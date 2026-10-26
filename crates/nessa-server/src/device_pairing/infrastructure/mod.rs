@@ -59,10 +59,11 @@ pub fn platform_announcer(
         std::sync::Arc::new(MulticastAnnouncer)
     }
 }
-pub(crate) use connection::RELAY_CAPACITY;
 pub use connection::{
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
+    TunnelPermit,
 };
+pub(crate) use connection::{RELAY_CAPACITY, TUNNEL_CAPACITY};
 pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 #[cfg(unix)]

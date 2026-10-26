@@ -1,5 +1,7 @@
 //! Canonical gateway setup, with the real native listener and a device paired
 //! through it, and separate client process support.
+#[path = "fixtures/catalogue.rs"]
+mod catalogue;
 #[path = "fixtures/client.rs"]
 mod client;
 #[path = "fixtures/gateway.rs"]
@@ -89,6 +91,9 @@ impl Gateway {
     /// process, so its process-local watch producer sees the change.
     pub(super) fn start_live(root: &Path) -> Self {
         Self::spawn(root, "live", Stdio::piped(), None)
+    }
+    pub(super) fn start_catalogue(root: &Path) -> Self {
+        Self::spawn(root, "catalogue", Stdio::piped(), None)
     }
     /// Actual Agent-produced semantic prefix and controlled terminal suffix.
     pub(super) fn start_semantic(root: &Path) -> Self {

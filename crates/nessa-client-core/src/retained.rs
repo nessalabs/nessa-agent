@@ -62,6 +62,7 @@ use nessa_protocol::product::generated::{
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
+use nessa_protocol::tunnel::TunnelAddress;
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -303,7 +304,9 @@ impl Cancellation for Stopping {
 /// Connect to the gateway at `address` (`host:port`, each address it
 /// resolves to tried in turn) within `timeout`, the same way a retained read
 /// does: direct, then, with a `relay`, through that relay for the gateway
-/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"). What
+/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"),
+/// and with a `tunnel`, through the gateway's web tunnel
+/// (`docs/design/auth/tunnel.md`); with both, those two at once. What
 /// connects is a plain stream; the caller's pinned TLS decides whether the
 /// gateway is the one it paired with. A paired environment dials its
 /// gateway with it.
@@ -316,6 +319,7 @@ impl Cancellation for Stopping {
 pub fn dial_gateway(
     address: &str,
     relay: Option<(&RelayAddress, &[u8; 44])>,
+    tunnel: Option<&TunnelAddress>,
     timeout: Duration,
 ) -> IoResult<TcpStream> {
     let deadline = Instant::now()
@@ -329,26 +333,44 @@ pub fn dial_gateway(
             "the gateway's address is not host:port",
         ));
     }
-    let Some((relay, pin)) = relay else {
-        return connect_any(address, deadline);
+    let route = match relay {
+        Some((relay, pin)) => {
+            // A pin that is no Ed25519 key fails TLS whatever the route, and
+            // dialing again cannot change it: said now, not left to a direct
+            // dial that may never connect.
+            let key = relay_key(pin).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the gateway's pin is not a key",
+                )
+            })?;
+            Some(RelayRoute {
+                address: relay.clone(),
+                key,
+            })
+        }
+        None => None,
     };
-    // A pin that is no Ed25519 key fails TLS whatever the route, and
-    // dialing again cannot change it: said now, not left to a direct dial
-    // that may never connect.
-    let key = relay_key(pin).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "the gateway's pin is not a key",
-        )
-    })?;
-    let route = RelayRoute {
-        address: relay.clone(),
-        key,
+    let tunnel = tunnel.cloned();
+    let beyond: Box<dyn FnOnce(Duration) -> IoResult<TcpStream> + Send> = match (route, tunnel) {
+        (None, None) => return connect_any(address, deadline),
+        (Some(route), None) => Box::new(move |left| relay_leg(&route, left)),
+        (None, Some(tunnel)) => Box::new(move |left| crate::tunnel::dial(&tunnel, left)),
+        // Both are beyond the local network: neither is preferred.
+        (Some(route), Some(tunnel)) => Box::new(move |left| {
+            race(
+                move |left| relay_leg(&route, left),
+                move |left| crate::tunnel::dial(&tunnel, left),
+                left,
+                Duration::ZERO,
+                &|| false,
+            )
+        }),
     };
     let address = address.to_owned();
     race(
         move |left| connect_any(&address, Instant::now() + left),
-        move |left| relay_leg(&route, left),
+        beyond,
         timeout,
         DIRECT_HEAD_START,
         &|| false,

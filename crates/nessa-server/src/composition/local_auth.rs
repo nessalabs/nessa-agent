@@ -268,6 +268,24 @@ pub(super) async fn product_state(
         }
         _ => None,
     };
+    // The web tunnel rides the native listener. With none to run, a
+    // provider program an earlier run left running is ended.
+    #[cfg(unix)]
+    let tunnel = match (&settings.native, &native) {
+        (Some(config), Some(_)) => config
+            .tunnel
+            .as_ref()
+            .map(|tunnel| super::tunnel::prepare(namespace, tunnel)),
+        _ => None,
+    };
+    #[cfg(unix)]
+    if tunnel
+        .as_ref()
+        .and_then(super::tunnel::PreparedTunnel::setting)
+        .is_none()
+    {
+        super::tunnel::release_kept(namespace);
+    }
     let credential_namespace = CredentialNamespace::new(
         config.stage.as_str().to_owned(),
         config.instance().map(str::to_owned),
@@ -453,21 +471,38 @@ pub(super) async fn product_state(
                 .join("native-linking"),
             Arc::new(SystemClock),
         );
-        product = product.with_native_linking(Arc::new(super::native_linking::ConfigLinking::new(
+        let linking = super::native_linking::ConfigLinking::new(
             Arc::new(config),
             Arc::new(audit),
             native.is_some(),
             restart.clone(),
-        )));
+        )
+        .with_tunnel(
+            crate::tunnel::infrastructure::files::TunnelFiles::new(namespace),
+            match &tunnel {
+                Some(tunnel) => tunnel.running(),
+                None => tokio::sync::watch::channel(None).1,
+            },
+        );
+        product = product.with_native_linking(Arc::new(linking));
+        if let Some(tunnel) = &tunnel {
+            product = product.with_tunnel(tunnel.view());
+        }
     }
     let (listener_environments, connected_environments) = environment_peers.unzip();
     let native = match native {
         Some((prepared, commands, peers)) => {
             product = product.with_pairing(Arc::new(commands)).with_peers(peers);
-            Some(match listener_environments {
+            let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,
-            })
+            };
+            #[cfg(unix)]
+            let prepared = match tunnel {
+                Some(tunnel) => prepared.with_tunnel(tunnel),
+                None => prepared,
+            };
+            Some(prepared)
         }
         None => None,
     };

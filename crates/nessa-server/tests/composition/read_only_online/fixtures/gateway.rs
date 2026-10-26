@@ -308,6 +308,7 @@ async fn gateway_child() {
             listen_address: address,
             relay,
             advertised_address: None,
+            tunnel: None,
         },
         NativeInputs {
             namespace: root.to_path_buf(),
@@ -347,7 +348,7 @@ async fn gateway_child() {
     // `conversations_not_configured`.
     let semantic =
         (mode == "semantic").then(|| super::semantic::prepare(storage.clone(), metadata.clone()));
-    let follows = matches!(mode.as_str(), "live" | "preparing-head")
+    let follows = matches!(mode.as_str(), "live" | "preparing-head" | "catalogue")
         .then(|| super::semantic::reader(storage.clone(), metadata.clone()));
     let mut state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
@@ -546,6 +547,10 @@ async fn gateway_child() {
             }
             drop(lease);
         }
+    }
+    if mode == "catalogue" {
+        super::catalogue::serve(&setup, metadata).await;
+        return;
     }
     if mode == "live" {
         tokio::spawn(live_control(

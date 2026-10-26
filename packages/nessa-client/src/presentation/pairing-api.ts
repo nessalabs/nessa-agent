@@ -8,6 +8,9 @@ import type {
   PairingOwnerStatus,
   PairingPendingResult,
   PairingSetLinkingResult,
+  PairingSetTunnelParams,
+  PairingSetTunnelResult,
+  PairingTunnelResult,
 } from "../generated/product.js"
 import {
   pairingApproveResult,
@@ -15,6 +18,8 @@ import {
   pairingOwnerStatus,
   pairingPendingResult,
   pairingSetLinkingResult,
+  pairingSetTunnelResult,
+  pairingTunnelResult,
 } from "../protocol/pairing-validate.js"
 
 /**
@@ -57,6 +62,13 @@ export type PairingApi = {
    * a gateway that matches it. Sending the same value again is safe.
    */
   setLinking(enabled: boolean): Promise<PairingSetLinkingResult>
+  /**
+   * Turn the web tunnel on or off, or change its mode, hostname or token. A
+   * field left out keeps what is saved. It applies as `setLinking` does.
+   */
+  setTunnel(params: PairingSetTunnelParams): Promise<PairingSetTunnelResult>
+  /** The saved tunnel setting, without its token, and the running tunnel. */
+  tunnel(): Promise<PairingTunnelResult>
 }
 
 export function createPairingApi(session: RpcRequester): PairingApi {
@@ -91,5 +103,8 @@ export function createPairingApi(session: RpcRequester): PairingApi {
       call(ProductMethod.PairingCancel, invitation(invitationId), pairingOwnerStatus),
     setLinking: (enabled) =>
       call(ProductMethod.PairingSetLinking, { enabled }, pairingSetLinkingResult),
+    setTunnel: (params) =>
+      call(ProductMethod.PairingSetTunnel, params, pairingSetTunnelResult),
+    tunnel: () => call(ProductMethod.PairingTunnel, {}, pairingTunnelResult),
   }
 }

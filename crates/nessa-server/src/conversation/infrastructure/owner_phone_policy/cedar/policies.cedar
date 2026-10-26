@@ -69,7 +69,7 @@ when { context has method && context.method == "auth.session" && !(context has p
 permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
 when {
     context has method && context has publishedAction && context.publishedAction == "server.read" &&
-    ["server.health", "agents.list", "agents.subscribe", "agents.unsubscribe"].contains(context.method)
+    ["server.health", "server.reach", "agents.list", "agents.subscribe", "agents.unsubscribe"].contains(context.method)
 };
 
 // The service owns the default fact; Cedar owns which creation selections this purpose permits.

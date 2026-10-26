@@ -24,7 +24,9 @@ pub mod peer_gateways;
 pub mod product;
 pub(crate) mod relay;
 pub mod server;
+pub(crate) mod services;
 pub(crate) mod timer;
+pub mod tunnel;
 
 pub use core::run;
 

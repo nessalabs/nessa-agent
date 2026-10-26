@@ -281,6 +281,12 @@ export interface ChannelCreation {
   readonly leftOut: number
   /** Whether each resource is a file or a folder, as its picker said, by path. */
   readonly kinds: Readonly<Record<string, ResourceKind>>
+  /**
+   * Drops that landed on the files question and whose paths the host is
+   * still looking at, by the name it gave each. Create waits for them: a
+   * Create sent now would leave out files the person already dropped.
+   */
+  readonly landing: readonly string[]
 }
 
 /**

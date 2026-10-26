@@ -128,6 +128,15 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   tunnel      native linking and then the web tunnel are turned on in
+ *               Settings, each restarting the gateway, which starts a
+ *               stand-in cloudflared (NESSA_TUNNEL_PROGRAM) and shows its
+ *               address once ready; the gateway is stopped and started
+ *               again and takes the same cloudflared back, at the same
+ *               address; a real `nessa env dial` worker pairs, then dials
+ *               only through the tunnel (its direct address refuses), and a
+ *               conversation placed on it is answered; turning the tunnel off
+ *               ends the cloudflared, and linking is turned off again
  *   launch      the window is reloaded while the host is still starting the
  *               gateway: the host holds the window's read, the startup
  *               screen never covers it, and once the gateway is up the
@@ -156,7 +165,10 @@
  *               transcript: named, a folder chosen in the host's picker that
  *               agents may not work in (the root) refused at its question,
  *               then one made for it; its model kept, notes typed, and a file
- *               attached from the host's picker; Create opens a new
+ *               attached from the host's picker, then a file and a folder
+ *               dragged onto the window (the whole flow lit as the drop
+ *               target while dragged over, each listed once with its kind,
+ *               the hint on one line, the count as 4/5); Create opens a new
  *               session's home in it, whose first message runs in the made
  *               folder with the notes in the agent's system prompt (Claude).
  *               A second channel works in a folder chosen in the picker, and
@@ -260,6 +272,10 @@ import {
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
+import {
+  pairedCatalogue,
+  preparePairedCatalogue,
+} from "./lib/stress-paired-catalogue.mjs"
 import {
   openStressConversation,
   selectedStressConversation,
@@ -856,12 +872,22 @@ async function rowShown(page, conversationId, title, failures) {
  * that read, which opens the conversation's agent. `where` is the composer,
  * when more than one pane shows one.
  */
-async function send(run, conversationId, text, failures, known, where = dock(run.page)) {
+async function send(
+  run,
+  conversationId,
+  text,
+  failures,
+  known,
+  where = dock(run.page),
+  sendBy,
+) {
   const before = known ?? (await seenTurns(run, conversationId))
   const box = where.locator("textarea")
   await box.fill(text)
   const button = where.getByRole(...composerControls.send)
-  await button.click({ timeout: 10_000 })
+  const timeout = sendBy === undefined ? 10_000 : sendBy - Date.now()
+  if (timeout <= 0) throw new Error("the upgraded Send exhausted its click budget")
+  await button.click({ timeout })
   const taken = await waitFor(async () => (await box.inputValue()) === "", 10_000)
   if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
   run.sent.set(conversationId, (run.sent.get(conversationId) ?? 0) + 1)
@@ -1289,12 +1315,13 @@ function providerName(provider) {
  * question as it is asked, and answers the gateway's listing of it; `null`
  * when it was not made. With `refusedFolder`, that folder is chosen first and
  * Create must be refused at the folder question, before a folder made for it
- * is taken instead.
+ * is taken instead. With `dropped`, those files and folders are dragged onto
+ * the window as the host tells it (`dropOnChannel`).
  */
 async function makeChannel(
   run,
   failures,
-  { name, folder, refusedFolder, notes, resource },
+  { name, folder, refusedFolder, notes, resource, dropped },
 ) {
   const { page } = run
   const pick = (kind, value) =>
@@ -1343,6 +1370,7 @@ async function makeChannel(
   await photograph(`${name}-3-model`)
   await page.keyboard.press(keys.enter)
   if (!(await asking("notes"))) return null
+  await saidWhole(page, `${css.newChannelField}[data-step="notes"]`, "notes", failures)
   if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
   await photograph(`${name}-4-notes`)
   await page.keyboard.press(keys.enter)
@@ -1359,6 +1387,7 @@ async function makeChannel(
     )
       failures.push(`the attached ${basename(resource)} is not listed in the flow`)
   }
+  if (dropped) await dropOnChannel(run, failures, dropped, photograph, name)
   await photograph(`${name}-5-resources`)
   const create = flow.getByRole("button", { name: /^Create channel/ })
   await create.click()
@@ -1395,12 +1424,130 @@ async function makeChannel(
   return listed ?? null
 }
 
+/** The desktop window's least width, as `tauri.conf.json` sets it. */
+const NARROWEST_WINDOW = 800
+
+/**
+ * The composer's hint for a question (a span's text, or an empty field's
+ * placeholder) fits its box on one line, whole: it is neither wrapped nor
+ * cut short. Measured as the text itself, in the box's own font, so a hint
+ * that is clipped to one line still fails.
+ */
+async function saidWhole(page, selector, question, failures) {
+  // At the narrowest the desktop window goes (`minWidth` in tauri.conf.json),
+  // where the composer has the least room.
+  const size = page.viewportSize()
+  if (size) await page.setViewportSize({ width: NARROWEST_WINDOW, height: size.height })
+  const said = await page.locator(selector).evaluate((node) => {
+    const text =
+      "placeholder" in node && node.value === "" ? node.placeholder : node.textContent
+    const style = getComputedStyle(node)
+    const context = document.createElement("canvas").getContext("2d")
+    context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+    const room =
+      node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    return { text, wide: context.measureText(text).width, room }
+  })
+  if (size) await page.setViewportSize(size)
+  if (said.wide > said.room + 1)
+    failures.push(
+      `the ${question} question's hint "${said.text}" needs ${Math.ceil(said.wide)}px on one line; it has ${Math.floor(said.room)}px`,
+    )
+}
+
+/**
+ * Drags `dropped` (each `{ path, kind }`) onto the window while the flow asks
+ * for files, as the host tells the page: a drag over it lights the whole flow
+ * as the drop target, and the drop lists each path with its kind's icon, once,
+ * after anything already attached, and puts the target out.
+ */
+async function dropOnChannel(run, failures, dropped, photograph, name) {
+  const { page } = run
+  const flow = page.locator(css.newChannel)
+  const heard = await waitFor(
+    () => page.evaluate(() => window.__fakeHostListening("nessa://paths-dropped") > 0),
+    5_000,
+  )
+  if (!heard) {
+    failures.push("the new channel flow does not listen for dropped files")
+    return
+  }
+  // The hint says it whole, on one line, and the count is short.
+  await saidWhole(page, `${css.newChannel} .new-channel-hint`, "files", failures)
+  const count = (await flow.locator(".new-channel-count").innerText()).trim()
+  if (!/^\d\/\d$/.test(count))
+    failures.push(`the flow counts its questions as "${count}"`)
+  const emit = (event, payload) =>
+    page.evaluate(
+      ([event, payload]) => window.__fakeHostEmit(event, payload),
+      [event, payload],
+    )
+  await emit("nessa://paths-dragging", { dragging: true })
+  const target = page.locator(`${css.newChannel}[data-dropping] ${css.newChannelDrop}`)
+  if (
+    !(await target.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("a drag over the new channel flow shows no drop target")
+  } else {
+    await photograph(`${name}-5-drop-target`)
+  }
+  const before = await flow.locator(css.newChannelResource).count()
+  // The host says the drag is gone as it lets go and names the drop, then,
+  // once it has looked at them, which paths that drop held.
+  await emit("nessa://paths-dragging", { dragging: false })
+  await emit("nessa://paths-drop-began", { drop: `stress-${name}` })
+  // Until the paths come, Create waits: the draft is not yet what was dropped.
+  const create = flow.getByRole("button", { name: /^Create channel/ })
+  const held = await waitFor(() => create.isDisabled(), 2_000)
+  if (!held) failures.push("Create can be pressed while dropped files are still coming")
+  await emit("nessa://paths-dropped", {
+    drop: `stress-${name}`,
+    paths: [...dropped, dropped[0]],
+    unread: 0,
+  })
+  const listed = await waitFor(
+    async () =>
+      (await flow.locator(css.newChannelResource).count()) === before + dropped.length,
+    5_000,
+  )
+  if (!listed)
+    failures.push(
+      `dropping ${dropped.length} paths listed ${(await flow.locator(css.newChannelResource).count()) - before}`,
+    )
+  for (const { path, kind } of dropped) {
+    const row = flow.locator(css.newChannelResource, { hasText: basename(path) })
+    const listedAs = await row
+      .getAttribute("data-kind", { timeout: 2_000 })
+      .catch(() => null)
+    if (listedAs !== kind)
+      failures.push(
+        `the dropped ${basename(path)} is listed as ${listedAs ?? "nothing"}, not ${kind}`,
+      )
+  }
+  // Out, and the questions back at full ink once their fade settles.
+  const out = await waitFor(
+    () =>
+      page.evaluate(
+        ([flow, drop]) =>
+          document.querySelector(drop) === null &&
+          getComputedStyle(document.querySelector(`${flow} .new-channel-scroll`))
+            .opacity === "1",
+        [css.newChannel, css.newChannelDrop],
+      ),
+    2_000,
+  )
+  if (!out) failures.push("the drop target stays lit after the drop")
+}
+
 /**
  * The first message of a new session in `channel`, from the home Create left
  * open: it is listed in that channel, and its agent works in the channel's
  * folder, told the channel's notes (Claude's system prompt, where it has one).
  */
-async function talkInChannel(run, step, channel, failures, notes) {
+async function talkInChannel(run, step, channel, failures, notes, attached = []) {
   const text = prompt(run, STRESS.channel, step, ` ${channel.name}`)
   const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
   await home.locator(css.field).waitFor({ timeout: 15_000 })
@@ -1439,9 +1586,20 @@ async function talkInChannel(run, step, channel, failures, notes) {
     )
   if (notes && run.stack.agent === "claude" && !reply.includes(notes))
     failures.push(`the agent in ${channel.name} was not told the channel's notes`)
+  for (const path of run.stack.agent === "claude" ? attached : [])
+    if (!reply.includes(path))
+      failures.push(`the agent in ${channel.name} was not told of ${path}`)
 }
 
 const steps = {
+  async pairedCatalogue(run, step) {
+    const result = await pairedCatalogue(step.cycles)
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `paired-catalogue-${run.engine}-${step.index}.json`),
+        JSON.stringify(result, null, 2),
+      )
+  },
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
     // A mode switch just before this step can still be settling. The picker
@@ -1560,9 +1718,17 @@ const steps = {
         ),
       )
   },
-  async reply(run, step, failures) {
+  async reply(run, step, failures, sendBy) {
     const text = prompt(run, STRESS.reply, step, step.extra ?? "")
-    const seen = await send(run, run.main.id, text, failures)
+    const seen = await send(
+      run,
+      run.main.id,
+      text,
+      failures,
+      undefined,
+      dock(run.page),
+      sendBy,
+    )
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     // A reply carried on behind a failure echoes its notice first.
     const echoed = turn && turn.userText !== text ? turn.userText.slice(0, 40) : text
@@ -2112,7 +2278,16 @@ const steps = {
         // The upgraded gateway still answers the conversation, in the
         // window: that answer comes over the window's new connection, so
         // the refused connections while it was down are the restart's.
-        if (failures.length === count) await steps.reply(run, step, failures)
+        if (failures.length === count) {
+          // Spend the original Send-click budget on browser recovery and the
+          // click together. The Node client above is a different connection.
+          const sendBy = Date.now() + 10_000
+          if (!(await run.restartConsole.readable(sendBy - Date.now())))
+            failures.push(
+              "the browser workspace did not recover before the upgraded Send",
+            )
+          else await steps.reply(run, step, failures, sendBy)
+        }
         return failures.length === count
       })
     })
@@ -2770,6 +2945,150 @@ const steps = {
     }
   },
 
+  async tunnel(run, step, failures) {
+    const directory = tunnelDirectory(run)
+    const on = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      if (!(await switchLinking(run, true, failures))) return false
+      if (!(await switchTunnel(run, true, failures))) return false
+      await closeSettings(run.page)
+      return true
+    })
+    // Its own function, so a check that ends it early still turns it off.
+    const throughTunnel = async () => {
+      let worker
+      let owner
+      try {
+        const { address } = await run.client.pairing.tunnel()
+        const kept = keptTunnel(directory)
+        if (!address || !kept) {
+          failures.push(
+            `the ready tunnel is at ${address} with ${JSON.stringify(kept)} kept`,
+          )
+          return
+        }
+        // The gateway stops and starts again; cloudflared does not.
+        await run.exclusive(() =>
+          run.restartConsole.during(run.opened, async () => {
+            const old = run.client
+            run.restarts += 1
+            await run.stack.gateway.restart("SIGTERM")
+            old.close()
+            run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          }),
+        )
+        const again = await waitFor(async () => {
+          const read = await run.client.pairing.tunnel()
+          return read.status === "ready" ? read : null
+        }, 60_000)
+        if (again?.address !== address)
+          failures.push(
+            `after a restart the tunnel is at ${again?.address}, not ${address}`,
+          )
+        const after = keptTunnel(directory)
+        if (after?.pid !== kept.pid || !alive(kept.pid))
+          failures.push(
+            `the restarted gateway did not take cloudflared ${kept.pid} back: ${JSON.stringify(after)}`,
+          )
+        if (failures.length) return
+        // A paired machine that cannot reach the gateway directly dials it
+        // through the tunnel.
+        const through = tunnelConnections(directory)
+        owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+        worker = await startWorker({
+          owner,
+          address: run.nativeAddress,
+          agent: run.stack.agent,
+          launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+          label: `t${step.index}`,
+          tunnel: { address: UNREACHABLE, origin: address },
+          connected: async (name) =>
+            (await offers(run, (environments) => environments.includes(name))).includes(
+              name,
+            ),
+        })
+        if (tunnelConnections(directory) <= through)
+          failures.push("the worker connected, but not through the tunnel")
+        const conversationId = randomUUID()
+        await run.client.conversation.create({
+          conversationId,
+          agent: run.stack.agent,
+          environment: worker.name,
+        })
+        const text = prompt(run, STRESS.reply, step, " tunnel")
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.lease?.host !== worker.name)
+          failures.push(`its lease runs on ${view?.lease?.host}, not ${worker.name}`)
+        // Read at rest while its worker serves: the run's own rest check
+        // comes after the worker is gone.
+        if (failures.length === 0) failures.push(...(await atRest(run, [conversationId])))
+      } finally {
+        if (worker) {
+          if (run.evidence)
+            writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+          await worker.close()
+        }
+        owner?.close()
+      }
+    }
+    // Off again, whatever happened: the tunnel's program ends with it.
+    // A throw from the check still turns the tunnel off first: left on, the
+    // gateway would start a new program after the kill below, and nothing
+    // here would know of it.
+    let thrown = null
+    try {
+      if (on) await throughTunnel()
+    } catch (error) {
+      thrown = error
+    }
+    let kept = null
+    try {
+      kept = keptTunnel(directory)
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        const tunnelOn =
+          (await run.page
+            .locator(css.tunnel)
+            .getAttribute("data-tunnel-enabled")
+            .catch(() => null)) === "true"
+        if (tunnelOn && (await switchTunnel(run, false, failures)) && kept) {
+          const gone = await waitFor(async () => !alive(kept.pid), 15_000)
+          if (!gone)
+            failures.push(`cloudflared ${kept.pid} outlived the tunnel turned off`)
+        }
+        if (
+          (await run.page.locator(css.linked).getAttribute("data-linked")) === "on" &&
+          (await switchLinking(run, false, failures))
+        )
+          await closeSettings(run.page)
+      })
+    } finally {
+      // Nothing the step started outlives it: its own process group, so
+      // the gateway's end never reaches it.
+      const left = keptTunnel(directory) ?? kept
+      if (left && alive(left.pid)) {
+        failures.push(`cloudflared ${left.pid} was still running at the step's end`)
+        try {
+          process.kill(-left.pid, "SIGKILL")
+        } catch {
+          // Gone in the meantime.
+        }
+      }
+    }
+    if (thrown) throw thrown
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async delegate(run, step, failures) {
     const text = prompt(run, STRESS.delegate, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -2980,6 +3299,13 @@ const steps = {
     const attached = mkdtempSync(join(run.stack.scratch, "channel-"))
     const resource = join(attached, "brief.md")
     writeFileSync(resource, "# Brief\n")
+    // Dragged onto the window: a file and a folder, as the host names them.
+    writeFileSync(join(attached, "dropped.md"), "# Dropped\n")
+    mkdirSync(join(attached, "dropped-kit"))
+    const dropped = [
+      { path: realpathSync(join(attached, "dropped.md")), kind: "file" },
+      { path: realpathSync(join(attached, "dropped-kit")), kind: "folder" },
+    ]
     const chosen = mkdtempSync(join(run.stack.scratch, "chosen-"))
     try {
       // Made in a folder of its own, after a folder agents may not use.
@@ -2988,6 +3314,7 @@ const steps = {
         refusedFolder: "/",
         notes,
         resource,
+        dropped,
       })
       if (made) {
         if (!made.folderMade || !made.folder.includes(`/channels/${made.channelId}`))
@@ -2996,7 +3323,14 @@ const steps = {
           )
         if (!existsSync(made.folder))
           failures.push(`the made folder ${made.folder} is not there`)
-        await talkInChannel(run, step, made, failures, notes)
+        await talkInChannel(
+          run,
+          step,
+          made,
+          failures,
+          notes,
+          dropped.map(({ path }) => path),
+        )
       }
       // Made in a folder chosen in the host's picker.
       const there = await makeChannel(run, failures, {
@@ -5067,7 +5401,7 @@ async function switchLinking(run, enabled, failures) {
     const before = failures.length
     const old = run.client
     run.restarts += 1
-    await run.page.locator(`${css.linked} [role='switch']`).click()
+    await run.page.locator(css.linkingSwitch).click()
     const shown = await waitFor(
       async () =>
         (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
@@ -5101,6 +5435,99 @@ async function switchLinking(run, enabled, failures) {
  * `environments`), once `holds` is true of them; what they last were after
  * 30 s otherwise. A worker that connects or leaves changes them.
  */
+/**
+ * The `tunnel` step's stand-in cloudflared (`lib/fake-cloudflared.mjs`),
+ * written into `directory` with this node as its interpreter: the gateway
+ * starts it with no PATH, and one exec keeps the name it records.
+ */
+function fakeCloudflared(directory) {
+  const source = readFileSync(
+    new URL("./lib/fake-cloudflared.mjs", import.meta.url),
+    "utf8",
+  )
+  const program = join(directory, "cloudflared")
+  writeFileSync(program, `#!${process.execPath}\n${source.replace(/^#!.*\n/, "")}`)
+  chmodSync(program, 0o755)
+  return program
+}
+
+/** A direct address that refuses at once, so a dial goes beyond it. */
+const UNREACHABLE = "127.0.0.1:9"
+
+/** The gateway's `<namespace>/tunnel`: the kept record and the program's log. */
+function tunnelDirectory(run) {
+  return join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "tunnel")
+}
+
+/** The tunnel program the gateway keeps, as its record says; `null` without one. */
+function keptTunnel(directory) {
+  try {
+    return JSON.parse(readFileSync(join(directory, "process.json"), "utf8"))
+  } catch {
+    return null
+  }
+}
+
+/** Connections the stand-in cloudflared has carried, as its log counts them. */
+function tunnelConnections(directory) {
+  try {
+    return readFileSync(join(directory, "cloudflared.log"), "utf8")
+      .split("\n")
+      .filter((line) => /^connection \d+$/.test(line)).length
+  } catch {
+    return 0
+  }
+}
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === "EPERM"
+  }
+}
+
+/**
+ * Turns the web tunnel `enabled` with its switch on the Linked devices tab,
+ * already open with linking on. The gateway saves the change and starts
+ * itself again in the same process; the window comes back showing the
+ * tunnel ready, or off. Resolves whether all of that held. Called with
+ * nothing else in flight (`run.exclusive`).
+ */
+async function switchTunnel(run, enabled, failures) {
+  const gateway = run.stack.gateway
+  const pid = gateway.server.pid
+  const want = enabled ? "ready" : "off"
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await run.page.locator(css.tunnelSwitch).click()
+    const shown = await waitFor(async () => {
+      const group = run.page.locator(css.tunnel)
+      return (
+        (await group.getAttribute("data-tunnel-enabled")) === String(enabled) &&
+        (await group.getAttribute("data-tunnel-status")) === want
+      )
+    }, 60_000)
+    if (!shown) failures.push(`the window did not come back with the tunnel ${want}`)
+    else if (enabled && (await run.page.locator(css.tunnelAddress).count()) !== 1)
+      failures.push("the ready tunnel's address is not shown")
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const read = await run.client.pairing.tunnel()
+    if (read.enabled !== enabled || read.status !== want)
+      failures.push(`the gateway answers the tunnel ${JSON.stringify(read)}`)
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  return held
+}
+
 const offers = (run, holds) =>
   waitFor(async () => {
     const { environments } = await run.client.agents.list()
@@ -5382,6 +5809,7 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
+  if (knobs.pairedCatalogues > 0) await preparePairedCatalogue()
   // Linking listens on every interface, as Settings sets it up, so the
   // gateway announces itself; clients on this machine dial it on loopback.
   const nativePort = await freePort()
@@ -5416,9 +5844,13 @@ async function startStack(options) {
     throw error
   }
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
-  const environment = github
-    ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
-    : {}
+  const environment = {
+    ...(github
+      ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
+      : {}),
+    // The `tunnel` step's cloudflared (debug builds only).
+    NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
+  }
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
@@ -5430,8 +5862,13 @@ async function startStack(options) {
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
       // The agent a `handoff` step switches its conversation to.
       others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
-      // Off, at a port of its own: the `linking` step turns it on from Settings.
-      native: { enabled: false, listenAddress: nativeListen },
+      // Off, at a port of its own: the `linking` step turns it on from
+      // Settings. Its tunnel too, at a loopback port of its own.
+      native: {
+        enabled: false,
+        listenAddress: nativeListen,
+        tunnel: { enabled: false, ingress: `127.0.0.1:${await freePort()}` },
+      },
     })
   } catch (error) {
     await github?.close()

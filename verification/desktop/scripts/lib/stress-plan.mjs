@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  pairedCatalogues: {
+    default: 1,
+    what: "real native paired catalogue cycles through the protected product child",
+  },
   modelSwitches: {
     default: 1,
     what: "same-provider model choices through the actual composer picker, applied by the next send",
@@ -125,6 +129,10 @@ export const KNOBS = {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
   },
+  tunnels: {
+    default: 1,
+    what: "times the web tunnel is turned on in Settings, kept across a gateway restart, dialed through by a paired worker, and turned off",
+  },
   drifts: {
     default: 1,
     what: "gateway restarts with a changed agent PATH and TMPDIR, then a send to the existing conversation completes",
@@ -230,6 +238,7 @@ export function plan(knobs) {
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
@@ -246,6 +255,8 @@ export function plan(knobs) {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
   }
+  if (knobs.pairedCatalogues > 0)
+    steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes follow
   // that work, using Ask before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older

@@ -529,6 +529,50 @@ it("a target-only drop leaves pane bodies available", async () => {
   await act(async () => root.unmount())
 })
 
+it.each(
+  [true, false].flatMap((previewPanes) =>
+    ["cancel", "drop"].flatMap((end) =>
+      ["full", "reduced"].map((motion) => ({ previewPanes, end, motion })),
+    ),
+  ),
+)(
+  "$motion $end restores glass only for a pane preview ($previewPanes)",
+  async ({ previewPanes, end, motion }) => {
+    document.documentElement.dataset.motion = motion
+    const fake = fakeSource(two())
+    const root = await mounted(
+      fake,
+      options({
+        previewPanes,
+        copySize: previewPanes ? null : { width: 280, height: 44 },
+      }),
+    )
+    const mark = vi.spyOn(document.documentElement, "toggleAttribute")
+    try {
+      await liftOntoTwo()
+      expect(document.documentElement.hasAttribute(marks.pressing)).toBe(previewPanes)
+      if (end === "cancel")
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+      pointer("pointerup", 827, 400)
+      // Capture writes as well as final state: a one-frame pulse is gone at rest.
+      await frames()
+      await frames()
+      await frames()
+      const released = mark.mock.calls.filter(([name, on]) => name === marks.blur && on)
+      expect(released.length > 0).toBe(previewPanes)
+      expect(document.documentElement.hasAttribute(marks.blur)).toBe(false)
+      expect(document.documentElement.hasAttribute(marks.pressing)).toBe(false)
+      expect(host.querySelector(`.${classes.ghost}`)).toBeNull()
+      expect(fake.state.drops).toHaveLength(end === "drop" ? 1 : 0)
+      expect(items(fake)).toEqual(end === "drop" ? ["b", "a"] : ["a", "b"])
+    } finally {
+      await act(async () => root.unmount())
+      mark.mockRestore()
+      delete document.documentElement.dataset.motion
+    }
+  },
+)
+
 it("previews the outcome of the layout the source holds, and commits it through the source in the room the press read", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)

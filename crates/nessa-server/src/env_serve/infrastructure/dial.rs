@@ -36,6 +36,7 @@ use nessa_protocol::pairing::{
     EnrollmentChannel, NativeFrameError,
 };
 use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
+use nessa_protocol::tunnel::TunnelAddress;
 use std::{
     io::{Error, ErrorKind, Result as IoResult},
     net::ToSocketAddrs,
@@ -46,7 +47,8 @@ use std::{
 /// Open one connection to the gateway at `address` (`host:port`, looked up
 /// now and each address tried), whose key is `pin`, as the paired
 /// environment `identity` is, and have it served. With a `relay`, the
-/// gateway is asked for there when the direct dial does not connect.
+/// gateway is asked for there when the direct dial does not connect, and
+/// with a `tunnel`, through its web tunnel.
 ///
 /// # Errors
 /// The gateway could not be reached, directly or through the relay, or
@@ -60,6 +62,7 @@ use std::{
 pub(crate) async fn dial(
     address: String,
     relay: Option<RelayAddress>,
+    tunnel: Option<TunnelAddress>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     clock: Arc<dyn Clock>,
@@ -68,22 +71,29 @@ pub(crate) async fn dial(
         // Each address the name resolves to gets a whole dial of its own,
         // its handshake included, as a TCP connect by name tries each: a
         // first address that connects but is not the pinned gateway does
-        // not stop the next. The relay finds the gateway by its key, not by
-        // this name, so with one a name that does not resolve here, or not
-        // within the direct leg's head start, is still asked for there.
-        let gateways: Vec<String> = match &relay {
-            None => address
+        // not stop the next. The relay finds the gateway by its key, and the
+        // tunnel by its own address, not by this name, so with either a name
+        // that does not resolve here, or not within the direct leg's head
+        // start, is still reached that way.
+        let beyond = relay.is_some() || tunnel.is_some();
+        let gateways: Vec<String> = if beyond {
+            resolved_within(&address, DIRECT_HEAD_START)
+        } else {
+            address
                 .to_socket_addrs()?
                 .map(|gateway| gateway.to_string())
-                .collect(),
-            Some(_) => resolved_within(&address, DIRECT_HEAD_START),
+                .collect()
         };
-        if gateways.is_empty() && relay.is_some() {
-            return open_environment(&address, relay.as_ref(), &identity, pin, clock);
+        let routes = Routes {
+            relay: relay.as_ref(),
+            tunnel: tunnel.as_ref(),
+        };
+        if gateways.is_empty() && beyond {
+            return open_environment(&address, routes, &identity, pin, clock);
         }
         let mut failed = Error::new(ErrorKind::NotFound, "no address");
         for gateway in gateways {
-            match open_environment(&gateway, relay.as_ref(), &identity, pin, clock.clone()) {
+            match open_environment(&gateway, routes, &identity, pin, clock.clone()) {
                 Ok(transport) => return Ok(transport),
                 Err(error) if error.kind() == ErrorKind::InvalidInput => return Err(error),
                 Err(error) => failed = error,
@@ -118,15 +128,28 @@ fn resolved_within(address: &str, wait: Duration) -> Vec<String> {
     }
 }
 
+/// The ways beyond the local network a dial may take.
+#[derive(Clone, Copy)]
+struct Routes<'a> {
+    relay: Option<&'a RelayAddress>,
+    tunnel: Option<&'a TunnelAddress>,
+}
+
 fn open_environment(
     address: &str,
-    relay: Option<&RelayAddress>,
+    routes: Routes<'_>,
     identity: &NativeIdentity,
     pin: [u8; 44],
     clock: Arc<dyn Clock>,
 ) -> IoResult<NativeTransport<DeadlineStream>> {
-    let socket = dial_gateway(address, relay.map(|relay| (relay, &pin)), TLS_DEADLINE)?;
-    // Through a relay, the peer is the relay: the endpoint only names it.
+    let socket = dial_gateway(
+        address,
+        routes.relay.map(|relay| (relay, &pin)),
+        routes.tunnel,
+        TLS_DEADLINE,
+    )?;
+    // Through a relay, the peer is the relay, and through a tunnel, this
+    // machine's end of its bridge: the endpoint only names it.
     let peer = socket.peer_addr()?;
     let (stream, deadline) =
         DeadlineStream::new(socket, clock, WakeEndpoint::new(peer)).map_err(deadline_error)?;

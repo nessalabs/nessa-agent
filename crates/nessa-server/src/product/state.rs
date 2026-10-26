@@ -182,6 +182,9 @@ pub struct ProductRouteState {
     /// whether or not it is on now. `None` — not Unix — answers
     /// `pairing_unavailable`.
     pub(crate) native_linking: Option<Arc<dyn NativeLinking>>,
+    /// The web tunnel this run serves (`pairing.tunnel`, `server.reach`).
+    /// `None` when it runs none.
+    pub(crate) tunnel: Option<crate::tunnel::application::TunnelView>,
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
@@ -320,6 +323,7 @@ impl ProductRouteState {
             mcp_authorization: None,
             pairing: None,
             native_linking: None,
+            tunnel: None,
             github: None,
             peers: None,
             conversations: None,
@@ -411,6 +415,13 @@ impl ProductRouteState {
     /// Register what turns native linking on or off from Settings.
     pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
         self.native_linking = Some(linking);
+        self
+    }
+
+    /// Register the web tunnel this run serves (Unix only).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn with_tunnel(mut self, tunnel: crate::tunnel::application::TunnelView) -> Self {
+        self.tunnel = Some(tunnel);
         self
     }
 
