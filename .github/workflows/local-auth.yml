@@ -357,6 +357,17 @@ jobs:
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
+      # Focused webhook coverage supplements the complete default run above.
+      # Reuse installed browsers and gateway; other knobs are zero so the
+      # fixture never enables native discovery. These are not full-cohort runs.
+      - name: Run focused webhook default and raised browser cases
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'webhooks') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled --seed 1 "${zero[@]}" --webhooks 1 --evidence "$STRESS_EVIDENCE/webhook-webkit-default" 2>&1 | tee "$STRESS_EVIDENCE/webhook-webkit-default.log"
+          node verification/desktop/scripts/conversation-stress.mjs --engine chromium,webkit --channel bundled --seed 1 "${zero[@]}" --webhooks 3 --evidence "$STRESS_EVIDENCE/webhook-raised-both" 2>&1 | tee "$STRESS_EVIDENCE/webhook-raised-both.log"
+        timeout-minutes: 10
       # The menu-bar panel ships in WKWebView, so its step also runs alone in
       # WebKit: page dots, the sent bubble's accent and rim, and the undo card.
       - name: Run the menu-bar panel stress step in WebKit
