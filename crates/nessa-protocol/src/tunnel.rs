@@ -57,17 +57,17 @@ impl TunnelAddress {
     /// The WebSocket URL a reader opens.
     pub fn websocket_url(&self) -> String {
         let scheme = if self.secure { "wss" } else { "ws" };
-        let rest = self
-            .origin
-            .split_once("://")
-            .map_or("", |(_, rest)| rest);
+        let rest = self.origin.split_once("://").map_or("", |(_, rest)| rest);
         format!("{scheme}://{rest}{TUNNEL_PATH}")
     }
 }
 
 impl fmt::Debug for TunnelAddress {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_tuple("TunnelAddress").field(&self.origin).finish()
+        formatter
+            .debug_tuple("TunnelAddress")
+            .field(&self.origin)
+            .finish()
     }
 }
 
