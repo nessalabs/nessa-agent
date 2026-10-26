@@ -81,15 +81,25 @@ pub enum LinkingAuditPhase {
     /// Before the lock is taken. When it cannot be kept, nothing is done.
     Requested,
     /// Saved, and how it applies. `written` is false when `config.json`
-    /// already said so and was left as it was.
+    /// already said so and was left as it was. `moved` names a listen
+    /// address the change replaced: what it said, and what it says now.
     Applied {
         applies: LinkingApply,
         written: bool,
+        moved: Option<ListenMoved>,
     },
     /// Refused, and nothing was saved.
     Refused(LinkingError),
     /// How the restart it asked for ended.
     Restart(LinkingRestart),
+}
+
+/// A listen address a change replaced, kept with its outcome: Settings'
+/// old loopback default, opened to the network.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListenMoved {
+    pub from: std::net::SocketAddr,
+    pub to: std::net::SocketAddr,
 }
 
 /// How a change's restart ended.

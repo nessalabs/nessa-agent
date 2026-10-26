@@ -42,7 +42,7 @@ stateDiagram-v2
         Loading --> Failed: deadline or proxy-ready or app-left
         Initializing --> Failed: deadline or proxy-ready or app-left
         Live --> Failed: proxy-ready or app-left
-        Live --> Ending: request-teardown [pane or window] / send teardown and deadline
+        Live --> Ending: request-teardown [panel or window] / send teardown and deadline
         Live --> Live: request-teardown [inline] / decline
         Ending --> Failed: proxy-ready or app-left
     }

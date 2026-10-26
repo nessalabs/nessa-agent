@@ -42,9 +42,14 @@ const PEER_CREDENTIAL_MAGIC: &[u8; 4] = b"NSPA";
 /// An environment peer's enrollment, told apart the same way.
 const ENVIRONMENT_PENDING_MAGIC: &[u8; 4] = b"NSEP";
 const ENVIRONMENT_CREDENTIAL_MAGIC: &[u8; 4] = b"NSEA";
-/// Owner-phone scope cannot be restored as a legacy shared reader.
+/// Owner-phone scope cannot be restored as a legacy shared reader. These name
+/// an enrollment adopted from a signed original, which must stay beside it.
 const OWNER_PHONE_PENDING_MAGIC: &[u8; 4] = b"NSOP";
 const OWNER_PHONE_CREDENTIAL_MAGIC: &[u8; 4] = b"NSOA";
+/// An owner phone redeemed by code: the same layout with no original, told
+/// apart so a signed record whose original disappeared never reads as one.
+const OWNER_PHONE_CODE_PENDING_MAGIC: &[u8; 4] = b"NSOC";
+const OWNER_PHONE_CODE_CREDENTIAL_MAGIC: &[u8; 4] = b"NSOD";
 
 /// The pending and credential magics of one enrollment class.
 fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
@@ -52,19 +57,50 @@ fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
         ConsentClass::DeviceRead => (PENDING_MAGIC, CREDENTIAL_MAGIC),
         ConsentClass::PeerRead => (PEER_PENDING_MAGIC, PEER_CREDENTIAL_MAGIC),
         ConsentClass::PeerEnvironment => (ENVIRONMENT_PENDING_MAGIC, ENVIRONMENT_CREDENTIAL_MAGIC),
-        ConsentClass::OwnerPhoneReadWrite => {
-            (OWNER_PHONE_PENDING_MAGIC, OWNER_PHONE_CREDENTIAL_MAGIC)
-        }
+        ConsentClass::OwnerPhoneReadWrite => (
+            OWNER_PHONE_CODE_PENDING_MAGIC,
+            OWNER_PHONE_CODE_CREDENTIAL_MAGIC,
+        ),
     }
 }
-/// The class and record kind a magic names; `None` for any other bytes.
-fn class_of(magic: &[u8]) -> Option<(ConsentClass, bool)> {
+/// Mark encoded owner-phone record bytes as adopted from a signed original.
+fn signed(mut bytes: Zeroizing<Vec<u8>>) -> Zeroizing<Vec<u8>> {
+    let magic = if &bytes[..4] == OWNER_PHONE_CODE_CREDENTIAL_MAGIC {
+        OWNER_PHONE_CREDENTIAL_MAGIC
+    } else {
+        OWNER_PHONE_PENDING_MAGIC
+    };
+    bytes[..4].copy_from_slice(magic);
+    bytes
+}
+/// What a record's magic names: its class, whether it is a credential, and
+/// whether it was adopted from a signed original.
+struct Magic {
+    class: ConsentClass,
+    credential: bool,
+    signed: bool,
+}
+/// `None` for any bytes that are not a record magic.
+fn class_of(magic: &[u8]) -> Option<Magic> {
+    let found = |class, credential, signed| {
+        Some(Magic {
+            class,
+            credential,
+            signed,
+        })
+    };
+    if magic == OWNER_PHONE_PENDING_MAGIC {
+        return found(ConsentClass::OwnerPhoneReadWrite, false, true);
+    }
+    if magic == OWNER_PHONE_CREDENTIAL_MAGIC {
+        return found(ConsentClass::OwnerPhoneReadWrite, true, true);
+    }
     ConsentClass::ALL.into_iter().find_map(|class| {
         let (pending, credential) = magics(class);
         if magic == pending {
-            Some((class, false))
+            found(class, false, false)
         } else if magic == credential {
-            Some((class, true))
+            found(class, true, false)
         } else {
             None
         }
@@ -283,12 +319,17 @@ enum ClientRecord {
 struct SavedClient {
     record: ClientRecord,
     bytes: Zeroizing<Vec<u8>>,
+    /// Adopted from a signed original, which must then be present beside it.
+    signed: bool,
 }
 impl FilePairingState {
     fn load_client(&self) -> Result<Option<SavedClient>, PrivateStateError> {
         let original = self.load_original_record()?;
         let saved = self.read_client_record()?;
         if let (Some(original), Some(saved)) = (&original, &saved) {
+            if !saved.signed {
+                return Err(PrivateStateError::Conflict);
+            }
             let bytes = Self::checked_owner_phone_enrollment(original, &saved.record)?;
             self.reconcile(owner_phone::ORIGINAL_FILE, &bytes)?;
         }
@@ -297,8 +338,23 @@ impl FilePairingState {
     // Raw data for same-lock validation, not a pending/issued selection getter.
     fn read_client_record(&self) -> Result<Option<SavedClient>, PrivateStateError> {
         self.read_bounded(ENROLLMENT_FILE, CREDENTIAL_MAX_BYTES)?
-            .map(|bytes| decode_client(&bytes).map(|record| SavedClient { record, bytes }))
+            .map(|bytes| {
+                let signed = class_of(&bytes[..bytes.len().min(4)]).is_some_and(|m| m.signed);
+                decode_client(&bytes).map(|record| SavedClient {
+                    record,
+                    bytes,
+                    signed,
+                })
+            })
             .transpose()
+    }
+    /// Whether the client's enrollment was adopted from a signed original.
+    pub(super) fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        let _guard = self
+            .operation
+            .lock()
+            .map_err(|_| PrivateStateError::Unavailable)?;
+        Ok(self.load_client()?.is_some_and(|saved| saved.signed))
     }
 }
 impl ClientPendingStore for FilePairingState {
@@ -387,9 +443,14 @@ impl ClientPendingStore for FilePairingState {
                 // An issued credential is never replaced by a new enrollment.
                 return Err(PrivateStateError::Conflict);
             }
+            Some(SavedClient { signed: true, .. }) => {
+                // A signed enrollment changes only through its original's adoption.
+                return Err(PrivateStateError::Conflict);
+            }
             Some(SavedClient {
                 record: ClientRecord::Pending(old),
                 bytes: saved,
+                ..
             }) => {
                 if bool::from(saved.as_slice().ct_eq(bytes.as_slice())) {
                     return self.reconcile(ENROLLMENT_FILE, &bytes);
@@ -418,7 +479,7 @@ impl ClientPendingStore for FilePairingState {
             .map_err(|_| PrivateStateError::Unavailable)?;
         self.exclude_original()?;
         match self.load_client()? {
-            None => Err(PrivateStateError::Conflict),
+            None | Some(SavedClient { signed: true, .. }) => Err(PrivateStateError::Conflict),
             Some(SavedClient {
                 record: ClientRecord::Pending(pending),
                 ..
@@ -437,6 +498,7 @@ impl ClientPendingStore for FilePairingState {
             Some(SavedClient {
                 record: ClientRecord::Credential(saved),
                 bytes,
+                ..
             }) => {
                 if saved.intent() != expected
                     || saved.credential() != credential
@@ -490,8 +552,14 @@ fn decode_client(bytes: &[u8]) -> Result<ClientRecord, PrivateStateError> {
         return Err(PrivateStateError::Corrupt);
     }
     match class_of(&bytes[..4]) {
-        Some((_, false)) => decode_pending(bytes).map(ClientRecord::Pending),
-        Some((class, true)) => {
+        Some(Magic {
+            credential: false, ..
+        }) => decode_pending(bytes).map(ClientRecord::Pending),
+        Some(Magic {
+            class,
+            credential: true,
+            ..
+        }) => {
             let pending = decode_pending_fields(&bytes[..PENDING_BYTES], class)?;
             let mut rest = &bytes[PENDING_BYTES..];
             let mut identifier = || -> Result<String, PrivateStateError> {
@@ -521,7 +589,12 @@ fn decode_client(bytes: &[u8]) -> Result<ClientRecord, PrivateStateError> {
     }
 }
 fn decode_pending(bytes: &[u8]) -> Result<PendingEnrollment, PrivateStateError> {
-    let Some((class, false)) = class_of(&bytes[..bytes.len().min(4)]) else {
+    let Some(Magic {
+        class,
+        credential: false,
+        ..
+    }) = class_of(&bytes[..bytes.len().min(4)])
+    else {
         return Err(PrivateStateError::Corrupt);
     };
     if bytes.len() != PENDING_BYTES {

@@ -190,6 +190,12 @@ it("archives a conversation from its row, and says so", async () => {
   await vi.waitFor(() => expect(rows()).toHaveLength(0))
   expect(store.getState().conversationHistory.archivedIds).toEqual([written])
   expect(container.textContent).toContain("Archived")
+  // The undo is a row card: the conversation's own avatar over its title.
+  const card = container.querySelector("[data-slot=undo-card]")
+  const { title } = store.getState().conversationHistory.undoable ?? {}
+  expect(title).toBeTruthy()
+  expect(card?.textContent).toContain(title)
+  expect(card?.querySelector("[data-slot=random-avatar]")).not.toBeNull()
 })
 
 it("brings an archived conversation back when its archive is undone", async () => {

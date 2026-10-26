@@ -385,6 +385,9 @@ impl OwnerPhoneOriginalStore for Store {
     > {
         Ok(None)
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        Ok(false)
+    }
 }
 
 impl OwnerPhoneOriginalStore for HeldStore {
@@ -404,6 +407,9 @@ impl OwnerPhoneOriginalStore for HeldStore {
         PrivateStateError,
     > {
         self.owned.load_original()
+    }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
     }
 }
 

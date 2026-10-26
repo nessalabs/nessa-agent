@@ -1,5 +1,5 @@
 //! Explicit same-owner adoption after actual pinned recovery.
-use super::super::{encode_credential, encode_pending, ClientRecord, ENROLLMENT_FILE};
+use super::super::{encode_credential, encode_pending, signed, ClientRecord, ENROLLMENT_FILE};
 use super::{encode, FilePairingState, ORIGINAL_FILE};
 use crate::{
     adapters::pairing::{verify_owner_phone_request, NativeIdentity},
@@ -67,6 +67,9 @@ impl OwnerPhoneEnrollmentStore for FilePairingState {
         // The shared pure checker validates before this invocation's first ack.
         let enrollment = self.read_client_record().map_err(OriginalRead)?;
         if let Some(saved) = &enrollment {
+            if !saved.signed {
+                return Err(OriginalRead(PrivateStateError::Conflict));
+            }
             Self::checked_owner_phone_enrollment(&original, &saved.record).map_err(OriginalRead)?;
             if let ClientRecord::Credential(saved) = &saved.record {
                 let Some((credential, receiver)) = issued else {
@@ -86,7 +89,7 @@ impl OwnerPhoneEnrollmentStore for FilePairingState {
             self.publish(ORIGINAL_FILE, &original_bytes, true)
                 .map_err(BindLineage)?;
         }
-        let bytes = match issued {
+        let bytes = signed(match issued {
             None => encode_pending(key, expected.gateway_pin(), public),
             Some((credential, receiver)) => encode_credential(&DeviceCredential::new(
                 PendingEnrollment::new(
@@ -97,7 +100,7 @@ impl OwnerPhoneEnrollmentStore for FilePairingState {
                 credential.clone(),
                 receiver.clone(),
             )),
-        };
+        });
         let result = match enrollment {
             Some(saved) if bool::from(saved.bytes.as_slice().ct_eq(bytes.as_slice())) => {
                 self.reconcile(ENROLLMENT_FILE, &bytes)

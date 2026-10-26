@@ -8,6 +8,7 @@
  * No view selects the workspace as a whole; that would render the whole
  * window for every change.
  */
+import type { ChatPanel } from "../../model/chat-panel"
 import { canChange, formHeld, waitingOn } from "../../application/usecases/sharing"
 import { createSelector } from "@reduxjs/toolkit"
 import {
@@ -53,7 +54,6 @@ import {
   focusedChannel,
   paneIds,
   sessionIn,
-  widgetIn,
   windowWidget,
   contentKind,
   answerOf,
@@ -88,8 +88,6 @@ export const selectPaneShape = (state: Root): string => {
   const layout = state.workspace.panes
   return layout ? layoutShape(layout) : ""
 }
-export const selectTabs = (state: Root) => state.workspace.tabs
-export const selectActiveTab = (state: Root) => state.workspace.tabs.activeTab ?? ""
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
 export const selectOverviewOpen = (state: Root) =>
@@ -261,13 +259,11 @@ export const selectFocusedPaneKey = (state: Root): PaneKey | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).key : null
 
 /**
- * The chat or widget in front: the active tab and its focused pane's item.
- * It changes only when what the workspace shows in front does.
+ * The chat in front: the focused pane's item. It changes only when what the
+ * workspace shows in front does.
  */
 export const selectInFront = (state: Root): string =>
-  `${state.workspace.tabs.activeTab ?? ""}\n${
-    state.workspace.panes ? focusedPane(state.workspace.panes).item : ""
-  }`
+  state.workspace.panes ? focusedPane(state.workspace.panes).item : ""
 
 /** The session in the focused pane; none while it shows a widget. */
 export const selectFocusedSessionId = (state: Root): string | null => {
@@ -281,11 +277,12 @@ export const selectPaneSession = (state: Root, pane: PaneKey): string | null => 
   return (shown && sessionIn(shown)) ?? null
 }
 
-/** The widget a pane shows; none when it shows a session. Compare with `shallowEqual`. */
-export const selectPaneWidget = (state: Root, pane: PaneKey): WidgetRef | null => {
-  const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
-  return (shown && widgetIn(shown)) ?? null
-}
+/** Chat `sessionId`'s right panel: its widgets as tabs; none while it has none. */
+export const selectChatPanel = (state: Root, sessionId: string): ChatPanel | null =>
+  entry(state.workspace.panels, sessionId) ?? null
+
+/** How many times something asked the window to show the right panel. */
+export const selectPanelAsked = (state: Root): number => state.workspace.panelAsked
 
 /** Whether a pane closes (`canClosePane`): what its close button and menu item offer. */
 export const selectPaneClosable = (state: Root, pane: PaneKey): boolean =>

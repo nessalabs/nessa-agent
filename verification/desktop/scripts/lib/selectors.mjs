@@ -100,8 +100,11 @@ export const css = {
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
-  widgetPane: "[data-widget-pane]", // a pane showing a widget
-  widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
+  panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
+  chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
+  panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body
+  panelWidgetHead: ".workspace-panel-widget-head", // class: that tab's trail and Open in Window
+  widgetBody: "[data-widget-body]", // a widget's body in the panel or the window, where its caret lands
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
@@ -156,6 +159,17 @@ export const css = {
   needsYouHeading: "#agents-needs-you", // the overview's Needs you heading
   codeBlock: ".workspace-code", // class: a code block in a transcript
   allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
+
+  // The menu-bar panel (index.html)
+  panelTabs: '.nessa-chrome [data-slot="chat-tabs"]', // the panel's tab strip; data-variant="dots"
+  panelCurrent: '.nessa-chrome [data-slot="chat-tabs-current"]', // the selected tab's name, leading the strip
+  panelDot: '.nessa-chrome [data-slot="chat-tab-dot"]', // one page dot per tab; its [data-active] tab is the bar
+  panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
+  panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
+  panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor
+  sentBubble: '[data-slot="chat-bubble"][data-tone="sent"]', // a message the person sent, drawn in the chat accent
+  undoCard: '[data-slot="undo-card"]', // the row card an archive leaves, with Undo
+  randomAvatar: '[data-slot="random-avatar"]', // a conversation's painted avatar
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
@@ -290,15 +304,20 @@ export const css = {
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
   github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
+  githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
+  githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus
+  githubActions: ".settings-github-actions", // Choose repositories and Disconnect; opacity 0 at rest
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',
   linkedPending: '[data-linked="pending"]',
   linkedNotice: "[data-linked-notice]",
+  pairingDialog: '[data-slot="dialog"]:has([data-linked-pairing])', // the modal Pair a device opens: the code and one orb
+  pairingRow: "[data-pairing-row]", // the tab's one Pair a device row
   pairingCode: '[data-slot="pairing-code"]',
   signalOrb: '[data-slot="signal-orb"]',
-  qrOrb: '[data-slot="qr-orb"]',
+  qrOrb: '[data-slot="qr-orb"]', // never drawn: the modal carries the signal orb alone
   fingerprint: '[data-slot="key-fingerprint"]',
 
   // The owner's share dialog (src/desktop/workspace/ui/share/share-dialog.tsx)
@@ -373,7 +392,7 @@ export const selectorFor = {
   /** A row in the open Settings tab, by its catalogue id. */
   settingRow: (id) => `#settings-panel [data-setting="${id}"]`,
   railItem: (id) => `[data-rail-item="${id}"]`, // a place on the side rail: agents, notes, …
-  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
+  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, panel, window
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
   fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode, message, context
@@ -408,6 +427,10 @@ export const selectorFor = {
  */
 export const safeAreaExempt = [
   ".workspace-titlebar",
+  // A header's picture runs up behind the window's controls, to the window's
+  // edge: the night scene or a chosen picture, not one being placed.
+  ".desktop-header-image:not([data-adjusting])",
+  ".desktop-night-scene",
   ".settings-titlebar",
   "[data-slot='app-shell-titlebar']",
   ".desktop-tooltip",
@@ -446,6 +469,17 @@ export const storage = {
   pictureInConversations: "nessa.desktop.picture-in-conversations",
   greeting: "nessa.desktop.greeting",
   sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
+  overviewFilter: "nessa.desktop.workspace.overview-filter", // the Agents overview's filter, as JSON (`remembered-filter.ts`)
+}
+
+/** The number each overview filter choice shows and answers to (`choiceKey`). */
+export const overviewFilterKeys = {
+  ongoing: "1",
+  all: "2",
+  any: "3",
+  today: "4",
+  week: "5",
+  month: "6",
 }
 
 /** The same-window event a stored preference announces a change on. */

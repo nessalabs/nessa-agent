@@ -4,18 +4,19 @@
  * Its edge resizes it, and dragged far enough right folds it. It is the chat
  * in front's panel: expanded, it covers the workspace for that chat alone —
  * the sidebar, the list and the panes are inert under it (`Covered`,
- * `workspace-layout.tsx`) and the tab strip shows that chat's tab only. The
- * same button, Escape, or anything that brings another chat in front — a new
- * tab, a window key, a tab switched to — docks it again
- * (`usePanelHeldByChat`). Until something opens in it, it says so.
+ * `workspace-layout.tsx`). The same button, Escape, or anything that brings
+ * another chat in front — a session opened, a new session, a window key —
+ * docks it again (`usePanelHeldByChat`). What it shows is that chat's panel:
+ * the widgets open in it, as tabs (`PanelContent`); until one opens, it says
+ * so.
  */
 import { memo, useLayoutEffect, useRef } from "react"
-import { EmptyState } from "@nessa-ui/react/empty-state"
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "../../../model/right-panel"
 import { IconButton } from "../../../ui/icon-button"
 import { ResizeEdge } from "../../../ui/resize-edge"
-import { focusInFront } from "../../adapters/dom/focus"
+import { chatPanelAttribute, focusInFront } from "../../adapters/dom/focus"
 import { useWorkspaceFrame } from "../workspace-frame"
+import { PanelContent } from "./panel-content"
 import "./right-panel.css"
 
 export const PANEL_ID = "workspace-panel"
@@ -108,6 +109,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
         data-flip="slide"
         data-flip-id="panel"
         data-maximized={maximized || undefined}
+        {...{ [chatPanelAttribute]: "" }}
         inert={!open || undefined}
         aria-hidden={!open || undefined}
         onFocus={() => {
@@ -118,13 +120,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
             holds.current = false
         }}
       >
-        <div className="workspace-panel-body">
-          <EmptyState
-            variant="compact"
-            className="desktop-empty-note"
-            title="Nothing open"
-          />
-        </div>
+        <PanelContent />
       </aside>
     </>
   )

@@ -25,7 +25,7 @@ export const workspaceShortcuts: readonly Binding<ShortcutCommand>[] = [
   bind({ code: "KeyB", command: true, alt: true }, "togglePanel"),
   bind({ code: "KeyN", command: true }, "newSession"),
   bind({ code: "KeyN", command: true, shift: true }, "newSessionBeside"),
-  // Splits the chat in front: a new session beside it, merged into its tab.
+  // Splits the chat in front: a new session beside it.
   bind({ code: "KeyD", command: true }, "splitRight"),
   bind({ code: "KeyW", command: true }, "closePane"),
   bind({ code: "Backslash", command: true }, "openBeside"),

@@ -354,10 +354,11 @@ Experimental turns it on; the rail stands beside the workspace in
   combination of the rail, the sidebar, the session list and the Agents
   overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
   (Chromium and WebKit, both layouts).
-- [ ] **Conversation cards clear the window toolbar**: New Session
-  is absent from the window toolbar; ⌘N still opens a new conversation, and
-  conversation cards begin below the toolbar; the frameless sidebar wash
-  extends to the window top.
+- [ ] **Each pane's header is the window's top row**: New Session is in the
+  window toolbar only in the layout without a session list (the session list's
+  head holds it otherwise); ⌘N still opens a new conversation; each pane's one
+  header sits in the toolbar's row; the frameless sidebar wash extends to the
+  window top.
   Sidebar content clears the toolbar, with no card rim behind the traffic lights.
   Sidebar and session-list toggles are adjacent, followed by Back and Forward.
   The 48px rail starts its icons
@@ -578,32 +579,33 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 ## Widgets
 
 _ADR 326_ ([`docs/adr/done/326-widgets.md`](../../docs/adr/done/326-widgets.md)):
-a plugin's view is drawn inline in a message, in a pane of its own, or in the
-window over the panes; Escape and focus as its _Focus_ and _Escape_ say. The
+a plugin's view is drawn inline in a message, as a tab in its chat's right
+panel, or in the window over the panes; Escape and focus as its _Focus_ and _Escape_ say. The
 scripts drive the sample plugin the sample workspace registers
 (`src/desktop/widgets/fixture/`), on its session "Widget hosts, every state".
 
-- [ ] **A card opens its widget in a pane beside its conversation, and the
-  window over the panes, and Escape goes back** — the pane's rect beside the
-  conversation's, the caret in its body; the window inside the chat area and
+- [ ] **A card opens its widget as a tab in its chat's panel, and the window
+  over the panes, and Escape goes back** — a tab in the panel beside the panes,
+  no pane added, the caret in its body; the window inside the chat area and
   clear of the session list, the caret in its body; its body and header fully
   opaque and its root/header at unit transform from the first mounted frame,
-  because it covers the main chat; the panes as they were
-  after Escape, the caret back in the focused pane's body.
-  _Check:_ `widgets.mjs --only card-pane-window`.
+  because it covers the main chat; the panes as they were after Escape, the
+  caret back in the chat's composer.
+  _Check:_ `widgets.mjs --only card-panel-window`.
 - [ ] **The window is left as the overview is, with ⌘W its own**: its close,
   ⌘W (no pane beneath it closes), a session chosen; ⌘0 from it opens the
   overview. _ADR 326 › Places._ _Check:_ `widgets.mjs --only window-left`.
 - [ ] **Escape steps back in a view first, and the caret stays in the widget**:
-  a detail open in a pane or the window is closed by Escape, the caret falls
+  a detail open in the panel or the window is closed by Escape, the caret falls
   back to the widget's body, a second detail is still Escape's to close; in
-  the window the next Escape goes back to the panes; a widget pane is never
+  the window the next Escape goes back to the panes; a panel's tab is never
   closed by Escape. _Check:_ `widgets.mjs --only escape-steps`.
 - [ ] **What a host cannot draw, it says**: the off and missing cards say the
   hosts' own lines (`hostDraws`, read from the page). _ADR 326 › What a host
   draws._ _Check:_ `widgets.mjs --only off-missing` (`--mode dev`); every row
   of the table, in every place, is `host-table.test.ts` and `hosts.test.tsx`.
-- [ ] **⌘1–4 and ⌘W landing on a widget pane put the caret in its body.**
+- [ ] **Opening a widget in the panel puts the caret in its body; ⌘1 brings it
+  back to the chat's composer; the last tab closed hands it to the composer.**
   _ADR 238 › Focus follows the focused pane_, as ADR 326 amends it.
   _Check:_ `widgets.mjs --only focus-keys`.
 - [ ] **Escape from a session row leaves the window; from the search, it
@@ -623,14 +625,14 @@ scripts drive the sample plugin the sample workspace registers
   _ADR 238 › Drag and drop_, the no-target row. _Check:_ `widgets.mjs --only
   drag-over-window`.
 - [ ] **A view is told its place's size**, as the place changes: a card grown
-  by its content alone and by a font, a pane after a window resize and a
-  split, the window after a resize — the size in its host context in whole
+  by its content alone and by a font, the panel laid out and after a window
+  resize, the window after a resize — the size in its host context in whole
   pixels, within a pixel of the place's content box. _ADR 326 › The
   contract_ (the host context). _Check:_ `widgets.mjs --only host-size`; it
   fails when the observer stops after its first report.
-- [ ] **A widget pane's chrome fits a narrow pane in a short window**, and the
-  window's at the same size: no header overflow, the trail and close inside
-  it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
+- [ ] **The panel's tab, head and body fit a narrow, short window**, and the
+  window's at the same size: no header overflow, the trail and its tab's close
+  inside it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
   560, three panes).
 
 ## Subagents
@@ -641,20 +643,19 @@ conversation. The sample fills the retry-budget session only. No composer.
 The same conversation's pane header shows those agents when the preview is
 on.
 
-- [ ] **The card opens a pane beside the conversation**, the list in activity
+- [ ] **The card opens a tab in the chat's right panel, no pane**, the list in activity
   order with a closed child called closed, and a child opens on its
   transcript. Focus stays in the panel. _Check:_ `subagents.mjs --only panel`.
 - [ ] **The transcript follows a new line while it is at the end, and stays
   put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
-- [ ] **Escape steps back to the list.** In a pane a second Escape changes
+- [ ] **Escape steps back to the list.** In the panel a second Escape changes
   nothing more; in the window it returns to the panes. _Check:_
   `subagents.mjs --only panel`.
-- [ ] **The list fits a narrow pane in a short window.** _Check:_
+- [ ] **The list fits the panel in a narrow, short window.** _Check:_
   `subagents.mjs --only narrow` (1000 × 560).
 - [ ] **The conversation's header shows its subagents, the busiest first.**
   Nothing is drawn for a conversation without them, or with the preview off
-  (`subagent-stack.test.tsx`). A click opens the panel beside the
-  conversation. At a narrow width the stack, the header's title and the
+  (`subagent-stack.test.tsx`). A click opens it in the chat's right panel. At a narrow width the stack, the header's title and the
   pane's menu sit in the header without it overflowing and without
   overlapping, and the title keeps a positive width inside the header.
   A production Chromium run fails when the open's longest frame exceeds
@@ -667,7 +668,7 @@ on.
 
 _ADR 344_ ([`docs/adr/done/344-mcp-ui.md`](../../docs/adr/done/344-mcp-ui.md)),
 #349: an MCP server's app is drawn behind a sandbox proxy on another origin,
-inline, in a pane (its fullscreen) and in the window, and spoken to over the
+inline, in its chat's right panel (its fullscreen) and in the window, and spoken to over the
 `ui/*` bridge. The script drives the fixture app the sample workspace
 registers (`src/desktop/widgets/app/fixture/`), on its session "An MCP App,
 in its sandbox". Every row of the bridge's design table is a jsdom test
@@ -681,10 +682,10 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   cause of its original teardown failure. _Check:_ `mcp-apps.mjs --only moving-frame`.
 - [ ] **It renders in all three places, told its mode and its call** — the
   card's app live, told `inline`, its call's input and result, its frame as
-  tall as the app says; its fullscreen request opens a pane beside the
-  conversation (answered `inline`: the card stays), whose app is told
+  tall as the app says; its fullscreen request opens a tab in the chat's right
+  panel, no pane (answered `inline`: the card stays), whose app is told
   `fullscreen` and fills its body; Open in Window shows it in the window,
-  filling it. _Check:_ `mcp-apps.mjs --only inline,pane,window`.
+  filling it. _Check:_ `mcp-apps.mjs --only inline,panel,window`.
 - [ ] **`tools/call` is answered for an allowed tool and refused for a hidden
   one**, with the gateway's reason. _Check:_ `mcp-apps.mjs --only tools-call`.
 - [ ] **An app's message lands in its conversation as the person's, saying
@@ -746,9 +747,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   live, and `#chart` shows the series from the tool result it was sent
   (`alpha 10, beta 20`), not a static page. _Check:_ `mcp-apps.mjs --only chart`
   (dev server: it imports the host's builder).
-- [ ] **It is torn down on close**: a pane's close takes its proxy and app
-  documents with it; an app asking to go is sent `ui/resource-teardown`, and
-  its pane closes only once it answers. _Check:_ `mcp-apps.mjs --only teardown`.
+- [ ] **It is torn down on close**: its panel tab's close takes its proxy and
+  app documents with it; an app asking to go is sent `ui/resource-teardown`,
+  and its tab closes only once it answers. _Check:_ `mcp-apps.mjs --only teardown`.
 - [ ] **In the desktop app** (by hand, `pnpm app`): the proxy loads from the
   `nessa-sandbox` scheme and the fixture app renders in each place.
   _ADR 344._ Not scriptable here: the scripts drive the browser build.
@@ -759,7 +760,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   so; its destructive call waits on a review in the conversation's
   permissions, its origin the app, shown in the window, and the app shows
   the answer to the review's Allow and to its Deny (the card does not offer
-  Always Allow); closing the pane of a mount with a
+  Always Allow); closing the panel tab of a mount with a
   call waiting withdraws the review, the window's card for it goes once it is
   withdrawn, and the inline mount stays. _#349
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
@@ -1009,8 +1010,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **Any pane's menu chooses the header picture.** From a conversation
   pane's "…" menu, Choose Header Picture… opens the file dialog and the
   picture chosen shows in the panes' bands; a new session's home draws it from
-  its pane's top edge, behind the title row — except in the window's corner
-  with nothing beside it, where nothing of it is under the window's controls;
+  its pane's top edge, behind the title row — in the window's corner with
+  nothing beside it too, behind the window's controls;
   Use Night Scene, offered only with a picture, takes it back; a file that is
   not an image is refused with why, in that pane's header (issue #320).
   _Check:_ `responsive.mjs --only header-picture`, and `safe-area.mjs`.
@@ -1032,9 +1033,13 @@ phone's scanner is not this screen.
   `linked-devices-tab.test.tsx`; `linked-devices.mjs` (`pending`).
 - [ ] **Linking off, refused, pair, approve, revoke, and an expired code**
   are said in plain words. The switch does not pretend to write config.
-  A wire code is not on the page. The code, both orbs and the actions sit
-  inside the settings panel, and Cancel takes focus once it can be used.
-  _Check:_ `linked-devices.mjs` (Chromium and WebKit). Rows L1–L21:
+  A wire code is not on the page. Pair a device is one row; the code opens
+  in a modal that sits inside the settings panel and fits it, with one live
+  signal orb (no QR orb) and New code and Cancel. Closing the modal keeps
+  the code; Show code reopens the same one and focus returns to the row's
+  control. Cancel closes it and focus goes to Pair a device. An expired code
+  draws no orb. _Check:_ `linked-devices.mjs` (Chromium and WebKit);
+  `conversation-stress.mjs` (`linking`). Rows L1–L21:
   `linked-devices.test.ts`, `linked-devices-gateway.test.ts`,
   `device-key.test.ts`.
 
@@ -1117,6 +1122,18 @@ phone's scanner is not this screen.
   says it isn't set up. A refused change says it could not change. _Check:_
   `settings-page.mjs --only native-hooks,native-hooks-on,native-hooks-unset,native-hooks-failed`; unit tests
   `native-hooks-rows.test.tsx`, `native-hooks-gateway.test.ts`.
+
+### Accounts
+
+- [ ] **Signed in, the GitHub row is the account's picture, @login and
+  "Connected".** The picture is GitHub's, by the account's id, through the
+  composed `GithubAvatar`; without one, or when it fails, the login's initial.
+  Choose repositories and Disconnect are icon buttons that take "Connected"'s
+  place under the pointer or keyboard focus, and take no pointer while hidden;
+  Shift+Tab and Tab move between them. They show at all times while an action
+  is in flight or after one failed, and on touch-capable screens.
+  _Check:_ `conversation-stress.mjs` (`github`); unit tests
+  `github-row.test.tsx`, `github-avatar.test.tsx`.
 
 ### Integrations: the gateway's MCP servers
 
@@ -1353,6 +1370,12 @@ in both themes, and screenshot what a rule is about (a highlighted item, a
 menu near the window's right edge, a pane header on hover).
 
 - [ ] **Every rule in _Interaction and visual rules_ holds.** _Check:_ manual.
+- [ ] **Menu rows lead with their icon, 30px high; a check comes before its
+  number, and the numbers line up.** In the Agents overview's filter, pressing
+  a choice's number picks it and closes the menu. _Check:_
+  `conversation-stress.mjs` step `menu` (knob `menus`): the pane's "…" menu
+  and the overview filter, with screenshots, in Chromium within the default
+  run and alone in WebKit in CI (`local-auth.yml`).
 
 ## Motion and reduced motion
 
@@ -1392,7 +1415,7 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   WKWebView) before it is reported as a bug; Playwright's WebKit is close,
   not identical (pointer events outside the viewport differ, for one).
 - _Known:_ headless WebKit does not draw `backdrop-filter`: the window's glass
-  (menus, tooltips, the revealed sidebar, the model picker) shows as its flat
+  (tooltips, the revealed sidebar, the model picker) shows as its flat
   fill in headless WebKit screenshots. Judge glass with `--headed` or in the
   app, not from a headless WebKit shot.
 
@@ -1722,7 +1745,10 @@ says why where the conversations would be.
   starts within 3% of the axis where its call started, is at least as wide as
   it is tall (a call of a few milliseconds is a round dot, never a hairline),
   and ends no more than 0.5 px past the axis. A call's card shows its input.
-  Chromium in the PR job; WebKit with the stress load run. The trace itself is
+  While the run is still at work (the agent holds after its last call), the
+  trace alone says so: its line reads "Working", open or folded, the call at
+  work is named once in its run, and no live row repeats it below
+  (`shownActivity` in `model/transcript.ts`). Chromium in the PR job; WebKit with the stress load run. The trace itself is
   nessa_ui's `ToolTrace`, with its own story checks (`Instant`).
 
 ### Onboarding readiness recovery
@@ -2256,18 +2282,26 @@ logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
 
-### Workspace document tabs (#1077)
+### One header per chat; tabs only in the right panel
 
-- `columns.mjs --only window-tabs` checks tabs in Chromium and WebKit: switching
-  tabs retains unsent text; ⌘D splits the chat in front into a merged tab; a
-  single chat's tab shows it alone and going back to the merged tab restores
-  its split; tab closure removes the chat. Home/End select and reveal tabs;
-  overflow leaves New Tab clickable at narrow widths. There is no Split Right
-  button in the tab strip: splitting is a drag, ⌘D or a pane's menu.
-- The `fresh` conversation-stress step types the first message, switches away
-  and back through document tabs, then sends that same text through the gateway.
-- By hand: resize and drag existing pane headers with tabs visible, and inspect
-  windowed/fullscreen toolbar alignment with the native traffic lights.
+- `columns.mjs --only chat-layout` (Chromium and WebKit): with the side columns
+  folded and two panes side by side, rail open and closed, no tab strip is drawn
+  for the chats; each pane has one header in the titlebar's row, none of it on
+  the window's controls (the cluster on the left, the panel's toggle on the
+  right); each pane's picture reaches the window's top edge; and with the rail
+  closed the left pane's composer starts past the corner mark.
+- `widgets.mjs` and `subagents.mjs`: a card's Open adds a tab to its chat's
+  panel, never a pane, the caret in its body; Open in Window and Back to Panel;
+  Escape inside the panel steps back and never closes the tab; closing the last
+  tab hands the caret to the chat's composer.
+- `safe-area.mjs`: nothing but a header's picture is painted under the window's
+  controls.
+- The `window` conversation-stress step holds one header per chat in the
+  titlebar row and the picture to the top edge, beside the session list and
+  with the panes alone; the `panel` step holds the expanded panel to its own
+  tabs or note, with ⌘N docking it.
+- By hand: the traffic lights over the corner pane's picture on a Mac, windowed
+  and fullscreen.
 
 ### Pending action ownership (#1087)
 
@@ -2296,3 +2330,18 @@ qualified same-task composer counterexample.
 _Check:_ `settings-action-owners.mjs` (both engines), component regressions in
 `native-hooks-rows.test.tsx` and `review-notice-rows.test.tsx`. See
 [settings action ownership](../../docs/design/settings-action-owners.md).
+
+## Menu-bar panel: page dots, accent and undo card
+
+- [ ] **The panel's tabs are page dots after the selected chat's name.** Opening
+  a chat from Messages adds a dot and names it in the lead. Once widths settle,
+  the selected dot is the only bar, wider than every other dot.
+- [ ] **A sent bubble wears the chat accent and its rim.** The bubble's
+  background is `--nessa-chat-accent`, and its shadow carries
+  `--nessa-chat-accent-rim`, both read from the live tokens.
+- [ ] **Archiving from Messages leaves an undo row card.** The card names the
+  chat and leads with its avatar. Undo unarchives it in the gateway, puts the
+  row back, and the card goes.
+
+_Check:_ `conversation-stress.mjs` step `menuPanel` (knob `menuPanels`), in
+Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).

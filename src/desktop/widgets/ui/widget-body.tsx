@@ -1,10 +1,10 @@
 /**
- * A widget's body in a pane of its own or in the window: the plugin's view
+ * A widget's body in a chat's panel or in the window: the plugin's view
  * for that place, or what ADR 326's table says in its stead
  * (`model/host-table.ts`). The chrome around it — title, way back, close —
  * is the workspace's; this draws only what the widget fills.
  *
- * The body is where the caret lands when its pane takes focus, or when what
+ * The body is where the caret lands when its place takes focus, or when what
  * held the caret inside it goes away (`data-widget-body`, ADR 326), for the
  * view to place further.
  */

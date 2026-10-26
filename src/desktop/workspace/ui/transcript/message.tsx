@@ -13,6 +13,7 @@ import { handoffLine } from "../../model/handoff"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import {
   groupSteps,
+  runSettled,
   terminalLabel,
   type Message as MessageValue,
   type MessageApp,
@@ -163,16 +164,11 @@ export const Message = memo(function Message({
               <ToolSteps
                 key={index}
                 steps={group}
-                // A run is over once its turn is, or once the agent has
-                // written past it with none of its calls still at work — a
-                // call can run on in the background while the agent writes.
-                settled={
-                  message.working !== true ||
-                  (index < groups.length - 1 &&
-                    group.every(
-                      (step) => step.status !== "pending" && step.status !== "running",
-                    ))
-                }
+                settled={runSettled(
+                  group,
+                  index === groups.length - 1,
+                  message.working === true,
+                )}
               />
             )
           // What the agent said is Markdown, whitespace and all: its line

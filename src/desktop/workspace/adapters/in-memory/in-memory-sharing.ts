@@ -18,8 +18,8 @@ import type { ShareGrant, ShareTarget, SharingFailure } from "../../model/sharin
 
 /** The sample's linked devices. */
 export const sampleShareTargets: readonly ShareTarget[] = [
-  { credentialId: "sample-phone", issuedAt: 1_760_000_000 },
-  { credentialId: "sample-tablet", issuedAt: 1_759_000_000 },
+  { credentialId: "sample-phone", issuedAt: 1_760_000_000, fullAccess: false },
+  { credentialId: "sample-tablet", issuedAt: 1_759_000_000, fullAccess: false },
 ]
 
 /** The sample's hosts the owner's turns may run commands on. */

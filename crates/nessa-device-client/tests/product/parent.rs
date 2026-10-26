@@ -1695,6 +1695,9 @@ impl OwnerPhoneOriginalStore for HeldStore {
     > {
         self.owned.load_original()
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
+    }
 }
 
 impl OwnerPhoneOriginalStore for PoisonableStore {
@@ -1715,6 +1718,9 @@ impl OwnerPhoneOriginalStore for PoisonableStore {
     > {
         self.owned.load_original()
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
+    }
 }
 
 impl OwnerPhoneOriginalStore for FailedStore {
@@ -1734,6 +1740,9 @@ impl OwnerPhoneOriginalStore for FailedStore {
         PrivateStateError,
     > {
         self.owned.load_original()
+    }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
     }
 }
 

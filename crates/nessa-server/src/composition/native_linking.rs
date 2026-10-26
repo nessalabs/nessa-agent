@@ -12,17 +12,19 @@
 //! ```
 //!
 //! Turning it on keeps a listen address already in the file, or names
-//! [`DEFAULT_NATIVE_LISTEN`]. Turning it off writes `"enabled": false` and
+//! [`DEFAULT_NATIVE_LISTEN`]; the loopback address Settings itself used to
+//! name ([`SUPERSEDED_NATIVE_LISTEN`]) is replaced by it, since no phone
+//! could reach it. Turning it off writes `"enabled": false` and
 //! keeps the addresses, so on again finds them. An address this machine cannot
 //! bind is refused before anything is saved: a saved one would leave a gateway
 //! that cannot start (design row S10 stops startup on a native bind failure).
 //! A change is refused busy while a restart is held or the gateway is
 //! stopping, so the gateway that comes back is the one the last answer named.
-use super::runtime_config::DEFAULT_NATIVE_LISTEN;
+use super::runtime_config::{DEFAULT_NATIVE_LISTEN, SUPERSEDED_NATIVE_LISTEN};
 use crate::core::self_restart::{RestartEnd, RestartReport, SelfRestart};
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingCaller,
-    LinkingChange, LinkingError, LinkingRestart, NativeLinking,
+    LinkingChange, LinkingError, LinkingRestart, ListenMoved, NativeLinking,
 };
 use crate::mcp_servers::application::StoreError;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
@@ -94,9 +96,13 @@ impl ConfigLinking {
             Ok(_) => self.save(enabled).await,
             Err(error) => Err(*error),
         };
-        let (applies, written) = match saved {
-            Ok(written) if enabled == self.running => (LinkingApply::Unchanged, written),
-            Ok(written) => (LinkingApply::Restarting, written),
+        // A moved address applies only by starting again, even when the run
+        // already serves native pairing (at the old address).
+        let (applies, Saved { written, moved }) = match saved {
+            Ok(saved) if enabled == self.running && saved.moved.is_none() => {
+                (LinkingApply::Unchanged, saved)
+            }
+            Ok(saved) => (LinkingApply::Restarting, saved),
             Err(error) => {
                 self.record(
                     operation_id,
@@ -114,7 +120,11 @@ impl ConfigLinking {
             operation_id,
             caller,
             enabled,
-            LinkingAuditPhase::Applied { applies, written },
+            LinkingAuditPhase::Applied {
+                applies,
+                written,
+                moved,
+            },
         )
         .await?;
         if applies == LinkingApply::Restarting
@@ -166,14 +176,17 @@ impl ConfigLinking {
         })
     }
 
-    /// Write `native` as `enabled`, holding the lock; whether the file was
-    /// written.
-    async fn save(&self, enabled: bool) -> Result<bool, LinkingError> {
+    /// Write `native` as `enabled`, holding the lock.
+    async fn save(&self, enabled: bool) -> Result<Saved, LinkingError> {
         if !self.restart.serving() {
             return Err(LinkingError::Busy);
         }
         let config = self.config.clone();
-        let (edited, listen) = tokio::task::spawn_blocking(move || {
+        let Edited {
+            document,
+            listen,
+            moved,
+        } = tokio::task::spawn_blocking(move || {
             config
                 .document()
                 .map_err(refusal)
@@ -189,8 +202,11 @@ impl ConfigLinking {
         if let (Some(address), false) = (listen, self.running) {
             bindable(address).await?;
         }
-        let Some(document) = edited else {
-            return Ok(false);
+        let Some(document) = document else {
+            return Ok(Saved {
+                written: false,
+                moved,
+            });
         };
         let config = self.config.clone();
         let published = tokio::task::spawn_blocking(move || config.publish(document))
@@ -200,7 +216,10 @@ impl ConfigLinking {
         if published == Published::NotDurable {
             tracing::warn!("native linking saved, but config.json's directory could not be synced");
         }
-        Ok(true)
+        Ok(Saved {
+            written: true,
+            moved,
+        })
     }
 }
 
@@ -240,9 +259,22 @@ fn refusal(error: StoreError) -> LinkingError {
     }
 }
 
-/// The document to publish, when it changes, and the address it listens on
-/// when on.
-type Edited = (Option<Map<String, Value>>, Option<SocketAddr>);
+/// What an edit makes of `config.json`.
+struct Edited {
+    /// The document to publish, when it changes.
+    document: Option<Map<String, Value>>,
+    /// The address it listens on, when on.
+    listen: Option<SocketAddr>,
+    /// The listen address it replaced, if any.
+    moved: Option<ListenMoved>,
+}
+
+/// What a save did: whether the file was written, and the listen address it
+/// replaced.
+struct Saved {
+    written: bool,
+    moved: Option<ListenMoved>,
+}
 
 /// `document` with `native` set to `enabled`: `None` to publish when it
 /// already says so.
@@ -253,7 +285,31 @@ fn edit(mut document: Map<String, Value>, enabled: bool) -> Edited {
     let saved_on = native
         .as_ref()
         .is_some_and(|native| native.get("enabled") != Some(&Value::Bool(false)));
-    let changed = saved_on != enabled;
+    // Settings' old loopback default, on its way back on: listen on the
+    // network instead. An address the person wrote is theirs and is kept.
+    let mut native = native;
+    let mut moved = None;
+    if let Some(section) = native
+        .as_deref_mut()
+        .and_then(Value::as_object_mut)
+        .filter(|_| enabled)
+    {
+        let old = section
+            .get("listenAddress")
+            .and_then(Value::as_str)
+            .and_then(|address| address.parse::<SocketAddr>().ok());
+        if old == Some(SUPERSEDED_NATIVE_LISTEN) {
+            section.insert(
+                "listenAddress".into(),
+                Value::String(DEFAULT_NATIVE_LISTEN.to_string()),
+            );
+            moved = Some(ListenMoved {
+                from: SUPERSEDED_NATIVE_LISTEN,
+                to: DEFAULT_NATIVE_LISTEN,
+            });
+        }
+    }
+    let changed = saved_on != enabled || moved.is_some();
     if changed {
         match (native, enabled) {
             (Some(Value::Object(section)), true) => {
@@ -285,7 +341,11 @@ fn edit(mut document: Map<String, Value>, enabled: bool) -> Edited {
         .flatten();
     // Off with no section is off already: nothing to keep.
     let publish = changed && (enabled || document.get("native").is_some_and(|n| !n.is_null()));
-    (publish.then_some(document), listen)
+    Edited {
+        document: publish.then_some(document),
+        listen,
+        moved,
+    }
 }
 
 /// Whether this machine can listen at `address` now. Released at once: the
@@ -432,7 +492,7 @@ mod tests {
         );
         assert_eq!(
             native(&files),
-            Some(serde_json::json!({ "listenAddress": "127.0.0.1:47650" }))
+            Some(serde_json::json!({ "listenAddress": "0.0.0.0:47650" }))
         );
         let bytes = files.bytes.lock().unwrap().clone().unwrap();
         assert!(RuntimeConfig::parse(&bytes).unwrap().session().is_ok());
@@ -442,7 +502,8 @@ mod tests {
                 LinkingAuditPhase::Requested,
                 LinkingAuditPhase::Applied {
                     applies: LinkingApply::Unchanged,
-                    written: true
+                    written: true,
+                    moved: None
                 }
             ]
         );
@@ -473,7 +534,8 @@ mod tests {
                 LinkingAuditPhase::Requested,
                 LinkingAuditPhase::Applied {
                     applies: LinkingApply::Restarting,
-                    written: true
+                    written: true,
+                    moved: None
                 }
             ]
         );
@@ -506,6 +568,47 @@ mod tests {
         assert_eq!(
             native(&files),
             Some(serde_json::json!({ "listenAddress": address, "relay": "192.0.2.1:9" }))
+        );
+    }
+
+    #[tokio::test]
+    async fn on_replaces_the_old_loopback_default_and_keeps_any_other_address() {
+        // Settings named 127.0.0.1:47650 before it listened on the network.
+        // A run serving there that is asked on again moves to the network
+        // address, which applies only by starting again, and the audit says
+        // what moved. A run that listens holds its address, so nothing is
+        // bound here.
+        let files = files(Some(r#"{"native":{"listenAddress":"127.0.0.1:47650"}}"#));
+        let linking = linking(files.clone(), true);
+        assert_eq!(
+            linking.set(true).await.unwrap().applies,
+            LinkingApply::Restarting
+        );
+        assert_eq!(
+            native(&files),
+            Some(serde_json::json!({ "listenAddress": "0.0.0.0:47650" }))
+        );
+        assert_eq!(
+            linking.records().last(),
+            Some(&LinkingAuditPhase::Applied {
+                applies: LinkingApply::Restarting,
+                written: true,
+                moved: Some(ListenMoved {
+                    from: SUPERSEDED_NATIVE_LISTEN,
+                    to: DEFAULT_NATIVE_LISTEN,
+                }),
+            })
+        );
+        // Another loopback port is the person's own choice.
+        let files = self::files(Some(&off_at("127.0.0.1:47651")));
+        let linking = self::linking(files.clone(), true);
+        assert_eq!(
+            linking.set(true).await.unwrap().applies,
+            LinkingApply::Unchanged
+        );
+        assert_eq!(
+            native(&files),
+            Some(serde_json::json!({ "listenAddress": "127.0.0.1:47651" }))
         );
     }
 
@@ -678,7 +781,8 @@ mod tests {
             linking.records().last(),
             Some(&LinkingAuditPhase::Applied {
                 applies: LinkingApply::Restarting,
-                written: false
+                written: false,
+                moved: None
             })
         );
     }

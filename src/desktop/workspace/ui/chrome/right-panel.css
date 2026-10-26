@@ -11,7 +11,8 @@
   width: calc(var(--workspace-panel-width) + var(--desktop-gutter));
   flex: none;
   flex-direction: column;
-  padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter) 0;
+  /* Its tabs are its titlebar row; what is in front starts below them. */
+  padding: 0 var(--desktop-gutter) var(--desktop-gutter) 0;
   outline: none;
   background:
     linear-gradient(
@@ -67,6 +68,76 @@
   align-items: center;
   justify-content: center;
   padding: 0 var(--desktop-gutter);
+}
+
+/* With nothing open, the note starts below the titlebar row, as a tab's widget does. */
+.workspace-panel > .workspace-panel-body[data-panel-empty] {
+  margin-top: var(--desktop-titlebar-height);
+}
+
+/*
+ * The panel's tabs: one per widget open for the chat in front, in the
+ * titlebar row, level with the window's controls. They stop short of the
+ * panel's own buttons over its top corner (`.workspace-titlebar-trailing`:
+ * Expand and Hide, two controls and the titlebar's end inset); maximized,
+ * with nothing to their left, they start after the window's controls too.
+ */
+.workspace-panel-tabs {
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  padding: 0 calc(2 * var(--desktop-control-size) + var(--desktop-control-edge) + 2px) 0
+    var(--desktop-gutter);
+}
+
+.workspace-panel-tabs > [data-slot="chat-tabs"] {
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace-panel[data-maximized] .workspace-panel-tabs {
+  padding-left: var(--desktop-titlebar-safe-start);
+}
+
+/* The open rail already holds the window's controls: past it, only what is left. */
+.workspace-window[data-rail="open"]
+  .workspace-panel[data-maximized]
+  .workspace-panel-tabs {
+  padding-left: calc(var(--desktop-titlebar-safe-start) - var(--rail-width));
+}
+
+/* The tab in front: its widget's trail and Open in Window, then its body. */
+.workspace-panel-widget {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  outline: none;
+}
+
+.workspace-panel-widget-head {
+  display: flex;
+  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: var(--desktop-control-inset) var(--desktop-control-inset)
+    var(--desktop-control-inset) 12px;
+}
+
+.workspace-panel-widget-head > nav {
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace-panel-widget-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: auto;
 }
 
 /* The overview covers the list and the panes, not the panel beside them. */

@@ -31,7 +31,7 @@ describe("what a host draws for an app view", () => {
   })
 
   it("the placeholder over a hidden frame while it loads, then the frame", () => {
-    expect(appDraws("pane", view({ lifecycle: "reading" }))).toEqual({
+    expect(appDraws("panel", view({ lifecycle: "reading" }))).toEqual({
       frame: "none",
       waiting: true,
       notices: [],
@@ -42,7 +42,7 @@ describe("what a host draws for an app view", () => {
         waiting: true,
         notices: [],
       })
-    expect(appDraws("pane", view({ lifecycle: "live" }))).toEqual({
+    expect(appDraws("panel", view({ lifecycle: "live" }))).toEqual({
       frame: "shown",
       waiting: false,
       notices: [],
@@ -67,7 +67,7 @@ describe("what a host draws for an app view", () => {
   it("notices above a live app: its server gone, and what its CSP blocked", () => {
     expect(
       appDraws(
-        "pane",
+        "panel",
         view({
           lifecycle: "live",
           serverGone: true,
@@ -80,7 +80,7 @@ describe("what a host draws for an app view", () => {
       `${appLines.blocked}: https://a.example, https://b.example`,
     ])
     expect(
-      appDraws("pane", view({ lifecycle: "live", anyBlocked: true })).notices,
+      appDraws("panel", view({ lifecycle: "live", anyBlocked: true })).notices,
     ).toEqual([appLines.blocked])
   })
 
@@ -97,7 +97,7 @@ describe("what a host draws for an app view", () => {
         notices: [`${appLines.blocked}: https://a.example`],
       })
     expect(
-      appDraws("pane", view({ lifecycle: "failed", anyBlocked: true, serverGone: true }))
+      appDraws("panel", view({ lifecycle: "failed", anyBlocked: true, serverGone: true }))
         .notices,
     ).toEqual([])
   })

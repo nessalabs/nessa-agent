@@ -22,6 +22,16 @@ import { writeFileSync } from "node:fs"
 
 /** The account the fake signs in. */
 export const FAKE_ACCOUNT = { id: 4242, login: "stress-octo" }
+/**
+ * Where the window asks for an account's picture (the desktop's
+ * `githubAvatarUrl`), and the picture the page is answered with there: a
+ * 56px grey square, so nothing leaves the machine.
+ */
+export const GITHUB_AVATARS = "https://avatars.githubusercontent.com/u"
+export const FAKE_AVATAR = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAADgAAAA4CAIAAAAn5KxJAAAAP0lEQVR42u3OMQ0AAAwDoEqv9B5TsQQUkD4RUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVHRM4zeYQ8NTLd/AAAAAElFTkSuQmCC",
+  "base64",
+)
 /** The fake app's identity, as the released app file names it. */
 const CLIENT_ID = "Iv1.stressfake"
 const SLUG = "nessa-stress"

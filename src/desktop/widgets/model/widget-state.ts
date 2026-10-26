@@ -27,15 +27,15 @@ export type WidgetAnswer =
   | { readonly registered: true; readonly name: string; readonly state: WidgetState }
 
 /**
- * Where a widget is drawn: a card in a message, a pane of its own, or the
+ * Where a widget is drawn: a card in a message, a tab in a chat's panel, or the
  * window — the content region's third view, over the panes.
  */
-export type WidgetPlace = "inline" | "pane" | "window"
+export type WidgetPlace = "inline" | "panel" | "window"
 
 /** The places a widget is opened in; `inline` is the transcript's, never asked for. */
 export type OpenPlace = Exclude<WidgetPlace, "inline">
 
-/** The places a plugin offers a view for, beside the pane every plugin has. */
+/** The places a plugin offers a view for, beside the panel every plugin has. */
 export interface OfferedPlaces {
   readonly inline: boolean
   readonly window: boolean

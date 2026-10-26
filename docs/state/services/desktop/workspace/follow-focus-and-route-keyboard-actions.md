@@ -23,6 +23,8 @@ Keyboard actions follow the current focus. A pane, input or open widget can hand
 
 Nessa uses the same published shortcuts for keyboard and visible controls. Focus determines the target, so a key should not accidentally act on a different conversation or pane.
 
+A widget opened in the chat's right panel takes the caret into its body. When focus falls out of the panel, for example because its last tab closed, it goes to the panel's tab in front, else to the focused chat's composer. ⌘1 to ⌘9 on the pane that is already focused brings the caret back to it from the panel, and from the overview or a widget over the window goes back to the panes.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Available
@@ -31,6 +33,8 @@ stateDiagram-v2
     CheckingOwner --> Routing: Workspace owns action
     Routing --> Handoff: Apply focused pane or front-content command
     Handoff --> Available: Content ready / focus composer or widget body
+    Handoff --> Available: Widget opened in the panel / focus its body
+    Handoff --> Available: Focus left the panel / panel tab in front, else composer
     Handoff --> Available: Dialog owns focus / preserve dialog
     note right of CheckingOwner
         One event's routing operation.

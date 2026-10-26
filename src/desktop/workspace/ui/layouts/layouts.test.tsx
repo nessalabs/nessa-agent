@@ -15,7 +15,6 @@ import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../../../clock"
 import {
   closePane,
-  closeSessionTab,
   focusPane,
   loadWorkspace,
   movePane,
@@ -185,7 +184,7 @@ describe("both layouts are the one shell", () => {
       expect(titlebar).toEqual(
         name === "three columns"
           ? ["Hide Sidebar", "Hide Session List", "Go Back", "Go Forward"]
-          : ["Hide Sidebar", "Go Back", "Go Forward"],
+          : ["Hide Sidebar", "New Session", "Go Back", "Go Forward"],
       )
       await act(async () => press("switcher"))
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
@@ -239,15 +238,7 @@ describe("the right panel, in both layouts", () => {
         )
       expect(covered()).toEqual([true, true, true])
       expect(panel().closest("[inert]")).toBeNull()
-      // It is the chat in front's: the strip shows that chat's tab alone —
-      // b, not a beside it — and no toggle for the columns it covers.
-      const tabs = () =>
-        [...host.querySelectorAll<HTMLElement>('.workspace-tab-list [role="tab"]')].map(
-          (tab) => tab.getAttribute("title"),
-        )
-      const titles = (ids: string[]) =>
-        ids.map((id) => selectSession(store.getState(), id)?.title ?? "New session")
-      expect(tabs()).toEqual(titles(["b"]))
+      // It is the chat in front's, and no toggle for the columns it covers shows.
       expect(button("Restore Panel")?.getAttribute("aria-pressed")).toBe("true")
       expect(
         host.querySelector('.workspace-titlebar [aria-controls="workspace-sidebar"]'),
@@ -263,21 +254,7 @@ describe("the right panel, in both layouts", () => {
       expect(covered()).toEqual([false, false, false])
       expect(host.querySelector('[role="dialog"]')).not.toBeNull()
       await act(async () => press("switcher"))
-      expect(tabs()).toEqual(titles(["a", "b"]))
-      // The strip's New Tab opens a session in a tab of its own, in front: docked.
       await act(async () => button("Expand Panel")?.click())
-      expect(tabs()).toEqual(titles(["b"]))
-      const before = store.getState().workspace.tabs.activeTab
-      await act(async () =>
-        host.querySelector<HTMLButtonElement>('[aria-label^="New Tab"]')?.click(),
-      )
-      expect(store.getState().workspace.tabs.activeTab).not.toBe(before)
-      expect(panel().dataset.maximized).toBeUndefined()
-      expect(tabs()).toEqual([...titles(["a", "b"]), "New session"])
-      // Back to b, expanded for b alone again.
-      await act(async () => store.dispatch(closePane()))
-      await act(async () => button("Expand Panel")?.click())
-      expect(tabs()).toEqual(titles(["b"]))
       // A session brought in front by anything else — a notice, a menu — docks it too.
       await act(async () => store.dispatch(openSession({ sessionId: "a" })))
       expect(panel().dataset.maximized).toBeUndefined()
@@ -369,25 +346,6 @@ describe("the right panel, in both layouts", () => {
     expect(store.getState().workspace.chrome.sidebarWidth).toBe(240)
     await act(async () => root.unmount())
   })
-})
-
-it("keeps one tab the strip's Tab stop, the Agents overview open or not, and only tabs in its tablist", async () => {
-  const { root } = await render(ThreeColumns)
-  const stops = () =>
-    host.querySelectorAll('.workspace-tab-list [role="tab"][tabindex="0"]').length
-  expect(stops()).toBe(1)
-  await act(async () => press("showOverview"))
-  expect(
-    host.querySelectorAll('.workspace-tab-list [aria-selected="true"]'),
-  ).toHaveLength(0)
-  expect(stops()).toBe(1)
-  const named = [...host.querySelectorAll(".workspace-tab-list *")].filter(
-    (each) =>
-      each.getAttribute("role") !== null &&
-      !["tab", "none"].includes(each.getAttribute("role") ?? ""),
-  )
-  expect(named).toEqual([])
-  await act(async () => root.unmount())
 })
 
 describe("Agents in the sidebar is a place to go, like a channel", () => {
@@ -616,7 +574,7 @@ describe("a session's row carries its session to the panes by its pane item", ()
 })
 
 describe("a pane's close is offered where closing it does something", () => {
-  it("offers it on every pane of several, on a last one showing a session or a widget, and not on a last home", async () => {
+  it("offers it on every pane of several, on a last one showing a session, and not on a last home", async () => {
     const { store, root } = await render(ThreeColumns)
     const offered = () =>
       [...host.querySelectorAll('.workspace-pane-header [aria-label^="Close Pane"]')].map(
@@ -682,20 +640,9 @@ describe("a pane's close is offered where closing it does something", () => {
     }
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
-    // A new session opens in a tab of its own: its pane closes that tab.
     await act(async () => void store.dispatch(newSession()))
-    expect(offered()).toEqual([true])
-    // The window's last tab, on a home, has nothing to close to.
-    for (const id of ["a", "b"])
-      await act(async () => void store.dispatch(closeSessionTab({ sessionId: id })))
-    expect(store.getState().workspace.tabs.tabs).toHaveLength(1)
     expect(offered()).toEqual([false])
     expect(await menuOffers()).toBe(false)
-    await act(async () =>
-      store.dispatch(openWidget({ widget: { plugin: "p", id: "i" }, place: "pane" })),
-    )
-    expect(offered()).toEqual([true])
-    expect(await menuOffers()).toBe(true)
     await act(async () => root.unmount())
   })
 })
@@ -1140,8 +1087,8 @@ describe("a draft's close", () => {
         : undefined
       if (!draftPane) throw new Error("draft pane missing")
       await act(async () => void store.dispatch(closePane({ pane: draftPane.key })))
-      // The draft lives with its window tab: closing its pane keeps it to reopen.
-      expect(store.getState().workspace.drafts).toHaveProperty(draftId)
+      expect(store.getState().workspace.drafts).not.toHaveProperty(draftId)
+      expect(store.getState().workspace.composerText).not.toHaveProperty(draftId)
       expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
       await act(async () => frames.runFrame())
       await act(async () => frames.runFrame())

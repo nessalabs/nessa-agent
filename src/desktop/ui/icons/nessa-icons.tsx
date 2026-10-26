@@ -47,6 +47,13 @@ const pane = <rect x="3" y="4" width="14" height="12" rx="3" />
 const shield = (
   <path d="M10 3.5l5.5 2v4.25c0 3.35-2.3 5.7-5.5 6.75-3.2-1.05-5.5-3.4-5.5-6.75V5.5z" />
 )
+const calendar = (
+  <>
+    <rect x="3.75" y="4.75" width="12.5" height="11.5" rx="2.5" />
+    <path d="M3.75 8.5h12.5M7.25 3.25v3M12.75 3.25v3" />
+  </>
+)
+const pin = <path d="M7.5 3.75h5l-.75 4.5 2.5 2.5h-8.5l2.5-2.5zM10 10.75v5.5" />
 const folder = (
   <path d="M3.5 6.25c0-.97.78-1.75 1.75-1.75h2.9l1.75 1.75h4.85c.97 0 1.75.78 1.75 1.75v5.75c0 .97-.78 1.75-1.75 1.75h-9.5c-.97 0-1.75-.78-1.75-1.75z" />
 )
@@ -272,6 +279,124 @@ export const nessaIcons: DesktopIconFamily = {
       <circle cx="10" cy="10" r="6.5" />
       <path d="M10 9.25v4.25" />
       <Dot x={10} y={6.9} r={0.95} />
+    </>,
+  ),
+
+  // A book on its spine, as a code host draws a repository: the label on its
+  // cover, and the page edge along the bottom.
+  repositories: drawn(
+    <>
+      <path d="M5.25 15.25V5a1.5 1.5 0 0 1 1.5-1.5h8v10H6.75a1.5 1.5 0 0 0-1.5 1.5 1.5 1.5 0 0 0 1.5 1.5h8" />
+      <path d="M8.25 6.5h3.5" />
+    </>,
+  ),
+  // Connections' two links with the line between them broken, and the sparks
+  // of the break.
+  disconnect: drawn(
+    <>
+      <circle cx="6.25" cy="13.75" r="2.25" />
+      <circle cx="13.75" cy="6.25" r="2.25" />
+      <path d="M7.9 12.1l.85-.85M11.25 8.75l.85-.85M9 4.5V3.5M16.5 11h-1M4.25 9.25l-.75-.75M11 16.5v-1" />
+    </>,
+  ),
+
+  // Menu rows. A pane's own actions draw on the pane shape; a move points
+  // at the edge the pane goes to.
+  open: drawn(
+    <path d="M11 4h5v5M16 4l-6.5 6.5M14 11.5v2.75c0 .97-.78 1.75-1.75 1.75h-6.5C4.78 16 4 15.22 4 14.25v-6.5C4 6.78 4.78 6 5.75 6H8.5" />,
+  ),
+  openBeside: drawn(
+    <>
+      {pane}
+      <path d="M10 4v12M13.5 8.25v3.5M11.75 10h3.5" />
+    </>,
+  ),
+  closePane: drawn(
+    <>
+      {pane}
+      <path d="M8.25 8.25l3.5 3.5M11.75 8.25l-3.5 3.5" />
+    </>,
+  ),
+  moveLeft: drawn(<path d="M4.5 4.5v11M15.5 10H8M11.25 6.75 8 10l3.25 3.25" />),
+  moveRight: drawn(<path d="M15.5 4.5v11M4.5 10H12M8.75 6.75 12 10l-3.25 3.25" />),
+  moveUp: drawn(<path d="M4.5 4.5h11M10 15.5V8M6.75 11.25 10 8l3.25 3.25" />),
+  moveDown: drawn(<path d="M4.5 15.5h11M10 4.5V12M6.75 8.75 10 12l3.25-3.25" />),
+  evenOut: drawn(
+    <>
+      {pane}
+      <path d="M10 4v12M5.75 10h1.5M12.75 10h1.5" />
+    </>,
+  ),
+  picture: drawn(
+    <>
+      {pane}
+      <circle cx="7.5" cy="8" r="1.25" />
+      <path d="M17 13l-3.5-3.5L6 16" />
+    </>,
+  ),
+  nightScene: drawn(
+    <path d="M15.5 12.25A6 6 0 1 1 7.75 4.5a4.75 4.75 0 0 0 7.75 7.75z" />,
+  ),
+  position: drawn(
+    <path d="M10 3.75v12.5M3.75 10h12.5M8.25 5.5 10 3.75l1.75 1.75M8.25 14.5 10 16.25l1.75-1.75M5.5 8.25 3.75 10l1.75 1.75M14.5 8.25 16.25 10l-1.75 1.75" />,
+  ),
+  // A field with the text cursor standing in it.
+  rename: drawn(
+    <path d="M11.5 6.5h-6a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h6M14.5 5v10M13 5h3M13 15h3" />,
+  ),
+  pin: drawn(pin),
+  unpin: drawn(
+    <>
+      {pin}
+      <path d="M4.25 4.25l11.5 11.5" />
+    </>,
+  ),
+  fork: drawn(
+    <>
+      <circle cx="6" cy="5" r="1.75" />
+      <circle cx="14" cy="5" r="1.75" />
+      <circle cx="10" cy="15" r="1.75" />
+      <path d="M6 6.75v.75A2.5 2.5 0 0 0 8.5 10h3A2.5 2.5 0 0 0 14 7.5v-.75M10 10v3.25" />
+    </>,
+  ),
+  share: drawn(
+    <path d="M10 12V3.75M7 6.75l3-3 3 3M5.5 10v4.5c0 .83.67 1.5 1.5 1.5h6c.83 0 1.5-.67 1.5-1.5V10" />,
+  ),
+  // A circle a quarter filled: under way.
+  ongoing: drawn(
+    <>
+      <circle cx="10" cy="10" r="6.25" />
+      <path d="M10 10V3.75A6.25 6.25 0 0 1 16.25 10z" fill="currentColor" stroke="none" />
+    </>,
+  ),
+  anyTime: drawn(
+    <>
+      <circle cx="10" cy="10" r="6.25" />
+      <path d="M10 6.75V10l2.25 1.5" />
+    </>,
+  ),
+  today: drawn(
+    <>
+      {calendar}
+      <Dot x={10} y={12.25} r={1.1} />
+    </>,
+  ),
+  lastWeek: drawn(
+    <>
+      {calendar}
+      <path d="M7 12.25h6" />
+    </>,
+  ),
+  lastMonth: drawn(
+    <>
+      {calendar}
+      <path d="M7 11.25h6M7 13.75h4" />
+    </>,
+  ),
+  tag: drawn(
+    <>
+      <path d="M3.75 10.25v-5.5c0-.55.45-1 1-1h5.5l6 6-6.5 6.5z" />
+      <Dot x={7.25} y={7.25} r={1} />
     </>,
   ),
 }

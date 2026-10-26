@@ -41,9 +41,11 @@
  *               beside, the panes are regions of one flat chat surface that
  *               reaches the window's top, right and bottom edges: no pane
  *               draws a fill or rim of its own, and a hairline down the
- *               middle of the gutter between them divides them; the two
- *               are one merged tab: New Tab opens a home alone and leaves it
- *               as it was, and clicking back into it restores the split
+ *               middle of the gutter between them divides them; no tab
+ *               strip is drawn for the chats, each pane has one header in
+ *               the titlebar's row, clear of the window's controls, and its
+ *               picture runs up to the window's top edge — with the session
+ *               list shown and with the panes alone
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -102,10 +104,12 @@
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
- *               message sent after it is answered. While it is on, Pair a
- *               device shows a code with the window's own sign-in; the
- *               code is cancelled, and leaving the tab and coming back
- *               still shows linking on
+ *               message sent after it is answered. While it is on, the
+ *               gateway is found by a DNS-SD browse on its port, and Pair a
+ *               device opens a code with the window's own sign-in, in a
+ *               modal with one signal orb; Escape hides it, Show code
+ *               brings the same code back, Cancel closes it, and leaving
+ *               the tab and coming back still shows linking on
  *   drift       the gateway is stopped and started again with its staged
  *               runtime directory moved and a different agent PATH and
  *               TMPDIR, the way an app update stages a new tree and
@@ -127,7 +131,10 @@
  *   github      GitHub is connected in Settings › Connections › Accounts
  *               against a fake GitHub on this machine: the row shows the
  *               code GitHub handed out and where to enter it, and once the
- *               fake approves it names the account; the sign-in is a private
+ *               fake approves it shows the account's picture (GitHub's
+ *               avatar host answered by the page), its login and
+ *               "Connected", its actions out only under the pointer or
+ *               keyboard focus; the sign-in is a private
  *               file the gateway never logs; an agent started after it has
  *               GH_TOKEN and a git credential helper for github.com, both the
  *               token, and so do the commands it runs through Nessa's own
@@ -150,13 +157,21 @@
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
  *               their folders, and each conversation in its own
+ *   menu        the pane's ⋯ menu opens with every row leading with its
+ *               icon at the menu recipe's row height; in the overview's
+ *               filter the chosen scope and span each show their check
+ *               before their number, the numbers stand in one column, and
+ *               pressing a number picks that choice and closes the menu;
+ *               the message sent in the window after it is answered
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
  *               line, "Ran 3 tools", that opens to a row per call, each with
  *               its status and a bar on the shared time axis (at least as
  *               wide as it is tall, ending inside the axis), and a call's
- *               card shows its input
+ *               card shows its input. While the run is still at work it
+ *               alone says so: its line reads "Working", open or folded, the
+ *               call at work is named once, and no live row repeats it
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -208,6 +223,7 @@ import {
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { browse } from "./lib/mdns-probe.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
 import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
@@ -226,9 +242,16 @@ import {
   keys,
   names,
   offeredLabel,
+  overviewFilterKeys,
   selectorFor,
+  storage,
 } from "./lib/selectors.mjs"
-import { FAKE_ACCOUNT, startFakeGithub } from "./lib/fake-github.mjs"
+import {
+  FAKE_ACCOUNT,
+  FAKE_AVATAR,
+  GITHUB_AVATARS,
+  startFakeGithub,
+} from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
@@ -368,6 +391,8 @@ class Run {
     this.sent = new Map()
     /** Where native linking listens once the `linking` step turns it on. */
     this.nativeAddress = stack.nativeAddress
+    /** What config.json names for it: every interface, on the same port. */
+    this.nativeListen = stack.nativeListen
   }
 
   /** Waits while a restart holds the gateway. */
@@ -502,39 +527,40 @@ async function setSideRail(page, on, failures) {
 }
 
 /**
- * The expanded right panel is the chat in front's: the strip shows that
- * chat's tab alone and no toggles for the columns it covers. New Tab docks
- * it before the new session opens, so the session is in front, in sight —
- * never under the panel. The new home is closed again and the chat brought
- * back, docked.
+ * The expanded right panel is the chat in front's: its own tabs, or with
+ * nothing open its note, no tab strip for the chats and no toggles for the
+ * columns it covers. ⌘N docks it before the new session opens, so the
+ * session is in front, in sight — never under the panel. The chat is
+ * brought back, docked.
  */
-async function expandedForItsChat(page, failures) {
-  const tabs = page.getByRole("tablist", { name: "Open views" })
-  const chat = await tabs
-    .locator('[role="tab"][aria-selected="true"]')
-    .locator("..")
-    .getAttribute("data-session-tab")
-  if ((await tabs.locator('[role="tab"]').count()) !== 1)
-    failures.push("the expanded panel's strip shows other chats' tabs")
+async function expandedForItsChat(run, failures) {
+  const page = run.page
+  if (
+    await page.locator('[role="tablist"]:not(#workspace-panel [role="tablist"])').count()
+  )
+    failures.push("the window draws a tab strip for the chats")
+  const panel = page.locator("#workspace-panel")
+  if (
+    !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
+    ((await panel.locator("[data-panel-empty]").count()) &&
+      (await panel.innerText()).trim() !== "Nothing open")
+  )
+    failures.push(
+      `the expanded panel shows neither its tabs nor its note: "${await panel.innerText()}"`,
+    )
   if (await page.locator(`${css.titlebar} [aria-controls="workspace-sidebar"]`).count())
     failures.push("the expanded panel's titlebar offers the sidebar it covers")
-  await page.getByRole("button", { name: /^New Tab/ }).click()
+  await page.keyboard.press(keys.newSession)
   const docked = await waitFor(
     async () => (await page.locator("#workspace-panel[data-maximized]").count()) === 0,
     2000,
   )
-  if (!docked) failures.push("New Tab left the panel expanded over the new session")
+  if (!docked) failures.push("⌘N left the panel expanded over the new session")
   const home = page.locator(`${css.focusedPane} ${css.paneHome}`)
   await home.locator(css.field).waitFor({ timeout: 15_000 })
   if (await home.evaluate((node) => node.closest("[inert]") !== null))
     failures.push("the new session opened under the panel")
-  if ((await tabs.locator('[role="tab"]').count()) < 2)
-    failures.push("docked again, the strip did not show the other tabs")
-  await page.keyboard.press(keys.closePane)
-  await home.waitFor({ state: "detached", timeout: 5000 }).catch(() => {
-    failures.push("⌘W did not close the new session's home")
-  })
-  if (chat) await tabs.locator(`[data-session-tab="${chat}"] [role="tab"]`).click()
+  await openStressConversation(page, run.main.id, run.main.title)
 }
 
 /**
@@ -826,6 +852,108 @@ async function send(
   if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
   run.sent.set(conversationId, (run.sent.get(conversationId) ?? 0) + 1)
   return before
+}
+
+/**
+ * The `trace` turn's run while it is still at work, after its last call: the
+ * run's trace alone says so. Open, it reads "Working" over a row per call,
+ * and the call at work is named once, in the run, with no live row under it
+ * saying the same; folded, its line still reads "Working". The run is live
+ * only for the turn's hold, so what it draws is read in one go, and nothing
+ * after that waits on it still being live.
+ */
+async function traceWhileLive(run, failures) {
+  const drawn = await waitFor(
+    () =>
+      run.page.evaluate(
+        (tools) => {
+          const works = document.querySelectorAll(
+            '.workspace-work[data-status="running"]',
+          )
+          if (works.length !== 1) return null
+          const work = works[0]
+          const rows = work.querySelectorAll('[data-slot="tool-trace-step"]')
+          if (rows.length !== tools.length) return null
+          const last = rows[rows.length - 1].textContent ?? ""
+          const label = tools.find((tool) => last.includes(tool)) ?? null
+          const count = (text) => (label ? (text ?? "").split(label).length - 1 : 0)
+          // The turn's own message, and any live row drawn in its transcript:
+          // an earlier run of the same calls is not this one.
+          const live = [
+            ...(work
+              .closest(".workspace-transcript")
+              ?.querySelectorAll(".workspace-live") ?? []),
+          ]
+          return {
+            label,
+            last,
+            line: work.querySelector('[data-slot="tool-trace-line"]')?.textContent ?? "",
+            rows: live.length,
+            times:
+              count(work.closest(".workspace-message")?.textContent) +
+              live.reduce((sum, row) => sum + count(row.textContent), 0),
+          }
+        },
+        TRACE_CALLS.map((call) => call.tool),
+      ),
+    15_000,
+  )
+  if (!drawn) {
+    failures.push(
+      `the window never drew the trace turn's ${TRACE_CALLS.length} calls as a live run`,
+    )
+    return
+  }
+  if (drawn.rows !== 0)
+    failures.push(`a live row repeats the running trace under it (${drawn.rows})`)
+  if (drawn.times !== 1)
+    failures.push(
+      `the call at work, ${drawn.label ?? JSON.stringify(drawn.last)}, is named ${drawn.times} times, not once`,
+    )
+  if (!drawn.line.includes("Working"))
+    failures.push(`the live run's line reads ${JSON.stringify(drawn.line)}`)
+  const work = run.page.locator('.workspace-work[data-status="running"]')
+  const transcript = run.page.locator(".workspace-transcript").filter({ has: work })
+  const line = work.locator('[data-slot="tool-trace-line"]')
+  if (run.evidence) await liveShot(run, transcript, "live")
+  // Folded while it works, its line is the one sign of it, still "Working".
+  // A turn that ended first has nothing left to fold.
+  try {
+    await line.click({ timeout: 2_000 })
+  } catch {
+    if ((await work.count()) === 0) return
+    throw new Error("the live run's line cannot be clicked")
+  }
+  const folded = await waitFor(
+    async () =>
+      (await work.count()) === 0 ||
+      ((await line.getAttribute("aria-expanded", { timeout: 500 }).catch(() => null)) ===
+        "false" &&
+        ((await line.textContent({ timeout: 500 }).catch(() => "")) ?? "").includes(
+          "Working",
+        ) &&
+        (await transcript.locator(".workspace-live").count()) === 0),
+    2_000,
+  )
+  if (!folded) failures.push("the live run, folded, does not read Working on its own")
+  else if (run.evidence) await liveShot(run, transcript, "live-folded")
+}
+
+/**
+ * Evidence of the live run, taken from the page by the transcript's box: an
+ * element's own screenshot waits for it to keep still, which a shimmering
+ * line never does within the hold. A run that ended first is not shot.
+ */
+async function liveShot(run, transcript, name) {
+  const box = await transcript.boundingBox({ timeout: 1_000 }).catch(() => null)
+  if (!box) return
+  await run.page
+    .screenshot({
+      path: join(run.evidence, `trace-${run.engine ?? "window"}-${name}.png`),
+      clip: box,
+      timeout: 4_000,
+    })
+    .catch((error) => log(`trace ${name} screenshot: ${error.message.split("\n")[0]}`))
 }
 
 /** The execution ids of the turns `conversationId` has now. */
@@ -1750,7 +1878,8 @@ const steps = {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
       if (!(await switchLinking(run, true, failures))) return
-      if (!(await pairFromWindow(run.page, failures))) return
+      if (!(await announced(run, failures))) return
+      if (!(await pairFromWindow(run, failures))) return
       // Away and back: the tab reads linking again, and it is still on.
       await closeSettings(run.page)
       await openLinkedDevices(run.page)
@@ -1779,101 +1908,178 @@ const steps = {
             .screenshot({ path: join(run.evidence, `github-${name}.png`) })
             .catch(() => {})
         : undefined
-    await run.exclusive(async () => {
-      await openAccounts(run.page)
-      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
-        failures.push(`GitHub was ${await state()} before Connect`)
-        return
-      }
-      await shot("signed-out")
-      await row.getByRole("button", { name: names.githubConnect }).click()
-      const code = row.locator("[data-github-code]")
-      const shown = await waitFor(
-        async () =>
-          github.userCode() !== null &&
-          (await code.getAttribute("data-github-code").catch(() => null)) ===
-            github.userCode(),
-        30_000,
-      )
-      if (!shown) {
-        failures.push(
-          `the row did not show the code GitHub handed out (${github.userCode()})`,
+    // GitHub's avatar host, answered here: which pictures were asked for.
+    const avatars = []
+    const pictures = `${GITHUB_AVATARS}/**`
+    const answer = (route) => {
+      avatars.push(route.request().url())
+      return route.fulfill({ contentType: "image/png", body: FAKE_AVATAR })
+    }
+    await run.page.route(pictures, answer)
+    // Answered until the step ends: its Disconnect reopens the signed-in row.
+    try {
+      await run.exclusive(async () => {
+        await openAccounts(run.page)
+        if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
+          failures.push(`GitHub was ${await state()} before Connect`)
+          return
+        }
+        await shot("signed-out")
+        await row.getByRole("button", { name: names.githubConnect }).click()
+        const code = row.locator("[data-github-code]")
+        const shown = await waitFor(
+          async () =>
+            github.userCode() !== null &&
+            (await code.getAttribute("data-github-code").catch(() => null)) ===
+              github.userCode(),
+          30_000,
         )
-        return
-      }
-      await shot("connecting")
-      const open = await row.locator("[data-github-open]").getAttribute("href")
-      if (open !== github.verificationUri)
-        failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
-      // The person enters the code on GitHub: the gateway's next poll takes it.
-      github.approve()
-      const connected = await waitFor(
-        async () =>
-          (await state()) === "connected" &&
-          (await row.textContent()).includes(`Signed in as @${FAKE_ACCOUNT.login}.`),
-        30_000,
-      )
-      if (!connected) {
-        failures.push(`the row is ${await state()} after GitHub approved the code`)
-        return
-      }
-      await shot("connected")
-      const repositories = await row
-        .locator("[data-github-repositories]")
-        .getAttribute("href")
-      if (repositories !== github.installUrl)
-        failures.push(
-          `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+        if (!shown) {
+          failures.push(
+            `the row did not show the code GitHub handed out (${github.userCode()})`,
+          )
+          return
+        }
+        await shot("connecting")
+        const open = await row.locator("[data-github-open]").getAttribute("href")
+        if (open !== github.verificationUri)
+          failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
+        // The person enters the code on GitHub: the gateway's next poll takes it.
+        github.approve()
+        const connected = await waitFor(
+          async () =>
+            (await state()) === "connected" &&
+            (await row.textContent()).includes(`@${FAKE_ACCOUNT.login}`) &&
+            (await row.locator(css.githubStatus).textContent()) === "Connected",
+          30_000,
         )
-      await closeSettings(run.page)
-    })
-    if (failures.length) return
-    if (!existsSync(signIn)) failures.push("the sign-in was not saved")
-    else if ((lstatSync(signIn).mode & 0o077) !== 0)
-      failures.push(
-        `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
+        if (!connected) {
+          failures.push(`the row is ${await state()} after GitHub approved the code`)
+          return
+        }
+        // The picture is GitHub's, asked for by the account's id: the page was
+        // answered above, so it loads here with nothing leaving the machine.
+        const avatar = run.page.locator(`${css.githubAvatar} img`)
+        const pictured = await waitFor(
+          () =>
+            avatar
+              .evaluate((image) => image.complete && image.naturalWidth > 0)
+              .catch(() => false),
+          10_000,
+        )
+        if (!pictured) failures.push("the row did not draw the account's picture")
+        if (!avatars.some((url) => url.includes(`/u/${FAKE_ACCOUNT.id}?`)))
+          failures.push(
+            `the picture was not asked for by id: ${avatars.join(", ") || "none"}`,
+          )
+        // At rest the actions are out of sight; the pointer or focus brings them.
+        const opacity = (selector) =>
+          row.locator(selector).evaluate((node) => getComputedStyle(node).opacity)
+        const shows = (actions) =>
+          waitFor(
+            async () =>
+              (await opacity(css.githubActions)) === (actions ? "1" : "0") &&
+              (await opacity(css.githubStatus)) === (actions ? "0" : "1"),
+            5_000,
+          )
+        await run.page.mouse.move(1, 1)
+        if (!(await shows(false))) failures.push("the actions show with the row at rest")
+        // Hidden is out of reach too: what is under Disconnect's spot at rest is not it.
+        const hit = await row
+          .getByRole("button", { name: names.githubDisconnect })
+          .evaluate((node) => {
+            const box = node.getBoundingClientRect()
+            const under = document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            )
+            return Boolean(under?.closest(".settings-github-actions"))
+          })
+        if (hit) failures.push("the hidden actions take the pointer at rest")
+        await shot("connected")
+        await row.hover()
+        if (!(await shows(true)))
+          failures.push("the actions did not show under the pointer")
+        await shot("connected-hover")
+        await run.page.mouse.move(1, 1)
+        if (!(await shows(false)))
+          failures.push("the actions still show once the pointer leaves")
+        // Both actions are in the tab order: Shift+Tab from Disconnect reaches
+        // Choose repositories, and Tab goes back.
+        const disconnect = row.getByRole("button", { name: names.githubDisconnect })
+        const focused = (locator) =>
+          locator.evaluate((node) => node === document.activeElement)
+        await disconnect.focus()
+        await run.page.keyboard.press("Shift+Tab")
+        if (!(await focused(row.locator("[data-github-repositories]"))))
+          failures.push("Shift+Tab from Disconnect did not reach Choose repositories")
+        await run.page.keyboard.press("Tab")
+        if (!(await focused(disconnect)))
+          failures.push("Tab from Choose repositories did not reach Disconnect")
+        if (!(await shows(true)))
+          failures.push("the actions did not show with focus in the row")
+        await shot("connected-focus")
+        const repositories = await row
+          .locator("[data-github-repositories]")
+          .getAttribute("href")
+        if (repositories !== github.installUrl)
+          failures.push(
+            `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+          )
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      if (!existsSync(signIn)) failures.push("the sign-in was not saved")
+      else if ((lstatSync(signIn).mode & 0o077) !== 0)
+        failures.push(
+          `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
+        )
+      if (run.stack.gateway.log().includes(github.token))
+        failures.push("the gateway logged the GitHub token")
+      // An agent opened now is started with the sign-in, for gh and for git.
+      await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
+      await githubAgent(
+        run,
+        step,
+        " connected",
+        `token=${print} git=${print}`,
+        failures,
+        true,
       )
-    if (run.stack.gateway.log().includes(github.token))
-      failures.push("the gateway logged the GitHub token")
-    // An agent opened now is started with the sign-in, for gh and for git.
-    await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
-    await githubAgent(
-      run,
-      step,
-      " connected",
-      `token=${print} git=${print}`,
-      failures,
-      true,
-    )
-    if (failures.length) return
-    await run.exclusive(async () => {
-      await openAccounts(run.page)
-      await row.getByRole("button", { name: names.githubDisconnect }).click()
-      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
-        failures.push(`the row is ${await state()} after Disconnect`)
-      await closeSettings(run.page)
-    })
-    if (failures.length) return
-    if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
-    await githubAgent(run, step, " disconnected", "token=none git=none", failures)
-    await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
-    // Each step of both is on record, and no record holds the token.
-    const audit = join(namespace, "conversations", "audit", "github")
-    const records = existsSync(audit) ? readdirSync(audit) : []
-    for (const event of [
-      "connect-requested",
-      "connected",
-      "disconnect-requested",
-      "disconnected",
-    ])
-      if (!records.some((name) => name.endsWith(`-${event}.json`)))
-        failures.push(`the audit has no ${event} record`)
-    if (
-      records.some((name) =>
-        readFileSync(join(audit, name), "utf8").includes(github.token),
+      if (failures.length) return
+      await run.exclusive(async () => {
+        await openAccounts(run.page)
+        // The actions are out of reach until the pointer is over the row, as a person's is.
+        await row.hover()
+        await row.getByRole("button", { name: names.githubDisconnect }).click()
+        if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
+          failures.push(`the row is ${await state()} after Disconnect`)
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
+      await githubAgent(run, step, " disconnected", "token=none git=none", failures)
+      await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
+      // Each step of both is on record, and no record holds the token.
+      const audit = join(namespace, "conversations", "audit", "github")
+      const records = existsSync(audit) ? readdirSync(audit) : []
+      for (const event of [
+        "connect-requested",
+        "connected",
+        "disconnect-requested",
+        "disconnected",
+      ])
+        if (!records.some((name) => name.endsWith(`-${event}.json`)))
+          failures.push(`the audit has no ${event} record`)
+      if (
+        records.some((name) =>
+          readFileSync(join(audit, name), "utf8").includes(github.token),
+        )
       )
-    )
-      failures.push("an audit record holds the GitHub token")
+        failures.push("an audit record holds the GitHub token")
+    } finally {
+      await run.page.unroute(pictures, answer)
+    }
   },
 
   async upgrade(run, step, failures) {
@@ -1983,6 +2189,214 @@ const steps = {
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
+  async menuPanel(run, step, failures) {
+    const page = await panelWindow(run)
+    try {
+      const strip = page.locator(css.panelTabs)
+      if (
+        !(await strip.waitFor({ timeout: 30_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("the panel drew no tab strip")
+        return
+      }
+      if ((await strip.getAttribute("data-variant")) !== "dots")
+        failures.push("the panel's tabs are not page dots")
+      // Messages, then the main conversation from its row: a chat opened
+      // from the list takes a dot, and its name leads the strip.
+      await page.locator(css.panelMessages).click()
+      const rowFor = (title) =>
+        page.locator(css.panelListRow).filter({ hasText: title }).first()
+      if (
+        !(await rowFor(run.main.title)
+          .waitFor({ timeout: 15_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      ) {
+        failures.push(
+          `the panel's Messages does not list ${JSON.stringify(run.main.title)}`,
+        )
+        return
+      }
+      const dotsBefore = await page.locator(css.panelDot).count()
+      await rowFor(run.main.title).click()
+      await panelNamed(page, run.main.title, failures)
+      const dots = await page.locator(css.panelDot).count()
+      if (dots !== dotsBefore + 1)
+        failures.push(`opening a chat left ${dots} dots, not ${dotsBefore + 1}`)
+      // The selected dot is the bar: wider than every other dot, once its
+      // width has settled.
+      const widths = () =>
+        page.locator(css.panelDot).evaluateAll((all) =>
+          all.map((dot) => ({
+            width: dot.getBoundingClientRect().width,
+            selected: dot.closest("[data-active]") !== null,
+          })),
+        )
+      const oneBar = (all) => {
+        const bar = all.filter((each) => each.selected)
+        return (
+          bar.length === 1 &&
+          all.every((each) => each.selected || each.width + 6 <= bar[0].width)
+        )
+      }
+      if (!(await waitFor(async () => oneBar(await widths()), 5_000)))
+        failures.push(
+          `the selected dot is not the one bar: ${JSON.stringify(await widths())}`,
+        )
+      // A message sent from the panel wears the chat accent and its rim.
+      const text = prompt(run, STRESS.reply, step, " from the panel")
+      const seen = await seenTurns(run, run.main.id)
+      const box = page.locator(css.panelComposer)
+      await box.click()
+      await page.keyboard.type(text)
+      await page.keyboard.press("Enter")
+      run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+      await settled(run, run.main.id, seen, text, "completed", failures)
+      const bubble = page.locator(css.sentBubble).filter({ hasText: text }).first()
+      if (
+        !(await bubble.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("the panel does not show the message it sent")
+      } else {
+        // Its colours are nessa_ui's to choose: the bubble must wear the chat
+        // accent and its rim, whatever values the theme gives them.
+        const paint = await bubble.evaluate((node) => {
+          const probe = document.createElement("span")
+          probe.style.background = "var(--nessa-chat-accent)"
+          probe.style.boxShadow = "var(--nessa-chat-accent-rim)"
+          node.parentElement.append(probe)
+          const want = getComputedStyle(probe)
+          const style = getComputedStyle(node)
+          const paint = {
+            background: style.backgroundColor,
+            accent: want.backgroundColor,
+            shadow: style.boxShadow,
+            rim: want.boxShadow,
+          }
+          probe.remove()
+          return paint
+        })
+        if (
+          paint.accent === "rgba(0, 0, 0, 0)" ||
+          paint.rim === "none" ||
+          paint.background !== paint.accent ||
+          !paint.shadow.includes(paint.rim)
+        )
+          failures.push(
+            `a sent bubble does not wear the chat accent and its rim: ${JSON.stringify(paint)}`,
+          )
+      }
+      // The panel has no workspace, so its reply is looked for on the page.
+      const echo = `${SAYS.echo}${text}`
+      if (
+        !(await page
+          .getByText(echo)
+          .first()
+          .waitFor({ timeout: 30_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      )
+        failures.push(`the panel does not show ${JSON.stringify(echo)}`)
+      // A chat archived from Messages leaves a row card with its avatar,
+      // and the card's Undo brings it back, in the list and the gateway.
+      const conversationId = randomUUID()
+      const first = prompt(run, STRESS.reply, step, " to archive")
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
+      run.checked.push(conversationId)
+      await settled(run, conversationId, new Set(), first, "completed", failures)
+      const title = await titleOf(run, conversationId)
+      await page.locator(css.panelMessages).click()
+      const row = rowFor(title)
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push(`the panel's Messages does not list ${JSON.stringify(title)}`)
+        return
+      }
+      await row.focus()
+      // From the keyboard: a pointer click races the row sliding open, and a
+      // list that redraws under it. Shift+F10 opens the actions and focuses
+      // the first; Tab walks them.
+      await page.keyboard.press("Shift+F10")
+      await waitFor(
+        () =>
+          page.evaluate(
+            () =>
+              document.activeElement?.getAttribute("data-slot") ===
+              "conversation-history-row-action",
+          ),
+        5_000,
+      )
+      const onArchive = () =>
+        page.evaluate(
+          (name) => document.activeElement?.getAttribute("aria-label") === name,
+          `Archive ${title}`,
+        )
+      for (let tabs = 0; tabs < 4 && !(await onArchive()); tabs++)
+        await page.keyboard.press("Tab")
+      if (!(await onArchive())) {
+        failures.push(
+          `Shift+F10 on ${JSON.stringify(title)} does not reach its Archive action`,
+        )
+        return
+      }
+      await page.keyboard.press("Enter")
+      const undoCard = page.locator(css.undoCard)
+      if (
+        !(await undoCard.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("archiving from the panel left no undo card")
+        return
+      }
+      if (!(await undoCard.innerText()).includes(title))
+        failures.push(`the undo card does not name ${JSON.stringify(title)}`)
+      if ((await undoCard.locator(css.randomAvatar).count()) !== 1)
+        failures.push("the undo card does not lead with the conversation's avatar")
+      const archived = async (want) =>
+        waitFor(async () => {
+          const { conversations } = await run.client.conversation.list({ archived: true })
+          return (
+            conversations.some((each) => each.conversationId === conversationId) === want
+          )
+        }, 15_000)
+      if (!(await archived(true)))
+        failures.push("the gateway did not archive the conversation")
+      await undoCard.getByRole("button", { name: /^Undo/ }).click()
+      if (!(await archived(false)))
+        failures.push("Undo did not unarchive the conversation")
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("Undo did not put the row back in the panel's Messages")
+      if (!(await waitFor(async () => (await undoCard.count()) === 0, 5_000)))
+        failures.push("the undo card stayed after Undo")
+    } finally {
+      await page.close()
+    }
+  },
+
   async rail(run, step, failures) {
     await run.exclusive(async () => {
       await setSideRail(run.page, true, failures)
@@ -2061,7 +2475,7 @@ const steps = {
         ))
       )
         failures.push("Expand Panel did not maximize it")
-      await expandedForItsChat(page, failures)
+      await expandedForItsChat(run, failures)
       await page.getByRole("button", { name: "Expand Panel" }).click()
       if (
         !(await waitFor(
@@ -2500,9 +2914,22 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
-    // The two are one merged tab. A new tab stands alone and leaves the
-    // merged tab as it was; clicking back into it restores the split.
-    await mergedTabStays(run, conversationId, failures)
+    // One header per chat, in the titlebar's row — beside the session list,
+    // and with the panes alone at the window's edge.
+    await headersLand(run.page, "beside the session list", failures)
+    await run.page.keyboard.press(keys.toggleSessionList)
+    await waitFor(
+      async () =>
+        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 1,
+      5_000,
+    )
+    await headersLand(run.page, "with the panes alone", failures)
+    await run.page.keyboard.press(keys.toggleSessionList)
+    await waitFor(
+      async () =>
+        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 0,
+      5_000,
+    )
     if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
     await run.page.keyboard.press(keys.closePane)
@@ -2619,27 +3046,10 @@ const steps = {
         clients.push(await connectClient(run.stack.gateway, INSTANCE, "panel"))
       for (let n = 0; n < FRESH_BURST; n += 1)
         burst.push(startedBeside(run, clients[n % FRESH_CLIENTS], step, n, failures))
-      const tabs = run.page.getByRole("tablist", { name: "Open views" })
-      const previous = await tabs
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")
-      await run.page.getByRole("button", { name: /^New Tab/ }).click()
+      await run.page.keyboard.press(keys.newSession)
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
       await home.locator(css.field).fill(text)
-      const draft = await tabs
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")
-      if (previous) {
-        await tabs.locator(`[data-session-tab="${previous}"] [role="tab"]`).click()
-        await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
-        if ((await home.locator(css.field).inputValue()) !== text)
-          failures.push(
-            "switching workspace tabs lost the new conversation's first message",
-          )
-      }
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
         () => selectedStressConversation(run.page, text),
@@ -3118,6 +3528,7 @@ const steps = {
   async trace(run, step, failures) {
     const text = prompt(run, STRESS.trace, step)
     const seen = await send(run, run.main.id, text, failures)
+    await traceWhileLive(run, failures)
     const { view, turn } = await settled(
       run,
       run.main.id,
@@ -3288,6 +3699,101 @@ const steps = {
       ))
     )
       failures.push("the run does not fold again")
+  },
+
+  async menu(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const menu = page.locator(css.menu)
+      const menuGone = () => menu.waitFor({ state: "detached", timeout: 5_000 })
+      // The pane's ⋯ menu: every row leads with its icon, one row height.
+      await page.locator(css.paneActions).first().click()
+      const pane = await menuRows(page)
+      if (run.evidence)
+        await page.screenshot({ path: join(run.evidence, `menu-${run.engine}-pane.png`) })
+      if (pane.length === 0) failures.push("the pane's ⋯ menu showed no rows")
+      for (const row of pane) {
+        if (!row.leads)
+          failures.push(`the pane menu's ${row.name} row leads with no icon`)
+        if (row.height !== MENU_ROW)
+          failures.push(
+            `the pane menu's ${row.name} row is ${row.height}px, not ${MENU_ROW}`,
+          )
+      }
+      await page.keyboard.press(keys.escape)
+      await menuGone()
+      // The overview's filter: the chosen choice's check before its number,
+      // the numbers in one column, and a number picks its choice.
+      const had = await page.evaluate((key) => {
+        try {
+          return JSON.parse(localStorage.getItem(key) ?? "null")
+        } catch {
+          return null
+        }
+      }, storage.overviewFilter)
+      await page.keyboard.press(keys.overview)
+      await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
+      const filter = page.locator(css.overviewFilter)
+      // The filter shows only over a list: a view that keeps every session
+      // out (an idle one under Ongoing) offers Show All instead.
+      if (!(await filter.isVisible())) {
+        await page.getByRole("button", { name: names.overviewShowAll }).click()
+        await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
+      }
+      const pick = async (key) => {
+        await filter.click({ timeout: 10_000 })
+        await page.keyboard.press(key)
+        await menuGone().catch(() =>
+          failures.push(`pressing ${key} left the filter open`),
+        )
+      }
+      await filter.click({ timeout: 10_000 })
+      const rows = await menuRows(page)
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `menu-${run.engine}-filter.png`),
+        })
+      const chosen = rows.filter((row) => row.checked)
+      if (chosen.length !== 2)
+        failures.push(
+          `the filter checked ${chosen.length} choices, not a scope and a span`,
+        )
+      for (const row of rows.filter((each) => each.radio)) {
+        if (!row.leads) failures.push(`the filter's ${row.name} row leads with no icon`)
+        if (row.shortcutRight !== rows.find((each) => each.radio)?.shortcutRight)
+          failures.push(`the filter's ${row.name} number is out of the column`)
+      }
+      for (const row of chosen)
+        if (!(row.checkRight !== null && row.checkRight <= row.shortcutLeft))
+          failures.push(`the filter's ${row.name} check is not before its number`)
+      await page.keyboard.press(keys.escape)
+      await menuGone()
+      // Any time, then Today: both keep this session (it changed just now)
+      // and so the filter on the page. Each number names its span on the chip.
+      for (const [key, label] of [
+        [overviewFilterKeys.today, "Today"],
+        [overviewFilterKeys.any, null],
+      ]) {
+        await pick(key)
+        const named = await waitFor(async () => {
+          const text = (await filter.textContent())?.trim() ?? ""
+          return label ? text.endsWith(`· ${label}`) : !text.includes("·")
+        }, 5_000)
+        if (!named) failures.push(`pressing ${key} did not choose its span in the filter`)
+      }
+      // Put the filter back as the person had it, the scope last: it may
+      // leave nothing listed, and the filter with it.
+      const keyFor = (choice, fallback) =>
+        typeof choice === "string" && Object.hasOwn(overviewFilterKeys, choice)
+          ? overviewFilterKeys[choice]
+          : overviewFilterKeys[fallback]
+      await pick(keyFor(had?.range, "any"))
+      await pick(keyFor(had?.scope, "ongoing"))
+      await page.keyboard.press(keys.escape)
+      await page.locator(css.overview).waitFor({ state: "detached", timeout: 10_000 })
+      await openStressConversation(page, run.main.id, run.main.title)
+      if (failures.length === 0) await steps.reply(run, step, failures)
+    })
   },
 
   async table(run, step, failures) {
@@ -3492,20 +3998,45 @@ const steps = {
   },
 }
 
+/** A menu row's height in nessa_ui's menu recipe, at the default scale. */
+const MENU_ROW = 30
+
+/**
+ * The open menu's rows as drawn: whether each leads with its icon, its
+ * height, whether it is checked, and where its check and shortcut sit.
+ */
+function menuRows(page) {
+  return page
+    .locator(css.menu)
+    .first()
+    .evaluate((menu) =>
+      [...menu.querySelectorAll('[role^="menuitem"]')].map((row) => {
+        const shortcut = row.querySelector('[data-slot$="menu-shortcut"]')
+        const check = row.querySelector('[data-slot$="menu-item-indicator"] svg')
+        const box = (element) => element?.getBoundingClientRect()
+        return {
+          name: row.textContent?.trim() ?? "",
+          leads: row.firstElementChild?.tagName.toLowerCase() === "svg",
+          height: Math.round(box(row).height),
+          radio: row.getAttribute("role") === "menuitemradio",
+          checked: row.getAttribute("aria-checked") === "true",
+          shortcut: shortcut?.textContent?.trim() ?? null,
+          shortcutLeft: shortcut ? Math.round(box(shortcut).left) : null,
+          shortcutRight: shortcut ? Math.round(box(shortcut).right) : null,
+          checkRight: check ? Math.round(box(check).right) : null,
+        }
+      }),
+    )
+}
+
 /**
  * Two panes side by side are regions of one flat chat surface, not cards
  * (`flatSurfaceFailures`): one hairline between them, mid-gutter.
  */
 /**
- * The merged tab (#1077): two conversations beside each other are one tab.
- * New Tab opens a home alone, the merged tab untouched; clicking one of the
- * merged tab's chats brings the split back as it was left, with that chat's
- * pane focused. The new tab is then closed.
- */
-/**
  * The window shows a thread's report as one line — the thread's chat as a
  * pill with its title, and what it did — never the report's text or ids;
- * pressed, the pill brings that chat to the front, in a tab of its own.
+ * pressed, the pill brings that chat to the front, in the focused pane.
  */
 async function reportLine(run, report, failures) {
   const thread = /^\[Thread report\] Thread (\S+) /.exec(report.userText)?.[1]
@@ -3536,13 +4067,10 @@ async function reportLine(run, report, failures) {
   )
     failures.push("the window shows the report's text, not just its line")
   await line.first().locator(`[data-chat-pill="${thread}"]`).click()
+  // In front: the focused pane shows it, which its list row says.
   const front = await waitFor(
     async () =>
-      (await run.page
-        .getByRole("tablist", { name: "Open views" })
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")) === thread,
+      (await selectedStressConversation(run.page, await titleOf(run, thread))) === thread,
     10_000,
   )
   if (!front)
@@ -3550,107 +4078,96 @@ async function reportLine(run, report, failures) {
   await openStressConversation(run.page, run.main.id, run.main.title)
 }
 
-async function mergedTabStays(run, besideId, failures) {
-  const tabs = run.page.getByRole("tablist", { name: "Open views" })
-  // A merged tab draws its chats together; only its chats are tabs.
-  const group = tabs.locator(".workspace-tab-group")
-  const widths = () =>
-    run.page
-      .locator(css.pane)
-      .evaluateAll((panes) =>
-        panes.map((pane) => Math.round(pane.getBoundingClientRect().width)),
+/**
+ * `oneHeaderPerChat` once the panes come to rest after a column folds or
+ * opens: what it measures is read again until it holds, or the columns'
+ * motion has had its time; what still fails then is the step's.
+ */
+async function headersLand(page, when, failures) {
+  let last = []
+  await waitFor(async () => {
+    last = []
+    await oneHeaderPerChat(page, when, last)
+    return last.length === 0
+  }, 5_000)
+  failures.push(...last)
+}
+
+/**
+ * The chats have no tabs (C1): no tab strip, and each pane has one header —
+ * its name, menu and close — in the titlebar's row, none of it on the
+ * window's controls (the cluster on the left, the panel's own on the
+ * right), and its picture up to the window's top edge, behind them.
+ */
+async function oneHeaderPerChat(page, when, failures) {
+  const state = await page.evaluate(
+    ({ titlebar, pane, header }) => {
+      const box = (e) => {
+        const b = e.getBoundingClientRect()
+        return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }
+      }
+      const shown = (e) => e.getClientRects().length > 0
+      return {
+        // Any tab list outside the right panel would be tabs for the chats.
+        strip: [...document.querySelectorAll('[role="tablist"]')].filter(
+          (list) => !list.closest("#workspace-panel"),
+        ).length,
+        bar: document.querySelector(titlebar).getBoundingClientRect().height,
+        controls: [
+          ...document.querySelectorAll(
+            `${titlebar} .workspace-titlebar-navigation button, ${titlebar} .workspace-titlebar-trailing button`,
+          ),
+        ]
+          .filter(shown)
+          .map(box),
+        panes: [...document.querySelectorAll(pane)].map((each) => ({
+          headers: [...each.querySelectorAll(header)].map((h) => ({
+            box: box(h),
+            parts: [...h.querySelectorAll("button, .workspace-pane-name")]
+              .filter(shown)
+              .map(box),
+          })),
+          box: box(each),
+          picture: [...each.querySelectorAll(".desktop-header, .desktop-header-image")]
+            .filter(shown)
+            .map(box)[0],
+        })),
+      }
+    },
+    { titlebar: css.titlebar, pane: css.pane, header: css.paneHeader },
+  )
+  const overlaps = (a, b) =>
+    a.left < b.right - 1 &&
+    b.left < a.right - 1 &&
+    a.top < b.bottom - 1 &&
+    b.top < a.bottom - 1
+  if (state.strip) failures.push(`${when}: a tab strip is drawn for the chats`)
+  for (const [at, pane] of state.panes.entries()) {
+    const name = `${when}, pane ${at + 1}`
+    if (pane.headers.length !== 1) {
+      failures.push(`${name}: ${pane.headers.length} headers, not one`)
+      continue
+    }
+    const [header] = pane.headers
+    if (header.box.top < -1 || header.box.bottom > state.bar + 1)
+      failures.push(
+        `${name}: its header is not in the titlebar row: ${JSON.stringify(header.box)}`,
       )
-  const before = await widths()
-  if ((await group.locator("[data-session-tab]").count()) !== 2) {
-    failures.push("two conversations side by side are not one merged tab")
-    return
-  }
-  await run.page.getByRole("button", { name: /^New Tab/ }).click()
-  if (
-    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 1, 10_000))
-  ) {
-    failures.push(
-      `a new tab shows ${await run.page.locator(css.pane).count()} panes, not 1`,
-    )
-    return
-  }
-  const fresh = await tabs
-    .locator('[role="tab"][aria-selected="true"]')
-    .locator("..")
-    .getAttribute("data-session-tab")
-  if ((await run.page.locator(`${css.focusedPane} ${css.paneHome}`).count()) !== 1)
-    failures.push("a new tab does not show a new session's home")
-  if ((await group.locator("[data-session-tab]").count()) !== 2)
-    failures.push("opening a new tab changed the merged tab")
-  if (fresh && (await group.locator(`[data-session-tab="${fresh}"]`).count()) > 0)
-    failures.push("a new tab joined the merged tab")
-  // At rest — once the selection's fade has run — a merged group is drawn
-  // as a plain tab is: no fill of its own.
-  const restFill = () =>
-    tabs.evaluate((list) => {
-      const fill = (e) => (e ? getComputedStyle(e).backgroundColor : null)
-      const group = list.querySelector(".workspace-tab-group:not([data-active])")
-      const plain = list.querySelector(
-        ":scope > .workspace-window-tab:not([data-active])",
-      )
-      return { group: fill(group), plain: fill(plain) ?? "rgba(0, 0, 0, 0)" }
-    })
-  if (
-    !(await waitFor(async () => {
-      const { group, plain } = await restFill()
-      return group === plain
-    }, 2_000))
-  ) {
-    const { group, plain } = await restFill()
-    failures.push(`an unselected merged tab is filled ${group}, a plain one ${plain}`)
-  }
-  // Each frame after the click: the panes go from the one tab's layout to
-  // the other's in one step, never through another.
-  const sampling = run.page.evaluate(
-    (pane) =>
-      new Promise((done) => {
-        const seen = []
-        const step = () => {
-          seen.push(
-            [...document.querySelectorAll(pane)]
-              .map((p) => Math.round(p.getBoundingClientRect().width))
-              .join(","),
+    for (const part of header.parts)
+      for (const control of state.controls)
+        if (overlaps(part, control))
+          failures.push(
+            `${name}: its header sits on a window control: ${JSON.stringify({ part, control })}`,
           )
-          if (seen.length < 30) requestAnimationFrame(step)
-          else done(seen)
-        }
-        requestAnimationFrame(step)
-      }),
-    css.pane,
-  )
-  await group.locator(`[data-session-tab="${besideId}"] [role="tab"]`).click()
-  const frames = [...new Set(await sampling)]
-  if (frames.length > 2)
-    failures.push(
-      `switching tabs passed through ${frames.length - 2} other layouts: ${frames.join(" → ")}`,
+    if (
+      pane.picture &&
+      (pane.picture.top > 0.5 || pane.picture.left > pane.box.left + 0.5)
     )
-  if (
-    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 2, 10_000))
-  ) {
-    failures.push("going back to the merged tab did not restore its split")
-    return
+      failures.push(
+        `${name}: its picture does not reach the window's top and its pane's left: ${JSON.stringify({ picture: pane.picture, pane: pane.box })}`,
+      )
   }
-  const after = await widths()
-  if (after.length !== before.length || after.some((w, i) => Math.abs(w - before[i]) > 1))
-    failures.push(`the merged tab came back at ${after} wide, not ${before}`)
-  if (!fresh) return
-  await tabs
-    .locator(`[data-session-tab="${fresh}"]`)
-    .getByRole("button", { name: /^Close Tab/ })
-    .click()
-  const closedAlone = await waitFor(
-    async () =>
-      (await tabs.locator(`[data-session-tab="${fresh}"]`).count()) === 0 &&
-      (await group.locator("[data-session-tab]").count()) === 2,
-    5_000,
-  )
-  if (!closedAlone)
-    failures.push("closing the new tab did not close it alone, the merged tab intact")
+  return state
 }
 
 async function flatPanes(page, failures) {
@@ -3752,6 +4269,35 @@ async function replayOnboarding(page, evidence) {
   const asked = (await page.evaluate(() => window.__fakeHostReplays)) - before
   await closeSettings(page)
   return asked
+}
+
+/** The menu-bar panel as the host opens it, over the run's gateway. */
+async function panelWindow(run) {
+  const page = await run.page.context().newPage()
+  await page.setViewportSize({ width: 420, height: 760 })
+  await page.addInitScript(gatewayHost, {
+    endpoint: run.stack.endpoint,
+    credential: run.stack.credential,
+    panel: true,
+  })
+  await page.goto(`${new URL(run.page.url()).origin}/index.html`)
+  return page
+}
+
+/** Waits until the panel's strip leads with `title`, the selected tab's name. */
+async function panelNamed(page, title, failures) {
+  const named = await waitFor(
+    async () =>
+      (
+        await page
+          .locator(css.panelCurrent)
+          .innerText()
+          .catch(() => "")
+      ).includes(title),
+    15_000,
+  )
+  if (!named)
+    failures.push(`the panel's strip does not lead with ${JSON.stringify(title)}`)
 }
 
 /**
@@ -4291,19 +4837,58 @@ async function closeSettings(page) {
 }
 
 /**
+ * With linking on, the gateway is found on the local network the way a phone
+ * that scanned the code finds it: a DNS-SD browse for `_nessa-link._tcp`
+ * hears it on its native port, with its gateway id. Resolves whether it did.
+ */
+async function announced(run, failures) {
+  const port = Number(run.nativeListen.split(":").pop())
+  let heard = []
+  for (
+    let attempt = 0;
+    attempt < 3 && !heard.some((each) => each.port === port);
+    attempt++
+  )
+    heard = await browse("_nessa-link._tcp.local", 3_000)
+  const gateway = heard.find((each) => each.port === port)
+  if (!gateway) {
+    failures.push(
+      `the gateway was not announced on port ${port}; heard ${JSON.stringify(heard)}`,
+    )
+    return false
+  }
+  if (!gateway.txt.gw) failures.push("the announcement carries no gateway id")
+  return Boolean(gateway.txt.gw)
+}
+
+/**
  * Pair a device on the Linked devices tab, with linking on: the window's own
  * sign-in opens a code, shown as a person pairing a phone sees it, never the
- * card that says this sign-in cannot manage credentials. The code is then
- * cancelled. Resolves whether all of that held.
+ * card that says this sign-in cannot manage credentials. The code opens in a
+ * modal with the one signal orb, none of it drawn on the page; Escape hides
+ * the modal and leaves the code open, and Show code brings back the same
+ * code. The code enrolls the owner's phone with full access: the gateway
+ * holds it as that class. Cancel in the modal then closes it and Pair a
+ * device is offered again. Resolves whether all of that held.
  */
-async function pairFromWindow(page, failures) {
+/** The class of a code that enrolls the owner's phone with full access. */
+const OWNER_PHONE_CLASS = "gateway-owner-conversation-read-write"
+
+async function pairFromWindow(run, failures) {
+  const { page } = run
   const before = failures.length
+  const dialog = page.locator(css.pairingDialog)
+  const codeIn = async () =>
+    (await dialog.locator('[data-slot="pairing-code-value"]').innerText()).replace(
+      /\s+/g,
+      "",
+    )
   await page.locator(selectorFor.linkedAction("pair")).click()
   const shown = await waitFor(
     async () =>
       (await page.locator(css.linkedRefused).count()) > 0
         ? "refused"
-        : (await page.locator(css.pairingCode).count()) > 0
+        : (await dialog.locator(css.pairingCode).count()) > 0
           ? "code"
           : null,
     10_000,
@@ -4312,18 +4897,63 @@ async function pairFromWindow(page, failures) {
     failures.push(
       shown === "refused"
         ? "Pair a device was refused: the window's sign-in cannot manage credentials"
-        : "Pair a device showed no code",
+        : "Pair a device opened no modal with a code",
     )
     return false
   }
-  const code = (
-    await page.locator('[data-slot="pairing-code-value"]').innerText()
-  ).replace(/\s+/g, "")
+  // The orb gathers in, then stays live: animated, not drawn still.
+  const orb = dialog.locator(css.signalOrb)
+  const live = await waitFor(
+    async () => (await orb.getAttribute("data-state").catch(() => null)) === "live",
+    5_000,
+  )
+  if (!live)
+    failures.push(
+      `the pairing orb was ${await orb.getAttribute("data-state").catch(() => "missing")}, not live`,
+    )
+  if (run.evidence)
+    await page
+      .screenshot({ path: join(run.evidence, `pairing-${run.engine}-modal.png`) })
+      .catch(() => {})
+  const code = await codeIn()
   if (!code) failures.push("the pairing code shown was empty")
-  await page.locator(selectorFor.linkedAction("cancel")).click()
+  // A phone paired from the window acts as the owner, with no share per chat.
+  const classes = await run.client.pairing.pending().then(
+    ({ items }) => items.map((item) => item.class),
+    (error) => [String(error)],
+  )
+  if (classes.length !== 1 || classes[0] !== OWNER_PHONE_CLASS)
+    failures.push(
+      `the open code enrolls ${JSON.stringify(classes)}, not the owner's phone`,
+    )
+  // Settings is a fixed layer over the window: a modal portalled past it is
+  // in the page but drawn underneath it, unseen.
+  if (!(await dialog.evaluate((node) => Boolean(node.closest("[data-settings-layers]")))))
+    failures.push("the pairing modal is not inside Settings, so it is drawn under it")
+  const orbs = await dialog.locator(css.signalOrb).count()
+  if (orbs !== 1) failures.push(`the pairing modal drew ${orbs} signal orbs, not 1`)
+  if ((await page.locator(css.qrOrb).count()) > 0) failures.push("a QR orb was drawn")
+  if ((await page.locator(`${css.linked} ${css.pairingCode}`).count()) > 0)
+    failures.push("the pairing code was drawn on the tab, not only in the modal")
+  await page.keyboard.press("Escape")
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("Escape did not close the pairing modal"))
+  await page.locator(selectorFor.linkedAction("show")).click()
+  await dialog
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Show code did not open the pairing modal again"))
+  const again = await codeIn().catch(() => "")
+  if (again !== code)
+    failures.push(`Show code showed ${JSON.stringify(again)}, not the open code`)
+  await dialog.locator(selectorFor.linkedAction("cancel")).click()
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("the cancelled code's modal stayed open"))
   await page
-    .waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
-    .catch(() => failures.push("the cancelled code stayed on the tab"))
+    .locator(selectorFor.linkedAction("pair"))
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
 }
 
@@ -4372,7 +5002,7 @@ async function switchLinking(run, enabled, failures) {
     const saved = JSON.parse(readFileSync(config, "utf8")).native
     if (
       (saved?.enabled !== false) !== enabled ||
-      saved?.listenAddress !== run.nativeAddress
+      saved?.listenAddress !== run.nativeListen
     )
       failures.push(`config.json holds native ${JSON.stringify(saved)}`)
     if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
@@ -4670,7 +5300,11 @@ async function atRest(run, ids) {
 async function startStack(options) {
   const knobs = knobsFrom(options)
   if (knobs.pairedCatalogues > 0) await preparePairedCatalogue()
-  const nativeAddress = `127.0.0.1:${await freePort()}`
+  // Linking listens on every interface, as Settings sets it up, so the
+  // gateway announces itself; clients on this machine dial it on loopback.
+  const nativePort = await freePort()
+  const nativeAddress = `127.0.0.1:${nativePort}`
+  const nativeListen = `0.0.0.0:${nativePort}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")
   writeFileSync(
@@ -4715,7 +5349,7 @@ async function startStack(options) {
       // The agent a `handoff` step switches its conversation to.
       others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
       // Off, at a port of its own: the `linking` step turns it on from Settings.
-      native: { enabled: false, listenAddress: nativeAddress },
+      native: { enabled: false, listenAddress: nativeListen },
     })
   } catch (error) {
     await github?.close()
@@ -4735,6 +5369,7 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    nativeListen,
     github,
     scenario,
     // Removed when the stack closes.

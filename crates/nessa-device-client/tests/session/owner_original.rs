@@ -215,6 +215,9 @@ impl OwnerPhoneOriginalStore for Store {
     fn load_original(&self) -> Result<Option<OwnerPhonePrivateOriginal>, PrivateStateError> {
         self.owned.load_original()
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
+    }
 }
 
 #[test]

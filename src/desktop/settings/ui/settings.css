@@ -63,7 +63,9 @@
   --settings-focus-offset: 2px;
 }
 
-:where(.settings) :focus-visible {
+/* A kit dialog's panel and body draw their own rings: the panel only after a keyboard open. */
+:where(.settings)
+  :focus-visible:not(:where([data-slot="dialog"], [data-slot="dialog-body"])) {
   outline: var(--settings-focus-outline);
   outline-offset: var(--settings-focus-offset);
 }
@@ -1336,22 +1338,42 @@ html:not(.dark) .settings .settings-card {
 :root[data-motion="reduced"] .settings-bar::after,
 :root[data-motion="reduced"] .settings-bar-title,
 :root[data-motion="reduced"] .settings-switch [data-slot="switch-thumb"],
-:root[data-motion="reduced"] .settings-choice-check {
+:root[data-motion="reduced"] .settings-choice-check,
+:root[data-motion="reduced"] .settings-github-status,
+:root[data-motion="reduced"] .settings-github-actions {
   transition: none;
 }
 
-/* Linked devices: the UI kit's groups, with the orbs stacked so a narrow page fits them. */
+/* Linked devices: the UI kit's groups. */
 .linked-devices {
   display: flex;
   flex-direction: column;
   gap: 32px;
 }
 
-.linked-orbs {
+/*
+ * The pairing modal: the orb on the left and the code beside it, wrapping
+ * under it when the window is too narrow for both. A waiting device's
+ * approval takes the full width below them.
+ */
+.linked-pairing {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  align-items: center;
   justify-content: center;
+  gap: 24px;
+  padding-block: 8px;
+}
+
+.linked-pairing-code {
+  flex: 1 1 200px;
+  display: flex;
+  justify-content: center;
+}
+
+.linked-pairing-waiting,
+.linked-pairing-notice {
+  flex: 1 1 100%;
 }
 
 .linked-actions {
@@ -1359,4 +1381,67 @@ html:not(.dark) .settings .settings-card {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/*
+ * Accounts › GitHub, signed in: the account's picture, round where an agent's
+ * mark is a tile, at the tile's size. "Connected" and the actions share one
+ * cell, so the room is the wider of the two and the swap moves nothing; the
+ * actions take its place under the pointer or keyboard focus, and stay out
+ * while an action is in flight or after one failed, and wherever a finger
+ * can reach them.
+ */
+.settings-github-avatar {
+  width: 28px;
+  height: 28px;
+}
+
+.settings-github-control {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+}
+
+.settings-github-status,
+.settings-github-actions {
+  grid-area: 1 / 1;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.settings-github-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.settings-github-status {
+  pointer-events: none;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+/* Out of sight is out of reach of the pointer too: a tap on "Connected" is not a Disconnect. */
+.settings-row[data-github-settled] .settings-github-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-row[data-github-settled]:is(:hover, :focus-within) .settings-github-actions,
+.settings-row:not([data-github-settled]) .settings-github-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.settings-row[data-github-settled]:is(:hover, :focus-within) .settings-github-status,
+.settings-row:not([data-github-settled]) .settings-github-status {
+  opacity: 0;
+}
+
+@media (hover: none), (any-pointer: coarse) {
+  .settings-row[data-github-settled] .settings-github-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .settings-row[data-github-settled] .settings-github-status {
+    opacity: 0;
+  }
 }

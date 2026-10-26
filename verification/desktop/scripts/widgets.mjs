@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 /**
  * Widgets (ADR 326), through the sample plugin the sample workspace
- * registers: the trail's card in a message opens a pane beside its
- * conversation, and that pane the window over the panes, and Escape goes
- * back; the window is left by Escape, its close, ⌘W (the pane beneath
+ * registers: the trail's card in a message opens a tab in its chat's right
+ * panel, never a pane, and that tab the window over the panes, and Escape
+ * goes back; the window is left by Escape, its close, ⌘W (the pane beneath
  * still there) and a session chosen, and ⌘0 from it goes to the overview;
  * Escape inside a view steps back first; the off and missing cards say so;
- * ⌘1–4 and ⌘W landing on a widget pane put the caret in its body; Escape
+ * the card's Open puts the caret in the panel's body and ⌘1–4 in a
+ * composer, and closing the last tab hands it back to the chat; Escape
  * from a session row leaves the window, and from the search only once its
  * query is cleared; with the edge peek shown, Escape dismisses the peek and
- * nothing more; the trail's detail closing leaves the caret in its pane, or
- * in the window's widget, and a second Escape still reaches the view; the
- * sidebar keeps the channel and the focused session marked beside the
+ * nothing more; the trail's detail closing leaves the caret in the panel,
+ * or in the window's widget, and a second Escape still reaches the view;
+ * the sidebar keeps the channel and the focused session marked beside the
  * window, and the Agents entry unmarked; a session row dragged over the
- * window shows no zone and a release changes nothing; and a widget pane's
- * chrome fits narrow and short panes.
+ * window shows no zone and a release changes nothing; and the panel's and
+ * the window's chrome fit a narrow, short window.
  *
  * Every check runs on a fresh page, in each engine and layout.
  */
@@ -29,7 +30,6 @@ import {
   modelRule,
   order,
   paneCount,
-  paneCountIs,
   recordZones,
   settled,
   state,
@@ -39,23 +39,26 @@ import {
 
 const meta = {
   name: "widgets",
-  summary: "widget hosts: card, pane, window, Escape, focus, drag, narrow panes",
+  summary: "widget hosts: card, panel, window, Escape, focus, drag, a narrow window",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
 Usage: node verification/desktop/scripts/widgets.mjs [options]
 
 Checks, per engine and layout (--only <names> to pick):
-  card-pane-window   the trail's card opens a pane beside its conversation, the
-                     caret in its body; Open in Window shows it over the panes, the
-                     caret in it and fully painted from its first frame; Escape goes back to the panes as they were
+  card-panel-window  the trail's card opens a tab in its chat's panel beside the
+                     panes, no pane added, the caret in its body; Open in Window
+                     shows it over the panes, the caret in it and fully painted
+                     from its first frame; Escape goes back to the panes as they
+                     were, the caret in the chat's composer
   window-left        the window is left by its close, ⌘W (no pane closed), a
                      session chosen; ⌘0 from it opens the overview
-  escape-steps       a detail open in the window or a pane: Escape closes it, the
+  escape-steps       a detail open in the window or the panel: Escape closes it, the
                      caret staying in the widget; a second Escape still reaches
                      the view (the window: back to the panes)
   off-missing        the off and missing cards say what the hosts say for them
-  focus-keys         ⌘1–4 and ⌘W landing on a widget pane put the caret in its body
+  focus-keys         the card's Open puts the caret in the panel's body, ⌘1 in the
+                     chat's composer; the last tab closed hands it to the composer
   escape-row-search  Escape from a session row leaves the window; from the
                      search, it clears the query first and leaves on the next
   escape-peek        with the edge peek shown over the window, Escape dismisses
@@ -67,10 +70,10 @@ Checks, per engine and layout (--only <names> to pick):
   drag-over-window   a session row carried over the window: no zone, no
                      placeholder; the release changes nothing
   host-size          the size a view is told (its host context) is its place's
-                     own: a card grown by its content and by a font, a pane
-                     resized and split, the window resized
-  narrow-short       a widget pane's header and body fit a narrow pane in a short
-                     window, and the window's at the same size
+                     own: a card grown by its content and by a font, the panel
+                     laid out and its window resized, the window resized
+  narrow-short       the panel's tab, head and body fit a narrow, short window,
+                     and the window's at the same size
 
 off-missing reads the hosts' words from the page's own module, so it needs
 --mode dev (the default). Under --mode prod that step is not run.`,
@@ -92,36 +95,35 @@ async function onSample(browser, { url, layout, width = 1440, height = 900 }) {
 /** Where the caret is, for the widget checks: its body's host, or what it is. */
 const caret = (page) =>
   page.evaluate(
-    ([body, pane, win, focused]) => {
+    ([body, panel, win, focused]) => {
       const a = document.activeElement
       if (!a || a === document.body) return "page"
       if (a.matches(body))
         return a.closest(win)
           ? "window body"
-          : a.closest(pane)?.matches(focused)
-            ? "focused widget pane body"
-            : "other widget pane body"
+          : a.closest(panel)
+            ? "panel body"
+            : "other body"
       if (a.tagName === "TEXTAREA" && a.closest(focused)) return "focused composer"
       return `${a.tagName}${a.getAttribute("aria-label") ? `[${a.getAttribute("aria-label")}]` : ""}`
     },
-    [css.widgetBody, css.widgetPane, css.widgetWindow, css.focusedPane],
+    [css.widgetBody, css.panelWidget, css.widgetWindow, css.focusedPane],
   )
 
 /** Waits until the caret is `where` (see `caret`), and says where it is. */
 async function caretAt(page, where) {
   await until(
     page,
-    ([body, pane, win, focused, want]) => {
+    ([body, panel, win, focused, want]) => {
       const a = document.activeElement
       if (!a || !a.matches) return false
       if (want === "window body") return a.matches(body) && !!a.closest(win)
-      if (want === "focused widget pane body")
-        return a.matches(body) && !!a.closest(pane)?.matches(focused)
+      if (want === "panel body") return a.matches(body) && !!a.closest(panel)
       if (want === "focused composer")
         return a.tagName === "TEXTAREA" && !!a.closest(focused)
       return false
     },
-    [css.widgetBody, css.widgetPane, css.widgetWindow, css.focusedPane, where],
+    [css.widgetBody, css.panelWidget, css.widgetWindow, css.focusedPane, where],
   )
   return caret(page)
 }
@@ -146,52 +148,50 @@ async function press(page, scope, name) {
   await settled(page)
 }
 
-/** The trail opened beside its conversation from its card: the pane's rect beside the origin's. */
-async function openTrailPane(page, failures) {
+/**
+ * The trail opened from its card: a tab in its chat's panel, in front, the
+ * panel shown beside the panes and no pane added. Returns the panel's rect
+ * and its conversation's.
+ */
+async function openTrailPanel(page, failures) {
   const before = await paneCount(page)
   await press(page, css.sampleCard, names.openWidget)
-  await paneCountIs(page, before + 1)
-  await need(page, css.widgetPane, "the trail's pane")
-  return page
-    .evaluate(
-      ([pane, widget]) => {
-        const rect = (e) => {
-          const r = e.getBoundingClientRect()
-          return { x: r.left, y: r.top, w: r.width, h: r.height }
-        }
-        const panes = [...document.querySelectorAll(pane)]
-        const shown = panes.find((e) => e.matches(widget))
-        const origin = panes.find(
-          (e) => !e.matches(widget) && e.querySelector("[data-sample-card]"),
-        )
-        return {
-          panes: panes.length,
-          widget: shown ? rect(shown) : null,
-          origin: origin ? rect(origin) : null,
-        }
-      },
-      [css.pane, css.widgetPane],
-    )
-    .then((rects) => {
-      if (rects.panes !== before + 1)
-        failures.push(`the card opened ${rects.panes - before} panes, expected one`)
-      if (!rects.widget || !rects.origin)
-        failures.push("the trail's pane, or its conversation's, is not on the page")
-      else if (
-        !(rects.widget.x >= rects.origin.x + rects.origin.w - 1) &&
-        !(rects.widget.y >= rects.origin.y + rects.origin.h - 1)
+  await need(page, `${css.panelWidget} ${css.widgetBody}`, "the trail's tab in the panel")
+  const rects = await page.evaluate(
+    ([panel, pane, tab]) => {
+      const rect = (e) => {
+        const r = e.getBoundingClientRect()
+        return { x: r.left, y: r.top, w: r.width, h: r.height }
+      }
+      const shown = document.querySelector(panel)
+      const origin = [...document.querySelectorAll(pane)].find((e) =>
+        e.querySelector("[data-sample-card]"),
       )
-        failures.push(
-          `the trail's pane is not beside its conversation: ${JSON.stringify(rects)}`,
-        )
-      return rects
-    })
+      return {
+        panel: shown && !shown.closest("[inert]") ? rect(shown) : null,
+        origin: origin ? rect(origin) : null,
+        tabs: [...document.querySelectorAll(tab)].map((e) => e.getAttribute("title")),
+      }
+    },
+    [css.panel, css.pane, `${css.chatPanelTabs} [role="tab"]`],
+  )
+  const after = await paneCount(page)
+  if (after !== before)
+    failures.push(`the card's Open changed the panes: ${before} → ${after}`)
+  if (!rects.panel || !rects.origin)
+    failures.push("the panel, or the trail's conversation, is not shown")
+  else if (rects.panel.x < rects.origin.x + rects.origin.w - 1)
+    failures.push(`the panel is not beside the panes: ${JSON.stringify(rects)}`)
+  if (rects.tabs.length !== 1)
+    failures.push(
+      `the panel holds ${JSON.stringify(rects.tabs)}, not the trail's one tab`,
+    )
+  return rects
 }
 
-/** Shows the trail in the window from its pane's header. */
-async function windowFromPane(page, failures) {
-  await page.locator(css.widgetPane).first().hover()
-  await press(page, css.widgetPane, names.openInWindow)
+/** Shows the trail in the window from its panel tab's head. */
+async function windowFromPanel(page, failures) {
+  await press(page, css.panelWidgetHead, names.openInWindow)
   await expectContent(page, content.widget, "Open in Window", failures)
   await need(page, css.widgetWindow, "the window")
 }
@@ -274,18 +274,19 @@ async function windowPaint(page, action) {
 }
 
 const checks = {
-  "card-pane-window": async (page) => {
+  "card-panel-window": async (page) => {
     const failures = []
-    const rects = await openTrailPane(page, failures)
-    await expectCaret(page, "focused widget pane body", "the card's Open", failures)
+    const rects = await openTrailPanel(page, failures)
+    await expectCaret(page, "panel body", "the card's Open", failures)
+    // The panel is its chat's: no way back to it is drawn before the title.
     const trail = await page
-      .locator(`${css.widgetPane} ${css.widgetTrail}`)
+      .locator(`${css.panelWidget} ${css.widgetTrail}`)
       .first()
       .innerText()
-    if (!trail.includes(names.widgetSession))
-      failures.push(`the pane's trail says "${trail}", not its conversation first`)
+    if (trail.includes(names.widgetSession))
+      failures.push(`the panel's trail says "${trail}", naming the chat it is for`)
     const panes = (await order(page)).join(",")
-    const paint = await windowPaint(page, () => windowFromPane(page, failures))
+    const paint = await windowPaint(page, () => windowFromPanel(page, failures))
     if (!paint.held)
       failures.push(
         `main widget window darkened or transformed on entry: ${JSON.stringify(paint)}`,
@@ -323,43 +324,38 @@ const checks = {
     const after = (await order(page)).join(",")
     if (after !== panes)
       failures.push(`the panes changed under the window: ${panes} → ${after}`)
-    await expectCaret(
-      page,
-      "focused widget pane body",
-      "Escape from the window",
-      failures,
-    )
+    await expectCaret(page, "focused composer", "Escape from the window", failures)
     return { rects, window, paint, failures }
   },
 
   "window-left": async (page) => {
     const failures = []
-    await openTrailPane(page, failures)
+    await openTrailPanel(page, failures)
     const panes = (await order(page)).join(",")
-    await windowFromPane(page, failures)
+    await windowFromPanel(page, failures)
     await press(page, css.widgetWindow, names.closeWindow)
     await expectContent(page, content.panes, "the window's close", failures)
-    await windowFromPane(page, failures)
+    await windowFromPanel(page, failures)
     await page.keyboard.press(keys.closePane)
     await settled(page)
     await expectContent(page, content.panes, "⌘W over the window", failures)
     const after = (await order(page)).join(",")
     if (after !== panes)
       failures.push(`⌘W over the window closed a pane: ${panes} → ${after}`)
-    await windowFromPane(page, failures)
+    await windowFromPanel(page, failures)
     // A session chosen: another row, from wherever the layout lists it.
     const row = page.locator(`${css.sessionRow}:not([aria-current="page"])`).first()
     if (!(await row.count())) throw new CannotRun("no other session row to choose")
     await row.click()
     await settled(page)
     await expectContent(page, content.panes, "a session chosen", failures)
-    // A chosen chat opens in a tab of its own: the card's chat is brought back.
+    // A chosen chat takes the focused pane's place: the card's chat is brought back.
     if (!(await page.locator(css.sampleCard).count())) {
       await page.keyboard.press(keys.switcher)
       await page.waitForSelector(css.switcherField, { state: "visible", timeout: 3000 })
       await page.keyboard.type(names.widgetSession)
       await page.keyboard.press(keys.enter)
-      await need(page, css.sampleCard, "the sample trail's card, its tab back")
+      await need(page, css.sampleCard, "the sample trail's card, back")
       await settled(page)
     }
     await windowFromCard(page, failures)
@@ -372,30 +368,29 @@ const checks = {
 
   "escape-steps": async (page) => {
     const failures = []
-    await openTrailPane(page, failures)
-    const pane = `${css.widgetPane} ${css.sampleStep}`
-    // In the pane: the detail closes, the caret stays in the pane, and a
+    await openTrailPanel(page, failures)
+    const step = `${css.panelWidget} ${css.sampleStep}`
+    // In the panel: the detail closes, the caret stays in the panel, and a
     // second detail is still the view's Escape to close.
     for (const round of [1, 2]) {
-      await page.locator(pane).first().click()
-      await need(page, `${css.widgetPane} ${css.sampleDetail}`, "the trail's detail")
+      await page.locator(step).first().click()
+      await need(page, `${css.panelWidget} ${css.sampleDetail}`, "the trail's detail")
       await escape(page)
-      if (await page.locator(`${css.widgetPane} ${css.sampleDetail}`).count())
-        failures.push(`Escape ${round} in the pane left its detail open`)
+      if (await page.locator(`${css.panelWidget} ${css.sampleDetail}`).count())
+        failures.push(`Escape ${round} in the panel left its detail open`)
       await expectCaret(
         page,
-        "focused widget pane body",
-        `the pane's detail closed (${round})`,
+        "panel body",
+        `the panel's detail closed (${round})`,
         failures,
       )
     }
-    const panes = await paneCount(page)
     await escape(page)
-    if ((await paneCount(page)) !== panes)
-      failures.push("Escape in a widget pane closed it")
+    if (!(await page.locator(css.panelWidget).count()))
+      failures.push("Escape in the panel closed its tab")
     // In the window: the detail closes, the window stays, the caret in it;
     // the next Escape reaches the host, back to the panes.
-    await windowFromPane(page, failures)
+    await windowFromPanel(page, failures)
     await page.locator(`${css.widgetWindow} ${css.sampleStep}`).first().click()
     await need(page, `${css.widgetWindow} ${css.sampleDetail}`, "the window's detail")
     await escape(page)
@@ -435,41 +430,17 @@ const checks = {
 
   "focus-keys": async (page) => {
     const failures = []
-    await openTrailPane(page, failures)
-    const keyed = await order(page)
-    const widgetAt = await page.evaluate(
-      ([pane, widget, keysInOrder]) =>
-        keysInOrder.findIndex((key) =>
-          document.querySelector(`${pane}[data-pane-key="${key}"]`)?.matches(widget),
-        ),
-      [css.pane, css.widgetPane, keyed],
-    )
-    const sessionAt = widgetAt === 0 ? 1 : 0
-    await page.keyboard.press(keys.focusPane(sessionAt + 1))
-    await expectCaret(
-      page,
-      "focused composer",
-      `⌘${sessionAt + 1} on the conversation`,
-      failures,
-    )
-    await page.keyboard.press(keys.focusPane(widgetAt + 1))
-    await expectCaret(
-      page,
-      "focused widget pane body",
-      `⌘${widgetAt + 1} on the widget`,
-      failures,
-    )
-    // ⌘W on the conversation: the widget's pane takes focus, the caret in its body.
-    await page.keyboard.press(keys.focusPane(sessionAt + 1))
-    await expectCaret(page, "focused composer", "back on the conversation", failures)
-    await page.keyboard.press(keys.closePane)
-    await paneCountIs(page, keyed.length - 1)
-    await expectCaret(
-      page,
-      "focused widget pane body",
-      "⌘W landing on the widget",
-      failures,
-    )
+    await openTrailPanel(page, failures)
+    await expectCaret(page, "panel body", "the card's Open", failures)
+    await page.keyboard.press(keys.focusPane(1))
+    await expectCaret(page, "focused composer", "⌘1 on the conversation", failures)
+    // Back in the panel, its last tab closed: the caret goes back to the chat.
+    await page.locator(`${css.panelWidget} ${css.widgetBody}`).first().focus()
+    await page.locator(`${css.chatPanelTabs} [title^="Close "]`).first().click()
+    await settled(page)
+    if (await page.locator(css.panelWidget).count())
+      failures.push("the tab's close left a tab in the panel")
+    await expectCaret(page, "focused composer", "the last tab closed", failures)
     return { failures }
   },
 
@@ -591,8 +562,8 @@ const checks = {
 
   "drag-over-window": async (page) => {
     const failures = []
-    await openTrailPane(page, failures)
-    await windowFromPane(page, failures)
+    await openTrailPanel(page, failures)
+    await windowFromPanel(page, failures)
     const before = (await order(page)).join(",")
     // A session no pane shows, so a drop anywhere would change the panes.
     const row = page
@@ -695,18 +666,14 @@ const checks = {
     await agrees(css.widgetCard, css.widgetCard, "the card, grown by its content")
     await page.addStyleTag({ content: `${css.sampleCard} { font-size: 22px; }` })
     await agrees(css.widgetCard, css.widgetCard, "the card, grown by its font")
-    // A pane: laid out, the window resized, the pane narrowed by a split.
-    await openTrailPane(page, failures)
-    await agrees(css.widgetPane, css.widgetBody, "the pane, laid out")
+    // The panel: laid out, and the window resized under it.
+    await openTrailPanel(page, failures)
+    await agrees(css.panelWidget, css.widgetBody, "the panel, laid out")
     await page.setViewportSize({ width: 1240, height: 820 })
     await settled(page)
-    await agrees(css.widgetPane, css.widgetBody, "the pane, the window resized")
-    await page.keyboard.press(keys.focusPane(1))
-    await page.keyboard.press(keys.newSessionBeside)
-    await settled(page)
-    await agrees(css.widgetPane, css.widgetBody, "the pane, narrowed by a split")
+    await agrees(css.panelWidget, css.widgetBody, "the panel, the window resized")
     // The window: laid out, and the window resized under it.
-    await windowFromPane(page, failures)
+    await windowFromPanel(page, failures)
     await agrees(css.widgetWindow, css.widgetBody, "the window, laid out")
     await page.setViewportSize({ width: 1440, height: 900 })
     await settled(page)
@@ -716,12 +683,8 @@ const checks = {
 
   "narrow-short": async (page) => {
     const failures = []
-    await openTrailPane(page, failures)
-    // Narrower still: a third pane beside.
-    await page.keyboard.press(keys.focusPane(1))
-    await page.keyboard.press(keys.newSessionBeside)
-    await settled(page)
-    const measure = (scope) =>
+    await openTrailPanel(page, failures)
+    const measure = (scope, header, close) =>
       page.evaluate(
         ([root, header, body, trail, close]) => {
           const at = document.querySelector(root)
@@ -742,13 +705,7 @@ const checks = {
             body: inside ? { width: inside.width, height: inside.height } : null,
           }
         },
-        [
-          scope,
-          css.paneHeader,
-          css.widgetBody,
-          css.widgetTrail,
-          `[aria-label^="${scope === css.widgetWindow ? names.closeWindow : names.closePane}"]`,
-        ],
+        [scope, header, css.widgetBody, css.widgetTrail, close],
       )
     const judge = (what, m) => {
       if (!m) return failures.push(`no ${what} on the page`)
@@ -760,12 +717,21 @@ const checks = {
       if (!m.body || m.body.width <= 0 || m.body.height <= 0)
         failures.push(`${what}'s body has no room: ${JSON.stringify(m.body)}`)
     }
-    const pane = await measure(css.widgetPane)
-    judge("the widget pane", pane)
-    await windowFromPane(page, failures)
-    const window = await measure(css.widgetWindow)
+    // The panel's close is its tab's.
+    const panel = await measure(
+      css.panel,
+      css.panelWidgetHead,
+      `${css.chatPanelTabs} [title^="Close "]`,
+    )
+    judge("the panel", panel)
+    await windowFromPanel(page, failures)
+    const window = await measure(
+      css.widgetWindow,
+      css.paneHeader,
+      `[aria-label^="${names.closeWindow}"]`,
+    )
     judge("the window", window)
-    return { pane, window, failures }
+    return { panel, window, failures }
   },
 }
 

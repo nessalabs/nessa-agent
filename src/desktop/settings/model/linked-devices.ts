@@ -248,6 +248,8 @@ export function initialLinkedDevicesState(): LinkedDevicesState {
 /* ——— What the window says. None of these sentences names a wire code. ——— */
 
 export const sentences = {
+  /** A paired phone that reads and writes every chat as the owner. */
+  fullAccessDevice: "Your phone · full access",
   checking: "Checking whether linking is on.",
   notConfigured: "Linking is off on this gateway.",
   restartNote:
@@ -289,6 +291,13 @@ export const sentences = {
   unreachable: "Cannot reach the gateway.",
   empty: "No linked devices.",
   pair: "Pair a device",
+  pairDetail: "Shows a one-use code for the device to enter or scan.",
+  pairingTitle: "Pair a device",
+  pairingDetail: "Enter the code on the device, or scan the orb.",
+  codeOpen: "A code is open. Show it again, or cancel it.",
+  codeUsed: "A device used this code. Show it to approve the device.",
+  codeCancelled: "This code was cancelled. Show it to open a new one.",
+  showCode: "Show code",
   cancel: "Cancel",
   refresh: "New code",
   approve: "Approve",

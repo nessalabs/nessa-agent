@@ -16,6 +16,32 @@ Existing device pairing deliberately delegates one read capability and requires 
 
 Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability set, signed exact device request and durable original-request ledger. The exact original bootstrap credential admits creation, replay, staging and publication. The issued device uses its private native key with its public credential ID for protected product and native read connections. Canonical Auth enrollment and its remembered receiver receipt durably own purpose once; current delegated Auth and current receiver agreement establish the distinct OwnerPhone reader. The purpose Cedar policy consumes published method/action facts and default-denies ancillary administration; it also preserves configured Ask approval and refuses owner-local path links. Current signed purpose and original receiver holding admit a first-party reader only after the canonical linkage policy passes. The shared ConversationAccessPolicyEvaluator then decides actual conversation Read/Act/Locate and catalogue List from current metadata, including deletion. Device and peer readers remain separate paired subjects with their existing share roles. Existing peer/device share roles, tool approval and revocation remain separate authorities.
 
+## Pairing by code
+
+Amended 2026-10-26. The owner phone can also be enrolled by the ordinary code
+pairing, not only by a signed original request. The owner's window creates
+`pairing.create {"enrollee": "ownerPhone"}`; the phone redeems the code over
+the pinned, channel-bound PAKE as any device does; the owner compares the
+claimed key's fingerprint on the desktop and approves that exact key. The
+issued credential holds the class's complete capability set, and the same
+purpose, Cedar allowlist and receiver checks below apply to it.
+
+`PairingRecord::owner_approved_key` is the one place that says an
+enrollment's key is owner-approved: the signed original's key, or the claimed
+key once the owner approved it. `OwnerPhonePurpose` asks it, so a code-paired
+phone and a signed one are the same reader. A record made for a signed
+original admits no code attempt, and a record redeemed by code takes no signed
+approval. A device client accepts an owner-phone invitation
+(`ConsentClass::accepts`); a peer client does not.
+
+Why this is the same consent: the signed path's strength is that the key
+reaches the gateway only through the owner's own session. Here OPAQUE proves
+the phone held the code and is talking to the real gateway, and the owner
+approves only the exact key that won the code, after comparing fingerprints.
+A person who saw the code and claimed first is the key the desktop shows, so
+the fingerprint comparison is what the owner's consent rests on. The code is
+single use with charged attempts.
+
 ## Lifecycle
 
 This table is the order for authorizing an owner phone and for the connection that follows. `SessionCloseReason` stays the wire reason. `connection_outcome` in `crates/nessa-protocol/src/product_contract/outcome.rs` is the only projection of a reason, or of a close that carried none, into what the client does next. `retryable()` stays on the reason and is not copied into that projection. A command that already happened is idempotent success; it is not a close and it does not end the session.

@@ -103,7 +103,7 @@ export const KNOBS = {
   },
   panels: {
     default: 1,
-    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its tab only; New Tab docks it and the new session opens in sight), left with Escape, then closed",
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its own tabs or note, no chat tabs; ⌘N docks it and the new session opens in sight), left with Escape, then closed",
   },
   onboardings: {
     default: 1,
@@ -136,6 +136,14 @@ export const KNOBS = {
   upgrades: {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
+  },
+  menus: {
+    default: 1,
+    what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
+  },
+  menuPanels: {
+    default: 1,
+    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
   githubs: {
     default: 1,
@@ -229,6 +237,8 @@ export function plan(knobs) {
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
+  add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
+  add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })

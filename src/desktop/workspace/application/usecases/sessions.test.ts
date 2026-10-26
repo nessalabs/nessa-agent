@@ -580,7 +580,7 @@ describe("what is typed and not sent", () => {
     expect(byPerson.composerText.a).toBeUndefined()
   })
 
-  it("goes with a removed session, and stays with a draft document when hidden", () => {
+  it("goes with its session removed, and stays with a new session another chat took the pane of", () => {
     const typed = composerTextChanged(loadedState(), { sessionId: "a", text: "x" })
     const removed = sessionRemoved(typed, {
       sessionId: "a",

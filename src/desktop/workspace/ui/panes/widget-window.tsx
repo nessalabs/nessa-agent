@@ -96,11 +96,11 @@ function WindowParts({
         }
         actions={
           <>
-            {/* Expanded, the same place offers the way back to its pane. */}
+            {/* Expanded, the same place offers the way back to its chat's panel. */}
             <IconButton
               icon="restore"
-              label="Back to Pane"
-              onClick={() => host.open("pane")}
+              label="Back to Panel"
+              onClick={() => host.open("panel")}
             />
             <IconButton
               icon="close"
