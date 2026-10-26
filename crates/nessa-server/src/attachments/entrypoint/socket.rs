@@ -12,8 +12,9 @@
 //! whole authority and this module learns nothing else: the service decides
 //! what the ticket admits, how long the transfer may take, and what is kept.
 //! An entry is keyed by a hash of the ticket, so the secret is not kept here.
-//! A refused piece ends its upload, and so does a piece out of order: what
-//! the service then answers is no longer the caller's to hear.
+//! A refused piece ends its upload, and so does a piece out of order: the
+//! body then ends interrupted, never complete, so nothing is kept from it.
+//! Only the last piece ends the body as complete.
 use crate::attachments::{
     application::{
         AttachmentService, PortFuture, TicketSecret, UploadBody, UploadError, UploadInterrupted,
@@ -26,7 +27,7 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 
 /// The most bytes one piece carries; its base64 fits the session's frame.
 pub const MAX_PIECE_BYTES: usize = 32 * 1024;
@@ -71,11 +72,19 @@ pub struct SocketUploads {
 
 struct Upload {
     progress: Mutex<Progress>,
+    /// Told when the entry is let go, so its task does not wait on it.
+    released: Notify,
+}
+/// What the body reads: bytes, then the end the last piece marks. A channel
+/// that closes without that end is an interrupted transfer.
+enum Piece {
+    Bytes(Vec<u8>),
+    End,
 }
 struct Progress {
     received: u64,
-    /// Closed by the last piece, or by a piece out of order.
-    pieces: Option<mpsc::Sender<Vec<u8>>>,
+    /// Ended by the last piece, or dropped by a refused one.
+    pieces: Option<mpsc::Sender<Piece>>,
     /// The service's answer, taken once.
     answer: Option<oneshot::Receiver<Result<Attachment, UploadError>>>,
 }
@@ -104,7 +113,7 @@ impl SocketUploads {
         let length = bytes.len() as u64;
         if !bytes.is_empty() {
             let sent = match progress.pieces.as_ref() {
-                Some(pieces) => pieces.send(bytes).await.is_ok(),
+                Some(pieces) => pieces.send(Piece::Bytes(bytes)).await.is_ok(),
                 None => false,
             };
             if !sent {
@@ -114,7 +123,11 @@ impl SocketUploads {
         }
         progress.received += length;
         if last {
-            progress.pieces = None;
+            if let Some(pieces) = progress.pieces.take() {
+                if pieces.send(Piece::End).await.is_err() {
+                    return Err(self.finish(&key, &upload, &mut progress).await);
+                }
+            }
             return match self.answer(&key, &upload, &mut progress).await {
                 Ok(stored) => Ok(PieceOutcome::Stored(stored)),
                 Err(error) => Err(error),
@@ -166,6 +179,7 @@ impl SocketUploads {
                 pieces: Some(pieces),
                 answer: Some(answer),
             }),
+            released: Notify::new(),
         });
         entries.insert(key, upload.clone());
         let service = service.clone();
@@ -178,9 +192,12 @@ impl SocketUploads {
                 .await;
             drop(ticket);
             let _ = answered.send(outcome);
-            // Nobody asked for the answer: the caller went quiet. Let it go.
-            tokio::time::sleep(ANSWER_KEPT).await;
-            uploads.remove(&key, &owned);
+            // The answer waits for its piece only while nobody has taken it
+            // or let the entry go; a caller that went quiet loses it.
+            tokio::select! {
+                () = owned.released.notified() => {}
+                () = tokio::time::sleep(ANSWER_KEPT) => uploads.remove(&key, &owned),
+            }
         });
         Ok(upload)
     }
@@ -213,8 +230,9 @@ impl SocketUploads {
     }
 
     /// Drop the entry under `key` if it is still `upload`, and not a later
-    /// upload that reused the key.
+    /// upload that reused the key, and release its task.
     fn remove(&self, key: &Key, upload: &Arc<Upload>) {
+        upload.released.notify_one();
         let mut entries = self.entries.lock().expect("socket uploads");
         if entries
             .get(key)
@@ -230,11 +248,17 @@ impl SocketUploads {
     }
 }
 
-/// Pieces as the service's chunk source. The channel closing is the end of
+/// Pieces as the service's chunk source. Only the last piece's end completes
 /// the transfer; a caller that goes quiet is the service's deadline to end.
-struct PieceBody(mpsc::Receiver<Vec<u8>>);
+struct PieceBody(mpsc::Receiver<Piece>);
 impl UploadBody for PieceBody {
     fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, UploadInterrupted> {
-        Box::pin(async move { Ok(self.0.recv().await) })
+        Box::pin(async move {
+            match self.0.recv().await {
+                Some(Piece::Bytes(bytes)) => Ok(Some(bytes)),
+                Some(Piece::End) => Ok(None),
+                None => Err(UploadInterrupted),
+            }
+        })
     }
 }

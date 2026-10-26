@@ -614,6 +614,37 @@ mod attachment_gateway {
     }
 
     #[tokio::test]
+    async fn every_byte_sent_but_never_a_last_piece_keeps_nothing() {
+        let fixture = Fixture::with_normalizer(
+            AttachmentLimits::default(),
+            StubNormalizer::producing(b"small jpeg", "image/jpeg"),
+        );
+        let state = attachment_state(&fixture);
+        let session = chat_session(&state, "owner-phone").await;
+        let ticket = ticket_for(&state, &session).await;
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 0, BYTES, false),
+        )
+        .await;
+        assert!(reply.ok);
+        // A repeat ends the upload interrupted, not complete.
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 0, BYTES, false),
+        )
+        .await;
+        assert_eq!(refused(reply), "upload_failed");
+        let reply =
+            chat_request(&state, &session, "attachment.begin", begin(BYTES, "image/png")).await;
+        assert_eq!(reply.payload.unwrap()["state"], "upload_required");
+    }
+
+    #[tokio::test]
     async fn a_piece_that_cannot_be_read_or_a_ticket_never_issued_is_refused() {
         let fixture = Fixture::new(AttachmentLimits::default());
         let state = attachment_state(&fixture);
