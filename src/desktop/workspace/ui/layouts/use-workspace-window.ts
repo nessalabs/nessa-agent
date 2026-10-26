@@ -20,13 +20,14 @@ import {
   PANEL_MAX_WIDTH,
   PANEL_MIN_WIDTH,
   panelWidth,
+  type PanelPlace,
 } from "../../../model/right-panel"
 import { draggedEdge } from "../../../model/side-column"
 import type { DesktopThemeId } from "../../../model/theme"
 import type { DesktopStore } from "../../../store"
 import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
 import { useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
-import { useFocusFollowsPane } from "../../adapters/dom/focus"
+import { focusInFront, useFocusFollowsPane } from "../../adapters/dom/focus"
 import { useWidgetEscape, type EscapeScopes } from "../../adapters/dom/widget-escape"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
 import { drawn } from "../../../model/side-column"
@@ -59,9 +60,9 @@ import {
   selectColumnCount,
   selectDraft,
   selectFocusedPaneKey,
-  selectActiveTab,
   selectInFront,
   selectPaneShape,
+  selectPanelAsked,
   selectPanes,
   selectSession,
   selectSessionListOpen,
@@ -137,7 +138,13 @@ function useWorkspaceKeys(
     const panes = selectPanes(store.getState())
     const pane = panes ? panesOf(panes)[index] : undefined
     if (!pane) return false
+    const already = pane.key === focused()
+    // Focusing goes back to the panes from the overview or a widget over them.
     dispatch(focusPane({ pane: pane.key }))
+    // Already the focused pane, its key does not move, so focus-follows has
+    // nothing to follow: the caret is brought back from wherever it is — the
+    // panel, say — here.
+    if (already) focusInFront()
   }
   const focusBeside = (step: -1 | 1) => {
     const panes = selectPanes(store.getState())
@@ -305,6 +312,7 @@ function useWorkspaceChrome(region: SidebarRegion) {
   const panelOpen = panelPlace.open && shownRailItem === undefined
   if (!panelOpen && panelMaximized) setPanelMaximized(false)
   usePanelHeldByChat(panelMaximized, setPanelMaximized)
+  usePanelAsked(panelPlace, setPanelPlace)
   const panelDrawnWidth = panelWidth(panelPlace.width, fullWidth)
   // The rail and the panel stand beside the workspace's columns, not among
   // them: the columns fit what is left. The fit itself is `ColumnFit`, so
@@ -362,8 +370,8 @@ function useWorkspaceChrome(region: SidebarRegion) {
 /**
  * The right panel belongs to the chat in front, so expanded it stands for
  * that chat alone. It holds only while that chat stays in front: anything
- * that brings another — a new tab, a session opened, a tab switched to, a
- * pane split off, the overview or a widget over the panes — docks it again,
+ * that brings another — a new session, a session opened, another pane
+ * focused, the overview or a widget over the panes — docks it again,
  * so nothing ever opens out of sight under it.
  */
 function usePanelHeldByChat(maximized: boolean, setMaximized: (value: boolean) => void) {
@@ -380,6 +388,24 @@ function usePanelHeldByChat(maximized: boolean, setMaximized: (value: boolean) =
         setMaximized(false)
     })
   }, [store, maximized, setMaximized])
+}
+
+/**
+ * A widget opened into a chat's panel asks the window to show the panel
+ * (`panelAsked`); whether it is open stays the window's, remembered as the
+ * person left it. Only a change of the count asks: the count the window
+ * starts with has been answered already.
+ */
+function usePanelAsked(place: PanelPlace, setPlace: (place: PanelPlace) => void) {
+  const asked = useWorkspaceSelector(selectPanelAsked)
+  const answered = useRef(asked)
+  const latest = useRef(place)
+  latest.current = place
+  useEffect(() => {
+    if (asked === answered.current) return
+    answered.current = asked
+    if (!latest.current.open) setPlace({ ...latest.current, open: true })
+  }, [asked, setPlace])
 }
 
 function useColumnDrag(
@@ -487,7 +513,12 @@ function useWorkspaceSwitcher(
       dispatch(openChannel({ channelId: row.channel.id, beside }))
     } else {
       const draftId = dispatch(
-        newSession({ channelId: row.channelId, beside: beside ? "right" : undefined }),
+        // Its own first message goes in a blank draft, never one left with typing.
+        newSession({
+          channelId: row.channelId,
+          beside: beside ? "right" : undefined,
+          fresh: Boolean(row.text),
+        }),
       )
       if (draftId && row.text)
         void dispatch(
@@ -511,8 +542,6 @@ export interface WorkspaceWindowModel {
   shape: string
   /** Which side columns are open: a change of these alone is a drawer (`FlipScope`). */
   openColumns: string
-  /** The window tab shown: its change is a cut, not a flight (`FlipScope`). */
-  tab: string
   splitPanes: SplitPanesSource
   railOffered: boolean
   railDrawn: boolean
@@ -546,6 +575,7 @@ export interface WorkspaceWindowModel {
   panelWidth: number
   onTogglePanel: () => void
   onTogglePanelMaximized: () => void
+  onNewSession: () => void
   onPanelDragStart: () => void
   onPanelDragMove: (delta: number) => void
 }
@@ -590,11 +620,10 @@ export function useWorkspaceWindow({
     chrome.railDrawn,
     chrome.panelOpen,
   )
-  // Painted with the boxes, as the shape is: another tab's layout is a cut.
-  const tab = usePaintedWithPanes(selectActiveTab, paneBoxFrame)
   const dispatch = useWorkspaceDispatch()
   const onToggleSidebar = useCallback(() => dispatch(toggleSidebar()), [dispatch])
   const onToggleSessionList = useCallback(() => dispatch(toggleSessionList()), [dispatch])
+  const onNewSession = useCallback(() => dispatch(newSession()), [dispatch])
   const onRevealSidebar = useCallback(
     () => dispatch(toggleSidebar({ open: true })),
     [dispatch],
@@ -622,7 +651,6 @@ export function useWorkspaceWindow({
     peek,
     shape,
     openColumns,
-    tab,
     splitPanes,
     railOffered: chrome.railOffered,
     railDrawn: chrome.railDrawn,
@@ -649,6 +677,7 @@ export function useWorkspaceWindow({
     panelWidth: chrome.panelWidth,
     onTogglePanel: chrome.togglePanel,
     onTogglePanelMaximized: chrome.toggleMaximized,
+    onNewSession,
     ...panelDrag,
     ...dragging,
   }

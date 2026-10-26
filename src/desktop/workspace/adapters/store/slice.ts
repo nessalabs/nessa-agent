@@ -44,7 +44,7 @@ import * as overview from "../../application/usecases/overview"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
-import * as sessionTabs from "../../application/usecases/session-tabs"
+import * as chatPanel from "../../application/usecases/chat-panel"
 import * as sessions from "../../application/usecases/sessions"
 import * as access from "../../application/usecases/access"
 import type { AccessMode } from "../../model/access"
@@ -62,17 +62,15 @@ const workspaceSlice = createSlice({
   name: "workspace",
   initialState: initialWorkspace as WorkspaceState,
   reducers: {
-    // Tabs: each one chat or a merged group, each with its own layout (#1077).
-    tabSwitched: (state, { payload }: Payload<{ tabId: string }>) =>
-      sessionTabs.switchTab(state, payload),
-    tabClosed: (state, { payload }: Payload<{ sessionId: string; draftId: string }>) =>
-      panes.closeTab(state, payload),
-    tabItemClosed: (state, { payload }: Payload<{ item: string; draftId: string }>) =>
-      panes.closeTabItem(state, payload),
-    tabSplitOff: (state, { payload }: Payload<{ sessionId: string }>) =>
-      panes.splitOffTab(state, payload),
-    sessionWalked: (state, { payload }: Payload<{ sessionId: string }>) =>
-      panes.walkToSession(state, payload),
+    // A chat's right panel: its widgets, as tabs (`usecases/chat-panel.ts`).
+    panelTabShown: (
+      state,
+      { payload }: Payload<{ sessionId: string; widget: WidgetRef }>,
+    ) => chatPanel.showPanelTab(state, payload),
+    panelTabClosed: (
+      state,
+      { payload }: Payload<{ sessionId: string; widget: WidgetRef }>,
+    ) => chatPanel.closePanelTab(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),
@@ -133,12 +131,8 @@ const workspaceSlice = createSlice({
       panes.closePane(state, payload),
     closeInFront: (state, { payload }: Payload<{ draftId?: string }>) =>
       navigation.closeInFront(state, payload),
-    widgetOpened: (
-      state,
-      {
-        payload,
-      }: Payload<{ widget: WidgetRef; origin?: string; room: PaneRoom | undefined }>,
-    ) => panes.openWidget(state, payload),
+    widgetOpened: (state, { payload }: Payload<{ widget: WidgetRef; origin?: string }>) =>
+      chatPanel.openWidgetInPanel(state, payload),
     draftCreated: (
       state,
       {
@@ -150,6 +144,7 @@ const workspaceSlice = createSlice({
         beside?: Side
         target?: PaneKey
         room?: PaneRoom
+        restore?: boolean
       }>,
     ) => panes.createDraft(state, payload),
 
@@ -488,7 +483,7 @@ export function initialWorkspaceFrom({
 
 /**
  * The actions that go somewhere — a session, a channel, a new
- * session, a widget's pane, another pane (or the focused one, asked for by
+ * session, a widget in a chat's panel, another pane (or the focused one, asked for by
  * name). Each leaves the Agents overview, or a widget over the panes, for
  * the panes (`navigated`), whoever dispatched it —
  * the sidebar, the switcher, a key, the overview's own Open, or an agent —
@@ -505,8 +500,6 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.widgetOpened,
     workspaceActions.selectChannel,
     workspaceActions.channelOpened,
-    workspaceActions.tabSwitched,
-    workspaceActions.sessionWalked,
   ].map((action) => action.type),
 )
 
@@ -526,9 +519,6 @@ const changesPanes: ReadonlySet<string> = new Set(
     workspaceActions.closeInFront,
     workspaceActions.equalizePanes,
     workspaceActions.resizePanes,
-    workspaceActions.tabClosed,
-    workspaceActions.tabItemClosed,
-    workspaceActions.tabSplitOff,
   ].map((action) => action.type),
 )
 

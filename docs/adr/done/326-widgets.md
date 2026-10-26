@@ -11,7 +11,23 @@ drawn when it cannot be — without the window knowing any plugin, and without
 any plugin reaching into the workspace.
 
 - **Date:** 2026-09-30
-- **Status:** accepted
+- **Status:** accepted; amended 2026-10-25 (the `pane` place is now `panel`, below)
+
+> **Amendment, 2026-10-25.** A widget no longer takes a pane of its own. The
+> `pane` place is renamed `panel`: the widget opens as a tab in its chat's
+> right panel (`workspace/model/chat-panel.ts`,
+> `application/usecases/chat-panel.ts`, `ui/chrome/panel-content.tsx`). Each
+> chat has its own panel, holding its widgets as tabs with one in front; the
+> panel beside the panes shows the focused chat's. Opening a widget there
+> brings its chat to the front first — its pane focused, or shown in the
+> focused pane when no pane shows it — and asks the window to show the panel;
+> one open already comes to the front where it is. A tab closes by its ×,
+> the next coming to the front, and the panel says "Nothing open" once none
+> is left; Escape inside the panel is the view's steps back, never the tab's
+> close. Chats have no tabs: only what opens in the panel does. Where the
+> record below says "pane" for a widget's place, read the panel; the window
+> place is unchanged, its way back now Back to Panel. Plugins declare
+> `views: { panel, inline?, window? }`.
 
 ## Context
 
@@ -77,7 +93,7 @@ What binds:
   kind: "off" } | { kind: "unshowable" }` — `origin` is the session the widget
   belongs to, when it has one; `off` says the plugin's preview is turned off;
   `unshowable` says the plugin holds the widget but cannot draw it (an
-  experiment that failed validation, 333). `views` offers `pane`, and any of
+  experiment that failed validation, 333). `views` offers `panel`, and any of
   `inline` and `window`. A `SessionAccessory` is something the plugin draws in a
   session pane's header, given the session's id and `openWidget` alone — it has
   no widget of its own to open, close or step back in, and no place; what it
@@ -110,7 +126,7 @@ What binds:
 | Place | What it is | Opened by | Left by |
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
-| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home, where a new session goes (`createDraft`: the channel being looked at, else the first) — `closePane` gains that case, which today leaves a last pane not showing a session as it is |
+| `panel` (was `pane`; see the amendment) | a tab in its chat's right panel, which each chat has its own of | `open("panel")`: a tab in the panel of the chat its `origin` names (else the focused chat's), added after the others if new, brought to the front, and the panel shown | its tab's close; the last tab closing leaves the panel's note; the chat deleted, or let go as an unsent draft, takes its panel with it |
 | `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview — with two differences: it covers the content region only, so the session list stays in reach beside it; and ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
 
 The sidebar beside the window keeps the channel and the focused session marked
@@ -120,28 +136,26 @@ changes nothing, as over the overview (238's drag table).
 
 The content view is `panes | agents | { widget }`, one at a time, and the window
 place is its third value: nothing is moved into or out of the grid to show a
-widget over it, so a widget can be in a pane and in the window at once, as a
-session can be in a pane and in the overview's peek. `openWidget` from the
-window replaces the widget shown there. A widget pane moves, resizes and closes
-as any pane does; nothing carries a widget into the grid from outside it. A
+widget over it, so a widget can be in its chat's panel and in the window at
+once, as a session can be in a pane and in the overview's peek. `openWidget`
+from the window replaces the widget shown there. No pane shows a widget. A
 widget with an `origin` offers a way back to it — its breadcrumb's first step —
-which focuses the pane showing that conversation, or opens it beside the
-widget's pane; from the window, it goes back to the panes and focuses the pane
-showing it, or opens it in the focused pane. A widget whose `origin` is removed
+from the window: it goes back to the panes and focuses the pane showing that
+conversation, or opens it in the focused pane; in the panel the chat is the
+one beside it already, so no way back is drawn. A widget whose `origin` is removed
 stays where it is, without a way back.
 
 **Focus.** 238 has one rule for where the caret goes
 (`workspace/adapters/dom/focus.ts`), in two halves: when a pane takes focus, and
 when whatever held the caret goes away, it lands in the focused pane's composer.
 This record amends the whole rule, both halves: the caret lands in the focused
-pane's composer when it shows a session, and in its body when it shows a widget,
-for the view to place further; and while the content view is a widget, focus
-that falls away lands in the window's widget body, not a pane beneath it — so a
+pane's composer; while the content view is a widget, focus that falls away
+lands in the window's widget body, not a pane beneath it; and focus that falls
+out of the right panel lands in its tab in front, else the composer — so a
 run's detail closing, or a subagent list giving way to one subagent, leaves
-focus in the widget's pane, or in the window's widget, where the next Escape
-still reaches it. Opening a widget in a pane is a pane taking focus; opening one
-in the window moves focus into it; going back to the panes is the focused pane
-taking focus.
+focus in the panel's widget, or in the window's widget, where the next Escape
+still reaches it. Opening a widget in the panel or in the window moves focus
+into its body; going back to the panes is the focused pane taking focus.
 
 **Escape**, after 238's owners (a menu or dialog, a carrying drag, the edge
 peek, the open overview), goes to the widget in front — the window's while it
@@ -160,7 +174,7 @@ Escape and stops it, so none after it answers:
 | the overview is open | the overview | the content view is the overview |
 | the session list's search holds a query | the search, which clears it | marked handled; the next Escape goes on |
 | the window shows a widget | its view's last step back, else the host: back to the panes | from anywhere outside the above — the session list's rows, and its search once empty, included (the window covers the content region only) |
-| focus is inside a widget's pane | its view's last step back, else nothing | — |
+| focus is inside the panel's tab in front | its view's last step back, else nothing | — |
 | anything else | nothing here | — |
 
 `workspace/adapters/dom/widget-escape.ts` answers the last four rows, and each
@@ -196,7 +210,7 @@ gateway's, and remaining.
 
 ### What a host draws
 
-| `useWidget` answers | Plugin registered | `inline` | `pane`, `window` |
+| `useWidget` answers | Plugin registered | `inline` | `panel`, `window` |
 | --- | --- | --- | --- |
 | ready | yes | the plugin's inline view, or a row with its title and Open if it has none | the plugin's view for that place; a place it does not offer is not offered |
 | unread | yes | a quiet placeholder with its plugin's name | the same, in the place's chrome |
@@ -219,7 +233,7 @@ not read, `missing` for none, else ready, titled by its tool and belonging to
 the call's session; it offers every place. A ready app's view is the sandboxed
 frame, and has rows of its own (`app/model/app-view.ts`):
 
-| The app's view | `inline` | `pane`, `window` |
+| The app's view | `inline` | `panel`, `window` |
 | --- | --- | --- |
 | loading (its resource read, the proxy loading, the handshake) | its plugin's name, quiet, over the frame not yet shown | the same |
 | live | the frame | the frame |

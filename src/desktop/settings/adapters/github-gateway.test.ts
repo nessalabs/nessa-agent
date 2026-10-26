@@ -55,7 +55,7 @@ it("names each state the gateway answers", async () => {
   )
   expect(await connected.read()).toEqual({
     ok: true,
-    view: { kind: "connected", login: "octo", installUrl },
+    view: { kind: "connected", accountId: 7, login: "octo", installUrl },
   })
   const ended = over(() =>
     Promise.resolve({ state: "signed_out", last: "denied", installUrl }),
@@ -96,6 +96,7 @@ it("says when a sign-out, or a failed one, is not on record", async () => {
     ok: true,
     view: {
       kind: "connected",
+      accountId: 7,
       login: "octo",
       unrecorded: "Nessa couldn't record this in its audit log.",
       installUrl,

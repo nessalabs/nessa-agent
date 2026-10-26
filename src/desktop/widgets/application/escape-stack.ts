@@ -3,8 +3,8 @@
  * step back to — a detail it opened — registers that step back with
  * `onEscape` while it has it, and takes it away when it is gone. Escape that
  * reaches the host runs the step registered last, and only that; with none,
- * the host's own Escape follows (the window goes back to the panes; a pane
- * does nothing).
+ * the host's own Escape follows (the window goes back to the panes; the
+ * panel does nothing).
  */
 export interface EscapeStack {
   /** Registers a step back, run before any registered earlier; returns its removal. */

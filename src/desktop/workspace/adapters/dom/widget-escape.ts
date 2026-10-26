@@ -7,13 +7,13 @@
  * open overview is neither — no widget is in the window under it, and focus
  * is in no pane — so its Escape is left to it. Then the window's widget,
  * from anywhere — its view's last step back, else back to the panes — or,
- * with focus inside a widget's pane, that view's last step back, else
- * nothing: a widget pane is never closed by Escape, as a session pane is not
+ * with focus inside the right panel, its widget's last step back, else
+ * nothing: a panel's tab is never closed by Escape, as a session pane is not
  * (`ui/layouts/widgets.test.tsx`, `widgets.mjs --only escape-steps`).
  *
  * A host registers its view's steps back under its scope while it is on the
- * page (`useEscapeScope`): the window's, or a widget pane's, with the
- * element focus must be inside for a pane's to answer.
+ * page (`useEscapeScope`): the window's, or the panel's, with the element
+ * focus must be inside for the panel's to answer.
  */
 import { createContext, useContext, useEffect, useMemo, type RefObject } from "react"
 import type { DesktopStore } from "../../../store"
@@ -28,7 +28,7 @@ interface EscapeHost {
   readonly element: RefObject<HTMLElement | null>
 }
 
-/** Every host on the page, by scope: `window`, or a widget pane's own. */
+/** Every host on the page, by scope: `window`, or the right panel's. */
 export type EscapeScopes = Map<string, EscapeHost>
 
 const EscapeScopesContext = createContext<EscapeScopes | null>(null)
@@ -37,8 +37,8 @@ export const EscapeScopesProvider = EscapeScopesContext.Provider
 /** The window's scope: one widget at a time is shown there. */
 export const windowScope = "window"
 
-/** A widget pane's scope, by its pane's key. */
-export const paneScope = (pane: number): string => `pane:${pane}`
+/** The right panel's scope: the widget in front of the focused chat's panel. */
+export const panelScope = "panel"
 
 /**
  * The steps back for a host drawn in `element`, registered under `scope`

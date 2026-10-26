@@ -1,7 +1,7 @@
 /**
  * A widget, by reference: the plugin that draws it and the plugin's own id
  * for the thing drawn (ADR 326). The one shape everywhere a widget is named —
- * a pane item, a transcript part, the window's content view, a command.
+ * a chat panel's tab, a transcript part, the window's content view, a command.
  */
 
 export interface WidgetRef {

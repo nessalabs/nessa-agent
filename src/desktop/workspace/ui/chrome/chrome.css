@@ -131,7 +131,7 @@
   gap: inherit;
 }
 
-/* Reserved for window tabs and labels as those capabilities arrive. */
+/* The titlebar's free room: it moves the window (`data-tauri-drag-region`). */
 .workspace-titlebar-space {
   flex: 1;
   align-self: stretch;
