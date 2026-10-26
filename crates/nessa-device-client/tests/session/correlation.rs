@@ -147,6 +147,7 @@ fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
         root.path().to_str().unwrap().to_owned(),
         "private".to_owned(),
         address.to_string(),
+        None,
     )
     .unwrap();
     let conversation = "00000000-0000-4000-8000-000000000001".to_owned();

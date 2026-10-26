@@ -103,3 +103,48 @@ async fn a_tunnel_that_does_not_answer_is_refused_within_its_budget() {
     assert!(started.elapsed() < Duration::from_secs(3));
     drop(listener);
 }
+
+/// A phone away from the gateway's network: its product connection's direct
+/// dial is refused, and the gateway's tunnel carries it instead. With no
+/// tunnel the refusal stands.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_product_connection_falls_back_on_the_gateways_tunnel() {
+    use crate::product::{LocalProductConnector, ProductConnector};
+    let tunnel = edge(echo).await;
+    // A port nothing listens on: the direct dial is refused at once.
+    let direct = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let alone = tokio::task::spawn_blocking(move || {
+        LocalProductConnector::default()
+            .connect(direct, Duration::from_secs(5))
+            .err()
+            .map(|error| error.kind())
+    })
+    .await
+    .unwrap();
+    // With no tunnel the plain direct dial's own refusal, as before.
+    assert_eq!(alone, Some(std::io::ErrorKind::ConnectionRefused));
+    let echoed = tokio::task::spawn_blocking(move || {
+        let mut connected = LocalProductConnector::reaching(Some(tunnel))
+            .connect(direct, Duration::from_secs(5))
+            .unwrap();
+        connected
+            .stream
+            .write_timeout(Duration::from_secs(5))
+            .unwrap();
+        connected
+            .stream
+            .read_timeout(Duration::from_secs(5))
+            .unwrap();
+        connected.stream.write_all(b"native hello").unwrap();
+        let mut received = [0u8; 12];
+        connected.stream.read_exact(&mut received).unwrap();
+        connected.interrupt.interrupt();
+        received
+    })
+    .await
+    .unwrap();
+    assert_eq!(&echoed, b"native hello");
+}

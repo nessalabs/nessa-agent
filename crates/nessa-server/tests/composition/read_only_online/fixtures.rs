@@ -4,11 +4,16 @@
 mod catalogue;
 #[path = "fixtures/client.rs"]
 mod client;
+#[cfg(unix)]
+#[path = "fixtures/edge.rs"]
+mod edge;
 #[path = "fixtures/gateway.rs"]
 mod gateway;
 #[path = "fixtures/semantic.rs"]
 mod semantic;
 pub(super) use client::{command, FollowChild, WireClient};
+#[cfg(unix)]
+pub(super) use edge::{Edge, EndsProcess};
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -20,6 +25,9 @@ use uuid::Uuid;
 
 const GATEWAY: &str = "composition::read_only_online_tests::fixtures::gateway::gateway_child";
 const CLIENT: &str = "composition::read_only_online_tests::fixtures::client::client_child";
+#[cfg(unix)]
+const CLOUDFLARED: &str =
+    "composition::read_only_online_tests::fixtures::edge::fake_cloudflared_child";
 #[derive(Serialize, Deserialize)]
 pub(super) struct Setup {
     pub(super) gateway: String,
@@ -95,11 +103,26 @@ impl Gateway {
     pub(super) fn start_catalogue(root: &Path) -> Self {
         Self::spawn(root, "catalogue", Stdio::piped(), None)
     }
+    #[cfg(unix)]
+    /// A catalogue gateway that also serves its web tunnel, with `program`
+    /// (an [`Edge::program`]) standing in for cloudflared.
+    pub(super) fn start_tunneled(root: &Path, program: &Path) -> Self {
+        Self::spawn_with(root, "catalogue", Stdio::piped(), None, Some(program))
+    }
     /// Actual Agent-produced semantic prefix and controlled terminal suffix.
     pub(super) fn start_semantic(root: &Path) -> Self {
         Self::spawn(root, "semantic", Stdio::piped(), None)
     }
     fn spawn(root: &Path, mode: &str, input: Stdio, relay: Option<&str>) -> Self {
+        Self::spawn_with(root, mode, input, relay, None)
+    }
+    fn spawn_with(
+        root: &Path,
+        mode: &str,
+        input: Stdio,
+        relay: Option<&str>,
+        tunnel: Option<&Path>,
+    ) -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", GATEWAY, "--nocapture"])
@@ -110,6 +133,10 @@ impl Gateway {
         } else {
             command.env_remove("NESSA_ONLINE_RELAY");
         }
+        match tunnel {
+            Some(program) => command.env("NESSA_TUNNEL_PROGRAM", program),
+            None => command.env_remove("NESSA_TUNNEL_PROGRAM"),
+        };
         let mut child = command
             .stdin(input)
             .stdout(Stdio::piped())

@@ -94,6 +94,7 @@ named tunnel, would close it; that is follow-up work.
 | Cloudflare service | The one provider today: a pinned, digest-checked `cloudflared`, what it is run with, and how its metrics say it is ready and at which address. Another way to reach the gateway is another service behind the same supervisor | `nessa-server` `tunnel` |
 | Switch | `pairing.setTunnel` (`credential.manage`), saved in `config.json` `native.tunnel`, audited with the setting before and after (hostname, token by fingerprint), applied by restarting the gateway like `pairing.setLinking`; `pairing.tunnel` reads its state | product, composition |
 | Address | `server.reach` (`server.read`, the owner phone's purpose list in Cedar) gives a paired device the current public address | product |
+| Phone dial | The phone keeps the origin `server.reach` last named beside its paired gateway and opens its native session with it (`NativeSession::open`'s `tunnel`). Its product dial goes direct first and through the tunnel after the head start (`dial_native`). Enrollment, status, owner recovery and retained reads dial directly, since the ingress answers only a product or environment opening; so a phone paired by code reaches its chats from anywhere, while one with a signed original, whose product opening recovers first, still needs the local network | `nessa-device-client`, nessa-ios |
 
 Why a loopback pair, not a new stream type: every reader and the gateway
 are built on a TCP stream, for their deadlines, their wake on shutdown and

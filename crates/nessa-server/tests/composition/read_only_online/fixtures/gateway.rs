@@ -407,6 +407,23 @@ async fn gateway_child() {
             .with_conversations(corpus.service.clone())
             .with_agents_catalog(super::semantic::catalog());
     }
+    // `NESSA_TUNNEL_PROGRAM`: the web tunnel is on, quick, with that program
+    // standing in for cloudflared, as the stress check runs it.
+    #[cfg(unix)]
+    let prepared = match std::env::var_os("NESSA_TUNNEL_PROGRAM") {
+        Some(_) => prepared.with_tunnel(crate::composition::tunnel::prepare(
+            root,
+            &crate::composition::runtime_config::TunnelConfig {
+                ingress: std::net::TcpListener::bind("127.0.0.1:0")
+                    .unwrap()
+                    .local_addr()
+                    .unwrap(),
+                mode: crate::tunnel::application::TunnelMode::Quick,
+                hostname: None,
+            },
+        )),
+        None => prepared,
+    };
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)
         .await
         .unwrap();

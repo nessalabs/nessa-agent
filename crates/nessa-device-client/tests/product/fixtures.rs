@@ -174,7 +174,7 @@ pub(crate) struct HeldConnector {
 impl ProductConnector for HeldConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
         self.gate.hold();
-        LocalProductConnector.connect(address, timeout)
+        LocalProductConnector::default().connect(address, timeout)
     }
 }
 pub(crate) struct CleanupConnector {
@@ -211,7 +211,7 @@ impl ProductStream for Cleanup {
 }
 impl ProductConnector for CleanupConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-        let connected = LocalProductConnector.connect(address, timeout)?;
+        let connected = LocalProductConnector::default().connect(address, timeout)?;
         Ok(ConnectedProduct {
             stream: Box::new(Cleanup {
                 inner: connected.stream,

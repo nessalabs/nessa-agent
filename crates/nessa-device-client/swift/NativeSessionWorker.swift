@@ -32,17 +32,20 @@ public final class NativeSessionWorker: @unchecked Sendable {
 
     /// Compose a session off the caller's executor. Cancellation before this call
     /// refuses construction; once queued, await its result and close its owner.
+    /// `tunnel` is the origin `server.reach` last named; status and product
+    /// dials fall back on it when the direct one does not connect.
     public static func open(
-        root: String, directory: String, address: String
+        root: String, directory: String, address: String, tunnel: String? = nil
     ) async throws -> NativeSessionWorker {
-        try await open(root: root, directory: directory, address: address,
+        try await open(root: root, directory: directory, address: address, tunnel: tunnel,
                        queue: DispatchQueue(label: "nessa.native.session"))
     }
 
     // Queue substitution stays inside this adapter/its verification module;
     // consuming UI cannot target physical native calls at the main queue.
     static func open(
-        root: String, directory: String, address: String, queue: DispatchQueue
+        root: String, directory: String, address: String, tunnel: String? = nil,
+        queue: DispatchQueue
     ) async throws -> NativeSessionWorker {
         try Task.checkCancellation()
         let workerQueue = DispatchQueue(label: "nessa.native.session.worker", target: queue)
@@ -50,7 +53,7 @@ public final class NativeSessionWorker: @unchecked Sendable {
             workerQueue.async {
                 do {
                     let session = try NativeDeviceSession.open(
-                        root: root, directory: directory, address: address)
+                        root: root, directory: directory, address: address, tunnel: tunnel)
                     continuation.resume(returning: NativeSessionWorker(session: session, queue: workerQueue))
                 } catch { continuation.resume(throwing: error) }
             }

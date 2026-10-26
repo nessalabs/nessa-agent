@@ -202,6 +202,7 @@ fn foreign_last_parent_drop_closes_child_and_preserves_original_ready_response_e
         root.path().to_str().unwrap().into(),
         "private".into(),
         address.to_string(),
+        None,
     )
     .unwrap();
     let child = parent.open_product("phone-instance".into()).unwrap();
@@ -269,7 +270,7 @@ fn foreign_completion_handle_holds_ticket_capacity_until_final_release() {
     let parent = parent(
         root.path(),
         address,
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         ProductLimits::new(1, 2, 2 * MAX_PROTECTED_RESPONSE_BYTES, 5, 2_000, 2_000, 500).unwrap(),
     );
     let child = child(&parent);
@@ -327,7 +328,7 @@ fn escaped_foreign_ticket_drop_does_not_release_inflight_capacity() {
     let parent = parent(
         root.path(),
         address,
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         ProductLimits::new(1, 2, 2 * MAX_PROTECTED_RESPONSE_BYTES, 5, 2_000, 2_000, 500).unwrap(),
     );
     let child = child(&parent);
@@ -383,7 +384,7 @@ fn foreign_delivered_event_handle_retains_count_and_byte_capacity() {
         let parent = parent(
             root.path(),
             address,
-            Arc::new(LocalProductConnector),
+            Arc::new(LocalProductConnector::default()),
             ProductLimits::new(
                 2,
                 if byte_limited { 8 } else { 1 },
@@ -732,7 +733,7 @@ fn foreign_relative_event_timeout_uses_one_original_native_deadline_and_checks_o
     let parent = compose_product(
         root.path(),
         address,
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         clock.clone(),
         wake.clone(),
         ProductLimits::default(),
@@ -1240,7 +1241,7 @@ fn retained_refresh_admits_while_foreign_event_waiter_owns_its_original_child() 
         clock: clock.clone(),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies {
-            connector: Arc::new(LocalProductConnector),
+            connector: Arc::new(LocalProductConnector::default()),
             wake: wake.clone(),
             limits: ProductLimits::default(),
         },
@@ -1305,7 +1306,7 @@ fn foreign_canonical_response_copy_bound_preserves_factual_response_and_live_adm
         let parent = parent(
             root.path(),
             address,
-            Arc::new(LocalProductConnector),
+            Arc::new(LocalProductConnector::default()),
             ProductLimits::new(
                 1,
                 2,
@@ -1477,7 +1478,7 @@ fn parent_signal_interrupts_actual_tls_opening_before_handshake_deadline() {
     let parent = parent(
         root.path(),
         address,
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         ProductLimits::default(),
     );
     let child = NativeProductSession {
@@ -1572,7 +1573,7 @@ fn foreign_close_retains_distinct_inflight_and_queued_dispatch_stages() {
     let parent = parent(
         root.path(),
         address,
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         ProductLimits::default(),
     );
     let _release = Release(pending.clone());

@@ -66,6 +66,7 @@ fn connect(root: &Path, instance: &str) -> (NativeDeviceSession, Arc<NativeProdu
         profile["stateRoot"].as_str().unwrap().into(),
         profile["stateDirectory"].as_str().unwrap().into(),
         profile["gatewayAddress"].as_str().unwrap().into(),
+        None,
     )
     .unwrap();
     let product = native.open_product(instance.into()).unwrap();
@@ -154,6 +155,55 @@ fn native_paired_catalogue_stress() {
     native.close().unwrap();
     let (native, product) = connect(&root, "catalogue-reconnect");
     check(&product, &expected);
+    product.close().unwrap();
+    native.close().unwrap();
+}
+
+/// A phone away from its gateway's network: the address it paired on refuses
+/// every dial, and its product connection goes through the gateway's real
+/// tunnel ingress instead, with a stand-in for cloudflared in front of it,
+/// under the same pinned TLS. A status stays on the local network: the
+/// ingress answers only a product or environment opening.
+#[cfg(unix)]
+#[test]
+fn a_phone_away_from_its_network_reaches_the_gateway_through_its_tunnel() {
+    use super::fixtures::{Edge, EndsProcess};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let edge = Edge::new(directory.path());
+    let _gateway = Gateway::start_tunneled(&root, edge.program());
+    let (pid, tunnel) = Edge::serving(&root);
+    let _ends = EndsProcess(pid);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    // Nothing listens here: every direct dial is refused at once.
+    let away = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let native = NativeDeviceSession::open(
+        profile["stateRoot"].as_str().unwrap().into(),
+        profile["stateDirectory"].as_str().unwrap().into(),
+        away.to_string(),
+        Some(tunnel),
+    )
+    .unwrap();
+    let product = native.open_product("away".into()).unwrap();
+    product.wait_ready().unwrap();
+    assert_eq!(
+        Edge::connections(&root),
+        1,
+        "the product connection came through the tunnel"
+    );
+    check(
+        &product,
+        &BTreeSet::from([setup.conversation.clone(), setup.empty.clone()]),
+    );
+    // Whatever a status reports from here, it never tried the tunnel.
+    let _ = native.status();
+    assert_eq!(Edge::connections(&root), 1, "a status dials directly");
     product.close().unwrap();
     native.close().unwrap();
 }
