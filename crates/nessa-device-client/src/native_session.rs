@@ -780,7 +780,9 @@ impl NativeDeviceSession {
     /// Compose numeric address and an existing private directory. No port offset,
     /// hostname-derived origin, socket connect or enrollment is performed.
     /// `tunnel` is the origin `server.reach` last named (`https://host`), which
-    /// every dial falls back on when the direct one does not connect.
+    /// status and product dials fall back on when the direct one does not
+    /// connect. One this build cannot read is left out rather than refused:
+    /// the local network still works, and the next `server.reach` replaces it.
     #[uniffi::constructor]
     pub fn open(
         root: String,
@@ -791,10 +793,7 @@ impl NativeDeviceSession {
         let address: SocketAddr = address
             .parse()
             .map_err(|_| NativeCallError::InvalidArgument)?;
-        let tunnel = tunnel
-            .map(TunnelAddress::try_from)
-            .transpose()
-            .map_err(|_| NativeCallError::InvalidArgument)?;
+        let tunnel = tunnel.and_then(|origin| TunnelAddress::try_from(origin).ok());
         NativeSession::open(Path::new(&root), Path::new(&directory), address, tunnel)
             .map(|value| Self { value })
             .map_err(Into::into)

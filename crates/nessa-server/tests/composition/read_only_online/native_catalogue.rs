@@ -195,8 +195,8 @@ fn edge(gateway: std::net::SocketAddr) -> (String, Arc<std::sync::atomic::Atomic
 }
 
 /// A phone away from its gateway's network: the address it paired on refuses
-/// every dial, and its status and product connection go through the tunnel
-/// it was told about instead, under the same pinned TLS.
+/// every dial, and its product connection goes through the tunnel it was told
+/// about instead, under the same pinned TLS.
 #[test]
 fn a_phone_away_from_its_network_reaches_the_gateway_through_its_tunnel() {
     let directory = tempfile::tempdir().unwrap();

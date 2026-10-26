@@ -73,10 +73,10 @@ impl ProductWake for ThreadProductWake {
     }
 }
 /// Real TCP composition adapter; the stop handle owns a cloned descriptor.
-/// With a tunnel it dials the way a retained read does (`dial_gateway`):
-/// direct first, then the gateway's web tunnel once the direct dial has not
-/// connected within the head start or was refused. Either way the socket
-/// carries the same pinned TLS.
+/// With a tunnel it dials direct first, then the gateway's web tunnel once
+/// the direct dial has not connected within the head start or was refused
+/// (`retained::dial_native`). Either way the socket carries the same pinned
+/// TLS.
 #[derive(Default)]
 pub struct LocalProductConnector {
     tunnel: Option<TunnelAddress>,
@@ -120,12 +120,7 @@ impl ProductInterrupt for Socket {
 }
 impl ProductConnector for LocalProductConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-        let socket = crate::retained::dial_gateway(
-            &address.to_string(),
-            None,
-            self.tunnel.as_ref(),
-            timeout,
-        )?;
+        let socket = crate::retained::dial_native(address, self.tunnel.as_ref(), timeout)?;
         let interrupt = Arc::new(Socket(socket.try_clone()?));
         Ok(ConnectedProduct {
             stream: Box::new(Socket(socket)),

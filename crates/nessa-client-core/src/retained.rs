@@ -301,6 +301,24 @@ impl Cancellation for Stopping {
         Some(self.until)
     }
 }
+/// Connect to a paired gateway's native listener at `address` within
+/// `timeout`, and with a `tunnel`, through it once the direct dial has not
+/// connected within the head start or was refused ([`dial_gateway`]). With
+/// no tunnel this is the plain direct dial, unchanged. A device's status and
+/// product connections dial this way.
+///
+/// # Errors
+/// Neither route connected in time.
+pub fn dial_native(
+    address: SocketAddr,
+    tunnel: Option<&TunnelAddress>,
+    timeout: Duration,
+) -> IoResult<TcpStream> {
+    match tunnel {
+        None => TcpStream::connect_timeout(&address, timeout),
+        Some(tunnel) => dial_gateway(&address.to_string(), None, Some(tunnel), timeout),
+    }
+}
 /// Connect to the gateway at `address` (`host:port`, each address it
 /// resolves to tried in turn) within `timeout`, the same way a retained read
 /// does: direct, then, with a `relay`, through that relay for the gateway

@@ -26,7 +26,7 @@ use nessa_client_core::{
         ProductWake, ThreadProductWake,
     },
     retained::{
-        dial_gateway, FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache,
+        dial_native, FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache,
         RetainedCataloguePage, RetainedDeviceReader, RetainedEnrollmentClient,
         RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge, RetainedTranscript,
         HANDSHAKE,
@@ -97,7 +97,7 @@ pub trait EnrollmentConnector: Send + Sync {
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError>;
 }
 /// Dials the gateway directly, then through its web tunnel when one is known
-/// and the direct dial does not connect (`dial_gateway`). A tunnel never
+/// and the direct dial does not connect (`dial_native`). A tunnel never
 /// pairs: the gateway closes a tunnel connection whose key holds no
 /// credential, so enrollment still needs the local network.
 struct SocketConnector {
@@ -105,7 +105,7 @@ struct SocketConnector {
 }
 impl EnrollmentConnector for SocketConnector {
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError> {
-        dial_gateway(&address.to_string(), None, self.tunnel.as_ref(), HANDSHAKE)
+        dial_native(address, self.tunnel.as_ref(), HANDSHAKE)
             .map_err(|error| NativeClientError::Io(error.kind()))
     }
 }
@@ -813,8 +813,8 @@ impl NativeSession {
     /// Composition entry: open an existing private directory beneath a trusted
     /// root. Cache creation is lazy; no socket or pairing is performed here.
     /// `tunnel` is the gateway's web tunnel as it last named it
-    /// (`server.reach`): every dial falls back on it when the direct one does
-    /// not connect.
+    /// (`server.reach`): status and product dials fall back on it when the
+    /// direct one does not connect. Retained reads still dial directly.
     pub fn open(
         root: &Path,
         directory: &Path,

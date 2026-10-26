@@ -120,13 +120,12 @@ async fn a_product_connection_falls_back_on_the_gateways_tunnel() {
         LocalProductConnector::default()
             .connect(direct, Duration::from_secs(5))
             .err()
+            .map(|error| error.kind())
     })
     .await
     .unwrap();
-    assert!(
-        alone.is_some(),
-        "a refused direct dial with no tunnel connects nothing"
-    );
+    // With no tunnel the plain direct dial's own refusal, as before.
+    assert_eq!(alone, Some(std::io::ErrorKind::ConnectionRefused));
     let echoed = tokio::task::spawn_blocking(move || {
         let mut connected = LocalProductConnector::reaching(Some(tunnel))
             .connect(direct, Duration::from_secs(5))

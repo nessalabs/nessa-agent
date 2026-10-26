@@ -32,8 +32,8 @@ public final class NativeSessionWorker: @unchecked Sendable {
 
     /// Compose a session off the caller's executor. Cancellation before this call
     /// refuses construction; once queued, await its result and close its owner.
-    /// `tunnel` is the origin `server.reach` last named; every dial falls back
-    /// on it when the direct one does not connect.
+    /// `tunnel` is the origin `server.reach` last named; status and product
+    /// dials fall back on it when the direct one does not connect.
     public static func open(
         root: String, directory: String, address: String, tunnel: String? = nil
     ) async throws -> NativeSessionWorker {
