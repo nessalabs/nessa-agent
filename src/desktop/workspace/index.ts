@@ -121,6 +121,7 @@ export {
 } from "./application/question-flights"
 export type {
   OutgoingMessage,
+  PathPicker,
   RememberedFilter,
   WorkspaceDependencies,
   WorkspaceSource,

@@ -319,6 +319,11 @@ fn main() {
             // menu bar item opens it again), hidden with its Dock icon kept
             // (the Dock reopens it), or the app quits (nothing could).
             if window.label() == desktop_window::DESKTOP_WINDOW {
+                // Files and folders dragged onto the window: only the host
+                // learns their paths (`channel_paths::dropped_on_desktop`).
+                if let WindowEvent::DragDrop(drag) = event {
+                    channel_paths::dropped_on_desktop(window.app_handle(), drag);
+                }
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let tray = window
                         .app_handle()

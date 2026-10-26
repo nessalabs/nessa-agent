@@ -82,6 +82,7 @@ export const css = {
   newChannelAsked: ".new-channel-asked", // class: the question being asked; data-step
   newChannelAnswered: ".new-channel-answered", // class: an answered question's ✓ line; data-step
   newChannelResource: ".new-channel-resources li", // a file or folder attached to the channel being made
+  newChannelDrop: ".new-channel-drop", // the drop target, while files are dragged over the flow
   homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript

@@ -129,6 +129,37 @@ Windows. Linux has no picker of its own yet, and a browser none at all, so
 there the flow does not ask for a folder or files: the channel works in a
 folder made for it.
 
+### Dropping files and folders
+
+While the flow asks for files, files and folders dragged from the Finder or
+Explorer onto the window are attached as a pick's are. The webview never sees
+the paths: Tauri gives them to the host (`WindowEvent::DragDrop`), and
+`dropped_on_desktop` in `src-tauri/src/channel_paths.rs` tells the page.
+Saying each path's kind takes the filesystem, which a stalled share can hold,
+so a drop arrives in two parts: `nessa://paths-drop-began {drop}` the moment
+the person lets go, then `nessa://paths-dropped {drop, paths, unread}` once
+each path is a file or a folder (at most 2 s each, all at once; no answer is
+a file). The host looks at no more paths than a channel holds
+(`x-channelRules.maxResources`); the rest come back as `unread` and are said
+as not fitting.
+
+The page binds each drop to the flow that was asking when it landed
+(`channelDropLanded`), and holds Create while any drop is `landing`. When its
+paths come (`channelDropSettled`) the drop stops holding Create, and its paths
+are added only if that same flow asks for files at that moment.
+
+| Drop lands while | Before its paths come | When they come | Test (`channel-commands.test.ts`) |
+| --- | --- | --- | --- |
+| another question is asked | — | nothing added | "takes files and folders dropped…" (early) |
+| files are asked | nothing | added; Create free | same test; "counts the paths the host did not look at…" |
+| files are asked | question moves on | nothing added; Create free | same test (moved) |
+| files are asked | question moves on and back | added; Create free | same test (back) |
+| files are asked | flow closes, another opens | nothing added to either | same test (late) |
+| files are asked | Create pressed | Create refused until they come, then sends them | "waits to create while a drop's paths are still coming…" |
+| the window has no drop port (Linux, browser) | — | never watched | "watches nothing where the window is never told of a drop" |
+
+The stress step `channel` drives the same order through the fake host.
+
 ## What comes later
 
 Settings that bound a conversation instead of starting it (inbound and output
@@ -145,7 +176,6 @@ channel. Renaming, moving and deleting channels are not built yet.
 - A channel made by another client with an approval preset other than Ask
   starts its new sessions there, but the desktop composer shows Ask until the
   conversation says otherwise. The desktop flow does not ask for a preset.
-- Dropping files on the flow does not attach them yet; the pickers do.
 - A conversation whose channel folder was removed cannot be opened, not even
   to read its transcript: its agent cannot be built there, and the read is
   refused `model_unavailable`, which names the wrong cause.
