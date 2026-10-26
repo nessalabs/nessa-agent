@@ -21,7 +21,7 @@ const paneOnly = { inline: false, window: false }
 describe("ready, its plugin registered", () => {
   it("draws the plugin's view in each place it offers", () => {
     expect(hostDraws("inline", ready, everywhere)).toEqual({ kind: "view" })
-    expect(hostDraws("pane", ready, everywhere)).toEqual({ kind: "view" })
+    expect(hostDraws("panel", ready, everywhere)).toEqual({ kind: "view" })
     expect(hostDraws("window", ready, everywhere)).toEqual({ kind: "view" })
   })
 
@@ -33,7 +33,7 @@ describe("ready, its plugin registered", () => {
   })
 
   it("draws a pane always, and says it cannot show a window its plugin does not offer", () => {
-    expect(hostDraws("pane", ready, paneOnly)).toEqual({ kind: "view" })
+    expect(hostDraws("panel", ready, paneOnly)).toEqual({ kind: "view" })
     expect(hostDraws("window", ready, paneOnly)).toEqual({
       kind: "line",
       text: hostLines.unshowable,
@@ -52,7 +52,7 @@ describe("not ready, or no plugin", () => {
   ]
   for (const [row, given, line] of rows)
     it(`draws ${row} as ADR 326 says, in each place`, () => {
-      for (const place of ["inline", "pane", "window"] as const) {
+      for (const place of ["inline", "panel", "window"] as const) {
         const drawn = hostDraws(place, given, everywhere)
         if (line === null) expect(drawn).toEqual({ kind: "waiting", name: "Experiment" })
         else

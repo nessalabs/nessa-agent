@@ -2,14 +2,16 @@
 /**
  * Settings › Accounts › GitHub: the row rests without a gateway; with one it
  * offers Connect, shows the code while the gateway waits and reads again
- * only then, names the signed-in account, and says why a try ended.
+ * only then, shows the signed-in account with its picture and "Connected"
+ * (its actions out only under the pointer or focus), and says why a try
+ * ended.
  */
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { GithubGateway } from "../adapters/github-gateway"
 import type { GithubOutcome, GithubView } from "../model/github"
-import { GithubProvider, GithubRow } from "./github-row"
+import { GithubProvider, GithubRow, type GithubAvatar } from "./github-row"
 
 let root: Root
 let host: HTMLDivElement
@@ -36,12 +38,19 @@ const connecting: GithubView = {
   expiresInSeconds: 900,
   installUrl,
 }
-const connected: GithubView = { kind: "connected", login: "octo", installUrl }
+const connected: GithubView = {
+  kind: "connected",
+  accountId: 7,
+  login: "octo",
+  installUrl,
+}
 
 const row = () => host.querySelector('[data-setting="github"]')
 const state = () => row()?.getAttribute("data-github-state")
 const button = (name: string) =>
-  [...(row()?.querySelectorAll("button") ?? [])].find((each) => each.textContent === name)
+  [...(row()?.querySelectorAll("button") ?? [])].find(
+    (each) => (each.getAttribute("aria-label") ?? each.textContent) === name,
+  )
 
 /** A gateway whose state is `view`, changed by its actions as the gateway would. */
 function fake(initial: GithubView) {
@@ -70,10 +79,10 @@ function fake(initial: GithubView) {
   return { gateway, calls, set: (next: GithubView) => (view = next) }
 }
 
-async function show(gateway: GithubGateway | undefined) {
+async function show(gateway: GithubGateway | undefined, avatar?: GithubAvatar) {
   await act(async () =>
     root.render(
-      <GithubProvider gateway={gateway}>
+      <GithubProvider gateway={gateway} avatar={avatar}>
         <GithubRow />
       </GithubProvider>,
     ),
@@ -104,7 +113,10 @@ it("connects, shows the code and where to enter it, and names the account once e
   github.set(connected)
   await act(async () => vi.advanceTimersByTime(2_000))
   expect(state()).toBe("connected")
-  expect(row()?.textContent).toContain("Signed in as @octo.")
+  expect(row()?.querySelector('[data-slot="settings-row-detail"]')?.textContent).toMatch(
+    /^@octo /,
+  )
+  expect(row()?.querySelector(".settings-github-status")?.textContent).toBe("Connected")
   expect(row()?.querySelector("[data-github-repositories]")?.getAttribute("href")).toBe(
     installUrl,
   )
@@ -129,6 +141,44 @@ it("disconnects, and says that this does not revoke the app on GitHub", async ()
   await act(async () => button("Disconnect")?.click())
   expect(github.calls).toContain("disconnect")
   expect(state()).toBe("signed-out")
+})
+
+it("draws the account's picture through the composed avatar, and only an initial without one", async () => {
+  const asked: { id: number; login: string }[] = []
+  const avatar: GithubAvatar = (account) => {
+    asked.push(account)
+    return <span data-fake-avatar={account.login} />
+  }
+  await show(fake(connected).gateway, avatar)
+  expect(asked.at(-1)).toEqual({ id: 7, login: "octo" })
+  expect(row()?.querySelector('[data-fake-avatar="octo"]')).not.toBeNull()
+  await show(fake(connected).gateway)
+  expect(row()?.querySelector('[data-slot="contact-avatar"]')?.textContent).toBe("O")
+  expect(row()?.querySelector("img")).toBeNull()
+})
+
+it("keeps its actions in reach: one Tab away at rest, out while one is in flight or failed", async () => {
+  const github = fake(connected)
+  let answer: ((outcome: GithubOutcome) => void) | undefined
+  const gateway: GithubGateway = {
+    ...github.gateway,
+    disconnect: () => new Promise<GithubOutcome>((resolve) => (answer = resolve)),
+  }
+  await show(gateway)
+  // At rest the actions wait for the pointer or focus (settings.css), and are
+  // in the tab order, so focus is what brings them out.
+  expect(row()?.hasAttribute("data-github-settled")).toBe(true)
+  const link = row()?.querySelector<HTMLAnchorElement>("[data-github-repositories]")
+  expect(link?.tabIndex).toBe(0)
+  expect(link?.getAttribute("aria-label")).toBe("Choose repositories")
+  expect(button("Disconnect")?.disabled).toBe(false)
+  await act(async () => button("Disconnect")?.click())
+  expect(row()?.hasAttribute("data-github-settled")).toBe(false)
+  await act(async () =>
+    answer?.({ ok: false, sentence: "The gateway is busy. Try again." }),
+  )
+  expect(state()).toBe("connected")
+  expect(row()?.hasAttribute("data-github-settled")).toBe(false)
 })
 
 it("shows a refused action's sentence over what the gateway now says", async () => {

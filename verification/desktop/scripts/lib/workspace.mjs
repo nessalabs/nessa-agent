@@ -539,7 +539,7 @@ export function flatSurfaceFailures(page) {
           `the surface stops short of the window: ${JSON.stringify(s.toJSON())} in ${innerWidth}x${innerHeight}`,
         )
       // The surface is the window's own ground — clear, so the header art
-      // runs up behind the tabs — never a card: no rim, no corner.
+      // runs up to the window's top edge — never a card: no rim, no corner.
       const surfaceStyle = getComputedStyle(surface)
       if (surfaceStyle.boxShadow !== "none" || parseFloat(surfaceStyle.borderRadius) > 0)
         failures.push(`the surface draws a card: ${surfaceStyle.boxShadow}`)

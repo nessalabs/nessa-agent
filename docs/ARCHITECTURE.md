@@ -119,13 +119,15 @@ translucent scrollbar kept for orientation and dragging, and the toolbar rests a
 lines and closes at three, apart so a draft near one threshold does not flip
 the layout, and the change is immediate, with no animation. In a narrow composer the project shows only its folder, so the model keeps
 its name.
-The workspace keeps navigation in the window's top row; New Session remains
-available through its keyboard shortcut.
-Its row holds the window's tabs: each tab is one conversation or a merged group
-of panes with its own layout (`workspace/model/window-tabs.ts`). The chat
-surface and the sidebar run up behind that row; a top-row pane's content starts
-below it, so folding the sidebar cannot put a pane's actions behind the
-navigation.
+The workspace keeps navigation in the window's top row, with New Session there
+in a layout without a session list, and at the head of the session list in one
+with it.
+Chats have no tabs: each pane's one header (its name, menu and close) is that
+row, and in the window's corner it starts after the navigation, so folding the
+sidebar cannot put a pane's actions behind it. The chat surface, the sidebar and
+each pane's header picture run up to the window's top edge, the picture behind
+the window's controls too. Only what opens in a chat's right panel is a tab,
+in the panel's own top row (`workspace/model/chat-panel.ts`).
 Column titles clear that group, moving below only where they cannot fit. The side rail (Settings › Advanced › Experimental) is a compact 48px
 column below that bar on every host, independent of the native traffic lights.
 Its toggle is nessa's mark at the sidebar's foot: wherever the rail is offered,
@@ -248,7 +250,8 @@ workspace shell (`ui/layouts/workspace-shell.tsx`) coordinates everything else
 through `use-workspace-window.ts`, and `workspace-layout.tsx` renders it,
 the quick switcher included. Titlebar content starts at the one safe area,
 `--desktop-titlebar-safe-start` (the host's window controls and our cluster);
-nothing draws under the window's controls. A column's title sits inline in
+no control or text draws under the window's controls, though a pane's header
+picture runs behind them to the window's edge. A column's title sits inline in
 the titlebar row, after the controls, where it fits, and on its own row below
 where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
 session list, the sidebar and Settings' page). ResizeObserver reports update
@@ -275,15 +278,13 @@ and kept like a pane's, bounded (`retention.overviewConversations`); a peek is
 not reading the session, which stays unread.
 
 
-The desktop window's document tabs are owned by `workspace/application/workspace-state.ts`
-(`sessionTabs`), with explicit closure in `application/usecases/session-tabs.ts`.
-`ui/chrome/window-tabs.tsx` projects these documents into the shared window toolbar.
-A document selected through the existing open command focuses an already visible
-pane or changes only the focused pane; tab state never owns a second split layout.
-Hidden tabs do not count as shown conversations for read receipts or approvals,
-and transcripts retain the existing bounded-cache lifecycle. Draft text stays
-with its document until explicit tab closure. Pane closure removes a split while
-keeping its document available in the tab strip.
+Each chat's right panel is owned by `workspace/application/workspace-state.ts`
+(`panels`, by session): `model/chat-panel.ts` holds its tabs and the one in
+front, and `application/usecases/chat-panel.ts` opens, shows and closes them.
+Opening a widget in the panel brings its chat to the front first — its pane
+focused, or shown in the focused pane — and asks the window to show the panel
+(`panelAsked`); the panel beside the panes always shows the focused chat's.
+A chat's panel goes with the chat.
 
 
 - `model/` is pure: the index's types (`workspace-index.ts`); how a
@@ -294,7 +295,8 @@ keeping its document available in the tab strip.
   draws it yet; a widget by reference (`widget-ref.ts`, until the widgets
   vertical of ADR 326 owns it); the revision rule every replacement follows
   (`revision.ts`); session grouping, search and time labels; and the new
-  session's lifecycle, a draft never listed and kept until its document tab closes,
+  session's lifecycle, a draft never listed and kept while a pane shows it or
+  something is typed in it,
   and a session the source never began going back to it when its last
   refused message is discarded.
 - `application/` owns the `WorkspaceSource` port (`ports.ts`: index,

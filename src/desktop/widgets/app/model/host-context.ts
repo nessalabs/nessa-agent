@@ -34,7 +34,7 @@ export function appHostContext(
 ): JsonObject {
   const { size } = context
   // Inline, the width is the card's and the height the app's, up to a
-  // limit; in a pane or the window, the place's box is the app's.
+  // limit; in the panel or the window, the place's box is the app's.
   const containerDimensions: JsonObject =
     place === "inline"
       ? size

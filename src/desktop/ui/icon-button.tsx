@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  type AnchorHTMLAttributes,
   type ButtonHTMLAttributes,
   type ComponentProps,
   type ElementType,
@@ -73,3 +74,43 @@ export const IconButton = forwardRef<
     </Element>
   )
 })
+
+/**
+ * `IconButton` for a link that leaves the window, such as to a page on
+ * GitHub: the same box, name and tooltip, as an `<a>`, so it opens where
+ * links open and reads as a link.
+ */
+export function IconLink({
+  icon,
+  label,
+  href,
+  size = "md",
+  shape = "rounded",
+  tone = "muted",
+  tooltipSide,
+  className,
+  ...props
+}: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "children"> & {
+  icon: DesktopIconRole
+  label: string
+  href: string
+  size?: IconButtonSize
+  shape?: IconButtonShape
+  tone?: IconButtonTone
+  tooltipSide?: TooltipSide
+} & { readonly [attribute: `data-${string}`]: string | boolean | undefined }) {
+  return (
+    <a
+      href={href}
+      className={className ? `desktop-icon-button ${className}` : "desktop-icon-button"}
+      data-size={size}
+      data-shape={shape}
+      data-tone={tone}
+      aria-label={label}
+      {...tooltip(label, { side: tooltipSide })}
+      {...props}
+    >
+      <DesktopIcon name={icon} />
+    </a>
+  )
+}

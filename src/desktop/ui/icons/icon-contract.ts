@@ -89,6 +89,9 @@ const desktopRoles = [
   "privacy",
   "advanced",
   "about",
+  // An account's actions in Settings
+  "repositories",
+  "disconnect",
 ] as const
 
 export const desktopIconRoles = [...designSystemRoles, ...desktopRoles] as const

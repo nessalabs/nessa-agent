@@ -8,10 +8,10 @@ import { useWorkspaceFrame } from "../workspace-frame"
 import { headerBar } from "./header-bar"
 
 /**
- * The bar atop a session's pane, a widget's pane and the window: its name at
+ * The bar atop a session's pane and a widget over the window: its name at
  * the start, a spacer that moves the window or carries the pane
  * (`headerBar`), what a session's widgets add, and its actions at the end.
- * The three headers differ only in what they put in it.
+ * The two headers differ only in what they put in it.
  */
 export function PaneHeaderFrame({
   pane,

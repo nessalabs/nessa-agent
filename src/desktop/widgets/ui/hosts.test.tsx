@@ -63,7 +63,7 @@ function plugin(
     name: "Experiment",
     useWidget: (widget) => (Object.hasOwn(states, widget) ? states[widget] : states.gone),
     views: {
-      pane: view("pane"),
+      panel: view("panel"),
       inline: views.inline ? view("inline") : undefined,
       window: views.window ? view("window") : undefined,
     },
@@ -144,7 +144,7 @@ describe("a card in a message", () => {
     )
     expect(host.querySelector(".widget-inline-title")?.textContent).toBe("Checkout climb")
     await act(async () => host.querySelector("button")?.click())
-    expect(fake.opened).toEqual(["pane"])
+    expect(fake.opened).toEqual(["panel"])
   })
 
   it("draws each row of the table that is not ready, with no close", async () => {
@@ -176,7 +176,7 @@ describe("a card in a message", () => {
 
 describe("a widget's body, in a pane or the window", () => {
   it("draws the plugin's view for the place, given the place", async () => {
-    for (const place of ["pane", "window"] as const) {
+    for (const place of ["panel", "window"] as const) {
       await draw(
         registryOf(plugin()),
         <Body widget={ref("run")} place={place} fake={fakeHost()} />,
@@ -204,7 +204,7 @@ describe("a widget's body, in a pane or the window", () => {
   it("draws a placeholder with the plugin's name while not read, with no close", async () => {
     await draw(
       registryOf(plugin()),
-      <Body widget={ref("waiting")} place="pane" fake={fakeHost()} />,
+      <Body widget={ref("waiting")} place="panel" fake={fakeHost()} />,
     )
     expect(host.querySelector('[role="status"]')?.textContent).toBe("Experiment")
     expect(host.querySelector("button")).toBeNull()
@@ -218,7 +218,7 @@ describe("a widget's body, in a pane or the window", () => {
       [ref("run", "absent"), "Can't show this here"],
     ] as const) {
       const fake = fakeHost()
-      await draw(registryOf(plugin()), <Body widget={widget} place="pane" fake={fake} />)
+      await draw(registryOf(plugin()), <Body widget={widget} place="panel" fake={fake} />)
       expect(host.querySelector('[data-slot="empty-state-title"]')?.textContent).toBe(
         said,
       )
@@ -233,7 +233,7 @@ describe("plugins registered while the window runs", () => {
     const registry = registryOf()
     await draw(
       registry,
-      <Body widget={ref("run", "mcp:rows")} place="pane" fake={fakeHost()} />,
+      <Body widget={ref("run", "mcp:rows")} place="panel" fake={fakeHost()} />,
     )
     expect(text()).toBe("Can't show this hereClose")
     // An MCP App, whose calls hold no widget "run": it says so, by the table.
