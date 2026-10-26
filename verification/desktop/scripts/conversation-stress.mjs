@@ -78,7 +78,7 @@
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
  *               the window's words can be seen; welcome's words are all
- *               there as it opens, its name plain text rather than typed in,
+ *               there as it opens, its name painted still rather than typed in,
  *               with Get started already showing; welcome has no Back button
  *               and Close sits in the top-right corner; past it the picker
  *               has Back in the top-left corner, which returns to welcome;
@@ -4340,6 +4340,7 @@ async function welcomedAtOnce(page, failures) {
       return {
         text: heading?.textContent,
         letters: heading?.querySelectorAll("[data-slot=type-in-letter]").length ?? 0,
+        painted: heading?.querySelector("[data-slot=gradient-text]")?.textContent,
         waiting: document.querySelectorAll(
           ".nessa-setup-pane [data-typed], .nessa-setup-after",
         ).length,
@@ -4354,6 +4355,8 @@ async function welcomedAtOnce(page, failures) {
   if (welcome.letters || welcome.waiting)
     failures.push(`the welcome is typed in: ${JSON.stringify(welcome)}`)
   if (!welcome.begin) failures.push("Get started is not there as the welcome opens")
+  if (welcome.painted !== "Nessa")
+    failures.push(`the welcome paints ${JSON.stringify(welcome.painted)}, not the name`)
 }
 
 /**

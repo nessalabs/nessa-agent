@@ -30,6 +30,7 @@ import type { ShortcutPlatform } from "../model/shortcut-display"
 import { AgentBackdrop } from "@nessa-ui/react/agent-card"
 import { AgentFigure } from "@nessa-ui/react/agent-figure/agent-figure"
 import { Button } from "@nessa-ui/react/button"
+import { GradientText } from "@nessa-ui/react/gradient-text"
 import { StepDots } from "@nessa-ui/react/step-dots"
 import {
   SETUP_AGENTS,
@@ -807,7 +808,7 @@ export function Onboarding({
       <SetupPane ref={step} step={state.step}>
         <div className="flex flex-col gap-3">
           <h1 id={SETUP_HEADING_ID} className={PANE_HEADING}>
-            Welcome to Nessa
+            Welcome to <GradientText>Nessa</GradientText>
           </h1>
           <p className="nessa-text-5 text-muted-foreground">Your personal sidekick</p>
           <Button size="lg" className={`mt-4 ${PANE_PILL}`} onClick={onBegin}>
