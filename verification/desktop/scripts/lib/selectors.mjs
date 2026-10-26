@@ -299,6 +299,9 @@ export const css = {
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
   github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
+  githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
+  githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus
+  githubActions: ".settings-github-actions", // Choose repositories and Disconnect; opacity 0 at rest
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',

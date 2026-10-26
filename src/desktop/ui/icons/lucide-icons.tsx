@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  BookMarked,
   Brain,
   Check,
   ChevronDown,
@@ -46,6 +47,7 @@ import {
   SquarePen,
   SquareTerminal,
   Trash2,
+  Unlink,
   X,
   Zap,
   type LucideIcon,
@@ -121,4 +123,7 @@ export const lucideIcons: DesktopIconFamily = {
   privacy: lucide(ShieldCheck),
   advanced: lucide(FlaskConical),
   about: lucide(Info),
+
+  repositories: lucide(BookMarked),
+  disconnect: lucide(Unlink),
 }

@@ -1069,6 +1069,18 @@ phone's scanner is not this screen.
   `settings-page.mjs --only native-hooks,native-hooks-on,native-hooks-unset,native-hooks-failed`; unit tests
   `native-hooks-rows.test.tsx`, `native-hooks-gateway.test.ts`.
 
+### Accounts
+
+- [ ] **Signed in, the GitHub row is the account's picture, @login and
+  "Connected".** The picture is GitHub's, by the account's id, through the
+  composed `GithubAvatar`; without one, or when it fails, the login's initial.
+  Choose repositories and Disconnect are icon buttons that take "Connected"'s
+  place under the pointer or keyboard focus, and take no pointer while hidden;
+  Shift+Tab and Tab move between them. They show at all times while an action
+  is in flight or after one failed, and on touch-capable screens.
+  _Check:_ `conversation-stress.mjs` (`github`); unit tests
+  `github-row.test.tsx`, `github-avatar.test.tsx`.
+
 ### Integrations: the gateway's MCP servers
 
 #391 PR 3's design (the issue's comments of its state table, rows U1–U31,

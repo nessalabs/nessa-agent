@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { ContactAvatar } from "@nessa-ui/react/message-actions/contact-avatar"
 import { PairingCode } from "@nessa-ui/react/pairing-code"
 import type { GithubGateway } from "../adapters/github-gateway"
 import type { GithubOutcome, GithubView } from "../model/github"
@@ -20,6 +21,12 @@ import { FoundSetting, ItemRow, RowAction, RowLink } from "./settings-controls"
  * becomes visible. Signed in, the row names the account and links to
  * choosing which repositories the app may reach. With no gateway it rests.
  *
+ * Signed in, the row is the account's picture, its login and "Connected";
+ * its actions, as icon buttons, take that word's place while the pointer is over the row or
+ * focus is in it, so they are always one Tab away. The picture is GitHub's,
+ * fetched outside the process, so it comes through the composed
+ * `GithubAvatar`; without one the account's initial stands in.
+ *
  * ```text
  *   signed out ──Connect──▶ connecting ──entered on GitHub──▶ connected
  *        ▲                     │  (read every pollMs)              │
@@ -27,16 +34,33 @@ import { FoundSetting, ItemRow, RowAction, RowLink } from "./settings-controls"
  *        └────────────────────────────Disconnect───────────────────┘
  * ```
  */
-const GithubContext = createContext<GithubGateway | undefined>(undefined)
+/** Draws a GitHub account's picture, or `login`'s initial when there is none or it fails to load. */
+export type GithubAvatar = (props: { id: number; login: string }) => ReactNode
+
+/** The account's initial, and no request: the row without a composed picture. */
+const initialOnly: GithubAvatar = ({ login }) => (
+  <ContactAvatar name={login} className="settings-github-avatar" />
+)
+
+const GithubContext = createContext<{
+  gateway: GithubGateway | undefined
+  avatar: GithubAvatar
+}>({ gateway: undefined, avatar: initialOnly })
 
 export function GithubProvider({
   gateway,
+  avatar = initialOnly,
   children,
 }: {
   gateway: GithubGateway | undefined
+  avatar?: GithubAvatar
   children: ReactNode
 }) {
-  return <GithubContext.Provider value={gateway}>{children}</GithubContext.Provider>
+  return (
+    <GithubContext.Provider value={{ gateway, avatar }}>
+      {children}
+    </GithubContext.Provider>
+  )
 }
 
 type Phase =
@@ -60,7 +84,7 @@ const revocation =
   "Disconnecting forgets the sign-in on this gateway. To revoke it on GitHub, use Settings › Applications there."
 
 export function GithubRow() {
-  const gateway = useContext(GithubContext)
+  const { gateway, avatar: Avatar } = useContext(GithubContext)
   const found = useContext(FoundSetting) === "github"
   const entry = setting("github")
   const [phase, setPhase] = useState<Phase>({ kind: "reading" })
@@ -217,21 +241,38 @@ export function GithubRow() {
           setting="github"
           found={found}
           label={entry.label}
+          leading={<Avatar id={view.accountId} login={view.login} />}
           detail={
-            failed ??
-            [`Signed in as @${view.login}.`, view.unrecorded, revocation]
-              .filter(Boolean)
-              .join(" ")
+            <>
+              {failed ?? [`@${view.login}`, view.unrecorded].filter(Boolean).join(" · ")}
+              <span className="sr-only"> {revocation}</span>
+            </>
           }
           data-github-state="connected"
+          // An action that failed keeps its buttons out, so trying again is where it was.
+          data-github-settled={failed === undefined && !busy ? "" : undefined}
           control={
-            <span className="linked-actions">
-              <RowLink href={view.installUrl} data-github-repositories>
-                Choose repositories
-              </RowLink>
-              <RowAction disabled={busy} onClick={() => act((each) => each.disconnect())}>
-                Disconnect
-              </RowAction>
+            // Keyed: the kit's row copies these to name its controls by the row.
+            <span className="settings-github-control">
+              <span key="status" className="settings-github-status">
+                Connected
+              </span>
+              <span key="actions" className="settings-github-actions">
+                <RowLink
+                  href={view.installUrl}
+                  icon="repositories"
+                  data-github-repositories
+                >
+                  Choose repositories
+                </RowLink>
+                <RowAction
+                  disabled={busy}
+                  icon="disconnect"
+                  onClick={() => act((each) => each.disconnect())}
+                >
+                  Disconnect
+                </RowAction>
+              </span>
             </span>
           }
         />
