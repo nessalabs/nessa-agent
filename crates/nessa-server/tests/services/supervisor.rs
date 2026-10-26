@@ -28,6 +28,7 @@ impl Service<&'static str> for Scripted {
     fn ready_within(&self) -> Duration {
         Duration::from_secs(10)
     }
+    #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
     fn prepare(&self) -> PortFuture<'_, Result<(), ServiceFailure>> {
         let failing = self
             .failing_prepares
