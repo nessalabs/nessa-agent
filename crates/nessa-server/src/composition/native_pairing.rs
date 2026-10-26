@@ -420,7 +420,7 @@ pub(super) async fn bind(
                     %error,
                     "the tunnel's ingress cannot be bound; the tunnel is not started"
                 );
-                tunnel.fail("ingress");
+                tunnel.ingress_failed();
                 None
             }
         },

@@ -44,6 +44,7 @@ use crate::tunnel::application::{
 use crate::tunnel::infrastructure::files::TunnelFiles;
 use serde_json::{Map, Value};
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
+use tokio::sync::watch;
 
 /// How long the answer has to reach the caller before the restart closes its
 /// socket. The caller reads the state again once it reconnects, so a reply
@@ -63,7 +64,7 @@ pub(super) struct ConfigLinking {
     tunnel_files: Option<TunnelFiles>,
     /// The tunnel this run serves, if any: what a tunnel change is compared
     /// with.
-    running_tunnel: Option<TunnelSetting>,
+    running_tunnel: watch::Receiver<Option<TunnelSetting>>,
 }
 
 /// One change.
@@ -101,7 +102,7 @@ impl ConfigLinking {
             running,
             restart,
             tunnel_files: None,
-            running_tunnel: None,
+            running_tunnel: watch::channel(None).1,
         }
     }
 
@@ -110,18 +111,23 @@ impl ConfigLinking {
     pub(super) fn with_tunnel(
         mut self,
         files: TunnelFiles,
-        running: Option<TunnelSetting>,
+        running: watch::Receiver<Option<TunnelSetting>>,
     ) -> Self {
         self.tunnel_files = Some(files);
         self.running_tunnel = running;
         self
     }
 
+    /// The tunnel this run serves now: none once its ingress failed.
+    fn running_tunnel(&self) -> Option<TunnelSetting> {
+        self.running_tunnel.borrow().clone()
+    }
+
     /// Whether this run serves what `change` is to.
     fn serves(&self, change: &Change) -> bool {
         match change {
             Change::Linking(_) => self.running,
-            Change::Tunnel(_) => self.running_tunnel.is_some(),
+            Change::Tunnel(_) => self.running_tunnel.borrow().is_some(),
         }
     }
 
@@ -319,9 +325,9 @@ impl ConfigLinking {
         .map_err(|_| LinkingError::Unavailable)??;
         // The ingress this run binds is held; any other is tried, under the
         // lock, so a saved tunnel never leaves a gateway that cannot start.
+        let running = self.running_tunnel();
         if let Some(setting) = &edited.setting {
-            let held = self
-                .running_tunnel
+            let held = running
                 .as_ref()
                 .is_some_and(|running| running.ingress == setting.ingress);
             if !held {
@@ -335,7 +341,7 @@ impl ConfigLinking {
                 .map_err(|_| LinkingError::Unavailable)?;
         }
         let applies = if edited.setting.as_ref().map(TunnelSetting::identity)
-            == self.running_tunnel.as_ref().map(TunnelSetting::identity)
+            == running.as_ref().map(TunnelSetting::identity)
         {
             LinkingApply::Unchanged
         } else {
@@ -1129,7 +1135,7 @@ mod tests {
             audit,
         } = linking(files, true);
         Linking {
-            linking: linking.with_tunnel(TunnelFiles::new(namespace), running),
+            linking: linking.with_tunnel(TunnelFiles::new(namespace), watch::channel(running).1),
             restart,
             audit,
         }
@@ -1219,6 +1225,30 @@ mod tests {
             .unwrap();
         assert_eq!(change.applies, LinkingApply::Unchanged);
         assert!(linking.restart.serving());
+    }
+
+    #[tokio::test]
+    async fn the_same_tunnel_saved_after_its_ingress_failed_is_tried_again() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, ingress) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let (running, serves) = watch::channel(Some(TunnelSetting {
+            ingress,
+            provider: TunnelProvider::Cloudflare(CloudflareTunnel::Quick),
+        }));
+        let Linking {
+            linking, restart, ..
+        } = linking(files.clone(), true);
+        let linking = linking.with_tunnel(TunnelFiles::new(namespace.path()), serves);
+        // The run could not bind the ingress: it serves nothing.
+        running.send_replace(None);
+        // The port is free again, so the same setting restarts the gateway.
+        let change = linking
+            .set_tunnel(caller(), request(true, Some(TunnelMode::Quick)))
+            .await
+            .unwrap();
+        assert_eq!(change.applies, LinkingApply::Restarting);
+        assert!(!restart.serving(), "a restart is held");
     }
 
     #[tokio::test]

@@ -479,9 +479,10 @@ pub(super) async fn product_state(
         )
         .with_tunnel(
             crate::tunnel::infrastructure::files::TunnelFiles::new(namespace),
-            tunnel
-                .as_ref()
-                .and_then(super::tunnel::PreparedTunnel::setting),
+            match &tunnel {
+                Some(tunnel) => tunnel.running(),
+                None => tokio::sync::watch::channel(None).1,
+            },
         );
         product = product.with_native_linking(Arc::new(linking));
         if let Some(tunnel) = &tunnel {

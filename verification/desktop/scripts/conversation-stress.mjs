@@ -3042,9 +3042,17 @@ const steps = {
       }
     }
     // Off again, whatever happened: the tunnel's program ends with it.
-    let kept = null
+    // A throw from the check still turns the tunnel off first: left on, the
+    // gateway would start a new program after the kill below, and nothing
+    // here would know of it.
+    let thrown = null
     try {
       if (on) await throughTunnel()
+    } catch (error) {
+      thrown = error
+    }
+    let kept = null
+    try {
       kept = keptTunnel(directory)
       await run.exclusive(async () => {
         await openLinkedDevices(run.page)
@@ -3077,6 +3085,7 @@ const steps = {
         }
       }
     }
+    if (thrown) throw thrown
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 

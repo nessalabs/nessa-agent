@@ -42,6 +42,10 @@ pub(super) struct PreparedTunnel {
     /// token unreadable): the status says why, and nothing runs.
     setting: Option<TunnelSetting>,
     status: watch::Sender<TunnelStatus>,
+    /// The setting this run serves, as Settings compares a change with
+    /// it: emptied when the ingress cannot be bound, so the same setting
+    /// saved again is tried again.
+    running: watch::Sender<Option<TunnelSetting>>,
 }
 
 impl PreparedTunnel {
@@ -57,15 +61,36 @@ impl PreparedTunnel {
         self.setting.clone()
     }
 
+    /// What this run serves, for Settings; see `running`.
+    pub(super) fn running(&self) -> watch::Receiver<Option<TunnelSetting>> {
+        self.running.subscribe()
+    }
+
     pub(super) fn ingress(&self) -> SocketAddr {
         self.ingress
     }
 
-    /// This run's tunnel cannot start, for `reason`; nothing runs.
-    pub(super) fn fail(&self, reason: &'static str) {
+    /// The ingress cannot be bound: nothing runs, and a program an earlier
+    /// run left running is ended, since it would go on forwarding to
+    /// whatever holds the port.
+    pub(super) fn ingress_failed(self) -> JoinHandle<()> {
+        self.running.send_replace(None);
         self.status
-            .send_replace(ServiceStatus::Failed(ServiceFailure::Unavailable(reason)));
+            .send_replace(ServiceStatus::Failed(ServiceFailure::Unavailable(
+                "ingress",
+            )));
+        let host = kept_host(&self.files);
+        tokio::spawn(async move { host.release().await })
     }
+}
+
+fn kept_host(files: &TunnelFiles) -> Arc<KeptHost> {
+    KeptHost::new(
+        files.directory().to_owned(),
+        PROGRAM_NAME,
+        shepherd::process_observer(),
+        Arc::new(TokioTimer::new()),
+    )
 }
 
 /// Read the tunnel `config` turns on, with its token.
@@ -88,14 +113,17 @@ pub(super) fn prepare(namespace: &Path, config: &TunnelConfig) -> PreparedTunnel
         tracing::warn!("the named tunnel's token could not be read; the tunnel is not started");
         status.send_replace(ServiceStatus::Failed(ServiceFailure::Unavailable("token")));
     }
+    let setting = tunnel.map(|tunnel| TunnelSetting {
+        ingress: config.ingress,
+        provider: TunnelProvider::Cloudflare(tunnel),
+    });
+    let (running, _) = watch::channel(setting.clone());
     PreparedTunnel {
         files,
         ingress: config.ingress,
-        setting: tunnel.map(|tunnel| TunnelSetting {
-            ingress: config.ingress,
-            provider: TunnelProvider::Cloudflare(tunnel),
-        }),
+        setting,
         status,
+        running,
     }
 }
 
@@ -109,6 +137,7 @@ pub(super) fn start(
         ingress,
         setting,
         status,
+        running: _,
     } = prepared;
     let setting = setting?;
     let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
@@ -143,12 +172,81 @@ pub(super) fn start(
 
 /// With the tunnel off, end a program an earlier run left running.
 pub(super) fn release_kept(namespace: &Path) -> JoinHandle<()> {
-    let files = TunnelFiles::new(namespace);
-    let host = KeptHost::new(
-        files.directory().to_owned(),
-        PROGRAM_NAME,
-        shepherd::process_observer(),
-        Arc::new(TokioTimer::new()),
-    );
+    let host = kept_host(&TunnelFiles::new(namespace));
     tokio::spawn(async move { host.release().await })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::application::{Halt, HostedEnd, Launch, ProcessHost};
+    use std::time::Duration;
+    use tokio::sync::oneshot;
+
+    fn alive(pid: u32) -> bool {
+        // Signal 0 checks for the process without signalling it.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+
+    /// A bind failure ends the program an earlier run left running, which
+    /// would otherwise go on forwarding to whatever holds the port, and
+    /// leaves Settings comparing with no running tunnel.
+    #[tokio::test]
+    async fn an_ingress_that_cannot_be_bound_ends_the_kept_program() {
+        let namespace = tempfile::tempdir().unwrap();
+        let files = TunnelFiles::new(namespace.path());
+        std::fs::create_dir_all(files.directory()).unwrap();
+        let host = kept_host(&files);
+        let (started, running) = oneshot::channel();
+        let (leave, halted) = oneshot::channel();
+        let run = tokio::spawn(host.run(
+            "quick".into(),
+            Launch {
+                program: "/bin/sleep".into(),
+                args: vec!["60".into()],
+                environment: vec![],
+                directory: files.directory().to_owned(),
+            },
+            started,
+            Box::pin(async move { halted.await.unwrap_or(Halt::End) }),
+        ));
+        running.await.unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(files.directory().join("process.json")).unwrap())
+                .unwrap();
+        let pid = record["pid"].as_u64().unwrap() as u32;
+        leave.send(Halt::Leave).unwrap();
+        assert_eq!(run.await.unwrap(), HostedEnd::Left);
+        assert!(alive(pid), "left running, as a gateway stop leaves it");
+
+        let prepared = prepare(
+            namespace.path(),
+            &TunnelConfig {
+                ingress: "127.0.0.1:47651".parse().unwrap(),
+                mode: crate::tunnel::application::TunnelMode::Quick,
+                hostname: None,
+            },
+        );
+        let status = prepared.view().status;
+        let settings = prepared.running();
+        assert!(settings.borrow().is_some());
+        prepared.ingress_failed().await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while alive(pid) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the kept program is ended");
+        assert!(!files.directory().join("process.json").exists());
+        assert!(
+            settings.borrow().is_none(),
+            "nothing runs for Settings to hold"
+        );
+        assert_eq!(
+            *status.borrow(),
+            ServiceStatus::Failed(ServiceFailure::Unavailable("ingress"))
+        );
+    }
 }

@@ -161,7 +161,9 @@ users of the machine can see it (see below).
 - **Its ingress.** `cloudflared` forwards to the gateway's loopback
   ingress, which the gateway binds only while the tunnel runs. A port
   another program holds fails the tunnel (`ingress`), never the gateway's
-  start. While the gateway is stopped and `cloudflared` is kept, another
+  start, and ends a `cloudflared` an earlier run kept, so it stops
+  forwarding to that port; saving the tunnel again tries the port again.
+  While the gateway is stopped and `cloudflared` is kept, another
   program of any user on the machine could take that port and answer at
   the tunnel's address; phones still refuse it, since they pin the
   gateway's key, but a browser would not. On a machine shared with people
