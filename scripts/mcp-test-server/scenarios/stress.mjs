@@ -109,7 +109,7 @@ export const TRACE_PAUSE_MS = 400
  * How long a `trace` turn holds after its last call before it answers: the
  * run is still at work for that long, for the window to be looked at live.
  */
-export const TRACE_HOLD_MS = 4000
+export const TRACE_HOLD_MS = 8000
 /**
  * The calls a `trace` turn makes, in order: what each is called with, which
  * the gateway keeps as its input, and how each ends.

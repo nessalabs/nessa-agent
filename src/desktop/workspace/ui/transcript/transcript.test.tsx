@@ -1520,7 +1520,11 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-live")).toBeNull()
     const trace = [...host.querySelectorAll(".workspace-work")].at(-1)
     expect(trace?.getAttribute("data-status")).toBe("running")
-    expect(host.textContent?.split("sleep 5").length).toBe(2)
+    expect(trace?.textContent?.split("sleep 5").length).toBe(2)
+    // A screen reader still hears what the agent is on: the trace has no status.
+    expect(host.querySelector('.workspace-live-spoken[role="status"]')?.textContent).toBe(
+      "sleep 5",
+    )
   })
 })
 

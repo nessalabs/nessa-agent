@@ -1665,7 +1665,7 @@ says why where the conversations would be.
   and ends no more than 0.5 px past the axis. A call's card shows its input.
   While the run is still at work (the agent holds after its last call), the
   trace alone says so: its line reads "Working", open or folded, the call at
-  work is named once in the transcript, and no live row repeats it below
+  work is named once in its run, and no live row repeats it below
   (`shownActivity` in `model/transcript.ts`). Chromium in the PR job; WebKit with the stress load run. The trace itself is
   nessa_ui's `ToolTrace`, with its own story checks (`Instant`).
 

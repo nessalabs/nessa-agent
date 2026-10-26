@@ -28,7 +28,7 @@ import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
 import { QuestionCard } from "./question-card"
-import { shownActivity, type Message as MessageValue } from "../../model/transcript"
+import { type Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
 import { readFailureCopy } from "../failure-copy"
@@ -248,7 +248,6 @@ export const Transcript = memo(function Transcript({
       shownWhileUsageLimit(message, usageLimit.executionId ?? ""),
     )
   }, [held, outbox, refusalId, usageLimit])
-  const liveActivity = shownActivity(messages, transcript?.activity ?? null)
   if (stayPut.current === null && transcript) {
     // Initial content and messages already shown while the read was pending
     // stay put. Later additions have their own entrance.
@@ -331,7 +330,7 @@ export const Transcript = memo(function Transcript({
               {transcript.interactionNotice}
             </p>
           ) : null}
-          {liveActivity ? <LiveRow activity={liveActivity} /> : null}
+          <LiveRow activity={transcript?.activity ?? null} after={messages} />
           {(transcript?.questions ?? []).map((question) => (
             <QuestionCard
               key={JSON.stringify([
