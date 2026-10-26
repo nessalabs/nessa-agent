@@ -163,7 +163,9 @@
  *               line, "Ran 3 tools", that opens to a row per call, each with
  *               its status and a bar on the shared time axis (at least as
  *               wide as it is tall, ending inside the axis), and a call's
- *               card shows its input
+ *               card shows its input. While the run is still at work it
+ *               alone says so: its line reads "Working", open or folded, the
+ *               call at work is named once, and no live row repeats it
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -828,6 +830,108 @@ async function send(run, conversationId, text, failures, known, where = dock(run
   if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
   run.sent.set(conversationId, (run.sent.get(conversationId) ?? 0) + 1)
   return before
+}
+
+/**
+ * The `trace` turn's run while it is still at work, after its last call: the
+ * run's trace alone says so. Open, it reads "Working" over a row per call,
+ * and the call at work is named once, in the run, with no live row under it
+ * saying the same; folded, its line still reads "Working". The run is live
+ * only for the turn's hold, so what it draws is read in one go, and nothing
+ * after that waits on it still being live.
+ */
+async function traceWhileLive(run, failures) {
+  const drawn = await waitFor(
+    () =>
+      run.page.evaluate(
+        (tools) => {
+          const works = document.querySelectorAll(
+            '.workspace-work[data-status="running"]',
+          )
+          if (works.length !== 1) return null
+          const work = works[0]
+          const rows = work.querySelectorAll('[data-slot="tool-trace-step"]')
+          if (rows.length !== tools.length) return null
+          const last = rows[rows.length - 1].textContent ?? ""
+          const label = tools.find((tool) => last.includes(tool)) ?? null
+          const count = (text) => (label ? (text ?? "").split(label).length - 1 : 0)
+          // The turn's own message, and any live row drawn in its transcript:
+          // an earlier run of the same calls is not this one.
+          const live = [
+            ...(work
+              .closest(".workspace-transcript")
+              ?.querySelectorAll(".workspace-live") ?? []),
+          ]
+          return {
+            label,
+            last,
+            line: work.querySelector('[data-slot="tool-trace-line"]')?.textContent ?? "",
+            rows: live.length,
+            times:
+              count(work.closest(".workspace-message")?.textContent) +
+              live.reduce((sum, row) => sum + count(row.textContent), 0),
+          }
+        },
+        TRACE_CALLS.map((call) => call.tool),
+      ),
+    15_000,
+  )
+  if (!drawn) {
+    failures.push(
+      `the window never drew the trace turn's ${TRACE_CALLS.length} calls as a live run`,
+    )
+    return
+  }
+  if (drawn.rows !== 0)
+    failures.push(`a live row repeats the running trace under it (${drawn.rows})`)
+  if (drawn.times !== 1)
+    failures.push(
+      `the call at work, ${drawn.label ?? JSON.stringify(drawn.last)}, is named ${drawn.times} times, not once`,
+    )
+  if (!drawn.line.includes("Working"))
+    failures.push(`the live run's line reads ${JSON.stringify(drawn.line)}`)
+  const work = run.page.locator('.workspace-work[data-status="running"]')
+  const transcript = run.page.locator(".workspace-transcript").filter({ has: work })
+  const line = work.locator('[data-slot="tool-trace-line"]')
+  if (run.evidence) await liveShot(run, transcript, "live")
+  // Folded while it works, its line is the one sign of it, still "Working".
+  // A turn that ended first has nothing left to fold.
+  try {
+    await line.click({ timeout: 2_000 })
+  } catch {
+    if ((await work.count()) === 0) return
+    throw new Error("the live run's line cannot be clicked")
+  }
+  const folded = await waitFor(
+    async () =>
+      (await work.count()) === 0 ||
+      ((await line.getAttribute("aria-expanded", { timeout: 500 }).catch(() => null)) ===
+        "false" &&
+        ((await line.textContent({ timeout: 500 }).catch(() => "")) ?? "").includes(
+          "Working",
+        ) &&
+        (await transcript.locator(".workspace-live").count()) === 0),
+    2_000,
+  )
+  if (!folded) failures.push("the live run, folded, does not read Working on its own")
+  else if (run.evidence) await liveShot(run, transcript, "live-folded")
+}
+
+/**
+ * Evidence of the live run, taken from the page by the transcript's box: an
+ * element's own screenshot waits for it to keep still, which a shimmering
+ * line never does within the hold. A run that ended first is not shot.
+ */
+async function liveShot(run, transcript, name) {
+  const box = await transcript.boundingBox({ timeout: 1_000 }).catch(() => null)
+  if (!box) return
+  await run.page
+    .screenshot({
+      path: join(run.evidence, `trace-${run.engine ?? "window"}-${name}.png`),
+      clip: box,
+      timeout: 4_000,
+    })
+    .catch((error) => log(`trace ${name} screenshot: ${error.message.split("\n")[0]}`))
 }
 
 /** The execution ids of the turns `conversationId` has now. */
@@ -3377,6 +3481,7 @@ const steps = {
   async trace(run, step, failures) {
     const text = prompt(run, STRESS.trace, step)
     const seen = await send(run, run.main.id, text, failures)
+    await traceWhileLive(run, failures)
     const { view, turn } = await settled(
       run,
       run.main.id,

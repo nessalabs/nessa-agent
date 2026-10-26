@@ -21,7 +21,7 @@ export function ReadOnlyTranscript({
         {messages.map((message) => (
           <Message key={message.id} sessionId="" message={message} isNew={false} />
         ))}
-        {activity ? <LiveRow activity={activity} /> : null}
+        <LiveRow activity={activity} after={messages} />
       </div>
     </div>
   )
