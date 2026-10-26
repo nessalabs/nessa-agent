@@ -405,20 +405,25 @@ pub(super) async fn bind(
     #[cfg_attr(not(unix), allow(unused_variables))]
     let (joined, tunneled) = mpsc::channel::<Tunneled>(TUNNEL_CAPACITY);
     #[cfg(unix)]
-    let tunnel = match tunnel {
-        Some(tunnel) => {
-            let ingress = tunnel.ingress();
-            let listener = TcpListener::bind(ingress).await.map_err(|source| {
-                RunError::Native(NativeFailure::Bind {
-                    address: ingress,
-                    source,
-                })
-            })?;
-            Some((
+    // Bound only for a tunnel that runs, so a setting Settings can still
+    // fix (a token that cannot be read) never holds the port it would need.
+    // A port another program holds fails the tunnel, not the gateway.
+    let tunnel = match tunnel.filter(|tunnel| tunnel.setting().is_some()) {
+        Some(tunnel) => match TcpListener::bind(tunnel.ingress()).await {
+            Ok(listener) => Some((
                 TunnelIngress::new(listener, connections.clone(), joined),
                 tunnel,
-            ))
-        }
+            )),
+            Err(error) => {
+                tracing::warn!(
+                    address = %tunnel.ingress(),
+                    %error,
+                    "the tunnel's ingress cannot be bound; the tunnel is not started"
+                );
+                tunnel.fail("ingress");
+                None
+            }
+        },
         None => None,
     };
     let accept = TunneledAccept::new(RelayedAccept::new(socket, relayed), tunneled);

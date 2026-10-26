@@ -202,7 +202,13 @@ async fn approved_then_served(
     };
     let composed = composed.map_err(|(_, failure)| failure)?;
     let served = serve_dialing(
-        &composed, address, relay, tunnel, identity, pin, stopping, draining,
+        &composed,
+        address,
+        Beyond { relay, tunnel },
+        identity,
+        pin,
+        stopping,
+        draining,
     )
     .await;
     composed.finish().await;
@@ -253,11 +259,17 @@ fn open(address: &str) -> Result<FilePairingEnvironment, RunError> {
         .map_err(RunError::Agent)
 }
 
+/// The ways to the gateway beyond its own address.
+#[derive(Clone, Copy)]
+struct Beyond<'a> {
+    relay: Option<&'a RelayAddress>,
+    tunnel: Option<&'a TunnelAddress>,
+}
+
 async fn serve_dialing(
     composed: &Composed,
     address: &str,
-    relay: Option<&RelayAddress>,
-    tunnel: Option<&TunnelAddress>,
+    Beyond { relay, tunnel }: Beyond<'_>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     stopping: watch::Receiver<bool>,

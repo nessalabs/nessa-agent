@@ -111,6 +111,25 @@ describe("web tunnel", () => {
     expect(tunnelFootnote(state)).toContain("Restarting")
   })
 
+  it("a bare hostname, as Cloudflare shows it, is sent as an https origin", () => {
+    const state = run(
+      connectedWith({ ...off, mode: "named", hasToken: true }),
+      { type: "hostname", hostname: "nessa.example.com" },
+      { type: "toggle", enabled: true },
+    )
+    expect(state.pending).toMatchObject({
+      change: { mode: "named", hostname: "https://nessa.example.com" },
+    })
+    const saved = connectedWith({
+      ...ready,
+      mode: "named",
+      hostname: "https://nessa.example.com",
+    })
+    expect(
+      canApply(run(saved, { type: "hostname", hostname: "nessa.example.com" })),
+    ).toBe(false)
+  })
+
   it("a saved token lets a named tunnel turn on with only a hostname", () => {
     const state = run(
       connectedWith({

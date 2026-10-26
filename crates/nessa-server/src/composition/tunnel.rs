@@ -60,6 +60,12 @@ impl PreparedTunnel {
     pub(super) fn ingress(&self) -> SocketAddr {
         self.ingress
     }
+
+    /// This run's tunnel cannot start, for `reason`; nothing runs.
+    pub(super) fn fail(&self, reason: &'static str) {
+        self.status
+            .send_replace(ServiceStatus::Failed(ServiceFailure::Unavailable(reason)));
+    }
 }
 
 /// Read the tunnel `config` turns on, with its token.

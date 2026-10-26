@@ -57,9 +57,12 @@ A tunnel connection does not: **the first thing the gateway does with a
 tunnel connection, right after the TLS handshake, is check that the key it
 proved holds an active credential** (a device credential, or one to serve
 as an environment). A key that holds none is closed before its first
-request is read. So pairing (`hello`, `begin`) can only happen on the
-local network, where the code was shown, and the internet sees a TLS
-handshake and nothing else from a key the gateway did not issue.
+request is read. A key that holds one may open only its session
+(`openProduct` or `openEnvironment`) as its first request; pairing
+(`hello`, `begin`), a status read and owner recovery close the connection
+too. So pairing can only happen on the local network, where the code was
+shown, and the internet sees a TLS handshake and nothing else from a key
+the gateway did not issue.
 
 This is authentication, the same kind of check as the existing rule that
 only a paired key may take a product session permit, and it stays in Rust
@@ -72,6 +75,13 @@ from a pool of four, beside the direct, relay, product and environment
 pools, from before the WebSocket upgrade until the connection ends. Anyone
 who has the public address can fill that pool; it never touches the
 direct one, so the internet cannot crowd out the local network.
+
+That is also its limit: a stranger who knows the address can keep four
+handshakes open, renewing them as each deadline (10 s for the upgrade,
+10 s for TLS) ends, and keep a phone out while they do. A named tunnel's
+hostname is public through DNS. Asking for something before the upgrade
+that only paired devices hold, or putting Cloudflare Access in front of a
+named tunnel, would close it; that is follow-up work.
 
 ## The pieces
 
@@ -148,6 +158,14 @@ users of the machine can see it (see below).
   one, at a new quick address. A gateway that starts itself again in
   place (`pairing.setLinking`, `pairing.setTunnel`) is the same process
   and keeps it.
+- **Its ingress.** `cloudflared` forwards to the gateway's loopback
+  ingress, which the gateway binds only while the tunnel runs. A port
+  another program holds fails the tunnel (`ingress`), never the gateway's
+  start. While the gateway is stopped and `cloudflared` is kept, another
+  program of any user on the machine could take that port and answer at
+  the tunnel's address; phones still refuse it, since they pin the
+  gateway's key, but a browser would not. On a machine shared with people
+  you do not trust, turn the tunnel off before stopping the gateway.
 - **Failure.** A `cloudflared` that exits is started again after a wait
   that doubles from 1 s to 60 s. While it is down the tunnel reads
   `starting` or `failed`, and phones on the local network are unaffected.
@@ -158,6 +176,7 @@ users of the machine can see it (see below).
 | --- | --- | --- | --- |
 | T1 | A tunnel connection whose key holds an active device credential opens a product session | Served exactly as on the local network: same authentication, same Cedar | gateway |
 | T2 | A tunnel connection whose key holds no credential, whatever its first request (`hello`, `begin`, `status`, `openProduct`) | Closed after the TLS handshake, before its first request is read | gateway |
+| T2a | A tunnel connection whose key holds a credential asks for `hello`, `status` or owner recovery | Closed without an answer | gateway |
 | T3 | A tunnel connection whose key holds a credential to serve opens `openEnvironment` | Served as on the local network | stress `tunnel` |
 | T4 | A fifth WebSocket arrives while four tunnel permits are held | Closed before the upgrade; direct readers are admitted as before | gateway |
 | T5 | The upgrade asks for any path but `/native`, or is not a WebSocket | Refused with 404 before a permit is spent on a bridge | gateway |
@@ -172,6 +191,8 @@ users of the machine can see it (see below).
 | T14 | `server.reach` from a paired owner phone | The current public address, or none | gateway |
 | T15 | The recorded pid now names another process (reboot, reuse) | Left alone; a new `cloudflared` is started | services |
 | T16 | `pairing.tunnel` after a named tunnel is saved | Says a token is saved, never the token; Settings never fills the token field | gateway, desktop |
+| T18 | The saved token cannot be read (loose permissions, not a token) | Read as no token: Settings says to save it again, and a new one is saved over it; the ingress is not held meanwhile | gateway |
+| T19 | Whatever answers the metrics port names an address that is not a `trycloudflare.com` name | Not taken as the tunnel's address | gateway |
 | T17 | `pairing.setTunnel` on while linking is off, or named with no hostname or token | `pairing_linking_off` or `pairing_tunnel_incomplete`; nothing saved | gateway |
 
 ## What this does not do

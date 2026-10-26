@@ -465,3 +465,72 @@ async fn a_tunneled_key_with_no_credential_is_closed_before_its_first_request() 
         .unwrap();
     fixture.gateway.shutdown().await;
 }
+
+/// Every key may serve: what a paired worker's or phone's key holds.
+struct EveryKeyServes;
+impl nessa_server::device_pairing::infrastructure::EnvironmentPeers for EveryKeyServes {
+    fn admits<'a>(
+        &'a self,
+        _proof: &'a nessa_auth::application::pairing::DeviceConnectionProof,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<bool, nessa_auth::application::ports::AccessError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(true) })
+    }
+    fn serve(
+        &self,
+        _stream: nessa_server::device_pairing::infrastructure::TlsStream,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn a_credentialed_key_through_the_tunnel_cannot_pair() {
+    let fixture = Fixture::new().await;
+    fixture
+        .gateway
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .await
+        .unwrap();
+    let pin = fixture.gateway.identity().public_spki();
+    let connections = Arc::new(
+        NativeEnrollmentConnections::new(
+            fixture.gateway.clone(),
+            RuntimeDependencies::default().clock,
+        )
+        .with_environment_peers(Arc::new(EveryKeyServes)),
+    );
+    let permit = connections.tunnel_permit().expect("a tunnel permit");
+    let (tunnel_server, tunnel_device) = sockets();
+    let tunnel_answer = device_says_hello(tunnel_device, pin);
+    let (accept, _) = ScriptedAccept::new([Step::Give(Accepted::Tunneled(tunnel_server, permit))]);
+    let listener = NativeEnrollmentListener::new(accept, connections.clone());
+    let (stop, stopped) = oneshot::channel::<()>();
+    let running = tokio::spawn(listener.run(
+        OsEntropy::default,
+        async {
+            stopped.await.ok();
+        },
+        |kind| panic!("listener stopped on {kind:?}"),
+    ));
+    assert!(
+        !tokio::time::timeout(WAIT, tunnel_answer)
+            .await
+            .unwrap()
+            .unwrap(),
+        "pairing, status and recovery stay on the local network, whatever the key holds"
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, running)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    fixture.gateway.shutdown().await;
+}

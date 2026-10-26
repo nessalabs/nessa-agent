@@ -313,10 +313,7 @@ impl ConfigLinking {
         let reading = files.clone();
         let edited = tokio::task::spawn_blocking(move || {
             let document = config.document().map_err(refusal)?;
-            let saved = reading
-                .read_token()
-                .map_err(|_| LinkingError::Unavailable)?;
-            edit_tunnel(document, &asked, saved)
+            edit_tunnel(document, &asked, saved_token(&reading))
         })
         .await
         .map_err(|_| LinkingError::Unavailable)??;
@@ -376,10 +373,7 @@ impl ConfigLinking {
         tokio::task::spawn_blocking(move || {
             let document = config.document().map_err(refusal)?;
             let section = saved_section(&document)?;
-            let has_token = files
-                .read_token()
-                .map_err(|_| LinkingError::Unavailable)?
-                .is_some();
+            let has_token = saved_token(&files).is_some();
             Ok(match section {
                 Some(section) => SavedTunnel {
                     enabled: section.enabled,
@@ -400,6 +394,15 @@ impl ConfigLinking {
         .await
         .map_err(|_| LinkingError::Unavailable)?
     }
+}
+
+/// The saved token. One that cannot be read (a file others may read, or
+/// not a token) counts as none, so Settings can save a new one over it.
+fn saved_token(files: &TunnelFiles) -> Option<TunnelToken> {
+    files.read_token().unwrap_or_else(|error| {
+        tracing::warn!(%error, "the saved tunnel token cannot be read; it is taken as none");
+        None
+    })
 }
 
 type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, LinkingError>> + Send + 'a>>;
@@ -540,6 +543,11 @@ fn edit_tunnel(
         .and_then(|section| section.ingress)
         .unwrap_or(DEFAULT_TUNNEL_INGRESS);
     let token = request.token.clone().or_else(|| saved_token.clone());
+    // A named tunnel always has its address, on or off: the saved section
+    // must read back as a whole setting.
+    if mode == TunnelMode::Named && hostname.is_none() {
+        return Err(LinkingError::TunnelIncomplete);
+    }
     let setting = if request.enabled {
         if !linking_on {
             return Err(LinkingError::LinkingOff);
@@ -1313,6 +1321,77 @@ mod tests {
             })
         );
         assert_eq!(tunnel_section(&files)["enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn a_token_that_cannot_be_read_is_taken_as_none_and_saved_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, _) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let kept = TunnelFiles::new(namespace.path());
+        kept.write_token(&TunnelToken::new("old".into()).unwrap())
+            .unwrap();
+        // Restored with loose permissions: not taken as the gateway's.
+        std::fs::set_permissions(kept.token_path(), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        assert!(!linking.linking.tunnel().await.unwrap().has_token);
+        assert_eq!(
+            linking
+                .linking
+                .set_tunnel(
+                    caller(),
+                    TunnelRequest {
+                        hostname: Some(address("https://gateway.example.com")),
+                        ..request(true, Some(TunnelMode::Named))
+                    },
+                )
+                .await
+                .map(|_| ()),
+            Err(LinkingError::TunnelIncomplete),
+            "a token it cannot read is no token"
+        );
+        let token = TunnelToken::new("new".into()).unwrap();
+        linking
+            .linking
+            .set_tunnel(
+                caller(),
+                TunnelRequest {
+                    hostname: Some(address("https://gateway.example.com")),
+                    token: Some(token.clone()),
+                    ..request(true, Some(TunnelMode::Named))
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(kept.read_token().unwrap(), Some(token));
+    }
+
+    #[tokio::test]
+    async fn a_named_tunnel_turned_off_still_needs_its_hostname() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, _) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        assert_eq!(
+            linking
+                .linking
+                .set_tunnel(
+                    caller(),
+                    TunnelRequest {
+                        token: Some(TunnelToken::new("token".into()).unwrap()),
+                        ..request(false, Some(TunnelMode::Named))
+                    },
+                )
+                .await
+                .map(|_| ()),
+            Err(LinkingError::TunnelIncomplete)
+        );
+        assert!(TunnelFiles::new(namespace.path())
+            .read_token()
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

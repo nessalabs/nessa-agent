@@ -286,15 +286,24 @@ impl Service<TunnelAddress> for CloudflareService {
                 CloudflareTunnel::Named { address, .. } => Some(address.clone()),
                 CloudflareTunnel::Quick => {
                     let (status, body) = probe(port, "/quicktunnel").await.ok()?;
-                    (status == 200).then(|| quick_address(&body)).flatten()
+                    let stand_in = matches!(self.program, Program::Given(_));
+                    (status == 200)
+                        .then(|| quick_address(&body, stand_in))
+                        .flatten()
                 }
             }
         })
     }
 }
 
-/// The address a quick tunnel's `/quicktunnel` answer names.
-fn quick_address(body: &[u8]) -> Option<TunnelAddress> {
+/// The address a quick tunnel's `/quicktunnel` answer names: a bare
+/// `trycloudflare.com` hostname, served over HTTPS. Whatever answers on the
+/// metrics port is believed only that far, since a local program could
+/// answer there first. A `stand_in` (`NESSA_TUNNEL_PROGRAM`, debug builds
+/// only) may name a whole origin, which is how the stress check's names its
+/// loopback edge; the address type still refuses plain HTTP to anything but
+/// loopback.
+fn quick_address(body: &[u8], stand_in: bool) -> Option<TunnelAddress> {
     #[derive(Deserialize)]
     struct Quick {
         hostname: String,
@@ -302,20 +311,24 @@ fn quick_address(body: &[u8]) -> Option<TunnelAddress> {
     let start = body.iter().position(|byte| *byte == b'{')?;
     let end = body.iter().rposition(|byte| *byte == b'}')?;
     let quick: Quick = serde_json::from_slice(body.get(start..=end)?).ok()?;
-    if quick.hostname.is_empty() {
-        return None;
-    }
-    // cloudflared names a bare hostname, served over HTTPS. An answer that
-    // names a whole origin is taken as written, which is how the stress
-    // check's stand-in names its loopback edge; the address type still
-    // refuses plain HTTP to anything but loopback.
-    let origin = if quick.hostname.contains("://") {
+    let origin = if stand_in && quick.hostname.contains("://") {
         quick.hostname
     } else {
+        let name = quick.hostname.strip_suffix(QUICK_DOMAIN)?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return None;
+        }
         format!("https://{}", quick.hostname)
     };
     TunnelAddress::try_from(origin).ok()
 }
+
+/// Where every quick tunnel's hostname is.
+const QUICK_DOMAIN: &str = ".trycloudflare.com";
 
 /// One `GET` to the metrics server on loopback: its status and body.
 async fn probe(port: u16, path: &str) -> io::Result<(u16, Vec<u8>)> {

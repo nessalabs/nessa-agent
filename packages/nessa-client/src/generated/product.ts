@@ -2496,7 +2496,7 @@ export interface PairingTunnelResult {
   status: PairingTunnelStatus
   /** The running tunnel's public address, when it is ready. */
   address?: string
-  /** Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, storage, token, start or not_ready. */
+  /** Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready. */
   failure?: string
 }
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */

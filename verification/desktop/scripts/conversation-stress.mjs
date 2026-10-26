@@ -2788,7 +2788,8 @@ const steps = {
       await closeSettings(run.page)
       return true
     })
-    if (on) {
+    // Its own function, so a check that ends it early still turns it off.
+    const throughTunnel = async () => {
       let worker
       let owner
       try {
@@ -2875,24 +2876,41 @@ const steps = {
       }
     }
     // Off again, whatever happened: the tunnel's program ends with it.
-    const kept = keptTunnel(directory)
-    await run.exclusive(async () => {
-      await openLinkedDevices(run.page)
-      const tunnelOn =
-        (await run.page
-          .locator(css.tunnel)
-          .getAttribute("data-tunnel-enabled")
-          .catch(() => null)) === "true"
-      if (tunnelOn && (await switchTunnel(run, false, failures)) && kept) {
-        const gone = await waitFor(async () => !alive(kept.pid), 15_000)
-        if (!gone) failures.push(`cloudflared ${kept.pid} outlived the tunnel turned off`)
+    let kept = null
+    try {
+      if (on) await throughTunnel()
+      kept = keptTunnel(directory)
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        const tunnelOn =
+          (await run.page
+            .locator(css.tunnel)
+            .getAttribute("data-tunnel-enabled")
+            .catch(() => null)) === "true"
+        if (tunnelOn && (await switchTunnel(run, false, failures)) && kept) {
+          const gone = await waitFor(async () => !alive(kept.pid), 15_000)
+          if (!gone)
+            failures.push(`cloudflared ${kept.pid} outlived the tunnel turned off`)
+        }
+        if (
+          (await run.page.locator(css.linked).getAttribute("data-linked")) === "on" &&
+          (await switchLinking(run, false, failures))
+        )
+          await closeSettings(run.page)
+      })
+    } finally {
+      // Nothing the step started outlives it: its own process group, so
+      // the gateway's end never reaches it.
+      const left = keptTunnel(directory) ?? kept
+      if (left && alive(left.pid)) {
+        failures.push(`cloudflared ${left.pid} was still running at the step's end`)
+        try {
+          process.kill(-left.pid, "SIGKILL")
+        } catch {
+          // Gone in the meantime.
+        }
       }
-      if (
-        (await run.page.locator(css.linked).getAttribute("data-linked")) === "on" &&
-        (await switchLinking(run, false, failures))
-      )
-        await closeSettings(run.page)
-    })
+    }
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 

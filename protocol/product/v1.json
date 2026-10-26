@@ -6119,7 +6119,7 @@
         "failure": {
           "type": "string",
           "maxLength": 32,
-          "description": "Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, storage, token, start or not_ready."
+          "description": "Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready."
         }
       },
       "required": ["enabled", "mode", "hasToken", "ingress", "status"]

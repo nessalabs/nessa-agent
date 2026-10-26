@@ -147,20 +147,31 @@ fn a_kept_program_that_no_longer_matches_is_fetched_again() {
 
 #[test]
 fn a_quick_answer_names_an_https_address_or_a_loopback_stand_in() {
-    let address =
-        |body: &str| quick_address(body.as_bytes()).map(|address| address.as_str().to_owned());
+    let address = |body: &str, stand_in: bool| {
+        quick_address(body.as_bytes(), stand_in).map(|address| address.as_str().to_owned())
+    };
     assert_eq!(
-        address(r#"{"hostname":"a-b-c.trycloudflare.com"}"#).as_deref(),
+        address(r#"{"hostname":"a-b-c.trycloudflare.com"}"#, false).as_deref(),
         Some("https://a-b-c.trycloudflare.com")
     );
+    // Whatever answers the metrics port names only a quick tunnel's address.
+    for refused in [
+        r#"{"hostname":"https://evil.example"}"#,
+        r#"{"hostname":"evil.example"}"#,
+        r#"{"hostname":"http://127.0.0.1:5"}"#,
+        r#"{"hostname":".trycloudflare.com"}"#,
+        r#"{"hostname":"a.b.trycloudflare.com"}"#,
+        r#"{"hostname":"a/b.trycloudflare.com"}"#,
+    ] {
+        assert_eq!(address(refused, false), None, "{refused}");
+    }
     assert_eq!(
-        address(r#"{"hostname":"http://127.0.0.1:5"}"#).as_deref(),
+        address(r#"{"hostname":"http://127.0.0.1:5"}"#, true).as_deref(),
         Some("http://127.0.0.1:5")
     );
-    assert_eq!(address(r#"{"hostname":"http://example.com"}"#), None);
-    assert_eq!(address(r#"{"hostname":""}"#), None);
-    assert_eq!(address(r#"{"hostname":"a.example/path"}"#), None);
-    assert_eq!(address("not json"), None);
+    assert_eq!(address(r#"{"hostname":"http://example.com"}"#, true), None);
+    assert_eq!(address(r#"{"hostname":""}"#, true), None);
+    assert_eq!(address("not json", true), None);
 }
 
 #[test]

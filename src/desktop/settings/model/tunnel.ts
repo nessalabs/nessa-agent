@@ -25,6 +25,7 @@ export type TunnelFailure =
   | "unsupported"
   | "download"
   | "unverified"
+  | "ingress"
   | "storage"
   | "token"
   | "start"
@@ -158,6 +159,7 @@ export const tunnelFailureText: Record<TunnelFailure, string> = {
   unsupported: "There is no cloudflared build for this machine.",
   download: "cloudflared could not be downloaded.",
   unverified: "The cloudflared download did not match the build Nessa pins.",
+  ingress: "Another program is using the tunnel's local port.",
   storage: "cloudflared could not be saved on this machine.",
   token: "The named tunnel's token could not be read. Save it again.",
   start: "cloudflared could not start.",
@@ -230,13 +232,22 @@ export function canToggle(state: TunnelState): boolean {
   return state.read?.enabled ? true : complete(state)
 }
 
+/**
+ * The hostname typed, as the gateway takes it: Cloudflare's dashboard shows
+ * a bare name (`nessa.example.com`), which is served over HTTPS.
+ */
+function originOf(hostname: string): string {
+  const typed = hostname.trim()
+  return typed === "" || typed.includes("://") ? typed : `https://${typed}`
+}
+
 /** Whether the draft differs from what is saved. */
 export function dirty(state: TunnelState): boolean {
   const read = state.read
   if (!read) return false
   return (
     state.draft.mode !== read.mode ||
-    state.draft.hostname.trim() !== (read.hostname ?? "") ||
+    originOf(state.draft.hostname) !== (read.hostname ?? "") ||
     state.draft.token.trim() !== ""
   )
 }
@@ -277,7 +288,7 @@ function begin(
 /** The draft, sent as a change that turns the tunnel on. */
 function changeOf(draft: TunnelDraft): TunnelChange {
   if (draft.mode === "quick") return { enabled: true, mode: "quick" }
-  const hostname = draft.hostname.trim()
+  const hostname = originOf(draft.hostname)
   const token = draft.token.trim()
   return {
     enabled: true,

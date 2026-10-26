@@ -97,6 +97,10 @@ pub enum NativeConnectionFailure {
     /// Whether a tunnel connection's key holds a credential could not be
     /// read; closed the same way.
     TunnelUnverifiable,
+    /// A tunnel connection asked for anything but a product session or an
+    /// environment: pairing, status and owner recovery stay on the local
+    /// network, whatever the key holds (design row T2).
+    TunnelLocalOnly,
 }
 /// Primary failure and independent failure to settle the original charged attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -675,6 +679,7 @@ fn serve_exchange<R: RngCore + CryptoRng>(
         &deadline,
         &mut entropy,
         &admissions,
+        tunneled,
     );
     match result {
         Ok(Exchanged::ProductSelected(permit)) => Ok(Served::Product(Box::new(channel), permit)),
@@ -714,7 +719,8 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
         | NativeConnectionFailure::WorkerFault(_)
         | NativeConnectionFailure::ClaimReply(_)
         | NativeConnectionFailure::TunnelUnregistered
-        | NativeConnectionFailure::TunnelUnverifiable => false,
+        | NativeConnectionFailure::TunnelUnverifiable
+        | NativeConnectionFailure::TunnelLocalOnly => false,
     }
 }
 /// How an exchange ended on a readable channel.
@@ -738,10 +744,21 @@ fn exchange<R: RngCore + CryptoRng>(
     deadline: &NativeDeadline,
     entropy: &mut R,
     admissions: &Admissions,
+    tunneled: bool,
 ) -> Result<Exchanged, NativeConnectionError> {
     begin_enrollment_phase(deadline)?;
     let first = read_request(channel)?;
     check_deadline(deadline)?;
+    // A credential lets a tunnel connection in, and only to its session:
+    // pairing a code, a status and owner recovery need the local network.
+    if tunneled
+        && !matches!(
+            first,
+            NativePairingRequest::OpenProduct | NativePairingRequest::OpenEnvironment
+        )
+    {
+        return Err(NativeConnectionFailure::TunnelLocalOnly.into());
+    }
     let public = match first {
         NativePairingRequest::RecoverOwnerPhone { request_id, digest } => {
             let (public, status) = gateway

@@ -183,6 +183,7 @@ function tunnelFailureOf(failure: string | undefined): TunnelFailure | undefined
     case "unsupported":
     case "download":
     case "unverified":
+    case "ingress":
     case "storage":
     case "token":
     case "start":

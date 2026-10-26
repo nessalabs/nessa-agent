@@ -97,8 +97,21 @@ impl KeptHost {
     /// run that has no use for it (its service is off).
     pub(crate) async fn release(&self) {
         if let Some(record) = self.read() {
-            if self.still(&record).await {
-                self.end_group(record.pid).await;
+            match self.observe(record.pid).await {
+                Some(identity) if record.identity.as_ref() == Some(&identity) => {
+                    self.end_group(record.pid).await;
+                }
+                // The pid names another process now: not ours to signal.
+                Some(_) => {}
+                // A live pid whose identity cannot be read is never
+                // signalled; say so, since it may be the helper, left
+                // running with no record.
+                None if !gone(record.pid) => tracing::warn!(
+                    service = self.name,
+                    pid = record.pid,
+                    "a kept helper's process could not be identified; it is left running"
+                ),
+                None => {}
             }
             self.forget();
         }
