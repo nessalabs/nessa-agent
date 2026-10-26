@@ -149,7 +149,15 @@ fn address(socket: *const libc::sockaddr) -> Option<IpAddr> {
             }
             libc::AF_INET6 => {
                 let v6 = &*(socket as *const libc::sockaddr_in6);
-                Some(IpAddr::from(v6.sin6_addr.s6_addr))
+                let mut octets = v6.sin6_addr.s6_addr;
+                // The kernel writes a link-local address's interface index
+                // into bytes 2 and 3 (`fe80:4::…`); the configured address
+                // has none there.
+                if octets[0] == 0xfe && octets[1] & 0xc0 == 0x80 {
+                    octets[2] = 0;
+                    octets[3] = 0;
+                }
+                Some(IpAddr::from(octets))
             }
             _ => None,
         }
