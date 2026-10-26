@@ -306,6 +306,10 @@ export const css = {
   githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus
   githubActions: ".settings-github-actions", // Choose repositories and Disconnect; opacity 0 at rest
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
+  linkingSwitch: "[data-linking-switch] [role='switch']", // the Native linking switch
+  tunnel: "[data-tunnel]", // the Web tunnel group: data-tunnel-enabled, data-tunnel-status
+  tunnelSwitch: "[data-tunnel] [role='switch']",
+  tunnelAddress: "[data-tunnel-address]", // the ready tunnel's public address
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',

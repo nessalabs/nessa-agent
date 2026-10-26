@@ -36,10 +36,6 @@ const wireCodes = [
   "credential_capacity",
 ]
 
-/** The Native linking switch; the web tunnel's is its own. */
-const linkingSwitch = "[data-linking-switch] [role='switch']"
-const tunnelSwitch = "[data-tunnel] [role='switch']"
-
 const invitationId = Array.from({ length: 16 }, (_, index) => index + 1)
 const deviceKey = Array.from({ length: 32 }, () => 1)
 const grant = (action) => ({
@@ -490,7 +486,7 @@ await main(meta, async ({ options, rep, url }) => {
 
     await gatewayStep("off", { mode: "off" }, async (page) => {
       const phase = await page.locator(css.linked).getAttribute("data-linked")
-      const toggle = page.locator(linkingSwitch)
+      const toggle = page.locator(css.linkingSwitch)
       const text = await panelText(page)
       return [
         phase === "off" ? null : `phase was ${phase}, expected off`,
@@ -513,7 +509,7 @@ await main(meta, async ({ options, rep, url }) => {
     })
 
     await gatewayStep("toggle", { mode: "off" }, async (page) => {
-      const toggle = page.locator(linkingSwitch)
+      const toggle = page.locator(css.linkingSwitch)
       await toggle.click()
       await page.waitForFunction(
         (selector) =>
@@ -533,7 +529,7 @@ await main(meta, async ({ options, rep, url }) => {
 
     await gatewayStep("tunnel", { mode: "on" }, async (page) => {
       const text = await panelText(page)
-      const toggle = page.locator(tunnelSwitch)
+      const toggle = page.locator(css.tunnelSwitch)
       const before = [
         text.includes("only on the same network") ? null : "the tunnel did not read off",
         text.includes("changes whenever cloudflared")
@@ -541,8 +537,8 @@ await main(meta, async ({ options, rep, url }) => {
           : "the quick address was not said to change",
       ]
       await toggle.click()
-      await page.waitForSelector("[data-tunnel-address]", { timeout: 20_000 })
-      const address = await page.locator("[data-tunnel-address]").innerText()
+      await page.waitForSelector(css.tunnelAddress, { timeout: 20_000 })
+      const address = await page.locator(css.tunnelAddress).innerText()
       await page.locator("[data-tunnel-mode] button", { hasText: "Named" }).click()
       const named = await panelText(page)
       return [

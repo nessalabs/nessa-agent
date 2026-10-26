@@ -128,6 +128,15 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   tunnel      native linking and then the web tunnel are turned on in
+ *               Settings, each restarting the gateway, which starts a
+ *               stand-in cloudflared (NESSA_TUNNEL_PROGRAM) and shows its
+ *               address once ready; the gateway is stopped and started
+ *               again and takes the same cloudflared back, at the same
+ *               address; a real `nessa env dial` worker pairs, then dials
+ *               only through the tunnel (its direct address refuses), and a
+ *               conversation placed on it is answered; turning the tunnel off
+ *               ends the cloudflared, and linking is turned off again
  *   launch      the window is reloaded while the host is still starting the
  *               gateway: the host holds the window's read, the startup
  *               screen never covers it, and once the gateway is up the
@@ -2770,6 +2779,123 @@ const steps = {
     }
   },
 
+  async tunnel(run, step, failures) {
+    const directory = tunnelDirectory(run)
+    const on = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      if (!(await switchLinking(run, true, failures))) return false
+      if (!(await switchTunnel(run, true, failures))) return false
+      await closeSettings(run.page)
+      return true
+    })
+    if (on) {
+      let worker
+      let owner
+      try {
+        const { address } = await run.client.pairing.tunnel()
+        const kept = keptTunnel(directory)
+        if (!address || !kept) {
+          failures.push(
+            `the ready tunnel is at ${address} with ${JSON.stringify(kept)} kept`,
+          )
+          return
+        }
+        // The gateway stops and starts again; cloudflared does not.
+        await run.exclusive(() =>
+          run.restartConsole.during(run.opened, async () => {
+            const old = run.client
+            run.restarts += 1
+            await run.stack.gateway.restart("SIGTERM")
+            old.close()
+            run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          }),
+        )
+        const again = await waitFor(async () => {
+          const read = await run.client.pairing.tunnel()
+          return read.status === "ready" ? read : null
+        }, 60_000)
+        if (again?.address !== address)
+          failures.push(
+            `after a restart the tunnel is at ${again?.address}, not ${address}`,
+          )
+        const after = keptTunnel(directory)
+        if (after?.pid !== kept.pid || !alive(kept.pid))
+          failures.push(
+            `the restarted gateway did not take cloudflared ${kept.pid} back: ${JSON.stringify(after)}`,
+          )
+        if (failures.length) return
+        // A paired machine that cannot reach the gateway directly dials it
+        // through the tunnel.
+        const through = tunnelConnections(directory)
+        owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+        worker = await startWorker({
+          owner,
+          address: run.nativeAddress,
+          agent: run.stack.agent,
+          launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+          label: `t${step.index}`,
+          tunnel: { address: UNREACHABLE, origin: address },
+          connected: async (name) =>
+            (await offers(run, (environments) => environments.includes(name))).includes(
+              name,
+            ),
+        })
+        if (tunnelConnections(directory) <= through)
+          failures.push("the worker connected, but not through the tunnel")
+        const conversationId = randomUUID()
+        await run.client.conversation.create({
+          conversationId,
+          agent: run.stack.agent,
+          environment: worker.name,
+        })
+        const text = prompt(run, STRESS.reply, step, " tunnel")
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.lease?.host !== worker.name)
+          failures.push(`its lease runs on ${view?.lease?.host}, not ${worker.name}`)
+        // Read at rest while its worker serves: the run's own rest check
+        // comes after the worker is gone.
+        if (failures.length === 0) failures.push(...(await atRest(run, [conversationId])))
+      } finally {
+        if (worker) {
+          if (run.evidence)
+            writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+          await worker.close()
+        }
+        owner?.close()
+      }
+    }
+    // Off again, whatever happened: the tunnel's program ends with it.
+    const kept = keptTunnel(directory)
+    await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const tunnelOn =
+        (await run.page
+          .locator(css.tunnel)
+          .getAttribute("data-tunnel-enabled")
+          .catch(() => null)) === "true"
+      if (tunnelOn && (await switchTunnel(run, false, failures)) && kept) {
+        const gone = await waitFor(async () => !alive(kept.pid), 15_000)
+        if (!gone) failures.push(`cloudflared ${kept.pid} outlived the tunnel turned off`)
+      }
+      if (
+        (await run.page.locator(css.linked).getAttribute("data-linked")) === "on" &&
+        (await switchLinking(run, false, failures))
+      )
+        await closeSettings(run.page)
+    })
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async delegate(run, step, failures) {
     const text = prompt(run, STRESS.delegate, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -5067,7 +5193,7 @@ async function switchLinking(run, enabled, failures) {
     const before = failures.length
     const old = run.client
     run.restarts += 1
-    await run.page.locator(`${css.linked} [role='switch']`).click()
+    await run.page.locator(css.linkingSwitch).click()
     const shown = await waitFor(
       async () =>
         (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
@@ -5101,6 +5227,99 @@ async function switchLinking(run, enabled, failures) {
  * `environments`), once `holds` is true of them; what they last were after
  * 30 s otherwise. A worker that connects or leaves changes them.
  */
+/**
+ * The `tunnel` step's stand-in cloudflared (`lib/fake-cloudflared.mjs`),
+ * written into `directory` with this node as its interpreter: the gateway
+ * starts it with no PATH, and one exec keeps the name it records.
+ */
+function fakeCloudflared(directory) {
+  const source = readFileSync(
+    new URL("./lib/fake-cloudflared.mjs", import.meta.url),
+    "utf8",
+  )
+  const program = join(directory, "cloudflared")
+  writeFileSync(program, `#!${process.execPath}\n${source.replace(/^#!.*\n/, "")}`)
+  chmodSync(program, 0o755)
+  return program
+}
+
+/** A direct address that refuses at once, so a dial goes beyond it. */
+const UNREACHABLE = "127.0.0.1:9"
+
+/** The gateway's `<namespace>/tunnel`: the kept record and the program's log. */
+function tunnelDirectory(run) {
+  return join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "tunnel")
+}
+
+/** The tunnel program the gateway keeps, as its record says; `null` without one. */
+function keptTunnel(directory) {
+  try {
+    return JSON.parse(readFileSync(join(directory, "process.json"), "utf8"))
+  } catch {
+    return null
+  }
+}
+
+/** Connections the stand-in cloudflared has carried, as its log counts them. */
+function tunnelConnections(directory) {
+  try {
+    return readFileSync(join(directory, "cloudflared.log"), "utf8")
+      .split("\n")
+      .filter((line) => /^connection \d+$/.test(line)).length
+  } catch {
+    return 0
+  }
+}
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === "EPERM"
+  }
+}
+
+/**
+ * Turns the web tunnel `enabled` with its switch on the Linked devices tab,
+ * already open with linking on. The gateway saves the change and starts
+ * itself again in the same process; the window comes back showing the
+ * tunnel ready, or off. Resolves whether all of that held. Called with
+ * nothing else in flight (`run.exclusive`).
+ */
+async function switchTunnel(run, enabled, failures) {
+  const gateway = run.stack.gateway
+  const pid = gateway.server.pid
+  const want = enabled ? "ready" : "off"
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await run.page.locator(css.tunnelSwitch).click()
+    const shown = await waitFor(async () => {
+      const group = run.page.locator(css.tunnel)
+      return (
+        (await group.getAttribute("data-tunnel-enabled")) === String(enabled) &&
+        (await group.getAttribute("data-tunnel-status")) === want
+      )
+    }, 60_000)
+    if (!shown) failures.push(`the window did not come back with the tunnel ${want}`)
+    else if (enabled && (await run.page.locator(css.tunnelAddress).count()) !== 1)
+      failures.push("the ready tunnel's address is not shown")
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const read = await run.client.pairing.tunnel()
+    if (read.enabled !== enabled || read.status !== want)
+      failures.push(`the gateway answers the tunnel ${JSON.stringify(read)}`)
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  return held
+}
+
 const offers = (run, holds) =>
   waitFor(async () => {
     const { environments } = await run.client.agents.list()
@@ -5416,9 +5635,13 @@ async function startStack(options) {
     throw error
   }
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
-  const environment = github
-    ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
-    : {}
+  const environment = {
+    ...(github
+      ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
+      : {}),
+    // The `tunnel` step's cloudflared (debug builds only).
+    NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
+  }
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
@@ -5430,8 +5653,13 @@ async function startStack(options) {
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
       // The agent a `handoff` step switches its conversation to.
       others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
-      // Off, at a port of its own: the `linking` step turns it on from Settings.
-      native: { enabled: false, listenAddress: nativeListen },
+      // Off, at a port of its own: the `linking` step turns it on from
+      // Settings. Its tunnel too, at a loopback port of its own.
+      native: {
+        enabled: false,
+        listenAddress: nativeListen,
+        tunnel: { enabled: false, ingress: `127.0.0.1:${await freePort()}` },
+      },
     })
   } catch (error) {
     await github?.close()

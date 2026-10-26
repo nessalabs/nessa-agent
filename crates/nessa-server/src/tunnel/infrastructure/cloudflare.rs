@@ -130,13 +130,19 @@ impl Program {
     }
 }
 
+/// Makes the source a pinned build is downloaded from. Called, and its
+/// source dropped, only on a blocking thread: the HTTPS source holds a
+/// blocking client, whose own runtime must never be dropped inside the
+/// gateway's.
+pub(crate) type MakeArchives = Arc<dyn Fn() -> Option<Box<dyn ArchiveSource>> + Send + Sync>;
+
 /// `cloudflared` as a helper service reporting the tunnel's address.
 pub(crate) struct CloudflareService {
     /// `<namespace>/tunnel`, private to the gateway.
     files: TunnelFiles,
     directory: PathBuf,
     program: Program,
-    archives: Arc<dyn ArchiveSource>,
+    archives: MakeArchives,
     tunnel: CloudflareTunnel,
     ingress: SocketAddr,
     /// The metrics port the current launch was given.
@@ -147,7 +153,7 @@ impl CloudflareService {
     pub(crate) fn new(
         files: TunnelFiles,
         program: Program,
-        archives: Arc<dyn ArchiveSource>,
+        archives: MakeArchives,
         tunnel: CloudflareTunnel,
         ingress: SocketAddr,
     ) -> Self {
@@ -194,10 +200,13 @@ impl Service<TunnelAddress> for CloudflareService {
                     let directory = self.directory.clone();
                     let build = build.clone();
                     let archives = self.archives.clone();
-                    tokio::task::spawn_blocking(move || install(&directory, &build, &*archives))
-                        .await
-                        .map_err(|_| ServiceFailure::Unavailable("download"))?
-                        .map(drop)
+                    tokio::task::spawn_blocking(move || {
+                        let archives = archives().ok_or(ServiceFailure::Unavailable("download"))?;
+                        install(&directory, &build, &*archives)
+                    })
+                    .await
+                    .map_err(|_| ServiceFailure::Unavailable("download"))?
+                    .map(drop)
                 }
             }
         })

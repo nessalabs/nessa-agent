@@ -180,7 +180,7 @@ fn service(directory: &Path, tunnel: CloudflareTunnel) -> CloudflareService {
     CloudflareService::new(
         TunnelFiles::new(directory),
         Program::Given("/bin/true".into()),
-        Arc::new(Serving(vec![])),
+        Arc::new(|| Some(Box::new(Serving(vec![])) as Box<dyn ArchiveSource>)),
         tunnel,
         "127.0.0.1:47651".parse().unwrap(),
     )

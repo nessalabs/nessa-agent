@@ -18,6 +18,7 @@
 //! into the native listener, whose tunnel edge admits only paired keys
 //! (`device_pairing::infrastructure::connection`).
 use super::runtime_config::TunnelConfig;
+use crate::agent_install::application::ArchiveSource;
 use crate::agent_install::infrastructure::HttpsArchives;
 use crate::services::application::{Backoff, ServiceFailure, ServiceStatus, ServiceSupervisor};
 use crate::services::infrastructure::KeptHost;
@@ -25,7 +26,7 @@ use crate::timer::{Timer, TokioTimer};
 use crate::tunnel::application::{
     CloudflareTunnel, TunnelMode, TunnelProvider, TunnelSetting, TunnelStatus, TunnelView,
 };
-use crate::tunnel::infrastructure::cloudflare::{CloudflareService, Program};
+use crate::tunnel::infrastructure::cloudflare::{CloudflareService, MakeArchives, Program};
 use crate::tunnel::infrastructure::files::TunnelFiles;
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use tokio::{sync::watch, task::JoinHandle};
@@ -105,15 +106,11 @@ pub(super) fn start(
     } = prepared;
     let setting = setting?;
     let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
-    let archives = match HttpsArchives::new() {
-        Ok(archives) => Arc::new(archives),
-        Err(_) => {
-            status.send_replace(ServiceStatus::Failed(ServiceFailure::Unavailable(
-                "download",
-            )));
-            return None;
-        }
-    };
+    let archives: MakeArchives = Arc::new(|| {
+        HttpsArchives::new()
+            .ok()
+            .map(|archives| Box::new(archives) as Box<dyn ArchiveSource>)
+    });
     let TunnelProvider::Cloudflare(tunnel) = setting.provider;
     let service = Arc::new(CloudflareService::new(
         files.clone(),
