@@ -5,10 +5,13 @@
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DatabaseSync } from "node:sqlite"
 import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import app from "../../../protocol/defaults/github-app.json" with { type: "json" }
-import { startFakeGithub } from "./lib/fake-github.mjs"
+import {
+  startFakeGithub,
+  nativeGithubEnvironment,
+  cleanupNativeGithub,
+} from "./lib/fake-github.mjs"
 import { startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { attempt } from "./lib/cli.mjs"
@@ -209,39 +212,9 @@ await main(
             ))
           )
             throw new Error("retry did not recover")
-          const db = new DatabaseSync(
-            join(
-              stack.gateway.directory,
-              "dev",
-              "instances",
-              "github-live-events",
-              "github-relay",
-              "inbox.sqlite",
-            ),
-          )
-          try {
-            db.exec(
-              "CREATE TRIGGER refuse_live_cleanup BEFORE INSERT ON binding_audit WHEN NEW.cause='live_events_disabled' BEGIN SELECT RAISE(ABORT,'test audit unavailable'); END;",
-            )
-            await row.hover()
-            await row.getByRole("button", { name: "Disconnect", exact: true }).click()
-            if (
-              !(await waitFor(
-                async () =>
-                  (await row.textContent()).includes(
-                    "Couldn't change live GitHub events",
-                  ),
-                10000,
-              ))
-            )
-              throw new Error("cleanup failure not shown")
-            const held = await stack.client.github.status()
-            if (held.state !== "connected" || !held.liveEvents?.enabled)
-              throw new Error("failed cleanup forgot sign-in or selection")
-          } finally {
-            db.exec("DROP TRIGGER refuse_live_cleanup")
-            db.close()
-          }
+          // Encrypted inboxes deliberately reject node:sqlite inspection.
+          // The native cleanup_audit_failure test owns fault injection and proves
+          // atomic refusal; this browser check owns the real disconnect flow.
           await row.hover()
           await row.getByRole("button", { name: "Disconnect", exact: true }).click()
           if (
@@ -309,7 +282,10 @@ await main(
         {
           stage: "dev",
           scenario: TEXT_REPLY_SCENARIO,
-          environment: { NESSA_GITHUB_APP: github.app(join(directory, "app.json")) },
+          environment: {
+            ...nativeGithubEnvironment(),
+            NESSA_GITHUB_APP: github.app(join(directory, "app.json")),
+          },
         },
       )
     } catch (error) {
@@ -324,6 +300,7 @@ await main(
         try {
           await stack.close()
         } finally {
+          cleanupNativeGithub(stack.gateway, "dev", "github-live-events")
           await github.close()
           rmSync(directory, { recursive: true, force: true })
         }

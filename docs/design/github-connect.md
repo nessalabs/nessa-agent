@@ -16,8 +16,8 @@ phone or a second window sees the same one. The owner is
 | Fact | Owner | Kept in |
 | --- | --- | --- |
 | Which app, and GitHub's addresses | `github/infrastructure/app.rs` | `protocol/defaults/github-app.json`, or the file `NESSA_GITHUB_APP` names (checks point it at a fake GitHub on this machine) |
-| Signed out, waiting for a code, or signed in | `GithubConnections` | memory, and the token file when signed in |
-| The token and whose it is | `GithubTokenFile` | `<namespace>/github/sign-in.json`, a private file in a private directory, replaced whole and synced |
+| Signed out, waiting for a code, or signed in | `GithubConnections` | memory, and the OS credential entry when signed in |
+| The token and whose it is | `GithubTokenKeychain` | injected OS credential entry scoped by namespace; legacy `sign-in.json` is consumed only for a verified one-time upgrade |
 | Each step, for the owner to look back on | `DurableGithubAudit` | `<namespace>/conversations/audit/github`, one private file per record, never a token or a code; a `connect-ended` record names what decided it (`github_answered`, `deadline_passed`, `github_unreachable`, `store_failed`) |
 | What an agent is started with | `GithubLaunchCredentials` (an SDK `OpenCredentialSource`) | read again at every agent open, never saved with the conversation |
 | What the person sees | `src/desktop/settings/ui/github-row.tsx` | nothing: it reads `github.status` |
@@ -48,7 +48,7 @@ sequenceDiagram
     H-->>G: access_token
     G->>H: GET /user (Bearer token)
     H-->>G: id, login
-    G->>G: audit connected, save sign-in.json, then Connected
+    G->>G: audit connected, save and verify OS credential entry, then Connected
     S->>G: github.status
     G-->>S: connected {account}
     A->>G: opens (new conversation, or a parked one woken)
@@ -123,7 +123,7 @@ waiting.
 | G16 | signed out (after G15) | the cancelled attempt's late answer | dropped: not the attempt waiting (`a_cancelled_attempts_late_approval_is_dropped`) | — |
 | G17 | connected | disconnect | `disconnect-requested` recorded first, then the file deleted, then signed out; if `disconnected` is refused, still signed out with `unrecorded`, refused `github_audit_unavailable` | disconnect-requested, disconnected |
 | G18 | connected | disconnect, the file cannot be deleted | still connected, refused `github_storage_unavailable`; if `disconnect-failed` is refused too, connected with `unrecorded` | disconnect-failed |
-| G19 | signed out | cancel, or disconnect | answers signed out; disconnect first deletes any token file left by G14 (refused `github_storage_unavailable` if it cannot) | — |
+| G19 | signed out | cancel, or disconnect | answers signed out; disconnect first deletes any credential entry left by G14 (refused `github_storage_unavailable` if it cannot) | — |
 | G20 | (start) | the gateway starts | the saved sign-in, or signed out; a file that cannot be read is signed out with `last: store_unavailable` | — |
 | G21 | connecting | the gateway stops | the attempt is gone; next start is signed out | — |
 
@@ -143,7 +143,7 @@ read its app. See the [protocol table](../../protocol/README.md).
 
 - Owner orderings: `crates/nessa-server/tests/github/mod.rs`, with a scripted
   GitHub, a memory store and a recording audit on a manual clock.
-- The HTTP answers, the app file, the token file, the audit and the git
+- The HTTP answers, the app file, the OS credential entry, the audit and the git
   helper (a real `git credential fill`): unit tests beside each in
   `github/infrastructure`.
 - Open credentials reach each agent at each open, and never print:
@@ -182,3 +182,5 @@ includes optional `liveEvents` counts where this build stage has a configured
 relay. Alpha/CI/prod are unconfigured and cannot fall back to dev. A reported gap
 requires an explicit **Continue with retained events** action. No event starts a
 conversation or an agent turn in this feature.
+
+OS storage, migration and encrypted inbox orderings are recorded in [ADR 1132](../adr/todo/1132-github-relay-hardening.md).

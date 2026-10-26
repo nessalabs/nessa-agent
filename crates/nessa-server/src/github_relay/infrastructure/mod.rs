@@ -11,3 +11,6 @@ pub use lifecycle::{TokioRelayWait, TracingRelayReporter};
 mod connected_store;
 pub use connected_store::ConnectedRelayStore;
 mod selection;
+
+mod keychain;
+pub use keychain::KeychainInboxKey;

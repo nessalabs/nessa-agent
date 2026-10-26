@@ -82,6 +82,7 @@ pub enum Failure {
     CatchUpPending,
     Forbidden,
     Offline,
+    RateLimited,
     InvalidResponse,
     Storage,
     Capacity,

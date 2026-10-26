@@ -35,10 +35,17 @@ fn page(user: &str, sequence: i64) -> Page {
         }],
     }
 }
+struct TestKey;
+impl crate::github_relay::application::InboxKeySource for TestKey {
+    fn load(&self) -> Result<Arc<nessa_local_database::DatabaseKey>, Failure> {
+        Ok(Arc::new(nessa_local_database::DatabaseKey::new([11; 32])))
+    }
+}
 fn store(directory: &tempfile::TempDir) -> SqliteRelayStore {
     SqliteRelayStore::new(
         directory.path().join("private/inbox.sqlite"),
         Arc::new(|| 1000000),
+        Arc::new(TestKey),
     )
 }
 
@@ -61,6 +68,7 @@ async fn failed_page_rolls_back_events_and_cursor_and_reopen_replays() {
     let reopened = SqliteRelayStore::new(
         directory.path().join("private/inbox.sqlite"),
         Arc::new(|| 1000000),
+        Arc::new(TestKey),
     );
     assert_eq!(reopened.cursor(&binding).await.unwrap(), 1);
     assert_eq!(reopened.events(&binding).await.unwrap(), good.events);
@@ -121,8 +129,12 @@ async fn gap_is_durable_and_requires_explicit_owner_acknowledgement() {
         "../../src/github_relay/infrastructure/schema.sql"
     ))
     .unwrap();
-    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
-        .unwrap();
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &schema,
+        &nessa_local_database::DatabaseKey::new([11; 32]),
+    )
+    .unwrap();
     let evidence:(String,String,i64,i64)=db.query_row("SELECT cause,initiator,before_cursor,after_cursor FROM audit WHERE cause='gap_accepted'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     assert_eq!(
         evidence,
@@ -137,6 +149,7 @@ async fn retention_records_delivery_identity_and_system_cause_with_cursor_unchan
     let store = SqliteRelayStore::new(
         directory.path().join("private/inbox.sqlite"),
         Arc::new(move || clock.load(Ordering::SeqCst)),
+        Arc::new(TestKey),
     );
     let binding = binding("11");
     store.bind(&binding, false).await.unwrap();
@@ -150,8 +163,12 @@ async fn retention_records_delivery_identity_and_system_cause_with_cursor_unchan
         "../../src/github_relay/infrastructure/schema.sql"
     ))
     .unwrap();
-    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
-        .unwrap();
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &schema,
+        &nessa_local_database::DatabaseKey::new([11; 32]),
+    )
+    .unwrap();
     let identity:String=db.query_row("SELECT delivery_id FROM audit WHERE cause='retention_expired' AND initiator='system:local-relay'",[],|r|r.get(0)).unwrap();
     assert_eq!(identity, first.events[0].delivery_id);
 }
@@ -225,8 +242,12 @@ async fn a_real_sqlite_write_failure_rolls_back_the_whole_page() {
         "../../src/github_relay/infrastructure/schema.sql"
     ))
     .unwrap();
-    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
-        .unwrap();
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &schema,
+        &nessa_local_database::DatabaseKey::new([11; 32]),
+    )
+    .unwrap();
     db.execute_batch("CREATE TRIGGER disk_failure BEFORE INSERT ON events WHEN NEW.sequence=2 BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
     let mut both = page("11", 1);
     both.events.push(page("11", 2).events.remove(0));
@@ -456,8 +477,12 @@ async fn a_full_inbox_expiry_keeps_each_deletion_identity_in_the_bounded_audit()
         "../../src/github_relay/infrastructure/schema.sql"
     ))
     .unwrap();
-    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
-        .unwrap();
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &schema,
+        &nessa_local_database::DatabaseKey::new([11; 32]),
+    )
+    .unwrap();
     db.execute("WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n < ?) INSERT INTO events(user_id,repository_id,sequence,delivery_id,event,payload,received_at,stored_at) SELECT '11','42',n,printf('%08x-0000-4000-8000-000000000000',n),'issues','{}','2026-01-01T00:00:00Z',0 FROM numbers",[crate::github_relay::domain::contract::STORED_EVENTS]).unwrap();
     db.execute(
         "UPDATE bindings SET cursor=?",
@@ -470,8 +495,12 @@ async fn a_full_inbox_expiry_keeps_each_deletion_identity_in_the_bounded_audit()
         .commit(&binding, count, &page("11", count + 1))
         .await
         .unwrap();
-    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
-        .unwrap();
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &schema,
+        &nessa_local_database::DatabaseKey::new([11; 32]),
+    )
+    .unwrap();
     let evidence: i64 = db
         .query_row(
             "SELECT COUNT(DISTINCT delivery_id) FROM audit WHERE cause='retention_expired'",
@@ -581,8 +610,13 @@ async fn opt_in_survives_restart_without_resetting_the_cursor_and_disable_fences
         store.commit(&first, 0, &first_page).await,
         Err(Failure::CursorChanged)
     );
-    let db = nessa_local_database::rusqlite::Connection::open(
-        directory.path().join("private/inbox.sqlite"),
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &nessa_local_database::Schema::new(include_str!(
+            "../../src/github_relay/infrastructure/schema.sql"
+        ))
+        .unwrap(),
+        &nessa_local_database::DatabaseKey::new([11; 32]),
     )
     .unwrap();
     let (cause, initiator): (String, String) = db
@@ -657,12 +691,101 @@ async fn cleanup_audit_failure_refuses_disable_and_preserves_selection() {
     live.set(true, "owner", false).await.unwrap();
     let binding = store.bindings().await.unwrap().remove(0);
     store.commit(&binding, 0, &page("11", 1)).await.unwrap();
-    let db = nessa_local_database::rusqlite::Connection::open(
-        directory.path().join("private/inbox.sqlite"),
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &nessa_local_database::Schema::new(include_str!(
+            "../../src/github_relay/infrastructure/schema.sql"
+        ))
+        .unwrap(),
+        &nessa_local_database::DatabaseKey::new([11; 32]),
     )
     .unwrap();
     db.execute_batch("CREATE TRIGGER refuse_cleanup BEFORE INSERT ON binding_audit WHEN NEW.cause='live_events_disabled' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;").unwrap();
     assert_eq!(live.set(false, "owner", false).await, Err(Failure::Storage));
     assert_eq!(live.status().await.unwrap(), (true, 1, 0));
     assert_eq!(store.events(&binding).await.unwrap().len(), 1);
+}
+
+/// Count requests through the actual follower and SQLite store over a virtual
+/// quiet day. The budget excludes event-triggered downloads and DO invocations.
+#[tokio::test]
+async fn a_quiet_day_uses_360_http_requests_per_repository() {
+    use crate::github_relay::application::{
+        follow, RelayLiveSource, RelayNotifications, RelayWait,
+    };
+    use std::sync::atomic::AtomicUsize;
+    struct Quiet {
+        pages: AtomicUsize,
+        watches: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl RelaySource for Quiet {
+        async fn page(&self, _: &str, b: &Binding, after: i64) -> Result<Page, Failure> {
+            self.pages.fetch_add(1, Ordering::SeqCst);
+            Ok(Page {
+                user_id: b.user_id().into(),
+                next: after,
+                has_more: false,
+                ticket: "ticket".into(),
+                events: vec![],
+            })
+        }
+    }
+    #[async_trait::async_trait]
+    impl RelayLiveSource for Quiet {
+        async fn watch(&self, _: &str) -> Result<Box<dyn RelayNotifications>, Failure> {
+            self.watches.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(SilentNotifications))
+        }
+    }
+    struct Day {
+        elapsed: AtomicI64,
+        finished: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl RelayWait for Day {
+        async fn wait(&self, duration: std::time::Duration) {
+            let after = self
+                .elapsed
+                .fetch_add(duration.as_secs() as i64, Ordering::SeqCst)
+                + duration.as_secs() as i64;
+            if after >= 86400 {
+                self.finished.notify_one();
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(store(&directory));
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let source = Arc::new(Quiet {
+        pages: AtomicUsize::new(0),
+        watches: AtomicUsize::new(0),
+    });
+    let day = Arc::new(Day {
+        elapsed: AtomicI64::new(0),
+        finished: tokio::sync::Notify::new(),
+    });
+    let task = {
+        let (source, store, day) = (source.clone(), store.clone(), day.clone());
+        tokio::spawn(async move {
+            follow(
+                source.as_ref(),
+                store.as_ref(),
+                &Credentials,
+                &binding,
+                day.as_ref(),
+                &Reporter,
+            )
+            .await
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(15), day.finished.notified())
+        .await
+        .unwrap();
+    task.abort();
+    let _ = task.await;
+    assert_eq!(source.pages.load(Ordering::SeqCst), 240);
+    assert_eq!(source.watches.load(Ordering::SeqCst), 120);
 }

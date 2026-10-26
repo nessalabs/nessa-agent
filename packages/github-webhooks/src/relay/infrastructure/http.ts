@@ -5,11 +5,18 @@ import type {
   RelayPolicyEvaluator,
   WakeTickets,
   RelayReadAudit,
+  RelayReadBudget,
 } from "../application/ports.js"
 import { relayCursor, repositoryIdentity } from "../domain/cursor.js"
 import type { WakeRooms } from "./wake-room.js"
 const reply = (status: number, body: unknown) =>
-  Response.json(body, { status, headers: { "Cache-Control": "no-store" } })
+  Response.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      ...(status === 429 ? { "Retry-After": "60" } : {}),
+    },
+  })
 export function createRelayHandler(dependencies: {
   stage: string
   identities: GitHubIdentitySource
@@ -18,6 +25,7 @@ export function createRelayHandler(dependencies: {
   tickets: WakeTickets
   rooms: WakeRooms
   audit: RelayReadAudit
+  budget: RelayReadBudget
 }) {
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url)
@@ -36,6 +44,7 @@ export function createRelayHandler(dependencies: {
             headers: {
               Upgrade: request.headers.get("Upgrade") ?? "",
               "x-relay-expires": String(ticket.expiresAt),
+              "x-relay-user": ticket.userId,
             },
           }),
         )
@@ -61,6 +70,7 @@ export function createRelayHandler(dependencies: {
         identity_changed: 409,
         unauthenticated: 401,
         unavailable: 503,
+        rate_limited: 429,
       } as const
       return reply(statuses[result.kind], { ...result, stage: dependencies.stage })
     } catch {

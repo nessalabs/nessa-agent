@@ -1,5 +1,5 @@
 //! The GitHub sign-in, composed once per run: the Nessa GitHub App, GitHub
-//! over HTTPS, the private sign-in file, its audit, and what each agent open
+//! over HTTPS, the OS sign-in entry, its audit, and what each agent open
 //! reads of it.
 //!
 //! `NESSA_GITHUB_APP` names a file describing another app in place of the
@@ -13,7 +13,7 @@ use nessa_sdk::infrastructure::acp::sessions::OpenCredentials;
 use super::local_auth::{conversation_root, SystemClock};
 use crate::github::application::GithubConnections;
 use crate::github::infrastructure::{
-    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenFile,
+    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenKeychain,
 };
 use crate::product::GithubRoutes;
 use crate::timer::TokioTimer;
@@ -57,7 +57,13 @@ pub(super) async fn compose(
     let connections = Arc::new(
         GithubConnections::load(
             Arc::new(api),
-            Arc::new(GithubTokenFile::new(namespace.join("github"))),
+            Arc::new(GithubTokenKeychain::new(
+                namespace.join("github"),
+                Arc::new(crate::secrets::KeychainSecret::new(
+                    namespace,
+                    "github-sign-in",
+                )),
+            )),
             Arc::new(DurableGithubAudit::new(
                 conversation_root(namespace).join("audit").join("github"),
                 Arc::new(SystemClock),

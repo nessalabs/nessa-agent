@@ -1,10 +1,10 @@
 use crate::github_relay::domain::contract;
 use crate::github_relay::{
-    application::RelayStore,
+    application::{InboxKeySource, RelayStore},
     domain::{Binding, Event, Failure, Page},
 };
 use nessa_local_database::{
-    open,
+    open_encrypted,
     rusqlite::{params, OptionalExtension},
     Schema,
 };
@@ -12,11 +12,16 @@ use std::{path::PathBuf, sync::Arc};
 
 pub struct SqliteRelayStore {
     path: PathBuf,
+    key: Arc<dyn InboxKeySource>,
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 impl SqliteRelayStore {
-    pub fn new(path: PathBuf, now: Arc<dyn Fn() -> i64 + Send + Sync>) -> Self {
-        Self { path, now }
+    pub fn new(
+        path: PathBuf,
+        now: Arc<dyn Fn() -> i64 + Send + Sync>,
+        key: Arc<dyn InboxKeySource>,
+    ) -> Self {
+        Self { path, now, key }
     }
     pub(super) async fn run<T: Send + 'static>(
         &self,
@@ -26,11 +31,14 @@ impl SqliteRelayStore {
     ) -> Result<T, Failure> {
         let path = self.path.clone();
         let now = (self.now)();
+        let key = self.key.clone();
         tokio::task::spawn_blocking(move || {
             let parent = path.parent().ok_or(Failure::Storage)?;
             nessa_local_storage::create_directory(parent).map_err(|_| Failure::Storage)?;
             let schema = Schema::new(include_str!("schema.sql")).map_err(|_| Failure::Storage)?;
-            let mut connection = open(&path, &schema).map_err(|_| Failure::Storage)?;
+            let key = key.load()?;
+            let mut connection =
+                open_encrypted(&path, &schema, &key).map_err(|_| Failure::Storage)?;
             operation(&mut connection, now)
         })
         .await

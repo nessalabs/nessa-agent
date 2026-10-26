@@ -1,6 +1,6 @@
 interface RelaySocket extends WebSocket {
   serializeAttachment(value: unknown): void
-  deserializeAttachment(): { expiresAt: number }
+  deserializeAttachment(): { expiresAt: number; userId?: string }
 }
 export interface RoomState {
   acceptWebSocket(socket: WebSocket): void
@@ -36,16 +36,26 @@ export class WakeRoom {
     }
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
       return new Response(null, { status: 426 })
-    if (this.state.getWebSockets().length >= 128)
-      return new Response(null, { status: 503 })
+    const userId = request.headers.get("x-relay-user") ?? ""
+    if (!/^[1-9][0-9]{0,15}$/.test(userId)) return new Response(null, { status: 401 })
     const expiresAt = Number(request.headers.get("x-relay-expires"))
     if (!Number.isSafeInteger(expiresAt) || expiresAt <= this.now())
       return new Response(null, { status: 401 })
     const alarm = await this.state.storage.getAlarm()
     if (alarm === null || alarm > expiresAt) await this.state.storage.setAlarm(expiresAt)
     if (expiresAt <= this.now()) return new Response(null, { status: 401 })
+    // Recheck capacity after the storage await: concurrent upgrades may have
+    // been accepted while the expiry alarm was being persisted.
+    if (this.state.getWebSockets().length >= 128)
+      return new Response(null, { status: 503 })
+    if (
+      this.state
+        .getWebSockets()
+        .filter((socket) => socket.deserializeAttachment().userId === userId).length >= 4
+    )
+      return new Response(null, { status: 429, headers: { "Retry-After": "60" } })
     const pair = new WebSocketPair()
-    pair[1].serializeAttachment({ expiresAt })
+    pair[1].serializeAttachment({ expiresAt, userId })
     this.state.acceptWebSocket(pair[1])
     return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit)
   }

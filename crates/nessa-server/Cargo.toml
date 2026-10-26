@@ -35,7 +35,9 @@ nessa-client-core = { path = "../nessa-client-core", default-features = false }
 nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }
-nessa-local-database = { path = "../nessa-local-database" }
+nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
+zeroize = "=1.9.0"
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
 nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
@@ -128,9 +130,6 @@ nessa-device-client = { path = "../nessa-device-client" }
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
 tempfile = "3"
-# Only to build the private key material a test record store double returns;
-# already in the build graph through nessa-auth.
-zeroize = "=1.9.0"
 tokio = { version = "1", features = ["test-util", "io-util"] }
 # Only to build the pixels a substitute system decoder hands back. The image
 # library this workspace already compiles; nothing new is built.

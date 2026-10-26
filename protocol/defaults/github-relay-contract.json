@@ -4,8 +4,8 @@
   "storedEvents": 10000,
   "storedBytes": 67108864,
   "retentionSeconds": 604800,
-  "ticketSeconds": 120,
-  "renewAfterSeconds": 90,
+  "ticketSeconds": 900,
+  "renewAfterSeconds": 720,
   "bindings": 16,
   "auditRows": 10000,
   "sweepRows": 64

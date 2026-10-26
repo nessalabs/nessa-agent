@@ -36,3 +36,9 @@ pub trait RelayReporter: Send + Sync {
     fn storage_failed(&self, failure: &Failure);
     fn task_failed(&self);
 }
+
+/// Returns the persisted key; missing keys for an encrypted inbox refuse access.
+/// Implementations perform blocking OS work on the store's blocking thread.
+pub trait InboxKeySource: Send + Sync {
+    fn load(&self) -> Result<std::sync::Arc<nessa_local_database::DatabaseKey>, Failure>;
+}

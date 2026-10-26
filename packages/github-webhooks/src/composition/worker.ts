@@ -1,3 +1,4 @@
+import { D1RelayReadBudget } from "../relay/infrastructure/budget.js"
 import stages from "../../../../protocol/defaults/github-relays.json"
 import { D1DeliveryStore, type SqlDatabase } from "../webhooks/infrastructure/d1.js"
 import { createWebhookHandler } from "../webhooks/infrastructure/http.js"
@@ -17,6 +18,8 @@ export class RepositoryWakeRoom extends WakeRoom {
 }
 
 interface Environment {
+  INGRESS_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> }
+  EDGE_LIMIT: { limit(input: { key: string }): Promise<{ success: boolean }> }
   DB: SqlDatabase
   GITHUB_WEBHOOK_SECRET?: string
   RELAY_TICKET_SECRET?: string
@@ -40,6 +43,7 @@ function relay(environment: Environment) {
   if (!target) return null
   return createRelayHandler({
     stage,
+    budget: new D1RelayReadBudget(environment.DB, Date.now),
     audit: new D1RelayReadAudit(environment.DB, () => new Date()),
     identities: new GitHubIdentityAdapter((...args) => fetch(...args), target.appId),
     policy,
@@ -60,10 +64,51 @@ export default {
       return Response.json({ result: "not_configured" }, { status: 503 })
     const path = new URL(request.url).pathname
     if (path.startsWith("/relay/")) {
+      // Edge limits are per Cloudflare location. No IP or credential is persisted.
+      if (!environment.EDGE_LIMIT)
+        return Response.json({ kind: "not_configured" }, { status: 503 })
+      const ip = request.headers.get("cf-connecting-ip") ?? "unknown"
+      const digest = new Uint8Array(
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(
+            request.headers.get("Authorization") ??
+              request.headers.get("x-nessa-watch-ticket") ??
+              "",
+          ),
+        ),
+      )
+      const key = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(
+        "",
+      )
+      if (
+        !(await environment.EDGE_LIMIT.limit({ key: `ip:${ip}` })).success ||
+        !(await environment.EDGE_LIMIT.limit({ key: `credential:${key}` })).success
+      )
+        return Response.json(
+          { kind: "rate_limited" },
+          { status: 429, headers: { "Retry-After": "60", "Cache-Control": "no-store" } },
+        )
+
       const handler = relay(environment)
       return handler
         ? handler(request)
         : Response.json({ kind: "not_configured" }, { status: 503 })
+    }
+    if (path === "/github/webhook") {
+      if (!environment.INGRESS_LIMIT)
+        return Response.json({ kind: "not_configured" }, { status: 503 })
+      if (
+        !(
+          await environment.INGRESS_LIMIT.limit({
+            key: request.headers.get("cf-connecting-ip") ?? "unknown",
+          })
+        ).success
+      )
+        return Response.json(
+          { kind: "rate_limited" },
+          { status: 429, headers: { "Retry-After": "60", "Cache-Control": "no-store" } },
+        )
     }
     const handler = createWebhookHandler({
       store: new D1DeliveryStore(environment.DB),
@@ -97,6 +142,7 @@ export default {
     return response
   },
   async scheduled(_controller: unknown, environment: Environment) {
+    await new D1RelayReadBudget(environment.DB, Date.now).expire()
     await new D1RelayInbox(environment.DB).expire(
       new Date(Date.now() - relayLimits.retentionMs).toISOString(),
     )

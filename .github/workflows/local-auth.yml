@@ -325,6 +325,7 @@ jobs:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/secret-service
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}

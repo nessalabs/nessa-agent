@@ -118,7 +118,14 @@ impl HttpRelaySource {
         )
         .await
         .map_err(|_| Failure::Offline)?
-        .map_err(|_| Failure::Offline)?;
+        .map_err(|error| match error {
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if response.status().as_u16() == 429 =>
+            {
+                Failure::RateLimited
+            }
+            _ => Failure::Offline,
+        })?;
         tracing::debug!("GitHub relay watch connected");
         Ok(RelayWatch(socket))
     }
@@ -167,6 +174,7 @@ impl RelaySource for HttpRelaySource {
             200 => (),
             401 => return Err(Failure::CredentialsUnavailable),
             403 => return Err(Failure::Forbidden),
+            429 => return Err(Failure::RateLimited),
             409 => {
                 let refusal: WireRefusal = response
                     .json()

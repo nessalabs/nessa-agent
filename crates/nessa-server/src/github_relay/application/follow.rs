@@ -72,7 +72,7 @@ pub async fn serve(
         }
         // Observe task panics; normal followers run until this owner is dropped.
         while let Some(Some(result)) = tasks.join_next().now_or_never() {
-            if result.is_err() {
+            if result.is_err_and(|error| !error.is_cancelled()) {
                 reporter.task_failed();
             }
         }
@@ -114,6 +114,7 @@ pub async fn follow(
                 let delay = if matches!(
                     error,
                     Failure::Forbidden
+                        | Failure::RateLimited
                         | Failure::IdentityChanged
                         | Failure::Gap(_)
                         | Failure::CredentialsUnavailable

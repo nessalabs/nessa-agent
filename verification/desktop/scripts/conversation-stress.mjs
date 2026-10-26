@@ -243,6 +243,8 @@ import {
   FAKE_AVATAR,
   GITHUB_AVATARS,
   startFakeGithub,
+  nativeGithubEnvironment,
+  cleanupNativeGithub,
 } from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
@@ -1991,11 +1993,10 @@ const steps = {
         await closeSettings(run.page)
       })
       if (failures.length) return
-      if (!existsSync(signIn)) failures.push("the sign-in was not saved")
-      else if ((lstatSync(signIn).mode & 0o077) !== 0)
-        failures.push(
-          `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
-        )
+      if (existsSync(signIn)) failures.push("GitHub sign-in leaked into a plaintext file")
+      const persisted = await run.stack.client.github.status()
+      if (persisted.state !== "connected")
+        failures.push("the OS-held sign-in is unavailable")
       if (run.stack.gateway.log().includes(github.token))
         failures.push("the gateway logged the GitHub token")
       // An agent opened now is started with the sign-in, for gh and for git.
@@ -5148,7 +5149,10 @@ async function startStack(options) {
   }
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
   const environment = github
-    ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
+    ? {
+        ...nativeGithubEnvironment(),
+        NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")),
+      }
     : {}
   let stack
   try {
@@ -5174,6 +5178,7 @@ async function startStack(options) {
     try {
       await close()
     } finally {
+      if (github) cleanupNativeGithub(stack.gateway, "ci", INSTANCE)
       await github?.close()
       rmSync(directory, { recursive: true, force: true })
     }

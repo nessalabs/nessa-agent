@@ -4,6 +4,18 @@
   "account_id": "572733d17410b5b1e34649e5f1b4cc3c",
   "build": { "command": "node scripts/prepare-cedar.mjs" },
   "rules": [{ "type": "Text", "globs": ["**/*.cedar"], "fallthrough": true }],
+  "ratelimits": [
+    {
+      "name": "INGRESS_LIMIT",
+      "namespace_id": "113202",
+      "simple": { "limit": 600, "period": 60 },
+    },
+    {
+      "name": "EDGE_LIMIT",
+      "namespace_id": "113201",
+      "simple": { "limit": 120, "period": 60 },
+    },
+  ],
   "vars": { "RELAY_STAGE": "dev" },
   "durable_objects": {
     "bindings": [{ "name": "WAKE_ROOMS", "class_name": "RepositoryWakeRoom" }],
@@ -14,7 +26,11 @@
   "compatibility_date": "2026-06-16",
   "workers_dev": true,
   "preview_urls": false,
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "logs": { "enabled": true, "invocation_logs": false },
+  },
   "d1_databases": [
     {
       "binding": "DB",

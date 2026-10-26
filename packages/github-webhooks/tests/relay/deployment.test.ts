@@ -8,6 +8,18 @@ import {
 test("rollout refuses missing stages and resource reuse before deploying", () => {
   const dev = configuredDevelopment()
   assert.equal(deployment("dev", { dev }).vars.RELAY_STAGE, "dev")
+  assert.throws(() =>
+    deployment("dev", {
+      dev,
+      prod: {
+        ...dev,
+        name: "separate-prod",
+        vars: { RELAY_STAGE: "prod" },
+        d1_databases: [{ database_id: "separate-db" }],
+      },
+    }),
+  )
+  assert.throws(() => deployment("dev", { dev: { ...dev, ratelimits: [] } }))
   for (const stage of ["prod", "alpha", "ci", "unknown"])
     assert.throws(() => deployment(stage, { dev, prod: null }))
   assert.throws(() =>

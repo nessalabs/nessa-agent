@@ -52,3 +52,7 @@ export interface RelayReadAudit {
     after: number
   }): Promise<void>
 }
+
+export interface RelayReadBudget {
+  admit(userId: string): Promise<boolean>
+}

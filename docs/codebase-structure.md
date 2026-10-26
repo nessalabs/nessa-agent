@@ -2590,7 +2590,7 @@ with real local D1 and Durable Objects.
 The native `crates/nessa-server/src/github_relay` context mirrors its own feature
 vocabulary: domain identities/order, application catch-up and ports, and
 infrastructure adapters for the existing `GithubConnections` token owner,
-HTTPS/WebSocket and private SQLite. `application/live_events.rs` coordinates opt-in
+HTTPS/WebSocket and encrypted SQLite. `infrastructure/keychain.rs` obtains the inbox key through the injected `secrets::SecretStore`; `secrets/keychain.rs` is the OS adapter, also used by `github/infrastructure/token_keychain.rs`. `nessa-local-database::encryption` owns SQLCipher and the atomic plaintext upgrade. `application/live_events.rs` coordinates opt-in
 and `infrastructure/selection.rs` commits selection changes and cleanup evidence.
 `product/github.rs` serializes enable/disable with sign-out;
 `settings/ui/github-row.tsx` presents that state. Composition

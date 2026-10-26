@@ -5,8 +5,8 @@ mod ports;
 pub use catch_up::catch_up;
 pub use follow::{follow, serve};
 pub use ports::{
-    GitHubCredentials, RelayLiveSource, RelayNotifications, RelayReporter, RelaySource, RelayStore,
-    RelayWait,
+    GitHubCredentials, InboxKeySource, RelayLiveSource, RelayNotifications, RelayReporter,
+    RelaySource, RelayStore, RelayWait,
 };
 mod live_events;
 pub use live_events::{ConnectedGithub, LiveEventStore, LiveEvents};

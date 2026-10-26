@@ -145,7 +145,7 @@ export function agentCommand(agent) {
  */
 export function signedOutEnvironment(directory, path) {
   const kept = Object.fromEntries(
-    ["TMPDIR", "RUST_LOG"]
+    ["TMPDIR", "RUST_LOG", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]
       .filter((name) => process.env[name] !== undefined)
       .map((name) => [name, process.env[name]]),
   )

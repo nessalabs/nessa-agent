@@ -1106,14 +1106,14 @@ See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 
 `packages/github-webhooks` composes the Workers Free signed receiver, bounded D1
 inbox, GitHub identity adapter, Cedar repository policy and SQLite Durable Object
-wake-up channels. An authenticated page rechecks the GitHub user and current
+wake-up channels. Native edge limits precede provider work; atomic verified-user budgets and signed-installation storage quotas bound shared capacity. An authenticated page rechecks the GitHub user and current
 repository access; an installation is not a user. Per-repository sequence/expiry
 watermarks support bounded offline catch-up and explicit gaps. No private payload
 is sent over the wake-up socket. Source wire bounds are published in
 `protocol/defaults/github-relay-contract.json`.
 
 `crates/nessa-server/src/github_relay` owns the native consumer and private local
-SQLite inbox. `GithubConnections` remains the sole token owner; its injected
+SQLCipher-encrypted inbox, keyed from the native OS secret store. `GithubConnections` remains the sole token owner in its own OS credential entry; its injected
 credential adapter discovers the App-selected repositories. `LiveEvents` owns
 selection changes through one private SQLite transaction, including deletion
 evidence, cursor preservation and gap acknowledgement. Its application coordinates

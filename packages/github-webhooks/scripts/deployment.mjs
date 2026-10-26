@@ -11,7 +11,9 @@ export function deployment(stage, targets) {
   if (
     target.vars.RELAY_STAGE !== stage ||
     !target.account_id ||
-    !target.d1_databases?.[0]?.database_id
+    !target.d1_databases?.[0]?.database_id ||
+    !target.ratelimits?.some((binding) => binding.name === "EDGE_LIMIT") ||
+    !target.ratelimits?.some((binding) => binding.name === "INGRESS_LIMIT")
   )
     throw new Error("Incomplete stage deployment")
   for (const [other, configuration] of Object.entries(targets)) {
@@ -19,9 +21,16 @@ export function deployment(stage, targets) {
       other !== stage &&
       configuration &&
       (configuration.name === target.name ||
-        configuration.d1_databases[0].database_id === target.d1_databases[0].database_id)
+        configuration.d1_databases[0].database_id ===
+          target.d1_databases[0].database_id ||
+        (configuration.account_id === target.account_id &&
+          configuration.ratelimits?.some((binding) =>
+            target.ratelimits.some((own) => own.namespace_id === binding.namespace_id),
+          )))
     )
-      throw new Error("Relay stages must not share a Worker or database")
+      throw new Error(
+        "Relay stages must not share a Worker, database or rate-limit namespace",
+      )
   }
   return target
 }

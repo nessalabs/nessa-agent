@@ -19,6 +19,10 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     compatibilityDate: "2026-06-16",
     durableObjects: { WAKE_ROOMS: { className: "RepositoryWakeRoom", useSQLite: true } },
     d1Databases: ["DB"],
+    ratelimits: {
+      INGRESS_LIMIT: { namespace_id: "113202", simple: { limit: 600, period: 60 } },
+      EDGE_LIMIT: { simple: { limit: 120, period: 60 }, namespace_id: "113201" },
+    },
     bindings: {
       GITHUB_WEBHOOK_SECRET: secret,
       RELAY_TICKET_SECRET: secret,
@@ -74,7 +78,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   })
   t.after(() => worker.dispose())
   const db = await worker.getD1Database("DB")
-  for (const name of ["0001_deliveries.sql", "0002_relay.sql"]) {
+  for (const name of ["0001_deliveries.sql", "0002_relay.sql", "0003_fair_use.sql"]) {
     const schema = await readFile(
       new URL(`../../migrations/${name}`, import.meta.url),
       "utf8",
@@ -256,7 +260,7 @@ test(
         secret,
         "dev",
         webcrypto.subtle as SubtleCrypto,
-        () => 122000,
+        () => 902000,
       ).verify(ticket),
       null,
     )
@@ -317,6 +321,7 @@ test("application policy refusal prevents inbox reads using injected boundary po
         expire: async () => {},
       },
       audit: { record: async () => {} },
+      budget: { admit: async () => true },
       tickets: { issue: async () => "ticket", verify: async () => null },
     },
   )
@@ -392,4 +397,128 @@ test("L8/L9: App user tokens disclose private events only for the active Nessa i
     assert.equal(response.status, 403, token)
     assert.equal((await response.text()).includes("private"), false)
   }
+})
+
+test("verified user read quotas are atomic, isolated, and reset only at the UTC window", async (t) => {
+  const { db } = await fixture(t)
+  const { D1RelayReadBudget } = await import("../../src/relay/infrastructure/budget.js")
+  let now = 1_000_000
+  const budget = new D1RelayReadBudget(db, () => now)
+  await db
+    .prepare("INSERT INTO relay_user_budget VALUES('11',?,5999,?,0)")
+    .bind(Math.floor(now / 86400000), Math.floor(now / 60000))
+    .run()
+  assert.deepEqual((await Promise.all([budget.admit("11"), budget.admit("11")])).sort(), [
+    false,
+    true,
+  ])
+  assert.equal(await budget.admit("22"), true)
+  await db
+    .prepare(
+      "UPDATE relay_user_budget SET day_reads=10,minute_reads=119 WHERE user_id='22'",
+    )
+    .run()
+  assert.deepEqual((await Promise.all([budget.admit("22"), budget.admit("22")])).sort(), [
+    false,
+    true,
+  ])
+  now += 60000
+  assert.equal(await budget.admit("11"), false)
+  now += 86400000
+  assert.equal(await budget.admit("11"), true)
+  now -= 86400000
+  assert.equal(await budget.admit("11"), false)
+  now += 4 * 86400000
+  await budget.expire()
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_user_budget").first())?.n,
+    0,
+  )
+})
+
+test("quota refusal discloses no payload or audit and returns a retry delay", async (t) => {
+  const { db, page } = await fixture(t)
+  const now = Date.now()
+  await db
+    .prepare("INSERT INTO relay_user_budget VALUES('11',?,6000,?,0)")
+    .bind(Math.floor(now / 86400000), Math.floor(now / 60000))
+    .run()
+  const result = await page()
+  assert.equal(result.status, 429)
+  assert.equal(result.headers.get("retry-after"), "60")
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_read_audit").first())?.n,
+    0,
+  )
+  assert.equal(((await result.json()) as { kind: string }).kind, "rate_limited")
+})
+
+test("invalid credential floods stop at the edge without audit or user-budget rows", async (t) => {
+  const { page, db } = await fixture(t)
+  let limited = false
+  for (let n = 0; n < 125; n++) {
+    const result = await page(0, { Authorization: "Bearer invalid_token_1234" })
+    if (result.status === 429) {
+      limited = true
+      break
+    }
+    assert.equal(result.status, 401)
+  }
+  assert.equal(limited, true)
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_user_budget").first())?.n,
+    0,
+  )
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_read_audit").first())?.n,
+    0,
+  )
+})
+
+test("concurrent replayed wake tickets cannot occupy another user's socket budget", async (t) => {
+  const { worker } = await fixture(t)
+  const tickets = new HmacWakeTickets(
+    secret,
+    "dev",
+    webcrypto.subtle as SubtleCrypto,
+    Date.now,
+  )
+  const ticket = await tickets.issue("11", "42")
+  const watch = (token: string) =>
+    worker.dispatchFetch("https://relay.test/relay/v1/watch", {
+      headers: {
+        Upgrade: "websocket",
+        "x-nessa-stage": "dev",
+        "x-nessa-watch-ticket": token,
+      },
+    })
+  const replies = await Promise.all(Array.from({ length: 5 }, () => watch(ticket)))
+  for (const reply of replies)
+    if (reply.webSocket) {
+      reply.webSocket.accept()
+      t.after(() => reply.webSocket?.close())
+    }
+  assert.deepEqual(replies.map((r) => r.status).sort(), [101, 101, 101, 101, 429])
+  const other = await watch(await tickets.issue("22", "42"))
+  assert.equal(other.status, 101)
+  other.webSocket!.accept()
+  other.webSocket!.close()
+})
+
+test("user-budget identity churn is bounded while existing users retain admission", async (t) => {
+  const { db } = await fixture(t)
+  const { D1RelayReadBudget } = await import("../../src/relay/infrastructure/budget.js")
+  const now = Date.now(),
+    day = Math.floor(now / 86400000),
+    minute = Math.floor(now / 60000)
+  await db
+    .prepare(
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<4096)
+   INSERT INTO relay_user_budget SELECT CAST(x AS TEXT),?,1,?,1 FROM n`,
+    )
+    .bind(day, minute)
+    .run()
+  const budget = new D1RelayReadBudget(db, () => now)
+  assert.equal(await budget.admit("5000"), false)
+  assert.equal(await budget.admit("11"), true)
 })

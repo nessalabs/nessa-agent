@@ -4,6 +4,7 @@ import type {
   RelayPolicyEvaluator,
   WakeTickets,
   RelayReadAudit,
+  RelayReadBudget,
 } from "./ports.js"
 export async function readRelay(
   input: { token: string; repositoryId: string; after: number; expectedUser: string },
@@ -13,12 +14,15 @@ export async function readRelay(
     inbox: RelayInbox
     tickets: WakeTickets
     audit: RelayReadAudit
+    budget: RelayReadBudget
   },
 ) {
   const verified = await dependencies.identities.verify(input.token, input.repositoryId)
   if (verified.kind !== "verified") return { kind: verified.kind } as const
   if (verified.identity.userId !== input.expectedUser)
     return { kind: "identity_changed" } as const
+  if (!(await dependencies.budget.admit(verified.identity.userId)))
+    return { kind: "rate_limited" } as const
   const decision = dependencies.policy.read(verified.identity, input.repositoryId)
   await dependencies.audit.record({
     userId: verified.identity.userId,

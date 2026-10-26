@@ -39,6 +39,13 @@ pub(super) fn store(environment: &Environment) -> Result<Arc<SqliteRelayStore>, 
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
         }),
+        Arc::new(crate::github_relay::infrastructure::KeychainInboxKey::new(
+            root.join("github-relay/inbox.sqlite"),
+            Arc::new(crate::secrets::KeychainSecret::new(
+                root,
+                "github-inbox-key",
+            )),
+        )),
     )))
 }
 fn source(environment: &Environment) -> Result<Arc<HttpRelaySource>, Failure> {

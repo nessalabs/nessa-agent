@@ -132,9 +132,9 @@ use hibernation; sockets carry only `changed`, without event data. Expiry closes
 them. Every payload read still checks GitHub access. Authorization is a snapshot
 at read admission; a read already admitted may finish after a revocation.
 
-The native gateway imports into a private stage/instance SQLite inbox. It obtains
+The native gateway imports into a SQLCipher-encrypted stage/instance inbox. It obtains
 a ticket, watches, then catches up again to close the read/watch race. It renews
-at 90 seconds, which also recovers lost wake-ups without polling GitHub event APIs.
+at 12 minutes (with a 15-minute wake-ticket lifetime), which also recovers lost wake-ups without polling GitHub event APIs.
 Local event inserts and the cursor commit together. A lost response/crash replays
 the page; competing consumers use a cursor and binding-generation check. Reconnect
 preserves the cursor; a disconnect/reconnect generation fences in-flight old work.
@@ -233,3 +233,47 @@ To disable ingestion, first deactivate the GitHub App webhook. Removing the
 Worker stops HTTP service; removing D1 permanently removes its inbox and needs
 separate explicit authorization. Keep the local secret until deliveries have
 been disabled or a deliberate rotation has finished on both services.
+
+
+## Storage and fair use hardening (#1132)
+
+GitHub sign-in and the separate random inbox encryption key use native OS secret
+storage (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+No plaintext secret-file fallback is provided. Linux desktop/headless users need
+an unlocked Secret Service session; a locked or unavailable service refuses access.
+The inbox is encrypted in full with SQLCipher, including identities, payloads,
+cursors, audits and journal pages. Sign-out deletes the login, while retaining the
+separate inbox key for encrypted cleanup evidence. Losing that key makes the
+existing inbox unreadable. Backing up a file alone does not back up its OS key.
+
+Before upgrading the existing dev inbox, stop old gateway processes. The upgrade
+verifies a new encrypted copy and atomically replaces the original. Existing login
+JSON is removed only after OS write/readback. Historical plaintext backups and
+filesystem snapshots are not erased by migration. Cloudflare receives plaintext
+webhooks over TLS and provides managed encryption at rest; this is not E2EE.
+
+The Free development relay retains at most 2,500 events / 16 MiB per signed
+installation, within the existing 10,000-event / 64-MiB total. A verified GitHub
+user gets 120 page attempts/minute and 6,000/day. These budgets are atomic;
+refused payload reads return 429 and Retry-After. Native clients back off five
+minutes on throttling. Edge limits run before provider calls: 120 relay requests
+per IP or credential/minute, and 600 webhook attempts/IP/minute. Edge counters are
+approximate per Cloudflare location, not a global denial-of-service guarantee.
+
+There are at most four sockets/user/repository and 128/room. User budget metadata
+is bounded to 4,096 identities and swept after inactivity. Repository gap metadata
+has admission bounds of 256 installation/repository pairs per installation, 4,096
+overall; old gap watermarks are preserved. Storage quotas reject new work, without
+evicting accepted data. GitHub does not automatically retry refused deliveries.
+
+A virtual quiet-day regression counts **240 page reads + 120 upgrades = 360 HTTP
+requests/repository/day**, down from 2,880 (87.5%). This excludes reconnects,
+events, DO messages/alarms and other service usage. Every payload read still
+rechecks GitHub permissions; only wake hints can outlive revocation, for at most
+the remaining ticket lease. The Free daily allowance is still shared and cannot
+support 10,000 busy users. No paid resource or automatic upgrade is configured.
+Invocation logs are disabled; sampled application logs contain delivery metadata
+and typed outcomes, not credentials or event bodies.
+
+See [ADR 1132](../../docs/adr/todo/1132-github-relay-hardening.md) for orderings,
+security boundaries and the review record.

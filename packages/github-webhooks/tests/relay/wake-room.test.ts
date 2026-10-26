@@ -45,7 +45,11 @@ test("R19: an unavailable expiry alarm refuses before registering a socket", asy
   await assert.rejects(
     room.fetch(
       new Request("https://room/watch", {
-        headers: { Upgrade: "websocket", "x-relay-expires": "1100" },
+        headers: {
+          Upgrade: "websocket",
+          "x-relay-expires": "1100",
+          "x-relay-user": "11",
+        },
       }),
     ),
     /alarm unavailable/,

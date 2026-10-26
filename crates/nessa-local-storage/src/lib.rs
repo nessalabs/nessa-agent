@@ -258,6 +258,10 @@ impl PrivateTempFile {
             "could not reserve private temporary file",
         ))
     }
+    /// The reserved private name, for libraries that open their own handle.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
     pub fn as_file(&self) -> &File {
         self.file.as_ref().expect("temporary file is open")
     }
