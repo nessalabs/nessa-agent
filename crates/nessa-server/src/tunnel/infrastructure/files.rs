@@ -1,5 +1,6 @@
 //! The tunnel's private directory, `<namespace>/tunnel`: the provider's
-//! program, its record and log, and a named tunnel's token. The token is
+//! program, its kept-process record (`kept/`) and log, and a named tunnel's
+//! token. The token is
 //! kept here and only here, never in `config.json` or a log: Settings writes
 //! it (`pairing.setTunnel`), startup reads it, and `cloudflared` is pointed
 //! at the file, so it never appears on a command line.
@@ -14,6 +15,8 @@ use std::{
 pub(crate) const TUNNEL_DIRECTORY: &str = "tunnel";
 /// The token's file in it.
 const TOKEN_FILE: &str = "token";
+/// shepherd's records of the program left running across the gateway's runs.
+const KEPT_DIRECTORY: &str = "kept";
 
 /// `<namespace>/tunnel`.
 #[derive(Clone, Debug)]
@@ -35,6 +38,11 @@ impl TunnelFiles {
     /// Where the token is, for the program that reads it.
     pub(crate) fn token_path(&self) -> PathBuf {
         self.directory.join(TOKEN_FILE)
+    }
+
+    /// Where shepherd records the program it leaves running across runs.
+    pub(crate) fn kept_directory(&self) -> PathBuf {
+        self.directory.join(KEPT_DIRECTORY)
     }
 
     /// The saved token, if any. A file that is not a token is an error, not

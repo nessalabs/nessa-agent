@@ -3548,6 +3548,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -5120,18 +5121,19 @@ dependencies = [
 [[package]]
 name = "shepherd"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789#5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789"
 dependencies = [
  "shepherd-app",
  "shepherd-domain",
  "shepherd-infra",
+ "thiserror 2.0.20",
  "tokio",
 ]
 
 [[package]]
 name = "shepherd-app"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789#5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -5144,7 +5146,7 @@ dependencies = [
 [[package]]
 name = "shepherd-domain"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789#5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -5152,13 +5154,15 @@ dependencies = [
 [[package]]
 name = "shepherd-infra"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789#5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789"
 dependencies = [
  "async-trait",
  "libc",
  "libproc",
  "mach2",
  "nix",
+ "serde",
+ "serde_json",
  "shepherd-app",
  "shepherd-domain",
  "sysinfo",

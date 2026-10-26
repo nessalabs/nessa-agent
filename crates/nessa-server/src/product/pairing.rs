@@ -321,7 +321,7 @@ pub(super) async fn set_tunnel(
 
 /// `pairing.tunnel`: the saved tunnel (never its token) and this run's.
 pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> OutgoingMessage {
-    use crate::services::application::ServiceStatus;
+    use crate::tunnel::application::TunnelStatus;
     use nessa_protocol::product::generated::{PairingTunnelResult, PairingTunnelStatus};
     if frame.params != json!({}) {
         return failure(&frame.id, "invalid_request");
@@ -339,13 +339,13 @@ pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> Ou
         .map(|tunnel| tunnel.status.borrow().clone());
     let (status, address, failure_reason) = match live {
         None => (PairingTunnelStatus::Off, None, None),
-        Some(ServiceStatus::Starting) => (PairingTunnelStatus::Starting, None, None),
-        Some(ServiceStatus::Ready(address)) => (
+        Some(TunnelStatus::Starting) => (PairingTunnelStatus::Starting, None, None),
+        Some(TunnelStatus::Ready(address)) => (
             PairingTunnelStatus::Ready,
             Some(address.as_str().to_owned()),
             None,
         ),
-        Some(ServiceStatus::Failed(failure)) => (
+        Some(TunnelStatus::Failed(failure)) => (
             PairingTunnelStatus::Failed,
             None,
             Some(failure.as_str().to_owned()),

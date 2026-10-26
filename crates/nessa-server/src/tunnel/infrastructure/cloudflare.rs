@@ -1,17 +1,20 @@
 //! The Cloudflare provider: `cloudflared`, pinned and checked, run as a
-//! helper service whose public address is read from its own metrics
+//! shepherd service whose public address is read from its own metrics
 //! (`docs/design/auth/tunnel.md`, "Running cloudflared"). This file is the
 //! only one that knows Cloudflare exists.
 //!
 //! ```text
-//! prepare ──▶ <tunnel>/cloudflared-<version>/cloudflared, digest checked
-//!             (downloaded from the pinned URL, size and digest checked, when missing)
-//! launch  ──▶ quick: cloudflared tunnel --url http://<ingress>
-//!             named: cloudflared tunnel run --token-file <tunnel>/token (written by Settings, `files`)
-//!             both:  --no-autoupdate --loglevel warn --metrics 127.0.0.1:<port>, HOME=<tunnel>, nothing else inherited
-//! key     ──▶ program path (so its version), mode, ingress, hostname, token digest
-//! resume  ──▶ a taken-back cloudflared is asked on the metrics port its launch named
-//! ready   ──▶ GET /ready is 200, and for quick GET /quicktunnel names its hostname
+//! launch ──▶ <tunnel>/cloudflared-<version>/cloudflared, digest checked
+//!            (downloaded from the pinned URL, size and digest checked, when missing)
+//!        ──▶ quick: cloudflared tunnel --url http://<ingress>
+//!            named: cloudflared tunnel run --token-file <tunnel>/token (written by Settings, `files`),
+//!                   revision "token <fingerprint>"
+//!            both:  --no-autoupdate --loglevel warn --metrics 127.0.0.1:<port>, HOME=<tunnel>,
+//!                   nothing else inherited, output to <tunnel>/cloudflared.log
+//!            (<port>: the kept program's when the launch on it is exactly the one recorded and no
+//!             launch of this run has run yet, so shepherd takes it back; else one free now)
+//! ready  ──▶ asked on the metrics port the running program's own record names:
+//!            GET /ready is 200, and for quick GET /quicktunnel names its hostname
 //! ```
 //!
 //! Arrows are steps in order. The token is passed in a file only the gateway
@@ -19,18 +22,25 @@
 //! only points at it.
 use super::files::TunnelFiles;
 use crate::agent_install::application::{ArchiveSource, StagedArchive};
-use crate::services::application::{Launch, PortFuture, Service, ServiceFailure};
-use crate::tunnel::application::CloudflareTunnel;
+use crate::tunnel::application::{CloudflareTunnel, TunnelFailure};
+use async_trait::async_trait;
 use nessa_protocol::tunnel::TunnelAddress;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use shepherd::{
+    EnvPolicy, KeptName, KeptProcesses, ProcessSpec, Service, ServiceFailure, ServiceInstance,
+    ServiceLaunch, SpecFingerprint,
+};
 use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek},
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,7 +48,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// The pinned release, compiled in: a gateway cannot be pointed at another.
 const PINS: &str = include_str!("../../../data/tunnel-releases.json");
 /// How long a started `cloudflared` has to connect and name its address.
-const READY_WITHIN: Duration = Duration::from_secs(60);
+pub(crate) const READY_WITHIN: Duration = Duration::from_secs(60);
+/// Its log, beside it: what it writes goes here, for as long as it runs.
+const LOG: &str = "cloudflared.log";
 /// How long one metrics request may take.
 const PROBE_DEADLINE: Duration = Duration::from_secs(2);
 /// The most of a metrics answer that is read.
@@ -136,7 +148,7 @@ impl Program {
 /// gateway's.
 pub(crate) type MakeArchives = Arc<dyn Fn() -> Option<Box<dyn ArchiveSource>> + Send + Sync>;
 
-/// `cloudflared` as a helper service reporting the tunnel's address.
+/// `cloudflared` as a shepherd service reporting the tunnel's address.
 pub(crate) struct CloudflareService {
     /// `<namespace>/tunnel`, private to the gateway.
     files: TunnelFiles,
@@ -145,8 +157,12 @@ pub(crate) struct CloudflareService {
     archives: MakeArchives,
     tunnel: CloudflareTunnel,
     ingress: SocketAddr,
-    /// The metrics port the current launch was given.
-    metrics: Mutex<Option<u16>>,
+    /// shepherd's records and the name it keeps the program under, when it
+    /// keeps it: a run's first launch asks them for the program left running.
+    kept: Option<(KeptProcesses, KeptName)>,
+    /// Whether a launch of this run has started or been taken back: until
+    /// one has, a launch reuses the kept program's metrics port.
+    ran: AtomicBool,
 }
 
 impl CloudflareService {
@@ -156,6 +172,7 @@ impl CloudflareService {
         archives: MakeArchives,
         tunnel: CloudflareTunnel,
         ingress: SocketAddr,
+        kept: Option<(KeptProcesses, KeptName)>,
     ) -> Self {
         Self {
             directory: files.directory().to_owned(),
@@ -164,85 +181,91 @@ impl CloudflareService {
             archives,
             tunnel,
             ingress,
-            metrics: Mutex::new(None),
+            kept,
+            ran: AtomicBool::new(false),
         }
     }
 
-    fn program_path(&self) -> Result<PathBuf, ServiceFailure> {
+    fn program_path(&self) -> Result<PathBuf, TunnelFailure> {
         match &self.program {
             Program::Pinned(build) => Ok(installed(&self.directory, build)),
             Program::Given(path) => Ok(path.clone()),
-            Program::Unsupported => Err(ServiceFailure::Unavailable("unsupported")),
+            Program::Unsupported => Err(TunnelFailure::Unavailable("unsupported")),
         }
     }
-}
 
-impl Service<TunnelAddress> for CloudflareService {
-    fn name(&self) -> &'static str {
-        "cloudflared"
-    }
-
-    fn ready_within(&self) -> Duration {
-        READY_WITHIN
-    }
-
-    fn prepare(&self) -> PortFuture<'_, Result<(), ServiceFailure>> {
-        Box::pin(async move {
-            private_directory(&self.directory)
-                .map_err(|_| ServiceFailure::Unavailable("storage"))?;
-            match &self.program {
-                Program::Unsupported => Err(ServiceFailure::Unavailable("unsupported")),
-                Program::Given(path) => path
-                    .is_file()
-                    .then_some(())
-                    .ok_or(ServiceFailure::Unavailable("unsupported")),
-                Program::Pinned(build) => {
-                    let directory = self.directory.clone();
-                    let build = build.clone();
-                    let archives = self.archives.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let archives = archives().ok_or(ServiceFailure::Unavailable("download"))?;
-                        install(&directory, &build, &*archives)
-                    })
-                    .await
-                    .map_err(|_| ServiceFailure::Unavailable("download"))?
-                    .map(drop)
-                }
+    /// Make its program ready to start: downloaded and checked, once.
+    async fn prepare(&self) -> Result<(), TunnelFailure> {
+        private_directory(&self.directory).map_err(|_| TunnelFailure::Unavailable("storage"))?;
+        match &self.program {
+            Program::Unsupported => Err(TunnelFailure::Unavailable("unsupported")),
+            Program::Given(path) => path
+                .is_file()
+                .then_some(())
+                .ok_or(TunnelFailure::Unavailable("unsupported")),
+            Program::Pinned(build) => {
+                let directory = self.directory.clone();
+                let build = build.clone();
+                let archives = self.archives.clone();
+                tokio::task::spawn_blocking(move || {
+                    let archives = archives().ok_or(TunnelFailure::Unavailable("download"))?;
+                    install(&directory, &build, &*archives)
+                })
+                .await
+                .map_err(|_| TunnelFailure::Unavailable("download"))?
+                .map(drop)
             }
-        })
+        }
     }
 
-    fn key(&self) -> Result<String, ServiceFailure> {
-        let program = self.program_path()?;
-        let tunnel = match &self.tunnel {
-            CloudflareTunnel::Quick => "quick".to_owned(),
-            CloudflareTunnel::Named { address, token } => {
-                format!("named {} token-sha256 {}", address.as_str(), token.digest())
-            }
+    /// The launch on the port the program a last run left running was
+    /// started with, as its live kept record says, when that launch is
+    /// exactly the one recorded: shepherd then takes the program back. Asked
+    /// only until a launch of this run has started or been taken back.
+    async fn kept_launch(&self) -> Result<Option<ServiceLaunch>, TunnelFailure> {
+        if self.ran.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        let Some((kept, name)) = self.kept.as_ref() else {
+            return Ok(None);
         };
-        Ok(format!(
-            "cloudflared {} ingress {} {tunnel}",
-            program.display(),
-            self.ingress
-        ))
+        let Ok(live) = kept.list().await else {
+            return Ok(None);
+        };
+        let Some(record) = live
+            .into_iter()
+            .find(|entry| &entry.record.name == name && !entry.held)
+            .map(|entry| entry.record)
+        else {
+            return Ok(None);
+        };
+        let Some(port) = metrics_port_in(&record.args) else {
+            return Ok(None);
+        };
+        let launch = self.launch_on(port)?;
+        let same =
+            SpecFingerprint::of(&launch.spec, launch.revision.as_deref()) == record.fingerprint;
+        Ok(same.then_some(launch))
     }
 
-    fn resume(&self, launch: &Launch) {
-        let port = launch
-            .args
-            .iter()
-            .skip_while(|arg| *arg != "--metrics")
-            .nth(1)
-            .and_then(|metrics| metrics.to_str()?.parse::<SocketAddr>().ok())
-            .filter(|metrics| metrics.ip().is_loopback())
-            .map(|metrics| metrics.port());
-        *self.metrics.lock().unwrap_or_else(PoisonError::into_inner) = port;
+    /// What to run this time: the kept program's own launch when it is
+    /// still this one, else one reporting on a port free now. A port is
+    /// never reused for a different launch, which would start it on a port
+    /// another program could take while the old one is ended.
+    async fn launch_spec(&self) -> Result<ServiceLaunch, TunnelFailure> {
+        if let Some(launch) = self.kept_launch().await? {
+            return Ok(launch);
+        }
+        let port = free_loopback_port().map_err(|_| TunnelFailure::Start)?;
+        self.launch_on(port)
     }
 
-    fn launch(&self) -> Result<Launch, ServiceFailure> {
+    /// The launch reporting on `port`. Everything that makes it a different
+    /// program is in the spec, and the token, which is only named there by
+    /// its file, is in the revision, so shepherd takes back a program a last
+    /// run left running only when it is still this one.
+    fn launch_on(&self, port: u16) -> Result<ServiceLaunch, TunnelFailure> {
         let program = self.program_path()?;
-        let port = free_loopback_port().map_err(|_| ServiceFailure::Start)?;
-        *self.metrics.lock().unwrap_or_else(PoisonError::into_inner) = Some(port);
         let mut args: Vec<OsString> = vec![
             "tunnel".into(),
             "--no-autoupdate".into(),
@@ -252,48 +275,93 @@ impl Service<TunnelAddress> for CloudflareService {
             "--metrics".into(),
             format!("127.0.0.1:{port}").into(),
         ];
+        let mut revision = None;
         match &self.tunnel {
             CloudflareTunnel::Quick => {
                 args.push("--url".into());
                 args.push(format!("http://{}", self.ingress).into());
             }
-            CloudflareTunnel::Named { .. } => {
+            CloudflareTunnel::Named { token, .. } => {
                 args.push("run".into());
                 args.push("--token-file".into());
                 args.push(self.files.token_path().into());
+                revision = Some(format!("token {}", token.fingerprint()));
             }
         }
-        Ok(Launch {
-            program,
-            args,
+        let spec = ProcessSpec::new(program)
+            .args(args)
             // HOME is the tunnel directory, so a person's own
             // `~/.cloudflared` setup is never read: a config file there
             // would turn a quick tunnel off.
-            environment: vec![("HOME".into(), self.directory.clone().into())],
-            directory: self.directory.clone(),
+            .env(EnvPolicy::Clear(vec![(
+                "HOME".into(),
+                self.directory.clone().into(),
+            )]))
+            .cwd(self.directory.clone());
+        let launch = ServiceLaunch::new(spec).log(self.directory.join(LOG));
+        Ok(match revision {
+            Some(revision) => launch.revision(revision),
+            None => launch,
         })
     }
 
-    fn ready(&self) -> PortFuture<'_, Option<TunnelAddress>> {
-        let port = *self.metrics.lock().unwrap_or_else(PoisonError::into_inner);
-        Box::pin(async move {
-            let port = port?;
-            let (status, _) = probe(port, "/ready").await.ok()?;
-            if status != 200 {
-                return None;
+    /// The address a running program reports once it is ready, asked on
+    /// the metrics port its own launch named.
+    async fn address(&self, args: &[String]) -> Option<TunnelAddress> {
+        let port = metrics_port_in(args)?;
+        let (status, _) = probe(port, "/ready").await.ok()?;
+        if status != 200 {
+            return None;
+        }
+        match &self.tunnel {
+            CloudflareTunnel::Named { address, .. } => Some(address.clone()),
+            CloudflareTunnel::Quick => {
+                let (status, body) = probe(port, "/quicktunnel").await.ok()?;
+                let stand_in = matches!(self.program, Program::Given(_));
+                (status == 200)
+                    .then(|| quick_address(&body, stand_in))
+                    .flatten()
             }
-            match &self.tunnel {
-                CloudflareTunnel::Named { address, .. } => Some(address.clone()),
-                CloudflareTunnel::Quick => {
-                    let (status, body) = probe(port, "/quicktunnel").await.ok()?;
-                    let stand_in = matches!(self.program, Program::Given(_));
-                    (status == 200)
-                        .then(|| quick_address(&body, stand_in))
-                        .flatten()
-                }
-            }
-        })
+        }
     }
+}
+
+#[async_trait]
+impl Service for CloudflareService {
+    type Ready = TunnelAddress;
+
+    /// A failure is its wire word, which `TunnelFailure::from_reason` reads
+    /// back.
+    async fn launch(&self) -> Result<ServiceLaunch, ServiceFailure> {
+        let failed = |failure: TunnelFailure| ServiceFailure::new(failure.as_str());
+        self.prepare().await.map_err(failed)?;
+        self.launch_spec().await.map_err(failed)
+    }
+
+    async fn ready(
+        &self,
+        instance: &ServiceInstance,
+    ) -> Result<Option<TunnelAddress>, ServiceFailure> {
+        // Only a started or taken-back run is asked whether it is ready.
+        self.ran.store(true, Ordering::SeqCst);
+        let args = instance
+            .record
+            .as_ref()
+            .map(|record| record.args.as_slice())
+            .unwrap_or_default();
+        Ok(self.address(args).await)
+    }
+}
+
+/// The loopback port a launch's `--metrics` names.
+fn metrics_port_in(args: &[String]) -> Option<u16> {
+    args.iter()
+        .skip_while(|arg| *arg != "--metrics")
+        .nth(1)?
+        .parse::<SocketAddr>()
+        .ok()
+        .filter(|metrics| metrics.ip().is_loopback())
+        .map(|metrics| metrics.port())
 }
 
 /// The address a quick tunnel's `/quicktunnel` answer names: a bare
@@ -390,9 +458,9 @@ pub(crate) fn install(
     directory: &Path,
     build: &PinnedBuild,
     archives: &dyn ArchiveSource,
-) -> Result<PathBuf, ServiceFailure> {
+) -> Result<PathBuf, TunnelFailure> {
     let program = installed(directory, build);
-    let storage = |_| ServiceFailure::Unavailable("storage");
+    let storage = |_| TunnelFailure::Unavailable("storage");
     if program.is_file() {
         if matches(&program, build.program_bytes, &build.program_digest).map_err(storage)? {
             return Ok(program);
@@ -415,13 +483,13 @@ pub(crate) fn install(
     let result = fetched
         .map_err(|error| {
             tracing::warn!(?error, "the tunnel program could not be downloaded");
-            ServiceFailure::Unavailable("download")
+            TunnelFailure::Unavailable("download")
         })
         .and_then(|()| {
             let file = staged.file_mut();
             file.rewind().map_err(storage)?;
             if !digest_matches(file, build.archive_bytes, &build.archive_digest).map_err(storage)? {
-                return Err(ServiceFailure::Unavailable("unverified"));
+                return Err(TunnelFailure::Unavailable("unverified"));
             }
             file.rewind().map_err(storage)?;
             unpack(file, build, release)
@@ -431,8 +499,8 @@ pub(crate) fn install(
 }
 
 /// Unpack the program from the checked download into place, checked again.
-fn unpack(file: &mut File, build: &PinnedBuild, release: &Path) -> Result<(), ServiceFailure> {
-    let storage = |_| ServiceFailure::Unavailable("storage");
+fn unpack(file: &mut File, build: &PinnedBuild, release: &Path) -> Result<(), TunnelFailure> {
+    let storage = |_| TunnelFailure::Unavailable("storage");
     let partial = release.join(format!("{PROGRAM}.part"));
     let mut out = OpenOptions::new()
         .write(true)
@@ -452,9 +520,9 @@ fn unpack(file: &mut File, build: &PinnedBuild, release: &Path) -> Result<(), Se
             let mut found = false;
             for entry in archive
                 .entries()
-                .map_err(|_| ServiceFailure::Unavailable("unverified"))?
+                .map_err(|_| TunnelFailure::Unavailable("unverified"))?
             {
-                let entry = entry.map_err(|_| ServiceFailure::Unavailable("unverified"))?;
+                let entry = entry.map_err(|_| TunnelFailure::Unavailable("unverified"))?;
                 let named = entry
                     .path()
                     .map(|path| path.as_os_str() == PROGRAM)
@@ -466,7 +534,7 @@ fn unpack(file: &mut File, build: &PinnedBuild, release: &Path) -> Result<(), Se
                 }
             }
             if !found {
-                return Err(ServiceFailure::Unavailable("unverified"));
+                return Err(TunnelFailure::Unavailable("unverified"));
             }
         }
     }
@@ -474,7 +542,7 @@ fn unpack(file: &mut File, build: &PinnedBuild, release: &Path) -> Result<(), Se
     drop(out);
     if !matches(&partial, build.program_bytes, &build.program_digest).map_err(storage)? {
         let _ = fs::remove_file(&partial);
-        return Err(ServiceFailure::Unavailable("unverified"));
+        return Err(TunnelFailure::Unavailable("unverified"));
     }
     runnable(&partial).map_err(storage)?;
     fs::rename(
