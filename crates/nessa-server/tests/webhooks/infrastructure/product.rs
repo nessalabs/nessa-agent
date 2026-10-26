@@ -326,6 +326,14 @@ impl Harness {
         runtime_clock: Option<Arc<dyn Clock>>,
         configured: Vec<ConfiguredWebhook>,
     ) -> Self {
+        Self::with_owner_read(pause, runtime_clock, configured, true).await
+    }
+    async fn with_owner_read(
+        pause: Option<Arc<IssuePause>>,
+        runtime_clock: Option<Arc<dyn Clock>>,
+        configured: Vec<ConfiguredWebhook>,
+        owner_read: bool,
+    ) -> Self {
         let root = Arc::new(tempfile::tempdir().unwrap());
         let private = root.path().join("private");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -362,7 +370,11 @@ impl Harness {
                 credential_id: "owner-key".into(),
                 issued_at: 1,
                 expires_at: None,
-                grants: vec![grant("credential.manage"), grant("conversation.read")],
+                grants: if owner_read {
+                    vec![grant("credential.manage"), grant("conversation.read")]
+                } else {
+                    vec![grant("credential.manage")]
+                },
             })
             .unwrap();
         let owner = String::from_utf8(bootstrap.evidence.expose_bytes().to_vec()).unwrap();

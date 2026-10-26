@@ -8216,7 +8216,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "The paired device's credential, as credential.list names it."
+          "description": "The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector."
         },
         "includeSourceHead": {
           "type": "boolean",
@@ -8241,14 +8241,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "The paired device's credential, as credential.list names it."
+          "description": "The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector."
         },
         "requestId": {
           "type": "string",
           "minLength": 36,
           "maxLength": 36,
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-          "description": "Server-issued frozen capture or immutable receipt UUID."
+          "description": "The frozen capture UUID returned by the owner cursor query. Explicit retries retain this exact identity."
         }
       },
       "required": ["conversationId", "credentialId", "requestId"]
@@ -8259,22 +8259,25 @@
       "description": "Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority.",
       "properties": {
         "scope": {
-          "$ref": "#/$defs/RecordScope"
+          "$ref": "#/$defs/RecordScope",
+          "description": "Complete scope/incarnation bound to the native checkpoint; its presence grants no read or delivery authority."
         },
         "position": {
           "type": "string",
           "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "maxLength": 20
+          "maxLength": 20,
+          "description": "Canonical unsigned decimal position committed in this native scope."
         },
         "resetRequired": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether fresh source capture requires an explicit owner reset for this frozen generation."
         },
         "requestId": {
           "type": ["string", "null"],
           "minLength": 36,
           "maxLength": 36,
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-          "description": "Server-issued frozen capture or immutable receipt UUID."
+          "description": "Frozen capture UUID when resetRequired is true; null otherwise. Not a caller-selected rewind identity."
         },
         "observedSourceHead": {
           "$ref": "#/$defs/ConversationRecordsHeadResult",
@@ -8293,26 +8296,29 @@
           "minLength": 36,
           "maxLength": 36,
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-          "description": "Server-issued frozen capture or immutable receipt UUID."
+          "description": "Original frozen capture request UUID; matching replay returns the same selection without another rewind."
         },
         "receiptId": {
           "type": "string",
           "minLength": 36,
           "maxLength": 36,
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-          "description": "Server-issued frozen capture or immutable receipt UUID."
+          "description": "Immutable native selection and audit receipt UUID for this applied reset."
         },
         "scope": {
-          "$ref": "#/$defs/RecordScope"
+          "$ref": "#/$defs/RecordScope",
+          "description": "Complete server-observed incarnation selected by this reset. It need not remain current when the native commit completes."
         },
         "position": {
           "type": "string",
-          "const": "0"
+          "const": "0",
+          "description": "Scoped checkpoint selected by the reset, always zero in the returned observed incarnation."
         },
         "appliedAtMs": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "description": "Original native selection observation time in Unix milliseconds, retained unchanged on replay."
         }
       },
       "required": ["requestId", "receiptId", "scope", "position", "appliedAtMs"]

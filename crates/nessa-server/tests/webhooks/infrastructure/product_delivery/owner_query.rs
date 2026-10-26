@@ -362,19 +362,20 @@ async fn requested_head_deadline_returns_explicit_refusal_but_shutdown_retains_p
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn default_checkpoint_needs_no_canonical_read_grant_but_requested_head_does() {
-    let f = Harness::new().await;
-    let (credential, mut owner, unprivileged, probe, release) = start(&f).await;
-    let mut params = ordinary_params();
-    params["requestId"] = json!("owner-manage-only");
-    params["principal"] = json!({"id":"owner","kind":"human"});
-    params["membership"] = json!({"id":"owner-member","principalId":"owner","organizationId":"org","role":"admin","state":"active"});
-    params["grants"] =
-        json!([{"action":"credential.manage","resource":{"organizationId":"org","id":"gateway"}}]);
-    let issued = owner.call("credential.issue", params).await;
-    assert_eq!(issued["ok"], true, "{issued}");
-    let (mut manager, ready) =
-        Client::open(f.address, issued["payload"]["secret"].as_str().unwrap()).await;
-    assert_eq!(ready["ok"], true);
+    let f = Harness::with_owner_read(
+        None,
+        None,
+        vec![ConfiguredWebhook {
+            principal: PrincipalId::new("hook").unwrap(),
+            registration: RegistrationConfig {
+                destination: Destination::parse("https://recipient.test/synthetic").unwrap(),
+                key: Arc::new(MacKey::new([7; 32])),
+            },
+        }],
+        false,
+    )
+    .await;
+    let (credential, mut manager, unprivileged, probe, release) = start(&f).await;
     let before = native_fingerprint(&f);
     let omitted = manager
         .call(
@@ -388,7 +389,6 @@ async fn default_checkpoint_needs_no_canonical_read_grant_but_requested_head_doe
     let calls = probe.calls.load(Ordering::SeqCst);
     release.0.release();
     drop(manager);
-    drop(owner);
     drop(unprivileged);
     f.close().await.unwrap();
     assert_eq!(omitted["ok"], true, "{omitted}");

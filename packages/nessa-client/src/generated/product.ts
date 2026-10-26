@@ -3146,7 +3146,7 @@ export interface WorkspacePublishResult {
 export interface ConversationWebhookCursorParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
-  /** The paired device's credential, as credential.list names it. */
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
   credentialId: string
   /** Explicitly request a separately observed canonical Head under current owner read authority. Omitted/false performs no canonical admission or physical Head I/O. This does not reconcile or mutate the native checkpoint. */
   includeSourceHead?: boolean
@@ -3155,29 +3155,35 @@ export interface ConversationWebhookCursorParams {
 export interface ConversationWebhookResetParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
-  /** The paired device's credential, as credential.list names it. */
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
   credentialId: string
-  /** Server-issued frozen capture or immutable receipt UUID. */
+  /** The frozen capture UUID returned by the owner cursor query. Explicit retries retain this exact identity. */
   requestId: string
 }
 /** Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority. */
 export interface ConversationWebhookCursorResult {
+  /** Complete scope/incarnation bound to the native checkpoint; its presence grants no read or delivery authority. */
   scope: RecordScope
+  /** Canonical unsigned decimal position committed in this native scope. */
   position: string
+  /** Whether fresh source capture requires an explicit owner reset for this frozen generation. */
   resetRequired: boolean
-  /** Server-issued frozen capture or immutable receipt UUID. */
+  /** Frozen capture UUID when resetRequired is true; null otherwise. Not a caller-selected rewind identity. */
   requestId: string | null
   /** Present only when explicitly requested and successfully read. Observed after the native checkpoint; these are separate non-atomic observations. Not a delivery, reset, publication or current-at-commit acknowledgement. */
   observedSourceHead?: ConversationRecordsHeadResult
 }
 /** Immutable result: reset applied for this explicitly observed scope at position zero. Does not promise current-at-commit, resumed delivery or current resetRequired status. Same request replays this result without another rewind. */
 export interface ConversationWebhookResetResult {
-  /** Server-issued frozen capture or immutable receipt UUID. */
+  /** Original frozen capture request UUID; matching replay returns the same selection without another rewind. */
   requestId: string
-  /** Server-issued frozen capture or immutable receipt UUID. */
+  /** Immutable native selection and audit receipt UUID for this applied reset. */
   receiptId: string
+  /** Complete server-observed incarnation selected by this reset. It need not remain current when the native commit completes. */
   scope: RecordScope
+  /** Scoped checkpoint selected by the reset, always zero in the returned observed incarnation. */
   position: "0"
+  /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
   appliedAtMs: number
 }
 export const subscriptionLimits = {
