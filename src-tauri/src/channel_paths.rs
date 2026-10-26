@@ -123,12 +123,25 @@ pub enum DroppedKind {
 /// as a file, which only decides its icon.
 const KIND_WAIT: Duration = Duration::from_secs(2);
 
-/// Most paths of one drop the host looks at: what a channel holds at most
-/// (`x-channelRules.maxResources` in the product protocol, held equal by a
-/// test). Each look is a thread of its own that a stalled share can keep, so
-/// a drop of thousands looks at no more than could ever be kept; the rest are
+/// The product protocol, whose `x-channelRules` say what a channel holds.
+const PRODUCT_PROTOCOL: &str = include_str!("../../protocol/product/v1.json");
+
+/// Most paths of one drop the host looks at: what a channel holds at most,
+/// read from the published `x-channelRules.maxResources`, never retyped.
+/// Each look is a thread of its own that a stalled share can keep, so a drop
+/// of thousands looks at no more than could ever be kept; the rest are
 /// counted and the page says they did not fit.
-const MOST_DROPPED: usize = 32;
+fn most_dropped() -> usize {
+    static MOST: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        let rules: serde_json::Value =
+            serde_json::from_str(PRODUCT_PROTOCOL).expect("bundled product protocol must parse");
+        rules["x-channelRules"]["maxResources"]
+            .as_u64()
+            .and_then(|most| usize::try_from(most).ok())
+            .expect("product protocol must say x-channelRules.maxResources")
+    });
+    *MOST
+}
 
 /// Whether a drag is over the window after `event`, when it changes that: a
 /// drag naming no paths (text, say) is nothing the page can take.
@@ -184,8 +197,9 @@ fn next_drop() -> String {
 
 /// The paths of a drop the host will look at, and how many it will not.
 fn within_bound(mut paths: Vec<PathBuf>) -> (Vec<PathBuf>, usize) {
-    let unread = paths.len().saturating_sub(MOST_DROPPED);
-    paths.truncate(MOST_DROPPED);
+    let most = most_dropped();
+    let unread = paths.len().saturating_sub(most);
+    paths.truncate(most);
     (paths, unread)
 }
 
@@ -342,17 +356,13 @@ mod tests {
 
     #[test]
     fn a_drop_looks_at_no_more_paths_than_a_channel_holds() {
-        let rules: serde_json::Value =
-            serde_json::from_str(include_str!("../../protocol/product/v1.json")).unwrap();
-        assert_eq!(
-            rules["x-channelRules"]["maxResources"].as_u64(),
-            Some(MOST_DROPPED as u64)
-        );
-        let many: Vec<PathBuf> = (0..MOST_DROPPED + 5)
+        let most = most_dropped();
+        assert!(most > 0);
+        let many: Vec<PathBuf> = (0..most + 5)
             .map(|n| PathBuf::from(format!("/p/{n}")))
             .collect();
         let (looked, unread) = within_bound(many);
-        assert_eq!(looked.len(), MOST_DROPPED);
+        assert_eq!(looked.len(), most);
         assert_eq!(looked[0], PathBuf::from("/p/0"));
         assert_eq!(unread, 5);
         assert_eq!(within_bound(vec!["/a".into()]), (vec!["/a".into()], 0));
