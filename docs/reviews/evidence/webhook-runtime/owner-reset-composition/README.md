@@ -9,7 +9,7 @@ was cherry-picked with provenance at `a2f576696bf8a847e45f6dc5a54df5ab2490ed38`;
 both parent helper blobs exactly matched before integration. No whole feature branch
 was transplanted. This is local qualification, not issue completion or merge readiness.
 
-The latest [current-main integration](current-main-integration.md) is
+The earlier [current-main integration](current-main-integration.md) is
 `3e7e965d6b5edbcf29ff6926d736d21090268bdb`, preserving main
 `2026c2becebec94ec69f849fa529143ad4625995` and UI pin
 `3118f2d8a15f68825ecef3fe0c337368b3d7f889`. Earlier UI/platform results below
@@ -28,6 +28,20 @@ original retention controls and the late-response boundary control passed. Defau
 Chromium stress passed 50/50; its webhook witness captured Head 46 with 46 queued
 records and zero attempts. This does not qualify the unexecuted focused WebKit
 and count-three additions, or a later source/main/UI combination.
+
+The subsequent [bounded integration closure](main-3a220-integration-closure.md)
+checks `c5cd751f4a7c75c9a2e9966436eada47de87bddd`, preserving main
+`3a22008c606d6867d02f4bd242ff27944726aa3f` and UI pin
+`39e617600ad36fd9c7a1f41691aca239af25b495`. The test-only
+[native lifecycle correction](native-lifecycle-qualification.md) has an independent
+[affected review](native-lifecycle-review.md); it does not change production
+budgets or establish a corrected Windows pass.
+The [current frontend receipt](main-3a220-frontend-summary.txt) records 5,306/5,306
+tests across 409 files and a successful build after the separately reviewed
+[asynchronous focus fixture correction](linked-focus-qualification.md)
+([affected review](linked-focus-review.md)). Original failed invocations remain
+recorded. No new-head platform or focused browser pass is inferred from these
+local checks.
 
 ## Behavior and ordering
 

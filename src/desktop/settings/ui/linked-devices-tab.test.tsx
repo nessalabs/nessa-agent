@@ -5,7 +5,7 @@
  */
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../../clock"
 import type {
   LinkedDevicesConnection,
@@ -368,9 +368,14 @@ describe("Linked devices", () => {
         )
         ?.click(),
     )
-    await act(async () => new Promise((done) => setTimeout(done, 0)))
-    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
-    expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
+    // The dialog's return-focus fallback can follow its close timer. Keep the
+    // read held until the actual parked focus is observed, not one timer turn.
+    await act(async () =>
+      vi.waitFor(() => {
+        expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+        expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
+      }),
+    )
     await act(async () => answerRead?.())
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
   })
