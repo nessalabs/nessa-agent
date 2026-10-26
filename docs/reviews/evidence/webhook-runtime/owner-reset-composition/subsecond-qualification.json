@@ -59,5 +59,45 @@
     "corrected browser/default stress",
     "raised webhook3",
     "webhook-specific WebKit"
-  ]
+  ],
+  "priorRunTerminal": {
+    "head": "0d0b12f32ceface5bf2f556c85d67fe3ff7cf06c",
+    "run": 40252725334,
+    "substantiveJobsPassed": 10,
+    "substantiveJobsFailed": 1,
+    "aggregate": "failure",
+    "ubuntuServer": {
+      "passed": 4125,
+      "failed": 0,
+      "ignored": 11
+    },
+    "macServer": {
+      "passed": 4122,
+      "failed": 0,
+      "ignored": 13
+    },
+    "windowsServer": {
+      "passed": 3395,
+      "failed": 0,
+      "ignored": 9
+    },
+    "retentionAllThreeAllPlatforms": "passed",
+    "formerCancellationColdAndLive": "passed",
+    "ubuntuNativeSmoke": "passed, owned cleanup",
+    "frontend": {
+      "passed": 5324,
+      "files": 408,
+      "buildSeconds": 17.02
+    },
+    "browserStress": {
+      "held": 39,
+      "total": 50,
+      "failure": "036 webhook forbidden"
+    },
+    "chaos": {
+      "passed": 2,
+      "total": 2
+    },
+    "cancelledOrRerun": false
+  }
 }

@@ -48,3 +48,26 @@ recipient delivery is covered separately by the complete product suite. Correcte
 browser execution and exact published-head platform acceptance remain pending.
 Raised webhook3 and webhook-specific WebKit are still outside the existing PR
 stress configuration. No old result is relabeled as a corrected browser pass.
+
+## Prior published run completed
+
+The0d0b12f32 run completed without cancellation or rerun. Ten substantive jobs
+passed; conversation stress and its required-check aggregate failed. The
+[selected platform log lines](ci-0d0b-platform.txt) record:
+
+| Platform/server suite | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| Ubuntu | 4125 | 0 | 11 |
+| Mac | 4122 | 0 | 13 |
+| Windows server | 3395 | 0 | 9 |
+
+All three retention controls and the former cancellation-history failures passed
+on each platform. Actual signed TLS/retry and failed-publication outcome controls
+passed on Mac and Windows. Windows non-server qualification, required Clippy and
+native enrollment110/110 passed. Ubuntu's native desktop window smoke passed
+with owned process cleanup. Frontend passed5324/5324 tests across408 files and
+built in17.02s. Gateway contract, SDK domain coverage and release compilation passed.
+
+This qualifies the earlier fixture repairs at0d0b12f32. It does not qualify the
+later69351af precision comparison or turn the failed default browser run into a
+pass. Those need new published-head CI/browser evidence.
