@@ -12,6 +12,7 @@ import type {
   LinkedDevicesGateway,
 } from "../adapters/linked-devices-gateway"
 import type { Outcome, ReadValue } from "../model/linked-devices"
+import type { TunnelChange, TunnelRead } from "../model/tunnel"
 import { LinkedDevicesProvider, LinkedDevicesTab } from "./linked-devices-tab"
 
 let root: Root
@@ -44,24 +45,58 @@ afterEach(async () => {
   host.remove()
 })
 
-function gateway(read: () => Promise<Outcome<ReadValue>>): LinkedDevicesGateway & {
+const tunnelOff: TunnelRead = {
+  enabled: false,
+  mode: "quick",
+  hasToken: false,
+  ingress: "127.0.0.1:47651",
+  status: "off",
+}
+
+function gateway(
+  read: () => Promise<Outcome<ReadValue>>,
+  tunnel: () => Promise<Outcome<TunnelRead>> = async () => ({
+    ok: true,
+    value: tunnelOff,
+  }),
+): LinkedDevicesGateway & {
   switchWaitMs: number
   creates: number
   linkings: boolean[]
+  tunnels: TunnelChange[]
   tell: (connection: LinkedDevicesConnection) => void
 } {
+  // Every part of the tab that follows the connection hears each change.
+  const followers = new Set<(connection: LinkedDevicesConnection) => void>()
   const gate = {
     pollMs: 0,
     switchWaitMs: 60_000,
     creates: 0,
     linkings: [] as boolean[],
-    tell: (_connection: LinkedDevicesConnection) => {},
+    tunnels: [] as TunnelChange[],
+    tell: (connection: LinkedDevicesConnection) => {
+      for (const follower of [...followers]) follower(connection)
+    },
     follow(handler: (connection: LinkedDevicesConnection) => void) {
-      gate.tell = handler
+      followers.add(handler)
       handler({ type: "connected" })
-      return () => {}
+      return () => {
+        followers.delete(handler)
+      }
     },
     read,
+    tunnel,
+    setTunnel: async (change: TunnelChange) => {
+      gate.tunnels.push(change)
+      return {
+        ok: true as const,
+        value: {
+          enabled: change.enabled,
+          mode: change.mode ?? ("quick" as const),
+          applies: "restarting" as const,
+        },
+      }
+    },
     create: async () => {
       gate.creates += 1
       return {
@@ -493,7 +528,6 @@ describe("Linked devices", () => {
   })
 
   it("L21: approve, deny and revoke rest while the gateway cannot be reached", async () => {
-    let tell: ((connection: LinkedDevicesConnection) => void) | undefined
     const gate = gateway(async () => ({
       ok: true,
       value: {
@@ -513,11 +547,6 @@ describe("Linked devices", () => {
         ],
       },
     }))
-    gate.follow = (handler) => {
-      tell = handler
-      handler({ type: "connected" })
-      return () => {}
-    }
     await mount(
       <LinkedDevicesProvider gateway={gate}>
         <LinkedDevicesTab />
@@ -527,7 +556,7 @@ describe("Linked devices", () => {
       host.querySelector<HTMLButtonElement>(`[data-linked-action='${action}']`)?.disabled
     expect(enabled("approve")).toBe(false)
     expect(enabled("revoke")).toBe(false)
-    await act(async () => tell?.({ type: "unreachable" }))
+    await act(async () => gate.tell({ type: "unreachable" }))
     expect(enabled("approve")).toBe(true)
     expect(enabled("deny")).toBe(true)
     expect(enabled("revoke")).toBe(true)
@@ -600,5 +629,86 @@ describe("Linked devices", () => {
     )
     expect(revokes).toBe(1)
     expect(host.textContent).toContain("next time it reads")
+  })
+})
+
+describe("Web tunnel", () => {
+  const linkedOn = async () => ({
+    ok: true as const,
+    value: { kind: "on" as const, enrollments: [], devices: [] },
+  })
+  const tunnelSwitch = () =>
+    host.querySelector<HTMLButtonElement>("[data-tunnel] [role='switch']")
+
+  it("is drawn only while linking is on", async () => {
+    const gate = gateway(async () => ({ ok: true, value: { kind: "off" } }))
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    expect(host.querySelector("[data-tunnel]")).toBeNull()
+  })
+
+  it("turns a quick tunnel on with one change and shows its address once ready", async () => {
+    let read: TunnelRead = tunnelOff
+    const gate = gateway(linkedOn, async () => ({ ok: true, value: read }))
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    expect(host.querySelector("[data-tunnel]")?.getAttribute("data-tunnel-status")).toBe(
+      "off",
+    )
+    expect(host.textContent).toContain("only on the same network")
+    expect(host.textContent).toContain("changes whenever cloudflared has to start again")
+    expect(host.querySelector("[data-tunnel-field]")).toBeNull()
+    await act(async () => tunnelSwitch()?.click())
+    expect(gate.tunnels).toEqual([{ enabled: true, mode: "quick" }])
+    expect(tunnelSwitch()?.getAttribute("aria-checked")).toBe("true")
+    expect(tunnelSwitch()?.disabled).toBe(true)
+    read = {
+      ...tunnelOff,
+      enabled: true,
+      status: "ready",
+      address: "https://a-b.trycloudflare.com",
+    }
+    await act(async () => gate.tell({ type: "unreachable" }))
+    await act(async () => gate.tell({ type: "connected" }))
+    expect(host.querySelector("[data-tunnel-address]")?.textContent).toBe(
+      "https://a-b.trycloudflare.com",
+    )
+    expect(tunnelSwitch()?.disabled).toBe(false)
+    expect(host.textContent).not.toContain("Restarting the gateway")
+  })
+
+  it("a named tunnel takes a hostname and a token, shows where to route it, and never shows the token back", async () => {
+    const gate = gateway(linkedOn, async () => ({
+      ok: true,
+      value: {
+        ...tunnelOff,
+        mode: "named",
+        hostname: "https://n.example",
+        hasToken: true,
+      },
+    }))
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    const field = (name: string) =>
+      host.querySelector<HTMLInputElement>(`[data-tunnel-field='${name}']`)
+    expect(field("hostname")?.value).toBe("https://n.example")
+    expect(field("token")?.value).toBe("")
+    expect(field("token")?.type).toBe("password")
+    expect(field("token")?.placeholder).toContain("Saved")
+    expect(host.textContent).toContain("route this hostname to http://127.0.0.1:47651")
+    expect(host.textContent).toContain("Its address never changes")
+    await act(async () => tunnelSwitch()?.click())
+    expect(gate.tunnels).toEqual([
+      { enabled: true, mode: "named", hostname: "https://n.example" },
+    ])
   })
 })

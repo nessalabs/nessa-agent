@@ -2,7 +2,7 @@
 /**
  * Settings › Connections › Linked devices (#462) against a scripted product
  * session: linking off, the switch turning it on across a gateway restart, a
- * refused owner, a code in a modal with one orb, approve, revoke, and an
+ * refused owner, the web tunnel, a code in a modal with one orb, approve, revoke, and an
  * expired code. Chromium and WebKit. The phone's scanner is not this screen.
  *
  * The page is the dev server's, opened with `?gateway` so it uses the browser
@@ -24,6 +24,9 @@ const wireCodes = [
   "pairing_capacity",
   "pairing_conflict",
   "pairing_ineligible",
+  "pairing_linking_off",
+  "pairing_tunnel_incomplete",
+  "not_ready",
   "forbidden",
   "unauthorized",
   "invalid_request",
@@ -32,6 +35,10 @@ const wireCodes = [
   "credential_conflict",
   "credential_capacity",
 ]
+
+/** The Native linking switch; the web tunnel's is its own. */
+const linkingSwitch = "[data-linking-switch] [role='switch']"
+const tunnelSwitch = "[data-tunnel] [role='switch']"
 
 const invitationId = Array.from({ length: 16 }, (_, index) => index + 1)
 const deviceKey = Array.from({ length: 32 }, () => 1)
@@ -64,6 +71,8 @@ const sessionReady = {
     "pairing.cancel",
     "pairing.approve",
     "pairing.setLinking",
+    "pairing.setTunnel",
+    "pairing.tunnel",
   ],
 }
 
@@ -107,6 +116,9 @@ const same = (a, b) =>
  */
 function scriptedGateway(scenario) {
   const invitations = [...(scenario.invitations ?? [])]
+  // The saved web tunnel; a quick one is ready at its address once the
+  // gateway has restarted with it.
+  const tunnel = { enabled: false, mode: "quick", ...(scenario.tunnel ?? {}) }
   let devices = [...(scenario.devices ?? [])]
   let subscriptions = 0
   const unexpected = []
@@ -126,6 +138,8 @@ function scriptedGateway(scenario) {
     "pairing.approve",
     "pairing.deny",
     "pairing.setLinking",
+    "pairing.setTunnel",
+    "pairing.tunnel",
     "workspace.publish",
   ])
 
@@ -169,6 +183,28 @@ function scriptedGateway(scenario) {
       return { ok: false, error: { code: "pairing_not_configured", message: "off" } }
     if (scenario.mode === "refused")
       return { ok: false, error: { code: "forbidden", message: "no" } }
+    if (method === "pairing.setTunnel") {
+      tunnel.enabled = params?.enabled === true
+      tunnel.mode = params?.mode ?? tunnel.mode
+      return {
+        ok: true,
+        payload: { enabled: tunnel.enabled, mode: tunnel.mode, applies: "restarting" },
+      }
+    }
+    if (method === "pairing.tunnel")
+      return {
+        ok: true,
+        payload: {
+          enabled: tunnel.enabled,
+          mode: tunnel.mode,
+          hasToken: false,
+          ingress: "127.0.0.1:47651",
+          status: tunnel.enabled ? "ready" : "off",
+          ...(tunnel.enabled
+            ? { address: "https://linked-check.trycloudflare.com" }
+            : {}),
+        },
+      }
     if (method === "pairing.pending") return { ok: true, payload: { items: invitations } }
     if (method === "pairing.create") {
       if (invitations.some((item) => item.phase === "available"))
@@ -265,7 +301,10 @@ function scriptedGateway(scenario) {
       }
       const result = reply(frame.method, frame.params, publish)
       socket.send(JSON.stringify({ type: "res", id: frame.id, ...result }))
-      if (frame.method === "pairing.setLinking" && result.ok)
+      if (
+        (frame.method === "pairing.setLinking" || frame.method === "pairing.setTunnel") &&
+        result.ok
+      )
         setTimeout(() => void socket.close(), 100)
       if (frame.method === "conversation.subscribeList" && result.ok) {
         seq += 1
@@ -377,7 +416,7 @@ async function laidOut(page) {
 
 const meta = {
   name: "linked-devices",
-  summary: "Linked devices: off, toggle, refused, pair, approve, revoke, expired",
+  summary: "Linked devices: off, toggle, tunnel, refused, pair, approve, revoke, expired",
   defaults: { engine: "chromium,webkit" },
   help: `
 Usage: node verification/desktop/scripts/linked-devices.mjs [options]
@@ -386,6 +425,7 @@ Per engine, against a scripted product session (and one sample page):
   pending    no gateway: the page is pending and offers no pairing
   off        linking off: the switch can be turned, no config hint, no group title, no pair control
   toggle     turning the switch on restarts the gateway, and the page comes back on
+  tunnel     the web tunnel turns on across a restart and shows its address; named says where to route
   refused    this sign-in cannot pair; recover-owner is named
   pair       a code and one orb in a modal; Escape hides it, Show code brings it back, Cancel clears it
   approve    a claimed device's fingerprint; Approve stays on a retryable stop
@@ -450,7 +490,7 @@ await main(meta, async ({ options, rep, url }) => {
 
     await gatewayStep("off", { mode: "off" }, async (page) => {
       const phase = await page.locator(css.linked).getAttribute("data-linked")
-      const toggle = page.locator("[role='switch']")
+      const toggle = page.locator(linkingSwitch)
       const text = await panelText(page)
       return [
         phase === "off" ? null : `phase was ${phase}, expected off`,
@@ -473,7 +513,7 @@ await main(meta, async ({ options, rep, url }) => {
     })
 
     await gatewayStep("toggle", { mode: "off" }, async (page) => {
-      const toggle = page.locator("[role='switch']")
+      const toggle = page.locator(linkingSwitch)
       await toggle.click()
       await page.waitForFunction(
         (selector) =>
@@ -488,6 +528,35 @@ await main(meta, async ({ options, rep, url }) => {
         (await page.locator(selectorFor.linkedAction("pair")).count()) === 1
           ? null
           : "pair was not offered once linking came back on",
+      ].filter(Boolean)
+    })
+
+    await gatewayStep("tunnel", { mode: "on" }, async (page) => {
+      const text = await panelText(page)
+      const toggle = page.locator(tunnelSwitch)
+      const before = [
+        text.includes("only on the same network") ? null : "the tunnel did not read off",
+        text.includes("changes whenever cloudflared")
+          ? null
+          : "the quick address was not said to change",
+      ]
+      await toggle.click()
+      await page.waitForSelector("[data-tunnel-address]", { timeout: 20_000 })
+      const address = await page.locator("[data-tunnel-address]").innerText()
+      await page.locator("[data-tunnel-mode] button", { hasText: "Named" }).click()
+      const named = await panelText(page)
+      return [
+        ...before,
+        (await toggle.getAttribute("aria-checked")) === "true"
+          ? null
+          : "the tunnel switch read off once the gateway was back",
+        address === "https://linked-check.trycloudflare.com"
+          ? null
+          : `the address read ${address}`,
+        named.includes("http://127.0.0.1:47651")
+          ? null
+          : "a named tunnel did not say where to route its hostname",
+        named.includes("never changes") ? null : "a named address was not said to stay",
       ].filter(Boolean)
     })
 

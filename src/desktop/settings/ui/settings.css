@@ -1365,6 +1365,19 @@ html:not(.dark) .settings .settings-card {
   padding-block: 8px;
 }
 
+/* The web tunnel: its public address, and a named tunnel's two fields. */
+.tunnel-address {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.tunnel-input {
+  width: 18rem;
+  max-width: 100%;
+}
+
 .linked-pairing-code {
   flex: 1 1 200px;
   display: flex;
