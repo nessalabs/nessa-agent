@@ -12,9 +12,11 @@ impl Clock for Time {
 }
 fn runtime() -> (tempfile::TempDir, WebhookRuntime) {
     let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("private");
+    nessa_local_storage::create_directory(&private).unwrap();
     let credentials = Arc::new(
         LocalCredentialStore::open(
-            root.path(),
+            &private,
             "auth.json",
             Arc::new(CedarPolicyEvaluator::new().unwrap()),
         )
@@ -23,8 +25,8 @@ fn runtime() -> (tempfile::TempDir, WebhookRuntime) {
     let clock = Arc::new(Time);
     let store = Arc::new(
         SqlOutbox::open(
-            &root.path().join("outbox.db"),
-            root.path().join("audit"),
+            &private.join("outbox.db"),
+            private.join("audit"),
             clock.clone(),
         )
         .unwrap(),

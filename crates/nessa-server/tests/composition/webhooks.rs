@@ -9,21 +9,28 @@ impl Clock for Time {
     }
 }
 struct Fixture {
-    root: tempfile::TempDir,
+    _root: tempfile::TempDir,
+    directory: std::path::PathBuf,
     credentials: Arc<LocalCredentialStore>,
 }
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        nessa_local_storage::create_directory(&directory).unwrap();
         let credentials = Arc::new(
             LocalCredentialStore::open(
-                root.path(),
+                &directory,
                 "auth.json",
                 Arc::new(CedarPolicyEvaluator::new().unwrap()),
             )
             .unwrap(),
         );
-        Self { root, credentials }
+        Self {
+            _root: root,
+            directory,
+            credentials,
+        }
     }
     async fn prepare(
         &self,
@@ -31,7 +38,7 @@ impl Fixture {
     ) -> Result<Option<Arc<WebhookRuntime>>, RunError> {
         prepare(
             settings,
-            self.root.path(),
+            &self.directory,
             self.credentials.clone(),
             self.credentials.clone(),
             Arc::new(Time),
@@ -39,7 +46,7 @@ impl Fixture {
         .await
     }
     fn files(&self) -> Vec<String> {
-        let mut files = std::fs::read_dir(self.root.path())
+        let mut files = std::fs::read_dir(&self.directory)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
@@ -103,7 +110,7 @@ async fn bounded_seed_configuration_opens_without_issuing_and_reopens_after_remo
     let runtime = f.prepare(&config(seeds)).await.unwrap().unwrap();
     assert!(runtime.store().intents().await.unwrap().is_empty());
     assert!(
-        !f.root.path().join("auth.json").exists(),
+        !f.directory.join("auth.json").exists(),
         "opening seeds never initializes or issues credentials"
     );
     runtime.shutdown().await.unwrap();
@@ -129,7 +136,7 @@ fn configuration_debug_redacts_url_and_mac_and_unknown_fields_refuse() {
 #[tokio::test]
 async fn a_non_file_outbox_refuses_instead_of_becoming_absent() {
     let f = Fixture::new();
-    std::fs::create_dir(f.root.path().join("webhooks.sqlite")).unwrap();
+    std::fs::create_dir(f.directory.join("webhooks.sqlite")).unwrap();
     let before = f.files();
     assert!(f.prepare(&RuntimeConfig::default()).await.is_err());
     assert_eq!(f.files(), before);
@@ -141,7 +148,7 @@ async fn an_outbox_symlink_refuses_without_following_it() {
     let outside = tempfile::tempdir().unwrap();
     let target = outside.path().join("untouched");
     std::fs::write(&target, b"synthetic-marker").unwrap();
-    std::os::unix::fs::symlink(&target, f.root.path().join("webhooks.sqlite")).unwrap();
+    std::os::unix::fs::symlink(&target, f.directory.join("webhooks.sqlite")).unwrap();
     assert!(f.prepare(&RuntimeConfig::default()).await.is_err());
     assert_eq!(std::fs::read(target).unwrap(), b"synthetic-marker");
 }

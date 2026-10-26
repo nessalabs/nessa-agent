@@ -2713,7 +2713,9 @@ const steps = {
   },
 
   async webhook(run, step, failures) {
-    const owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+    // The panel creates this conversation and holds the default owner grants,
+    // including credential.manage. Sharing must use that same conversation owner.
+    const owner = await connectClient(run.stack.gateway, INSTANCE, "panel")
     const conversationId = randomUUID()
     let shared = false
     try {
