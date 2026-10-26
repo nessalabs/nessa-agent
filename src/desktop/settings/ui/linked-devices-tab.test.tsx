@@ -364,6 +364,8 @@ describe("Linked devices", () => {
     // Radix closes its focus scope on one timer; the kit's fallback focus
     // runs on a second. Keep the gateway read held while both callbacks run,
     // without waiting on elapsed host time or changing the injected clock.
+    // One virtual millisecond admits the nested zero-delay timer clamp, but
+    // does not admit a genuinely delayed fallback.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
     try {
       await act(async () =>
@@ -373,7 +375,7 @@ describe("Linked devices", () => {
           )
           ?.click(),
       )
-      await act(async () => vi.runAllTimersAsync())
+      await act(async () => vi.advanceTimersByTimeAsync(1))
     } finally {
       vi.useRealTimers()
     }
