@@ -50,6 +50,14 @@ pub const UPDATE_FAILED: &str = "nessa://update-failed";
 /// not one — macOS sends it nowhere a person looks, and the release Windows
 /// build has no console at all.
 pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
+/// Whether a drag carrying files or folders is over the desktop window; the
+/// payload is `{ dragging }`. The window's drag and drop belongs to the host,
+/// so the page has no drag events of its own to draw a drop target from.
+pub const PATHS_DRAGGING: &str = "nessa://paths-dragging";
+/// Files and folders dropped on the desktop window; the payload is
+/// `{ paths }`, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
+/// the channel pickers': the gateway checks each again before using it.
+pub const PATHS_DRAGGED: &str = "nessa://paths-dropped";
 /// Setup recorded a finish, and with it the agent it chose. Sent to every
 /// window: one that already asked which agent setup chose asks again.
 pub const SETUP_RECORDED: &str = "nessa://setup-recorded";

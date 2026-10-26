@@ -28,6 +28,8 @@ export {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  onPathsDragged,
+  type DroppedPath,
   onAttachmentDragging,
   onAttachmentBatch,
   onAttachmentReadying,

@@ -108,20 +108,29 @@ export function channelDrafted(
   }
 }
 
-/** Adds picked files or folders, each once, as many as fit; says how many did not. */
+/**
+ * Adds picked or dropped files and folders, each once, as many as fit; says
+ * how many did not. Each names its own kind: one drop can hold both.
+ */
 export function channelResourcesAdded(
   state: WorkspaceState,
   {
     opening,
-    paths,
-    kind,
-  }: { opening: string; paths: readonly string[]; kind: ResourceKind },
+    added,
+  }: {
+    opening: string
+    added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+  },
 ): WorkspaceState {
   const flow = editable(state, opening)
-  if (!flow || paths.length === 0) return state
-  const { resources, leftOut } = withResources(flow.draft.resources, paths)
+  if (!flow || added.length === 0) return state
+  const { resources, leftOut } = withResources(
+    flow.draft.resources,
+    added.map(({ path }) => path),
+  )
   const kinds = { ...flow.kinds }
-  for (const path of resources) if (!Object.hasOwn(kinds, path)) kinds[path] = kind
+  for (const { path, kind } of added)
+    if (resources.includes(path) && !Object.hasOwn(kinds, path)) kinds[path] = kind
   return {
     ...state,
     channelCreation: {

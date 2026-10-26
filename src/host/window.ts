@@ -53,6 +53,8 @@ const HOST_EVENTS = {
   attachmentDragging: "nessa://attachment-dragging",
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
+  pathsDragging: "nessa://paths-dragging",
+  pathsDropped: "nessa://paths-dropped",
   gatewayStartup: "nessa://gateway-startup",
   runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
@@ -565,6 +567,37 @@ export async function chooseChannelResources(
   if (!inTauri) return []
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<string[]>("choose_channel_resources", { folders: kind === "folders" })
+}
+
+/** A file or folder dragged onto the desktop window, as the host names it. */
+export interface DroppedPath {
+  path: string
+  kind: "file" | "folder"
+}
+
+/**
+ * Be told of files and folders dragged onto the desktop window: `dragging`
+ * while a drag carrying paths is over it, `dropped` with the paths it let go
+ * of. The window receives no drop events of its own (the webview's drag and
+ * drop belongs to the host), and a DOM `File` names no path, so this is the
+ * only way the page learns where a dropped file is. Only paths, like the
+ * channel pickers': the gateway checks each again before using it.
+ */
+export async function onPathsDragged(handlers: {
+  dragging: (over: boolean) => void
+  dropped: (paths: DroppedPath[]) => void
+}): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  const stops = await Promise.all([
+    listen<{ dragging: boolean }>(HOST_EVENTS.pathsDragging, ({ payload }) =>
+      handlers.dragging(payload.dragging),
+    ),
+    listen<{ paths: DroppedPath[] }>(HOST_EVENTS.pathsDropped, ({ payload }) =>
+      handlers.dropped(payload.paths),
+    ),
+  ])
+  return () => stops.forEach((stop) => stop())
 }
 
 /** The person's home folder, to write paths under it from `~`; `null` outside Tauri. */

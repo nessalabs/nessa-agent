@@ -7,6 +7,8 @@ import { makeDesktopStore } from "../../../store"
 import {
   ChannelCreationError,
   type ChannelSource,
+  type DroppedPath,
+  type PathDropWatch,
   type PathPicker,
 } from "../../application/ports"
 import { createQuestionFlights } from "../../application/question-flights"
@@ -27,6 +29,7 @@ import {
   openChannelCreation,
   removeChannelResource,
   showContent,
+  watchChannelDrops,
 } from "./commands"
 
 /** Pickers that answer what the test queued, a cancel when nothing is. */
@@ -34,7 +37,12 @@ function queuedPaths() {
   const folders: (string | null)[] = []
   const resources: string[][] = []
   const asked: string[] = []
+  const watches = new Set<PathDropWatch>()
   const paths: PathPicker = {
+    drops: (watch) => {
+      watches.add(watch)
+      return () => watches.delete(watch)
+    },
     home: async () => "/home/person",
     folder: async () => {
       asked.push("folder")
@@ -45,7 +53,7 @@ function queuedPaths() {
       return resources.shift() ?? []
     },
   }
-  return { paths, folders, resources, asked }
+  return { paths, folders, resources, asked, watches }
 }
 
 /** The source's index, which a channel made through `channels()` joins, as a real source's does. */
@@ -199,6 +207,41 @@ describe("asking", () => {
     await store.dispatch(addChannelResources({ kind: "files" }))
     expect(flowOf(store)?.draft.resources).toHaveLength(channelRules.maxResources)
     expect(flowOf(store)?.leftOut).toBe(2)
+  })
+
+  it("takes files and folders dropped while it asks for them, each with its kind", async () => {
+    const { paths, watches } = queuedPaths()
+    const { store } = await storeWith({ channels: channels(), paths })
+    store.dispatch(openChannelCreation())
+    const over: boolean[] = []
+    const stop = store.dispatch(watchChannelDrops({ dragging: (is) => over.push(is) }))
+    const drop = (...dropped: DroppedPath[]) =>
+      watches.forEach((watch) => watch.dropped(dropped))
+    watches.forEach((watch) => watch.dragging(true))
+    expect(over).toEqual([true])
+    // Asked for its name, a drop adds nothing.
+    drop({ path: "/work/early.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual([])
+    store.dispatch(askChannelStep({ step: "resources" }))
+    drop(
+      { path: "/work/brief.md", kind: "file" },
+      { path: "/work/docs", kind: "folder" },
+      { path: "/work/brief.md", kind: "file" },
+    )
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md", "/work/docs"])
+    expect(flowOf(store)?.kinds).toEqual({
+      "/work/brief.md": "file",
+      "/work/docs": "folder",
+    })
+    stop()
+    expect(watches.size).toBe(0)
+  })
+
+  it("watches nothing where the window is never told of a drop", async () => {
+    const { store } = await storeWith({ channels: channels() })
+    store.dispatch(openChannelCreation())
+    const stop = store.dispatch(watchChannelDrops({ dragging: () => {} }))
+    expect(() => stop()).not.toThrow()
   })
 })
 

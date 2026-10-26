@@ -127,13 +127,38 @@ export function addChannelResources({
       console.error("The file picker failed", error)
       return [] as readonly string[]
     })
+    const each = kind === "folders" ? "folder" : "file"
     dispatch(
       channelResourcesAdded({
         opening,
-        paths: picked,
-        kind: kind === "folders" ? "folder" : "file",
+        added: picked.map((path) => ({ path, kind: each })),
       }),
     )
+  }
+}
+
+/**
+ * Watches for files and folders dragged onto the window while the flow asks
+ * for them: `dragging` says when a drag is over it, and what is dropped is
+ * added as a pick's answer is. A drop that lands once the question has moved
+ * on, or the flow has closed, changes nothing. Answers how to stop watching;
+ * where the window is never told of a drop, it watches nothing.
+ */
+export function watchChannelDrops({
+  dragging,
+}: {
+  dragging: (over: boolean) => void
+}): WorkspaceCommand<() => void> {
+  return (dispatch, getState, { paths }) => {
+    if (!paths?.drops) return () => {}
+    return paths.drops({
+      dragging,
+      dropped: (added) => {
+        const flow = getState().workspace.channelCreation
+        if (!flow || flow.asking !== "resources") return
+        dispatch(channelResourcesAdded({ opening: flow.opening, added }))
+      },
+    })
   }
 }
 

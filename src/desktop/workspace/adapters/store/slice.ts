@@ -422,7 +422,10 @@ const workspaceSlice = createSlice({
       state,
       {
         payload,
-      }: Payload<{ opening: string; paths: readonly string[]; kind: ResourceKind }>,
+      }: Payload<{
+        opening: string
+        added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+      }>,
     ) => channelCreation.channelResourcesAdded(state, payload),
     channelResourceRemoved: (
       state,

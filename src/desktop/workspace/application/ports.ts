@@ -39,7 +39,7 @@ import type {
   WorkspaceIndex,
   SessionSummary,
 } from "../model/workspace-index"
-import type { ChannelDraft, ChannelFailure } from "../model/channel-draft"
+import type { ChannelDraft, ChannelFailure, ResourceKind } from "../model/channel-draft"
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { QuestionChoice, Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
@@ -428,6 +428,25 @@ export interface PathPicker {
   folder(): Promise<string | null>
   /** Files, or folders: one kind at a time, as not every system's picker chooses both. */
   resources(kind: "files" | "folders"): Promise<readonly string[]>
+  /**
+   * Files and folders dragged onto the window, as the system names them:
+   * `dragging` while a drag that carries paths is over it, `dropped` with
+   * what it let go of. Answers how to stop watching. Absent where the window
+   * is never told of a drop.
+   */
+  drops?(watch: PathDropWatch): () => void
+}
+
+/** What a watch on dragged paths is told. */
+export interface PathDropWatch {
+  dragging(over: boolean): void
+  dropped(paths: readonly DroppedPath[]): void
+}
+
+/** One dragged path, and whether it is a file or a folder. */
+export interface DroppedPath {
+  readonly path: string
+  readonly kind: ResourceKind
 }
 
 /**

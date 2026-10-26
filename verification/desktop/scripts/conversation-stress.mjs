@@ -156,7 +156,10 @@
  *               transcript: named, a folder chosen in the host's picker that
  *               agents may not work in (the root) refused at its question,
  *               then one made for it; its model kept, notes typed, and a file
- *               attached from the host's picker; Create opens a new
+ *               attached from the host's picker, then a file and a folder
+ *               dragged onto the window (the whole flow lit as the drop
+ *               target while dragged over, each listed once with its kind,
+ *               the hint on one line, the count as 4/5); Create opens a new
  *               session's home in it, whose first message runs in the made
  *               folder with the notes in the agent's system prompt (Claude).
  *               A second channel works in a folder chosen in the picker, and
@@ -1289,12 +1292,13 @@ function providerName(provider) {
  * question as it is asked, and answers the gateway's listing of it; `null`
  * when it was not made. With `refusedFolder`, that folder is chosen first and
  * Create must be refused at the folder question, before a folder made for it
- * is taken instead.
+ * is taken instead. With `dropped`, those files and folders are dragged onto
+ * the window as the host tells it (`dropOnChannel`).
  */
 async function makeChannel(
   run,
   failures,
-  { name, folder, refusedFolder, notes, resource },
+  { name, folder, refusedFolder, notes, resource, dropped },
 ) {
   const { page } = run
   const pick = (kind, value) =>
@@ -1359,6 +1363,7 @@ async function makeChannel(
     )
       failures.push(`the attached ${basename(resource)} is not listed in the flow`)
   }
+  if (dropped) await dropOnChannel(run, failures, dropped, photograph, name)
   await photograph(`${name}-5-resources`)
   const create = flow.getByRole("button", { name: /^Create channel/ })
   await create.click()
@@ -1396,11 +1401,94 @@ async function makeChannel(
 }
 
 /**
+ * Drags `dropped` (each `{ path, kind }`) onto the window while the flow asks
+ * for files, as the host tells the page: a drag over it lights the whole flow
+ * as the drop target, and the drop lists each path with its kind's icon, once,
+ * after anything already attached, and puts the target out.
+ */
+async function dropOnChannel(run, failures, dropped, photograph, name) {
+  const { page } = run
+  const flow = page.locator(css.newChannel)
+  const heard = await waitFor(
+    () => page.evaluate(() => window.__fakeHostListening("nessa://paths-dropped") > 0),
+    5_000,
+  )
+  if (!heard) {
+    failures.push("the new channel flow does not listen for dropped files")
+    return
+  }
+  // The hint says it in one line, and the count is short.
+  const hint = flow.locator(".new-channel-hint")
+  const lines = await hint.evaluate((node) =>
+    Math.round(
+      node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight),
+    ),
+  )
+  if (lines !== 1) failures.push(`the files question's hint takes ${lines} lines, not 1`)
+  const count = (await flow.locator(".new-channel-count").innerText()).trim()
+  if (!/^\d\/\d$/.test(count))
+    failures.push(`the flow counts its questions as "${count}"`)
+  const emit = (event, payload) =>
+    page.evaluate(
+      ([event, payload]) => window.__fakeHostEmit(event, payload),
+      [event, payload],
+    )
+  await emit("nessa://paths-dragging", { dragging: true })
+  const target = page.locator(`${css.newChannel}[data-dropping] ${css.newChannelDrop}`)
+  if (
+    !(await target.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("a drag over the new channel flow shows no drop target")
+  } else {
+    await photograph(`${name}-5-drop-target`)
+  }
+  const before = await flow.locator(css.newChannelResource).count()
+  // The host says the drag is gone as it lets go, then which paths it dropped.
+  await emit("nessa://paths-dragging", { dragging: false })
+  await emit("nessa://paths-dropped", { paths: [...dropped, dropped[0]] })
+  const listed = await waitFor(
+    async () =>
+      (await flow.locator(css.newChannelResource).count()) === before + dropped.length,
+    5_000,
+  )
+  if (!listed)
+    failures.push(
+      `dropping ${dropped.length} paths listed ${(await flow.locator(css.newChannelResource).count()) - before}`,
+    )
+  for (const { path, kind } of dropped) {
+    const row = flow.locator(css.newChannelResource, { hasText: basename(path) })
+    const listedAs = await row
+      .getAttribute("data-kind", { timeout: 2_000 })
+      .catch(() => null)
+    if (listedAs !== kind)
+      failures.push(
+        `the dropped ${basename(path)} is listed as ${listedAs ?? "nothing"}, not ${kind}`,
+      )
+  }
+  // Out, and the questions back at full ink once their fade settles.
+  const out = await waitFor(
+    () =>
+      page.evaluate(
+        ([flow, drop]) =>
+          document.querySelector(drop) === null &&
+          getComputedStyle(document.querySelector(`${flow} .new-channel-scroll`))
+            .opacity === "1",
+        [css.newChannel, css.newChannelDrop],
+      ),
+    2_000,
+  )
+  if (!out) failures.push("the drop target stays lit after the drop")
+}
+
+/**
  * The first message of a new session in `channel`, from the home Create left
  * open: it is listed in that channel, and its agent works in the channel's
  * folder, told the channel's notes (Claude's system prompt, where it has one).
  */
-async function talkInChannel(run, step, channel, failures, notes) {
+async function talkInChannel(run, step, channel, failures, notes, attached = []) {
   const text = prompt(run, STRESS.channel, step, ` ${channel.name}`)
   const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
   await home.locator(css.field).waitFor({ timeout: 15_000 })
@@ -1439,6 +1527,9 @@ async function talkInChannel(run, step, channel, failures, notes) {
     )
   if (notes && run.stack.agent === "claude" && !reply.includes(notes))
     failures.push(`the agent in ${channel.name} was not told the channel's notes`)
+  for (const path of run.stack.agent === "claude" ? attached : [])
+    if (!reply.includes(path))
+      failures.push(`the agent in ${channel.name} was not told of ${path}`)
 }
 
 const steps = {
@@ -2980,6 +3071,13 @@ const steps = {
     const attached = mkdtempSync(join(run.stack.scratch, "channel-"))
     const resource = join(attached, "brief.md")
     writeFileSync(resource, "# Brief\n")
+    // Dragged onto the window: a file and a folder, as the host names them.
+    writeFileSync(join(attached, "dropped.md"), "# Dropped\n")
+    mkdirSync(join(attached, "dropped-kit"))
+    const dropped = [
+      { path: realpathSync(join(attached, "dropped.md")), kind: "file" },
+      { path: realpathSync(join(attached, "dropped-kit")), kind: "folder" },
+    ]
     const chosen = mkdtempSync(join(run.stack.scratch, "chosen-"))
     try {
       // Made in a folder of its own, after a folder agents may not use.
@@ -2988,6 +3086,7 @@ const steps = {
         refusedFolder: "/",
         notes,
         resource,
+        dropped,
       })
       if (made) {
         if (!made.folderMade || !made.folder.includes(`/channels/${made.channelId}`))
@@ -2996,7 +3095,14 @@ const steps = {
           )
         if (!existsSync(made.folder))
           failures.push(`the made folder ${made.folder} is not there`)
-        await talkInChannel(run, step, made, failures, notes)
+        await talkInChannel(
+          run,
+          step,
+          made,
+          failures,
+          notes,
+          dropped.map(({ path }) => path),
+        )
       }
       // Made in a folder chosen in the host's picker.
       const there = await makeChannel(run, failures, {
