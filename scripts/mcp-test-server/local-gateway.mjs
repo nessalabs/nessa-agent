@@ -135,7 +135,7 @@ export function agentCommand(agent) {
 
 /**
  * What a signed-out gateway is started with, over `NESSA_*`: this process's
- * `PATH` (`path` first, when given), `TMPDIR` and `RUST_LOG`, and a `HOME` of
+ * `PATH` (`path` first, when given), `TMPDIR`, `RUST_LOG` and local OS-service addresses, and a `HOME` of
  * its own under `directory`, so neither a credential variable nor a sign-in
  * kept under the real home reaches it or the agent it starts. Built from
  * what it needs rather than by removing the credentials it might find.

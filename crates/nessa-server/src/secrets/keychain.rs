@@ -1,6 +1,9 @@
-use super::{SecretStore, SecretUnavailable};
+#[cfg(not(target_os = "linux"))]
+use super::SecretStore;
+use super::SecretUnavailable;
 use sha2::{Digest, Sha256};
 use std::path::Path;
+#[cfg(not(target_os = "linux"))]
 use zeroize::Zeroizing;
 
 /// Persistent native storage: Keychain, Credential Manager, or Secret Service.
@@ -62,28 +65,25 @@ impl SecretStore for KeychainSecret {
 #[cfg(target_os = "macos")]
 impl SecretStore for KeychainSecret {
     fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, SecretUnavailable> {
-        super::read_macos(&self.service, self.purpose)
+        let keychain = super::macos::default_keychain()?;
+        super::macos::read_in(&keychain, &self.service, self.purpose)
             .map(|bytes| bytes.map(Zeroizing::new))
-            .map_err(|_| SecretUnavailable)
     }
     fn write(&self, bytes: &[u8]) -> Result<(), SecretUnavailable> {
-        security_framework::passwords::set_generic_password(&self.service, self.purpose, bytes)
-            .map_err(|_| SecretUnavailable)
+        let keychain = super::macos::default_keychain()?;
+        super::macos::write_in(&keychain, &self.service, self.purpose, bytes)
     }
     fn delete(&self) -> Result<(), SecretUnavailable> {
-        match security_framework::passwords::delete_generic_password(&self.service, self.purpose) {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == security_framework_sys::base::errSecItemNotFound => {
-                Ok(())
-            }
-            Err(_) => Err(SecretUnavailable),
-        }
+        let keychain = super::macos::default_keychain()?;
+        super::macos::delete_in(&keychain, &self.service, self.purpose)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::secrets::SecretStore;
     #[test]
     #[cfg(unix)]
     fn aliases_share_an_identity_and_missing_namespaces_refuse() {

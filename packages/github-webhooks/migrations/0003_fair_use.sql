@@ -22,7 +22,7 @@ END;
 CREATE TRIGGER relay_installation_removed AFTER DELETE ON deliveries BEGIN
  UPDATE relay_installation_usage SET deliveries=deliveries-1, bytes=bytes-OLD.bytes
  WHERE installation_id=OLD.installation_key;
- DELETE FROM relay_installation_usage WHERE deliveries=0;
+ DELETE FROM relay_installation_usage WHERE installation_id=OLD.installation_key AND deliveries=0;
 END;
 
 CREATE TABLE relay_user_budget (
@@ -60,8 +60,8 @@ INSERT OR IGNORE INTO relay_repositories
 CREATE TRIGGER relay_repository_admission BEFORE INSERT ON deliveries
 WHEN NEW.repository_key IS NOT NULL AND NEW.installation_key<>'unrouted'
  AND NOT EXISTS(SELECT 1 FROM relay_repositories WHERE installation_id=NEW.installation_key AND repository_id=NEW.repository_key)
- AND ((SELECT COUNT(*) FROM relay_repositories)>=4096
- OR (SELECT COUNT(*) FROM relay_repositories WHERE installation_id=NEW.installation_key)>=256) BEGIN
+ AND ((SELECT repositories FROM relay_capacity WHERE singleton=1)>=4096
+ OR COALESCE((SELECT repositories FROM relay_repository_usage WHERE installation_id=NEW.installation_key),0)>=256) BEGIN
  SELECT RAISE(IGNORE);
 END;
 
@@ -73,3 +73,39 @@ END;
 CREATE INDEX deliveries_expiry ON deliveries(received_at,delivery_id);
 
 CREATE INDEX relay_user_budget_expiry ON relay_user_budget(day,user_id);
+
+
+CREATE TABLE relay_capacity (
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ users INTEGER NOT NULL CHECK(users>=0),
+ repositories INTEGER NOT NULL CHECK(repositories>=0)
+);
+
+INSERT INTO relay_capacity SELECT 1,(SELECT COUNT(*) FROM relay_user_budget),(SELECT COUNT(*) FROM relay_repositories);
+
+CREATE TABLE relay_repository_usage (
+ installation_id TEXT PRIMARY KEY,
+ repositories INTEGER NOT NULL CHECK(repositories>=0)
+);
+
+INSERT INTO relay_repository_usage SELECT installation_id,COUNT(*) FROM relay_repositories GROUP BY installation_id;
+
+CREATE TRIGGER relay_repository_count_added AFTER INSERT ON relay_repositories BEGIN
+ UPDATE relay_capacity SET repositories=repositories+1 WHERE singleton=1;
+ INSERT INTO relay_repository_usage VALUES(NEW.installation_id,1)
+ ON CONFLICT(installation_id) DO UPDATE SET repositories=repositories+1;
+END;
+
+CREATE TRIGGER relay_repository_count_removed AFTER DELETE ON relay_repositories BEGIN
+ UPDATE relay_capacity SET repositories=repositories-1 WHERE singleton=1;
+ UPDATE relay_repository_usage SET repositories=repositories-1 WHERE installation_id=OLD.installation_id;
+ DELETE FROM relay_repository_usage WHERE installation_id=OLD.installation_id AND repositories=0;
+END;
+
+CREATE TRIGGER relay_user_count_added AFTER INSERT ON relay_user_budget BEGIN
+ UPDATE relay_capacity SET users=users+1 WHERE singleton=1;
+END;
+
+CREATE TRIGGER relay_user_count_removed AFTER DELETE ON relay_user_budget BEGIN
+ UPDATE relay_capacity SET users=users-1 WHERE singleton=1;
+END;

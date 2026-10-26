@@ -91,3 +91,44 @@ GitHub stress step; this behavior predates this change and is tracked separately
 in [#1136](https://github.com/nessalabs/nessa-agent/issues/1136). Chromium completed
 three connect/use/disconnect cycles; dedicated live-event Settings verification
 passed both engines. No full WebKit stress pass is claimed.
+
+### Structural cost review after round 2
+
+Two rounds found cleanup scans in the same D1 component. The structural gap was
+cost ownership: the first test examined only outer statements while per-delivery
+triggers did global garbage collection. Each delivery accounting hook must touch
+only its own installation; global zero-counter sweeping is removed. Cost evidence
+must include trigger subprograms, not only outer query plans. On 4,096 one-event
+installations / 64 expirations, independent SQLite measurement found 1,055,730 VM
+instructions before the keyed change, versus 15,537 with identical retained rows.
+
+The second review also requires noninteractive macOS writes/deletes, including
+lock-after-lookup races, and correction of the wake attachment comment (user ID
+plus expiry). Native tests use a disposable keychain handle, without changing or
+locking the user's real default keychain. Windows CI exposed Git's incomplete Perl
+instead of a complete native Perl; vendored OpenSSL must select a verified complete
+Perl explicitly in native Windows build workflows.
+
+| Further case | Required result |
+| --- | --- |
+| Many one-event installations expire | Accounting removes only each delivery's installation row, without a global scan |
+| macOS target keychain locks | Scoped read/write/delete refuse promptly; default/login keychain is untouched by the test |
+| Windows vendored crypto build | Explicit complete Perl passes required-module checks before compilation |
+| UTC midnight during budget admission | Day and minute derive from the same captured clock snapshot |
+
+
+The execution probe also confirmed a metadata COUNT reads all 4,096 records.
+Admission now consumes schema-owned live counters for user identities and
+repository registrations, including per-installation registrations. Insert/delete
+triggers maintain these atomically; admission does not recount metadata on each
+new identity. This completes the structural change to keyed accounting rather
+than adding indexes around repeated global work.
+
+
+Round-2 dispositions are implemented: the D1 trigger execution regression reads
+836 rows for 64 expirations across 4,096 installations; weakening keyed cleanup
+or either metadata counter is detected by isolated mutation probes. Scoped macOS
+operations pass a real disposable locked-keychain check without touching the
+login keychain. The current full CI stress failure was reproduced as a stale
+fixture client after gateway restart; its sign-in assertion now uses the run's
+current client. Protocol descriptions now name OS credential storage.

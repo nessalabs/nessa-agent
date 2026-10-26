@@ -505,22 +505,37 @@ test("concurrent replayed wake tickets cannot occupy another user's socket budge
   other.webSocket!.close()
 })
 
-test("user-budget identity churn is bounded while existing users retain admission", async (t) => {
+test("user-budget identity churn is bounded, atomic and releases expired capacity", async (t) => {
   const { db } = await fixture(t)
   const { D1RelayReadBudget } = await import("../../src/relay/infrastructure/budget.js")
-  const now = Date.now(),
-    day = Math.floor(now / 86400000),
+  let now = Date.now()
+  const day = Math.floor(now / 86400000),
     minute = Math.floor(now / 60000)
   await db
     .prepare(
-      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<4096)
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<4095)
    INSERT INTO relay_user_budget SELECT CAST(x AS TEXT),?,1,?,1 FROM n`,
     )
     .bind(day, minute)
     .run()
   const budget = new D1RelayReadBudget(db, () => now)
-  assert.equal(await budget.admit("5000"), false)
+  assert.deepEqual(
+    (await Promise.all([budget.admit("5000"), budget.admit("5001")])).sort(),
+    [false, true],
+  )
+  assert.equal(await budget.admit("5002"), false)
   assert.equal(await budget.admit("11"), true)
+  assert.equal(
+    (await db.prepare("SELECT users FROM relay_capacity").first())?.users,
+    4096,
+  )
+  now += 3 * 86400000
+  await budget.expire()
+  assert.equal(await budget.admit("5002"), true)
+  assert.equal(
+    (await db.prepare("SELECT users FROM relay_capacity").first())?.users,
+    4033,
+  )
 })
 
 test("idle cleanup uses indexed ranges at full data and audit capacity", async (t) => {
@@ -576,5 +591,104 @@ test("idle cleanup uses indexed ranges at full data and audit capacity", async (
   assert.equal(
     (await db.prepare("SELECT COUNT(*) AS n FROM relay_cleanup_audit").first())?.n,
     10000,
+  )
+})
+
+test("expiry accounting stays bounded across thousands of installations including trigger work", async (t) => {
+  const { db } = await fixture(t)
+  await db
+    .prepare(
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<4096),
+   bodies AS (SELECT x,json_object('installation',json_object('id',x),'repository',json_object('id',x)) AS body FROM n)
+   INSERT INTO deliveries(delivery_id,event,payload_sha256,payload,received_at,bytes)
+   SELECT CAST(x AS TEXT),'issues','fixture',body,'2000-01-01T00:00:00Z',length(body) FROM bodies`,
+    )
+    .run()
+  let reads = 0
+  type Statement = ReturnType<
+    import("../../src/webhooks/infrastructure/d1.js").SqlDatabase["prepare"]
+  >
+  const traced = (statement: Statement): Statement => ({
+    bind(...values) {
+      return traced(statement.bind(...values))
+    },
+    first<T>() {
+      return statement.first<T>()
+    },
+    async all<T>() {
+      const result = await statement.all<T>()
+      const meta = (result as { meta?: { rows_read?: number } }).meta
+      assert.equal(
+        typeof meta?.rows_read,
+        "number",
+        "real D1 execution counters are required",
+      )
+      reads += meta!.rows_read!
+      return result
+    },
+  })
+  await new D1RelayInbox({ prepare: (sql) => traced(db.prepare(sql)) }).expire(
+    "2020-01-01T00:00:00Z",
+  )
+  assert.ok(
+    reads > 0 && reads < 4096,
+    `64 expirations read ${reads} rows including trigger programs`,
+  )
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_installation_usage").first())?.n,
+    4032,
+  )
+  t.diagnostic(
+    `64 expirations / 4096 installations: ${reads} D1 rows read including triggers`,
+  )
+})
+
+test("metadata capacity counters agree across registration, deletion and failed admission", async (t) => {
+  const { db } = await fixture(t)
+  await db.prepare("INSERT INTO relay_repositories VALUES('90','42')").run()
+  assert.deepEqual(await db.prepare("SELECT * FROM relay_repository_usage").first(), {
+    installation_id: "90",
+    repositories: 1,
+  })
+  assert.equal(
+    (await db.prepare("SELECT repositories FROM relay_capacity").first())?.repositories,
+    1,
+  )
+  await db
+    .prepare(
+      "DELETE FROM relay_repositories WHERE installation_id='90' AND repository_id='42'",
+    )
+    .run()
+  assert.equal(
+    (await db.prepare("SELECT repositories FROM relay_capacity").first())?.repositories,
+    0,
+  )
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_repository_usage").first())?.n,
+    0,
+  )
+  await db.exec(
+    "CREATE TRIGGER refuse_user_capacity BEFORE UPDATE ON relay_capacity WHEN NEW.users<>OLD.users BEGIN SELECT RAISE(ABORT,'capacity unavailable'); END;",
+  )
+  const { D1RelayReadBudget } = await import("../../src/relay/infrastructure/budget.js")
+  await assert.rejects(new D1RelayReadBudget(db, Date.now).admit("11"))
+  assert.equal((await db.prepare("SELECT users FROM relay_capacity").first())?.users, 0)
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_user_budget").first())?.n,
+    0,
+  )
+})
+
+test("budget day and minute share one UTC snapshot across midnight", async (t) => {
+  const { db } = await fixture(t)
+  const { D1RelayReadBudget } = await import("../../src/relay/infrastructure/budget.js")
+  let clock = 86400000 - 1
+  const budget = new D1RelayReadBudget(db, () => clock++)
+  assert.equal(await budget.admit("11"), true)
+  assert.deepEqual(
+    await db
+      .prepare("SELECT day,minute FROM relay_user_budget WHERE user_id='11'")
+      .first(),
+    { day: 0, minute: 1439 },
   )
 })

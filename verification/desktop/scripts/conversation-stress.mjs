@@ -1994,7 +1994,9 @@ const steps = {
       })
       if (failures.length) return
       if (existsSync(signIn)) failures.push("GitHub sign-in leaked into a plaintext file")
-      const persisted = await run.stack.client.github.status()
+      // A preceding restart replaces run.client; stack.client still names the
+      // original closed session. Read through this run's current connection.
+      const persisted = await run.client.github.status()
       if (persisted.state !== "connected")
         failures.push("the OS-held sign-in is unavailable")
       if (run.stack.gateway.log().includes(github.token))

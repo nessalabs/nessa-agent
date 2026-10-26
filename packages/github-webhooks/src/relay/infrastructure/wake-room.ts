@@ -13,7 +13,7 @@ export interface WakeRooms {
 }
 
 /** Only the outer Worker can reach this class. It receives no GitHub credential
- * or event payload. Stored socket attachments are expiry metadata only. */
+ * or event payload. Stored socket attachments contain expiry and verified user identity only. */
 export class WakeRoom {
   constructor(
     private readonly state: RoomState,

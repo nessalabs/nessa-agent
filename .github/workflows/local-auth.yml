@@ -409,6 +409,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/native-crypto
+        if: runner.os == 'Windows'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -450,6 +452,8 @@ jobs:
     timeout-minutes: 130
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/native-crypto
+        if: runner.os == 'Windows'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -678,13 +682,10 @@ jobs:
       - run: node --import tsx scripts/smoke-install-agent.mjs
         working-directory: .ci-auth
 
-  # Linux used to run this after runtime assembly on the matrix leg: about nine
-  # minutes of instrumented tests, serial, on a fresh target directory. The
-  # instrumentation does not share artifacts with that assembly or with the
-  # ordinary test build, so it runs beside them. The 100% domain thresholds and
-  # the single test thread stay in scripts/check-sdk-domain-coverage.sh.
-  # Dependencies and workspace crates are cached under a prefix of their own;
-  # rust-cache would otherwise keep only dependencies, and only from `target/`.
+      - name: Verify locked disposable macOS credentials refuse without prompting
+        if: runner.os == 'macOS'
+        run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --lib secrets::macos::tests::locked_disposable_keychain_refuses_all_operations_without_ui -- --ignored
+        timeout-minutes: 5
       - name: Start disposable Secret Service for native credential verification
         if: runner.os == 'Linux'
         uses: ./.github/actions/secret-service
@@ -693,6 +694,13 @@ jobs:
         run: timeout 120 cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --lib secrets::linux::tests::locked_disposable_service_refuses_without_prompting -- --ignored
         timeout-minutes: 5
 
+  # Linux used to run this after runtime assembly on the matrix leg: about nine
+  # minutes of instrumented tests, serial, on a fresh target directory. The
+  # instrumentation does not share artifacts with that assembly or with the
+  # ordinary test build, so it runs beside them. The 100% domain thresholds and
+  # the single test thread stay in scripts/check-sdk-domain-coverage.sh.
+  # Dependencies and workspace crates are cached under a prefix of their own;
+  # rust-cache would otherwise keep only dependencies, and only from `target/`.
   sdk-domain-coverage:
     name: SDK domain coverage
     needs: changes

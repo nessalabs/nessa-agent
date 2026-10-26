@@ -2507,7 +2507,7 @@ export interface GithubLiveEventsParams {
   /** Explicit acknowledgement of missing history, continue within retained events. */
   acceptGaps?: boolean
 }
-/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
+/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its namespace-scoped OS credential store, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
 export interface GithubConnection {
   /** Where the sign-in stands. */
   state: GithubConnectState
@@ -2524,7 +2524,7 @@ export interface GithubConnection {
   /** Where the person chooses the repositories the Nessa app may use. A token reaches only those. */
   installUrl: string
 }
-/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
+/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the OS credential store could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
 export const GithubErrorCode = {
   GithubNotConfigured: "github_not_configured",
   GithubUnreachable: "github_unreachable",
