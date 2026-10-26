@@ -69,6 +69,7 @@ export function channelCreationOpened(
       failure: null,
       leftOut: 0,
       kinds: {},
+      landing: [],
     },
   }
 }
@@ -142,6 +143,51 @@ export function channelResourcesAdded(
       kinds,
     },
   }
+}
+
+/**
+ * A drop landed, named `drop`; its paths come later. It is the flow's only
+ * while the flow asks for files: landed on any other question, it is let go.
+ */
+export function channelDropLanded(
+  state: WorkspaceState,
+  { opening, drop }: { opening: string; drop: string },
+): WorkspaceState {
+  const flow = editable(state, opening)
+  if (!flow || flow.asking !== "resources" || flow.landing.includes(drop)) return state
+  return {
+    ...state,
+    channelCreation: { ...flow, landing: [...flow.landing, drop] },
+  }
+}
+
+/**
+ * A drop's paths came. They are added, as a pick's are, only when the drop
+ * landed on this flow and the flow still asks for files; either way the drop
+ * stops holding Create.
+ */
+export function channelDropSettled(
+  state: WorkspaceState,
+  {
+    drop,
+    added,
+  }: {
+    drop: string
+    added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+  },
+): WorkspaceState {
+  const flow = state.channelCreation
+  if (!flow || !flow.landing.includes(drop)) return state
+  const settled: WorkspaceState = {
+    ...state,
+    channelCreation: {
+      ...flow,
+      landing: flow.landing.filter((each) => each !== drop),
+    },
+  }
+  return flow.asking === "resources"
+    ? channelResourcesAdded(settled, { opening: flow.opening, added })
+    : settled
 }
 
 /** Takes one file or folder off the channel. */

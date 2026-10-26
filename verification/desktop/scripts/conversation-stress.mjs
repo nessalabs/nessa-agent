@@ -1476,6 +1476,10 @@ async function dropOnChannel(run, failures, dropped, photograph, name) {
   // once it has looked at them, which paths that drop held.
   await emit("nessa://paths-dragging", { dragging: false })
   await emit("nessa://paths-drop-began", { drop: `stress-${name}` })
+  // Until the paths come, Create waits: the draft is not yet what was dropped.
+  const create = flow.getByRole("button", { name: /^Create channel/ })
+  const held = await waitFor(() => create.isDisabled(), 2_000)
+  if (!held) failures.push("Create can be pressed while dropped files are still coming")
   await emit("nessa://paths-dropped", {
     drop: `stress-${name}`,
     paths: [...dropped, dropped[0]],

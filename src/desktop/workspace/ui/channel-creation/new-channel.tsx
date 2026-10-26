@@ -119,8 +119,11 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
   const field = useRef<HTMLTextAreaElement>(null)
   const steps = channelStepsFor(pickable)
   const { draft, asking, creating, failure } = flow
-  const ready = canCreate(draft) && !creating
-  const dropping = useDrops(asking === "resources" && !creating)
+  const landing = flow.landing.length > 0
+  const ready = canCreate(draft) && !creating && !landing
+  // Watched the whole time the flow is open, so a drop's paths are heard
+  // even after the question moves on; only the files question is lit.
+  const dropping = useDrops(!creating) && asking === "resources"
 
   useCovers(layer)
   useFocusReturns()
@@ -258,7 +261,11 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
               // Return goes on from anywhere in the layer that is not a field.
               aria-hidden="true"
             >
-              {asking ? composerHints[asking] : `Ready to make #${draft.name.trim()}`}
+              {landing
+                ? "Adding what you dropped…"
+                : asking
+                  ? composerHints[asking]
+                  : `Ready to make #${draft.name.trim()}`}
             </span>
           )}
           <span className="new-channel-count" aria-label="Questions answered">
@@ -297,22 +304,22 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
 }
 
 /**
- * Watches for files and folders dragged onto the window while `asking`:
+ * Watches for files and folders dragged onto the window while `watching`:
  * answers whether a drag is over it now. What is dropped is added by the
  * command (`watchChannelDrops`), as a pick's answer is.
  */
-function useDrops(asking: boolean): boolean {
+function useDrops(watching: boolean): boolean {
   const dispatch = useWorkspaceDispatch()
   const [over, setOver] = useState(false)
   useEffect(() => {
-    if (!asking) return
+    if (!watching) return
     const stop = dispatch(watchChannelDrops({ dragging: setOver }))
     return () => {
       stop()
       setOver(false)
     }
-  }, [dispatch, asking])
-  return asking && over
+  }, [dispatch, watching])
+  return watching && over
 }
 
 /**

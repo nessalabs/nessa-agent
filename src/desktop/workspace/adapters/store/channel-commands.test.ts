@@ -242,6 +242,15 @@ describe("asking", () => {
       "/work/brief.md": "file",
       "/work/docs": "folder",
     })
+    // Landed here, then the question moved on before the paths came: they
+    // add nothing, and the drop no longer holds Create.
+    const moved = land()
+    expect(flowOf(store)?.landing).toEqual([moved])
+    store.dispatch(askChannelStep({ step: "notes" }))
+    answer(moved, { path: "/work/moved.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md", "/work/docs"])
+    expect(flowOf(store)?.landing).toEqual([])
+    store.dispatch(askChannelStep({ step: "resources" }))
     // Landed here, then the flow closed and another opened before the paths
     // came: they belong to neither.
     const late = land()
@@ -252,6 +261,27 @@ describe("asking", () => {
     expect(flowOf(store)?.draft.resources).toEqual([])
     stop()
     expect(watches.size).toBe(0)
+  })
+
+  it("waits to create while a drop's paths are still coming, then sends them", async () => {
+    const { paths, watches } = queuedPaths()
+    const source = channels()
+    const { store } = await storeWith({ channels: source, paths })
+    store.dispatch(openChannelCreation())
+    store.dispatch(draftChannel({ change: { name: "drops" } }))
+    store.dispatch(askChannelStep({ step: "resources" }))
+    const stop = store.dispatch(watchChannelDrops({ dragging: () => {} }))
+    watches.forEach((watch) => watch.began("d1"))
+    expect(await store.dispatch(createChannel())).toBeUndefined()
+    expect(flowOf(store)?.creating).toBe(false)
+    watches.forEach((watch) =>
+      watch.dropped("d1", [{ path: "/work/brief.md", kind: "file" }]),
+    )
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md"])
+    const made = await store.dispatch(createChannel())
+    expect(made).toBeDefined()
+    expect(listed.find((channel) => channel.id === made)?.name).toBe("drops")
+    stop()
   })
 
   it("watches nothing where the window is never told of a drop", async () => {
