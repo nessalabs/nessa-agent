@@ -1572,32 +1572,6 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 }
 
 /*
- * The welcome's line under the typed name, and its way on. In the page from
- * the start, so the layout does not move when they come, and shown once the
- * name has been typed — which under reduced motion is at once. Before that
- * they take no pointer and no focus.
- */
-.nessa-setup-after {
-  visibility: hidden;
-  opacity: 0;
-  transform: translateY(6px);
-  transition:
-    opacity var(--nessa-motion-duration-slow) var(--nessa-motion-easing-arrival),
-    transform var(--nessa-motion-duration-slow) var(--nessa-motion-easing-arrival),
-    visibility 0s;
-}
-
-[data-typed] > .nessa-setup-after {
-  visibility: visible;
-  opacity: 1;
-  transform: none;
-}
-
-[data-typed] > .nessa-setup-after + .nessa-setup-after {
-  transition-delay: 120ms;
-}
-
-/*
  * The window's contents wait for the window. Hidden, not just transparent, so
  * nothing in it can be clicked or tabbed to while it is still a glow; Escape
  * leaves from the first frame.
@@ -1653,8 +1627,7 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   .nessa-setup-window[data-beat] .nessa-setup-pane,
   .nessa-setup-window[data-beat] .nessa-setup-chrome,
   .nessa-setup-backdrop,
-  .nessa-setup-figure,
-  .nessa-setup-after {
+  .nessa-setup-figure {
     animation: none;
     transition: none;
   }

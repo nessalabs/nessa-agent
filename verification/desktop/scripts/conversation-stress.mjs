@@ -78,7 +78,9 @@
  *               is asked once; in the setup window that ask opens, nothing
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
- *               the window's words can be seen; welcome has no Back button
+ *               the window's words can be seen; welcome's words are all
+ *               there as it opens, its name painted still rather than typed in,
+ *               with Get started already showing; welcome has no Back button
  *               and Close sits in the top-right corner; past it the picker
  *               has Back in the top-left corner, which returns to welcome;
  *               it lists Claude, Codex and a Local AI that is coming, never
@@ -91,7 +93,9 @@
  *               of installed agents or Check downloads; its Download, pressed
  *               from the keyboard, fetches with the focus kept on the card,
  *               installs it, and the card becomes Codex's row, which takes
- *               the focus; setup is then finished
+ *               the focus; on the shortcut step the host's summon, shown then
+ *               hidden, teaches the step without sending a ring through the
+ *               light behind the window; setup is then finished
  *               on a ready agent: the window flies into the menu bar, asking
  *               the host where its icon is, and hands over finished on that
  *               agent; the message sent in the window after it is answered
@@ -2512,6 +2516,8 @@ const steps = {
         const button = (name) => page.getByRole("button", { name, exact: true })
         await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
         await openedAsAGlow(page, failures)
+        await welcomedAtOnce(page, failures)
+        await page.screenshot({ path: join(run.evidence, "onboarding-welcome.png") })
         // Welcome has nothing before it: no Back, and Close in its corner.
         await button(names.setup.close).waitFor()
         let corners = await setupCorners(page)
@@ -4344,6 +4350,93 @@ async function setupWindow(run, prepare) {
 }
 
 /**
+ * The welcome's words are all there as the window opens: the name is plain
+ * text, not letters typed in one at a time, and the line under it and its
+ * way on do not wait for it.
+ */
+async function welcomedAtOnce(page, failures) {
+  const read = () =>
+    page.evaluate(() => {
+      const heading = document.getElementById("nessa-setup-heading")
+      const seen = (element) =>
+        Boolean(
+          element?.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
+        )
+      const begin = [...document.querySelectorAll(".nessa-setup-pane button")].find(
+        (button) => button.textContent.trim() === "Get started",
+      )
+      return {
+        text: heading?.textContent,
+        letters: heading?.querySelectorAll("[data-slot=type-in-letter]").length ?? 0,
+        painted: heading?.querySelector("[data-slot=gradient-text]")?.textContent,
+        waiting: document.querySelectorAll(
+          ".nessa-setup-pane [data-typed], .nessa-setup-after",
+        ).length,
+        begin: seen(begin),
+      }
+    })
+  // The pane takes a moment to slide in; typing the name took seconds.
+  await waitFor(async () => (await read()).begin, 1_000)
+  const welcome = await read()
+  if (welcome.text !== names.setup.welcome)
+    failures.push(`the welcome reads ${JSON.stringify(welcome.text)} as it opens`)
+  if (welcome.letters || welcome.waiting)
+    failures.push(`the welcome is typed in: ${JSON.stringify(welcome)}`)
+  if (!welcome.begin) failures.push("Get started is not there as the welcome opens")
+  if (welcome.painted !== "Nessa")
+    failures.push(`the welcome paints ${JSON.stringify(welcome.painted)}, not the name`)
+}
+
+/**
+ * A summon the host reports lights the keys and lets setup be finished, and
+ * sends nothing through the light behind the window: the field stays as it
+ * was, settled, the whole time.
+ */
+async function summonedWithoutARing(page, failures, evidence) {
+  const field = page.locator(".nessa-setup-field")
+  await page.getByRole("button", { name: names.setup.finish[1], exact: true }).waitFor({
+    timeout: 10_000,
+  })
+  const listening = () =>
+    page.evaluate(() => window.__fakeHostListening("nessa://summoned"))
+  if (!(await waitFor(async () => (await listening()) > 0, 5_000))) {
+    failures.push("the summon step never listened for the host's summon")
+    return
+  }
+  if (
+    !(await waitFor(
+      async () => (await field.getAttribute("data-settled")) !== null,
+      5_000,
+    ))
+  )
+    failures.push("the light behind setup never settled on the summon step")
+  await field.evaluate((element) => {
+    window.__setupFieldStirred = 0
+    new MutationObserver(() => {
+      if (!element.hasAttribute("data-settled")) window.__setupFieldStirred++
+    }).observe(element, { attributes: true, attributeFilter: ["data-settled"] })
+  })
+  // The panel shows, then hides again: the lesson is learnt on the second.
+  await page.evaluate(() => window.__fakeHostEmit("nessa://summoned", true))
+  // Where a ring would be, just after the press.
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(evidence, "onboarding-summoned.png") })
+  await page.evaluate(() => window.__fakeHostEmit("nessa://summoned", false))
+  const taught = await waitFor(
+    async () =>
+      (await page
+        .getByRole("button", { name: names.setup.finish[0], exact: true })
+        .count()) > 0,
+    5_000,
+  )
+  if (!taught) failures.push("a summon the host reported did not teach the step")
+  // Longer than a ring took to cross the window.
+  await page.waitForTimeout(1_500)
+  const stirred = await page.evaluate(() => window.__setupFieldStirred)
+  if (stirred) failures.push(`a summon stirred the light behind setup ${stirred} times`)
+}
+
+/**
  * The opening was a glow on the desktop that became the window: nothing
  * dimmed what is behind setup, the beats came in order, and none of the
  * window's words showed before the window had formed.
@@ -4647,6 +4740,7 @@ async function finishedIntoTheMenuBar(run, failures) {
     const chosen = (await ready.first().getAttribute("aria-label"))?.toLowerCase()
     await ready.first().click()
     await button(names.setup.continue).click()
+    await summonedWithoutARing(page, failures, run.evidence)
     const finish = page.getByRole("button", {
       name: new RegExp(`^(${names.setup.finish.join("|")})$`),
     })
