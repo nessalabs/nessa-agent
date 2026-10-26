@@ -62,10 +62,37 @@ is seeded at one by default and explicitly tested at three; these are helper
 controls, **not executed browser stress acceptance**. Positive TLS delivery above
 comes from the separate real loopback recipient fixtures.
 
+## Round-three finding closure
+
+[Round three](review-3.md) originally required changes: one minor conflicting
+canonical W-reset row and one formatting nit. No blocker or major was confirmed
+in the inspected assembled paths. Thirteen independent focused controls passed:
+[pin7](review-3-attempt-tests.txt), [public reset4](review-3-owner-reset-tests.txt),
+[canonical revoke/unshare1](review-3-canonical-revoke-test.txt), and
+[healthy sibling1](review-3-sibling-test.txt).
+
+Both exact findings are [closed at37611fac240304fffb8dd69fae101ff5f1ac664d](review-3-closure.md).
+Only the single canonical W-reset row and formatter layout changed. The reviewer
+verified identical complete TypeScript and transpiled-JavaScript ASTs, including
+all assertions, and [pinned formatting](review-3-closure-format.txt). The
+[closure receipt](review-3-closure-checks.json) records that emitted bytes differ
+because line wrapping is preserved; byte identity of the formatted test is not
+claimed. All production remains byte-identical. This is bounded finding closure
+under round three, not a fourth full review, counter reset or relabeling of the
+original report as finding-free.
+
 ## Remaining gates and exclusions
 
-Whole-feature final independent review, exact-head platform CI, canonical browser,
-default/raised stress and chaos acceptance remain required. Earlier source-specific
+Exact-head platform CI, canonical browser, default/raised stress and chaos
+acceptance remain required. The complete native-filesystem `pnpm frontend:check` passed at37611, including
+**5,324/5,324 unit tests**,408 desktop helpers,108 architecture tests/checker,
+61 protocol controls, client docs/types, root types, formatting/lint and production
+build. The actor remained unprivileged UID1000 with normal root/tmp UID0 metadata.
+The earlier sandbox run passed5,322 and failed two unchanged private-file positive
+fixtures because root/tmp mapped to UID65534; both passed in native context before
+the complete pipeline passed. No ownership rule/assertion changed. Earlier format
+and missing-just failures are also preserved. The [qualification receipt](qualification.json)
+records source, toolchain, counts, failures and unrun gates. Earlier source-specific
 results and the original Windows failures remain historical. Native discovery's
 upstream full stress step now listens on all interfaces; it was preserved and not
 started here. No real credential, account, provider registration, production data,

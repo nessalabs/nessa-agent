@@ -1,0 +1,13 @@
+{
+  "base": "8fb396b1625b13ae4c80555de5e46057ccba7980",
+  "head": "37611fac240304fffb8dd69fae101ff5f1ac664d",
+  "changedFiles": [
+    "docs/design/access-grants.md",
+    "packages/nessa-client/src/presentation/conversation-api.test.ts"
+  ],
+  "onlyWResetRowChanged": true,
+  "testTypeScriptAstIdentical": true,
+  "emittedJavaScriptAstIdentical": true,
+  "emittedJavaScriptBytesIdentical": false,
+  "productionDiffEmpty": true
+}
