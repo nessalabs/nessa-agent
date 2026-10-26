@@ -281,6 +281,7 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.subscribeList",
         "conversation.subscribeEvents",
         "conversation.peek",
+        "channel.list",
         "attachment.begin",
         "artifact.read",
         "agents.list",
@@ -301,6 +302,7 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
     }
     for method in [
         "agents.install",
+        "channel.create",
         "mcp.servers.list",
         "credential.issue",
         "conversation.share",

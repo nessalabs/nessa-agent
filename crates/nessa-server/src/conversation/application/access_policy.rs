@@ -595,6 +595,32 @@ impl<'a> PairedAccess<'a> {
         }
     }
 
+    /// Admit candidates in order through [`Self::allows`], sharing a decision
+    /// only when the resource facts and held capabilities are identical.
+    /// The action and paired party are fixed for this call.
+    ///
+    /// # Errors
+    /// `Unavailable` when any candidate's policy decision is unavailable.
+    pub fn allows_each<'c>(
+        &self,
+        action: AccessAction,
+        candidates: impl IntoIterator<Item = (&'c Conversation, Option<Capabilities>)>,
+    ) -> Result<Vec<bool>, PairedRefusal> {
+        let mut decided = HashMap::new();
+        candidates
+            .into_iter()
+            .map(|(conversation, held)| {
+                let key = (AccessResource::of(conversation), held);
+                if let Some(admitted) = decided.get(&key) {
+                    return Ok(*admitted);
+                }
+                let admitted = self.allows(action, conversation, held)?;
+                decided.insert(key, admitted);
+                Ok(admitted)
+            })
+            .collect()
+    }
+
     /// Whether the party may take `action` on the owner's catalogue its
     /// binding reads: `conversation.list`, or `conversation.write` for a
     /// command no grant role names.

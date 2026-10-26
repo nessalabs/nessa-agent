@@ -284,9 +284,9 @@ fresh while a conversation changes, so a separate-process test can drive
 "subscribe, then copy records from the durable checkpoint whenever they
 change" with the real client, on two paired devices at once. It is
 deliberately minimal: a phone keeps its own continuous lifecycle. No stop
-seam, no reconnect, no timestamps on its lines, no catalogue follow (a paired
-device's `conversation.subscribeList` waits on #724; catalogue freshness is
-`sync-catalogue`).
+seam, no reconnect, no timestamps on its lines, no catalogue follow in this CLI
+(the gateway supports a device's grant-scoped `conversation.subscribeList`;
+this CLI's catalogue freshness remains `sync-catalogue`).
 
 The wake is the gateway's own `conversation.subscribe`, the one live read path
 ([record subscriptions](record-subscriptions.md)). A view frame names the

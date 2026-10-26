@@ -41,6 +41,16 @@ when {
 // A live conversation is conversation.subscribe. The chat list is
 // conversation.subscribeList. The payloadless watch methods are not this purpose.
 
+// The phone's sidebar lists the owner's channels. Listing reads only the
+// catalogue; making a channel names a folder on the owner's machine, which
+// stays the desktop's to do, so channel.create is not this purpose.
+@id("owner-phone.channel-list")
+permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
+when {
+    context has method && context has publishedAction &&
+    context.publishedAction == "conversation.write" && context.method == "channel.list"
+};
+
 @id("owner-phone.native-read-methods")
 permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
 when {

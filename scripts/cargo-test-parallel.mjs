@@ -31,6 +31,11 @@ import { spawn } from "node:child_process"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { withFailureAnnotations } from "./cargo-test-parallel/diagnostics.mjs"
+import {
+  serverCasePlan,
+  testRegistry,
+  validateFilteredRegistry,
+} from "./cargo-test-parallel/server-cases.mjs"
 
 const PARTITIONS = ["all", "server-lib", "remaining"]
 
@@ -255,26 +260,48 @@ export async function runParallelCargoTests({
     )
     if (metadataCode !== 0) throw new Error(`cargo metadata exited with ${metadataCode}`)
     const partitions = partitionExecutables(executables, JSON.parse(metadata))
-    selected = partitions[partition]
+    const server = partitions["server-lib"][0]
+    async function list(args) {
+      let output = ""
+      const code = await run(server.executable, [...args, "--list"], {
+        cwd,
+        onStdout: (chunk) => {
+          output += chunk
+        },
+        onStderr: (chunk) => stderr.write(chunk),
+      })
+      if (code !== 0) throw new Error(`server libtest registry exited with ${code}`)
+      return output
+    }
+    const plan = serverCasePlan(testRegistry(await list([])))
+    for (const part of ["server-lib", "remaining"])
+      validateFilteredRegistry(await list(plan[part].args), plan[part].names)
+    const serverTask = { ...server, args: plan[partition].args }
+    selected =
+      partition === "server-lib" ? [serverTask] : [serverTask, ...partitions.remaining]
     stderr.write(
-      `partition ${partition}: ${selected.length}/${executables.length} binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
+      `partition ${partition}: ${plan[partition].names.length} server cases, ${selected.length - 1} other binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
     )
   }
 
   const executionStarted = Date.now()
-  const failures = await runPool(selected, concurrency, async ({ label, executable }) => {
-    stderr.write(`starting ${label}\n`)
-    const started = Date.now()
-    const prefixed = linePrefix(label, (line) => stdout.write(line))
-    const code = await run(executable, [], {
-      cwd,
-      onStdout: (chunk) => prefixed.push(chunk),
-      onStderr: (chunk) => prefixed.push(chunk),
-    })
-    prefixed.end()
-    stderr.write(`${label} finished in ${secondsSince(started)}s with exit ${code}\n`)
-    if (code !== 0) throw new Error(`${label} exited with ${code}`)
-  })
+  const failures = await runPool(
+    selected,
+    concurrency,
+    async ({ label, executable, args = [] }) => {
+      stderr.write(`starting ${label}\n`)
+      const started = Date.now()
+      const prefixed = linePrefix(label, (line) => stdout.write(line))
+      const code = await run(executable, args, {
+        cwd,
+        onStdout: (chunk) => prefixed.push(chunk),
+        onStderr: (chunk) => prefixed.push(chunk),
+      })
+      prefixed.end()
+      stderr.write(`${label} finished in ${secondsSince(started)}s with exit ${code}\n`)
+      if (code !== 0) throw new Error(`${label} exited with ${code}`)
+    },
+  )
   if (failures.length > 0) {
     throw new Error(failures.map((failure) => failure.message).join("\n"))
   }

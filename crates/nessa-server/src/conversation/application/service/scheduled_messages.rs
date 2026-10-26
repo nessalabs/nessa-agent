@@ -45,7 +45,7 @@ use super::{
 use crate::conversation::application::usage_limit_policy::{
     UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferencePolicyEvaluator,
 };
-use crate::conversation::application::ConversationFuture;
+use crate::conversation::application::{ConversationFuture, Reader};
 use crate::conversation::domain::{ContinuationCause, ContinuationPlan};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::commands::{
@@ -1709,7 +1709,13 @@ impl ConversationService {
                 let page = self
                     .inner
                     .listing
-                    .observe(&organization, &principal, false, cursor.clone())
+                    .observe(
+                        &organization,
+                        &principal,
+                        false,
+                        cursor.clone(),
+                        &Reader::Owner,
+                    )
                     .await?;
                 let complete = page.complete;
                 let next = page.cursor;

@@ -60,6 +60,8 @@ export const css = {
   cornerPane: "[data-pane-key][data-split-corner]", // the top-left pane, whose header clears the window's controls when no side column is beside it
   panesAlone: "[data-workspace][data-panes-alone]", // both side columns closed: the corner pane's header steps past the controls
   focusedPane: "[data-pane-key][data-pane-focused]",
+  focusBlocked:
+    "[inert], [data-drag-reflow], [data-split-flying], [data-split-measuring], [data-message-arrival-waiting]",
   workspaceFlight: "[data-split-flipping], [data-split-flying]",
   paneGrid: "[data-split-grid]", // the grid the panes are laid out in — the box the drag measures
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
@@ -80,6 +82,7 @@ export const css = {
   newChannelAsked: ".new-channel-asked", // class: the question being asked; data-step
   newChannelAnswered: ".new-channel-answered", // class: an answered question's ✓ line; data-step
   newChannelResource: ".new-channel-resources li", // a file or folder attached to the channel being made
+  newChannelDrop: ".new-channel-drop", // the drop target, while files are dragged over the flow
   homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
@@ -597,6 +600,7 @@ export const names = {
   experimental: "Experimental",
   /** Settings › Advanced's tab holding first-run setup, and its row's button. */
   setupTab: "Setup",
+  setupBrowserHint: "Setup can be replayed in the Nessa app.",
   replayOnboarding: "Replay",
   /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
   setup: {

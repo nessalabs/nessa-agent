@@ -24,6 +24,8 @@ const {
   channelDrafted,
   channelResourcesAdded,
   channelResourceRemoved,
+  channelDropLanded,
+  channelDropSettled,
   channelStepAsked,
   channelStepAnswered,
   channelCreating,
@@ -127,26 +129,64 @@ export function addChannelResources({
       console.error("The file picker failed", error)
       return [] as readonly string[]
     })
+    const each = kind === "folders" ? "folder" : "file"
     dispatch(
       channelResourcesAdded({
         opening,
-        paths: picked,
-        kind: kind === "folders" ? "folder" : "file",
+        added: picked.map((path) => ({ path, kind: each })),
       }),
     )
   }
 }
 
 /**
+ * Watches for files and folders dragged onto the window while the flow is
+ * open: `dragging` says when a drag is over it, and what is dropped on the
+ * files question is added as a pick's answer is. The host names a drop as it
+ * lands and answers with its paths only after looking at them, which can be
+ * seconds later, so the flow keeps each landed name (`landing`) and Create
+ * waits for it. A drop that landed while the flow asked something else,
+ * whose flow has since closed (even if another has opened), or whose paths
+ * come once the question has moved on, adds nothing. Answers how to stop
+ * watching; where the window is never told of a drop, it watches nothing.
+ */
+export function watchChannelDrops({
+  dragging,
+}: {
+  dragging: (over: boolean) => void
+}): WorkspaceCommand<() => void> {
+  return (dispatch, getState, { paths }) => {
+    if (!paths?.drops) return () => {}
+    return paths.drops({
+      dragging,
+      began: (drop) => {
+        const opening = openingOf(getState())
+        if (opening) dispatch(channelDropLanded({ opening, drop }))
+      },
+      dropped: (drop, added, unread) =>
+        dispatch(channelDropSettled({ drop, added, unread })),
+    })
+  }
+}
+
+/**
  * Makes the channel from the draft as the store holds it now. Made, it joins
  * the index and opens, and the index is read again so the source lists it
- * too. Refused, the flow says why at the step it is about. Returns the
- * channel's id, or nothing.
+ * too. Refused, the flow says why at the step it is about. With a drop still
+ * landing it makes nothing: the draft is not yet what the person gave it.
+ * Returns the channel's id, or nothing.
  */
 export function createChannel(): WorkspaceCommand<Promise<string | undefined>> {
   return async (dispatch, getState, { channels, newId }) => {
     const flow = getState().workspace.channelCreation
-    if (!flow || flow.creating || !channels || !canCreate(flow.draft)) return undefined
+    if (
+      !flow ||
+      flow.creating ||
+      flow.landing.length > 0 ||
+      !channels ||
+      !canCreate(flow.draft)
+    )
+      return undefined
     const { opening, draft } = flow
     const requestId = flow.requestId ?? newId()
     dispatch(channelCreating({ opening, requestId }))

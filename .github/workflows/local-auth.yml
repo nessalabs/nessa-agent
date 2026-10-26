@@ -523,8 +523,9 @@ jobs:
       # The package list is still one cargo invocation (`--no-run`), so feature
       # unification does not change. scripts/cargo-test-parallel.mjs then runs
       # the built test binaries two at a time and runs doctests with the same
-      # packages. Windows uses remaining; windows-server-tests owns its library
-      # executable. Linux/macOS use all. It does not raise libtest's thread count:
+      # packages. Windows remaining also runs the four seeded catalogue cases;
+      # windows-server-tests runs the complementary server library cases.
+      # Linux/macOS use all. It does not raise libtest's thread count:
       # the ACP
       # process-contract semaphore is process-local, and a process-per-test
       # runner would make that semaphore admit every contract test at once.
