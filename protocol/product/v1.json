@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 87,
+          "maxItems": 90,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -6028,6 +6028,115 @@
       },
       "required": ["enabled", "applies"]
     },
+    "PairingTunnelMode": {
+      "type": "string",
+      "enum": ["quick", "named"],
+      "description": "How the web tunnel is carried. quick: a free Cloudflare quick tunnel at a random trycloudflare.com address, which changes whenever cloudflared starts again (it is kept running across gateway restarts, so it changes only when cloudflared itself has to start again). named: a tunnel made in the person's Cloudflare account, at their own hostname, which never changes."
+    },
+    "PairingSetTunnelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turn the web tunnel on or off for this gateway, so a paired phone reaches it from anywhere. Needs native linking on. The gateway saves the choice in its config.json (the token in a private file beside its state, never in config.json) and, when the running gateway does not already match it, restarts itself to apply it. A field left out keeps what is saved.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "True turns the tunnel on; false turns it off and keeps its other settings. Sending the same request again changes nothing, so a retry is safe."
+        },
+        "mode": {
+          "$ref": "#/$defs/PairingTunnelMode",
+          "description": "Quick or named. Left out, the saved mode, or quick when none is saved."
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 270,
+          "description": "A named tunnel's public address, https://host or https://host:port, with no path. Left out, the saved one."
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "A named tunnel's token from Cloudflare's dashboard: printable ASCII with no spaces. Left out, the saved one. It is never sent back."
+        }
+      },
+      "required": ["enabled"]
+    },
+    "PairingSetTunnelResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of pairing.setTunnel.",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "The saved choice." },
+        "mode": { "$ref": "#/$defs/PairingTunnelMode", "description": "The saved mode." },
+        "applies": {
+          "$ref": "#/$defs/PairingLinkingApply",
+          "description": "How the saved choice takes effect."
+        }
+      },
+      "required": ["enabled", "mode", "applies"]
+    },
+    "PairingTunnelStatus": {
+      "type": "string",
+      "enum": ["off", "starting", "ready", "failed"],
+      "description": "Where the running gateway's tunnel stands. off: this run has no tunnel. starting: it is being started, or started again. ready: it answers at address. failed: the last attempt failed for failure; it is tried again."
+    },
+    "PairingTunnelResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of pairing.tunnel: the saved tunnel setting and the running tunnel. The token is never included.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the saved setting turns the tunnel on."
+        },
+        "mode": {
+          "$ref": "#/$defs/PairingTunnelMode",
+          "description": "The saved mode, quick when none is saved."
+        },
+        "hostname": {
+          "type": "string",
+          "maxLength": 270,
+          "description": "The saved named tunnel's address, when one is saved."
+        },
+        "hasToken": {
+          "type": "boolean",
+          "description": "Whether a named tunnel's token is saved."
+        },
+        "ingress": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "The loopback address the tunnel forwards to: where a named tunnel's public hostname must point in Cloudflare's dashboard, as http://<ingress>."
+        },
+        "status": {
+          "$ref": "#/$defs/PairingTunnelStatus",
+          "description": "The running tunnel's status."
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 270,
+          "description": "The running tunnel's public address, when it is ready."
+        },
+        "failure": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, storage, token, start or not_ready."
+        }
+      },
+      "required": ["enabled", "mode", "hasToken", "ingress", "status"]
+    },
+    "ServerReachResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep.",
+      "properties": {
+        "tunnel": {
+          "type": ["string", "null"],
+          "maxLength": 270,
+          "description": "The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages."
+        }
+      },
+      "required": ["tunnel"]
+    },
     "PairingErrorCode": {
       "type": "string",
       "enum": [
@@ -6040,17 +6149,28 @@
         "pairing_busy",
         "pairing_unavailable",
         "pairing_address_in_use",
-        "pairing_audit_unavailable"
+        "pairing_audit_unavailable",
+        "pairing_linking_off",
+        "pairing_tunnel_incomplete"
       ],
-      "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which)."
+      "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking and pairing.setTunnel, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). pairing.setTunnel refuses with the same codes: pairing_busy and pairing_unavailable as above, pairing_address_in_use when the tunnel's loopback ingress cannot be bound, and pairing_audit_unavailable as above. pairing_linking_off: pairing.setTunnel cannot turn the tunnel on while native linking is off; nothing was saved. pairing_tunnel_incomplete: a named tunnel needs a hostname and a token, given or saved; nothing was saved."
     },
     "GithubAccount": {
       "type": "object",
       "additionalProperties": false,
       "description": "The GitHub account a sign-in belongs to.",
       "properties": {
-        "id": { "type": "integer", "minimum": 0, "description": "GitHub's numeric id for the account, which never changes." },
-        "login": { "type": "string", "minLength": 1, "maxLength": 256, "description": "The account's login, which can change." }
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "GitHub's numeric id for the account, which never changes."
+        },
+        "login": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The account's login, which can change."
+        }
       },
       "required": ["id", "login"]
     },
@@ -6061,7 +6181,15 @@
     },
     "GithubConnectEnd": {
       "type": "string",
-      "enum": ["expired", "denied", "cancelled", "rejected", "unreachable", "store_unavailable", "audit_unavailable"],
+      "enum": [
+        "expired",
+        "denied",
+        "cancelled",
+        "rejected",
+        "unreachable",
+        "store_unavailable",
+        "audit_unavailable"
+      ],
       "description": "Why the latest sign-in ended without signing in. expired: the code ran out before it was entered. denied: the person refused it on GitHub. cancelled: it was cancelled here. rejected: GitHub refused the Nessa app itself. unreachable: GitHub could not be reached. store_unavailable: the token could not be kept, or a kept one could not be read at startup. audit_unavailable: its record could not be kept, so the token was dropped."
     },
     "GithubCode": {
@@ -6069,9 +6197,23 @@
       "additionalProperties": false,
       "description": "The code a sign-in waits for.",
       "properties": {
-        "userCode": { "type": "string", "minLength": 1, "maxLength": 64, "description": "What the person enters on GitHub." },
-        "verificationUri": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "Where they enter it." },
-        "expiresInSeconds": { "type": "integer", "minimum": 0, "description": "Whole seconds left before the code expires, when this was answered." }
+        "userCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "What the person enters on GitHub."
+        },
+        "verificationUri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Where they enter it."
+        },
+        "expiresInSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Whole seconds left before the code expires, when this was answered."
+        }
       },
       "required": ["userCode", "verificationUri", "expiresInSeconds"]
     },
@@ -6080,18 +6222,45 @@
       "additionalProperties": false,
       "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
       "properties": {
-        "state": { "$ref": "#/$defs/GithubConnectState", "description": "Where the sign-in stands." },
-        "account": { "$ref": "#/$defs/GithubAccount", "description": "Present exactly when connected." },
-        "code": { "$ref": "#/$defs/GithubCode", "description": "Present exactly when connecting." },
-        "last": { "$ref": "#/$defs/GithubConnectEnd", "description": "When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect." },
-        "unrecorded": { "type": "boolean", "const": true, "description": "The gateway could not keep the last change in its audit, and that change still stands. With last: how the attempt ended. Connected: a sign-out that failed. Signed out with no last: the sign-out. Absent when it is on record, and with last audit_unavailable, which already says so." },
-        "installUrl": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "Where the person chooses the repositories the Nessa app may use. A token reaches only those." }
+        "state": {
+          "$ref": "#/$defs/GithubConnectState",
+          "description": "Where the sign-in stands."
+        },
+        "account": {
+          "$ref": "#/$defs/GithubAccount",
+          "description": "Present exactly when connected."
+        },
+        "code": {
+          "$ref": "#/$defs/GithubCode",
+          "description": "Present exactly when connecting."
+        },
+        "last": {
+          "$ref": "#/$defs/GithubConnectEnd",
+          "description": "When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect."
+        },
+        "unrecorded": {
+          "type": "boolean",
+          "const": true,
+          "description": "The gateway could not keep the last change in its audit, and that change still stands. With last: how the attempt ended. Connected: a sign-out that failed. Signed out with no last: the sign-out. Absent when it is on record, and with last audit_unavailable, which already says so."
+        },
+        "installUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Where the person chooses the repositories the Nessa app may use. A token reaches only those."
+        }
       },
       "required": ["state", "installUrl"]
     },
     "GithubErrorCode": {
       "type": "string",
-      "enum": ["github_not_configured", "github_unreachable", "github_rejected", "github_storage_unavailable", "github_audit_unavailable"],
+      "enum": [
+        "github_not_configured",
+        "github_unreachable",
+        "github_rejected",
+        "github_storage_unavailable",
+        "github_audit_unavailable"
+      ],
       "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
     },
     "PeerEnrollParams": {

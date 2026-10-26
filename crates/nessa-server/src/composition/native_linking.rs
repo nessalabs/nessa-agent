@@ -20,14 +20,28 @@
 //! that cannot start (design row S10 stops startup on a native bind failure).
 //! A change is refused busy while a restart is held or the gateway is
 //! stopping, so the gateway that comes back is the one the last answer named.
-use super::runtime_config::{DEFAULT_NATIVE_LISTEN, SUPERSEDED_NATIVE_LISTEN};
+//!
+//! `pairing.setTunnel` changes `native.tunnel` the same way, under the same
+//! lock and audit (its own subject): a named tunnel's token is written to
+//! its private file first (`tunnel::infrastructure::files`), then the
+//! section, so a saved named tunnel never lacks its token; turning it on
+//! needs linking on, and an ingress this run does not hold is bind-checked.
+//! It restarts when the saved tunnel's identity differs from the one this
+//! run serves.
+use super::runtime_config::{TunnelSection, DEFAULT_NATIVE_LISTEN, SUPERSEDED_NATIVE_LISTEN};
 use crate::core::self_restart::{RestartEnd, RestartReport, SelfRestart};
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingCaller,
-    LinkingChange, LinkingError, LinkingRestart, ListenMoved, NativeLinking,
+    LinkingChange, LinkingError, LinkingRestart, LinkingSubject, ListenMoved, NativeLinking,
+    SavedTunnel, TunnelChange, TunnelRequest,
 };
 use crate::mcp_servers::application::StoreError;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
+use crate::tunnel::application::{
+    CloudflareTunnel, TunnelMode, TunnelProvider, TunnelSetting, TunnelToken,
+    DEFAULT_TUNNEL_INGRESS,
+};
+use crate::tunnel::infrastructure::files::TunnelFiles;
 use serde_json::{Map, Value};
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
@@ -44,6 +58,34 @@ pub(super) struct ConfigLinking {
     /// with to decide whether to start again.
     running: bool,
     restart: Arc<SelfRestart>,
+    /// The tunnel's files, where its token is kept; `None` answers
+    /// tunnel changes unavailable.
+    tunnel_files: Option<TunnelFiles>,
+    /// The tunnel this run serves, if any: what a tunnel change is compared
+    /// with.
+    running_tunnel: Option<TunnelSetting>,
+}
+
+/// One change.
+#[derive(Clone)]
+enum Change {
+    Linking(bool),
+    Tunnel(TunnelRequest),
+}
+
+impl Change {
+    fn subject(&self) -> LinkingSubject {
+        match self {
+            Self::Linking(_) => LinkingSubject::Linking,
+            Self::Tunnel(request) => LinkingSubject::Tunnel { mode: request.mode },
+        }
+    }
+    fn enabled(&self) -> bool {
+        match self {
+            Self::Linking(enabled) => *enabled,
+            Self::Tunnel(request) => request.enabled,
+        }
+    }
 }
 
 impl ConfigLinking {
@@ -58,6 +100,24 @@ impl ConfigLinking {
             audit,
             running,
             restart,
+            tunnel_files: None,
+            running_tunnel: None,
+        }
+    }
+
+    /// Change the tunnel too: its token kept in `files`, compared with
+    /// `running`, the tunnel this run serves.
+    pub(super) fn with_tunnel(mut self, files: TunnelFiles, running: Option<TunnelSetting>) -> Self {
+        self.tunnel_files = Some(files);
+        self.running_tunnel = running;
+        self
+    }
+
+    /// Whether this run serves what `change` is to.
+    fn serves(&self, change: &Change) -> bool {
+        match change {
+            Change::Linking(_) => self.running,
+            Change::Tunnel(_) => self.running_tunnel.is_some(),
         }
     }
 
@@ -66,15 +126,16 @@ impl ConfigLinking {
         &self,
         operation_id: &str,
         caller: &LinkingCaller,
-        enabled: bool,
+        change: &Change,
         phase: LinkingAuditPhase,
     ) -> Result<(), LinkingError> {
         let audit = self.audit.clone();
         let record = LinkingAuditRecord {
             operation_id: operation_id.to_owned(),
             caller: caller.clone(),
-            enabled,
-            running: self.running,
+            subject: change.subject(),
+            enabled: change.enabled(),
+            running: self.serves(change),
             phase,
         };
         tokio::task::spawn_blocking(move || audit.record(&record))
@@ -83,43 +144,40 @@ impl ConfigLinking {
             .map_err(|_| LinkingError::AuditUnavailable)
     }
 
-    /// Save `enabled` under the lock, held until the outcome is recorded and
+    /// Save `change` under the lock, held until the outcome is recorded and
     /// any restart scheduled, so no other change lands in between.
     async fn change(
         &self,
         operation_id: &str,
         caller: &LinkingCaller,
-        enabled: bool,
-    ) -> Result<LinkingApply, LinkingError> {
+        change: &Change,
+    ) -> Result<Saved, LinkingError> {
         let lock = self.config.lock().await.map_err(refusal);
-        let saved = match &lock {
-            Ok(_) => self.save(enabled).await,
-            Err(error) => Err(*error),
+        let saved = match (&lock, change) {
+            (Ok(_), Change::Linking(enabled)) => self.save(*enabled).await,
+            (Ok(_), Change::Tunnel(request)) => self.save_tunnel(request).await,
+            (Err(error), _) => Err(*error),
         };
-        // A moved address applies only by starting again, even when the run
-        // already serves native pairing (at the old address).
-        let (applies, Saved { written, moved }) = match saved {
-            Ok(saved) if enabled == self.running && saved.moved.is_none() => {
-                (LinkingApply::Unchanged, saved)
-            }
-            Ok(saved) => (LinkingApply::Restarting, saved),
+        let saved = match saved {
+            Ok(saved) => saved,
             Err(error) => {
-                self.record(
-                    operation_id,
-                    caller,
-                    enabled,
-                    LinkingAuditPhase::Refused(error),
-                )
-                .await?;
+                self.record(operation_id, caller, change, LinkingAuditPhase::Refused(error))
+                    .await?;
                 return Err(error);
             }
         };
+        let Saved {
+            applies,
+            written,
+            moved,
+            ..
+        } = saved;
         // Recorded before it is answered or applied: a change whose outcome
         // was not kept is saved, and waits for the next start.
         self.record(
             operation_id,
             caller,
-            enabled,
+            change,
             LinkingAuditPhase::Applied {
                 applies,
                 written,
@@ -130,7 +188,7 @@ impl ConfigLinking {
         if applies == LinkingApply::Restarting
             && self
                 .restart
-                .schedule(self.restart_report(operation_id, caller, enabled))
+                .schedule(self.restart_report(operation_id, caller, change))
         {
             let restart = self.restart.clone();
             tokio::spawn(async move {
@@ -138,7 +196,7 @@ impl ConfigLinking {
                 restart.request();
             });
         }
-        Ok(applies)
+        Ok(saved)
     }
 
     /// How the restart this change asked for ended, recorded with the
@@ -148,14 +206,15 @@ impl ConfigLinking {
         &self,
         operation_id: &str,
         caller: &LinkingCaller,
-        enabled: bool,
+        change: &Change,
     ) -> RestartReport {
         let audit = self.audit.clone();
         let record = LinkingAuditRecord {
             operation_id: operation_id.to_owned(),
             caller: caller.clone(),
-            enabled,
-            running: self.running,
+            subject: change.subject(),
+            enabled: change.enabled(),
+            running: self.serves(change),
             phase: LinkingAuditPhase::Requested,
         };
         Box::new(move |end| {
@@ -202,10 +261,19 @@ impl ConfigLinking {
         if let (Some(address), false) = (listen, self.running) {
             bindable(address).await?;
         }
+        // A moved address applies only by starting again, even when the run
+        // already serves native pairing (at the old address).
+        let applies = if enabled == self.running && moved.is_none() {
+            LinkingApply::Unchanged
+        } else {
+            LinkingApply::Restarting
+        };
         let Some(document) = document else {
             return Ok(Saved {
+                applies,
                 written: false,
                 moved,
+                mode: None,
             });
         };
         let config = self.config.clone();
@@ -217,28 +285,122 @@ impl ConfigLinking {
             tracing::warn!("native linking saved, but config.json's directory could not be synced");
         }
         Ok(Saved {
+            applies,
             written: true,
             moved,
+            mode: None,
         })
+    }
+
+    /// Write `native.tunnel` as `request` asks, holding the lock: the token
+    /// first, then the section.
+    async fn save_tunnel(&self, request: &TunnelRequest) -> Result<Saved, LinkingError> {
+        if !self.restart.serving() {
+            return Err(LinkingError::Busy);
+        }
+        let files = self.tunnel_files.clone().ok_or(LinkingError::Unavailable)?;
+        let config = self.config.clone();
+        let asked = request.clone();
+        let reading = files.clone();
+        let edited = tokio::task::spawn_blocking(move || {
+            let document = config.document().map_err(refusal)?;
+            let saved = reading
+                .read_token()
+                .map_err(|_| LinkingError::Unavailable)?;
+            edit_tunnel(document, &asked, saved)
+        })
+        .await
+        .map_err(|_| LinkingError::Unavailable)??;
+        // The ingress this run binds is held; any other is tried, under the
+        // lock, so a saved tunnel never leaves a gateway that cannot start.
+        if let Some(setting) = &edited.setting {
+            let held = self
+                .running_tunnel
+                .as_ref()
+                .is_some_and(|running| running.ingress == setting.ingress);
+            if !held {
+                bindable(setting.ingress).await?;
+            }
+        }
+        if let Some(token) = edited.token {
+            tokio::task::spawn_blocking(move || files.write_token(&token))
+                .await
+                .map_err(|_| LinkingError::Unavailable)?
+                .map_err(|_| LinkingError::Unavailable)?;
+        }
+        let applies = if edited.setting.as_ref().map(TunnelSetting::identity)
+            == self.running_tunnel.as_ref().map(TunnelSetting::identity)
+        {
+            LinkingApply::Unchanged
+        } else {
+            LinkingApply::Restarting
+        };
+        let written = match edited.document {
+            Some(document) => {
+                let config = self.config.clone();
+                let published = tokio::task::spawn_blocking(move || config.publish(document))
+                    .await
+                    .map_err(|_| LinkingError::Unavailable)?
+                    .map_err(refusal)?;
+                if published == Published::NotDurable {
+                    tracing::warn!("the tunnel saved, but config.json's directory could not be synced");
+                }
+                true
+            }
+            None => false,
+        };
+        Ok(Saved {
+            applies,
+            written,
+            moved: None,
+            mode: Some(edited.mode),
+        })
+    }
+
+    /// The tunnel as saved, read without the lock: a change in flight is
+    /// seen before or after, never half.
+    async fn read_tunnel(&self) -> Result<SavedTunnel, LinkingError> {
+        let files = self.tunnel_files.clone().ok_or(LinkingError::Unavailable)?;
+        let config = self.config.clone();
+        tokio::task::spawn_blocking(move || {
+            let document = config.document().map_err(refusal)?;
+            let section = saved_section(&document)?;
+            let has_token = files
+                .read_token()
+                .map_err(|_| LinkingError::Unavailable)?
+                .is_some();
+            Ok(match section {
+                Some(section) => SavedTunnel {
+                    enabled: section.enabled,
+                    mode: section.mode.into(),
+                    hostname: section.hostname,
+                    has_token,
+                    ingress: section.ingress.unwrap_or(DEFAULT_TUNNEL_INGRESS),
+                },
+                None => SavedTunnel {
+                    enabled: false,
+                    mode: TunnelMode::Quick,
+                    hostname: None,
+                    has_token,
+                    ingress: DEFAULT_TUNNEL_INGRESS,
+                },
+            })
+        })
+        .await
+        .map_err(|_| LinkingError::Unavailable)?
     }
 }
 
+type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, LinkingError>> + Send + 'a>>;
+
 impl NativeLinking for ConfigLinking {
-    fn set(
-        &self,
-        caller: LinkingCaller,
-        enabled: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<LinkingChange, LinkingError>> + Send + '_>> {
+    fn set(&self, caller: LinkingCaller, enabled: bool) -> Answer<'_, LinkingChange> {
         Box::pin(async move {
             let operation_id = uuid::Uuid::new_v4().to_string();
-            self.record(
-                &operation_id,
-                &caller,
-                enabled,
-                LinkingAuditPhase::Requested,
-            )
-            .await?;
-            let applies = self.change(&operation_id, &caller, enabled).await?;
+            let change = Change::Linking(enabled);
+            self.record(&operation_id, &caller, &change, LinkingAuditPhase::Requested)
+                .await?;
+            let applies = self.change(&operation_id, &caller, &change).await?.applies;
             tracing::info!(
                 enabled,
                 ?applies,
@@ -247,6 +409,34 @@ impl NativeLinking for ConfigLinking {
             );
             Ok(LinkingChange { enabled, applies })
         })
+    }
+
+    fn set_tunnel(&self, caller: LinkingCaller, request: TunnelRequest) -> Answer<'_, TunnelChange> {
+        Box::pin(async move {
+            let operation_id = uuid::Uuid::new_v4().to_string();
+            let enabled = request.enabled;
+            let change = Change::Tunnel(request);
+            self.record(&operation_id, &caller, &change, LinkingAuditPhase::Requested)
+                .await?;
+            let saved = self.change(&operation_id, &caller, &change).await?;
+            let mode = saved.mode.unwrap_or(TunnelMode::Quick);
+            tracing::info!(
+                enabled,
+                mode = mode.as_str(),
+                applies = ?saved.applies,
+                principal = %caller.principal_id,
+                "the tunnel changed from Settings"
+            );
+            Ok(TunnelChange {
+                enabled,
+                mode,
+                applies: saved.applies,
+            })
+        })
+    }
+
+    fn tunnel(&self) -> Answer<'_, SavedTunnel> {
+        Box::pin(self.read_tunnel())
     }
 }
 
@@ -269,11 +459,117 @@ struct Edited {
     moved: Option<ListenMoved>,
 }
 
-/// What a save did: whether the file was written, and the listen address it
-/// replaced.
+/// What a save did: how it applies, whether the file was written, the
+/// listen address it replaced, and a tunnel change's saved mode.
 struct Saved {
+    applies: LinkingApply,
     written: bool,
     moved: Option<ListenMoved>,
+    mode: Option<TunnelMode>,
+}
+
+/// What a tunnel edit makes of `config.json`.
+struct EditedTunnel {
+    /// The document to publish, when it changes.
+    document: Option<Map<String, Value>>,
+    /// The tunnel it turns on, `None` when off.
+    setting: Option<TunnelSetting>,
+    /// The mode it saves.
+    mode: TunnelMode,
+    /// A token to write, when one was given and differs from the saved one.
+    token: Option<TunnelToken>,
+}
+
+/// The saved `native.tunnel`, if any. The file passed the runtime
+/// configuration's check, so a section it has parses.
+fn saved_section(document: &Map<String, Value>) -> Result<Option<TunnelSection>, LinkingError> {
+    document
+        .get("native")
+        .and_then(|native| native.get("tunnel"))
+        .filter(|tunnel| !tunnel.is_null())
+        .map(|tunnel| serde_json::from_value(tunnel.clone()).map_err(|_| LinkingError::Unavailable))
+        .transpose()
+}
+
+/// `document` with `native.tunnel` as `request` asks, given the saved token.
+fn edit_tunnel(
+    mut document: Map<String, Value>,
+    request: &TunnelRequest,
+    saved_token: Option<TunnelToken>,
+) -> Result<EditedTunnel, LinkingError> {
+    let linking_on = document
+        .get("native")
+        .filter(|native| native.is_object())
+        .is_some_and(|native| native.get("enabled") != Some(&Value::Bool(false)));
+    let saved = saved_section(&document)?;
+    let mode = request
+        .mode
+        .or(saved.as_ref().map(|section| section.mode.into()))
+        .unwrap_or(TunnelMode::Quick);
+    let hostname = request
+        .hostname
+        .clone()
+        .or_else(|| saved.as_ref().and_then(|section| section.hostname.clone()));
+    let ingress = saved
+        .as_ref()
+        .and_then(|section| section.ingress)
+        .unwrap_or(DEFAULT_TUNNEL_INGRESS);
+    let token = request.token.clone().or_else(|| saved_token.clone());
+    let setting = if request.enabled {
+        if !linking_on {
+            return Err(LinkingError::LinkingOff);
+        }
+        let tunnel = match (mode, hostname, token) {
+            (TunnelMode::Quick, _, _) => CloudflareTunnel::Quick,
+            (TunnelMode::Named, Some(address), Some(token)) => {
+                CloudflareTunnel::Named { address, token }
+            }
+            (TunnelMode::Named, _, _) => return Err(LinkingError::TunnelIncomplete),
+        };
+        Some(TunnelSetting {
+            ingress,
+            provider: TunnelProvider::Cloudflare(tunnel),
+        })
+    } else {
+        None
+    };
+    let existing = document
+        .get("native")
+        .and_then(|native| native.get("tunnel"))
+        .filter(|tunnel| !tunnel.is_null())
+        .cloned();
+    let mut section = existing
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if request.enabled {
+        section.remove("enabled");
+    } else {
+        section.insert("enabled".into(), Value::Bool(false));
+    }
+    section.insert("provider".into(), Value::String("cloudflare".into()));
+    section.insert("mode".into(), Value::String(mode.as_str().into()));
+    if let Some(hostname) = &request.hostname {
+        section.insert("hostname".into(), Value::String(hostname.as_str().into()));
+    }
+    let section = Value::Object(section);
+    // Off with no section is off already: nothing to keep.
+    let publish = existing.as_ref() != Some(&section) && (request.enabled || existing.is_some());
+    if publish {
+        if let Some(native) = document.get_mut("native").and_then(Value::as_object_mut) {
+            native.insert("tunnel".into(), section);
+        }
+    }
+    Ok(EditedTunnel {
+        document: publish.then_some(document),
+        setting,
+        mode,
+        token: request
+            .token
+            .clone()
+            .filter(|token| Some(token) != saved_token.as_ref()),
+    })
 }
 
 /// `document` with `native` set to `enabled`: `None` to publish when it
@@ -785,5 +1081,231 @@ mod tests {
                 moved: None
             })
         );
+    }
+
+    /// A linking that changes the tunnel too, its token kept beneath
+    /// `namespace`, compared with `running`.
+    fn tunnel_linking(
+        files: Arc<Files>,
+        namespace: &std::path::Path,
+        running: Option<TunnelSetting>,
+    ) -> Linking {
+        let Linking {
+            linking,
+            restart,
+            audit,
+        } = linking(files, true);
+        Linking {
+            linking: linking.with_tunnel(TunnelFiles::new(namespace), running),
+            restart,
+            audit,
+        }
+    }
+
+    fn request(enabled: bool, mode: Option<TunnelMode>) -> TunnelRequest {
+        TunnelRequest {
+            enabled,
+            mode,
+            hostname: None,
+            token: None,
+        }
+    }
+
+    fn address(text: &str) -> nessa_protocol::tunnel::TunnelAddress {
+        nessa_protocol::tunnel::TunnelAddress::try_from(text.to_owned()).unwrap()
+    }
+
+    /// Linking on, with the tunnel's ingress on a free port.
+    fn linking_on_with_ingress() -> (String, SocketAddr) {
+        let ingress: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
+        (
+            format!(
+                r#"{{"native":{{"listenAddress":"0.0.0.0:47650","tunnel":{{"enabled":false,"ingress":"{ingress}"}}}}}}"#
+            ),
+            ingress,
+        )
+    }
+
+    fn tunnel_section(files: &Files) -> Value {
+        native(files).unwrap()["tunnel"].clone()
+    }
+
+    #[tokio::test]
+    async fn a_quick_tunnel_turned_on_is_saved_and_restarts() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, ingress) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        assert_eq!(
+            linking.linking.set_tunnel(caller(), request(true, None)).await,
+            Ok(TunnelChange {
+                enabled: true,
+                mode: TunnelMode::Quick,
+                applies: LinkingApply::Restarting
+            })
+        );
+        assert_eq!(
+            tunnel_section(&files),
+            serde_json::json!({ "ingress": ingress.to_string(), "provider": "cloudflare", "mode": "quick" })
+        );
+        let bytes = files.bytes.lock().unwrap().clone().unwrap();
+        assert!(RuntimeConfig::parse(&bytes).is_ok());
+        assert!(!linking.restart.serving(), "a restart is held");
+        assert_eq!(
+            linking.records(),
+            [
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Applied {
+                    applies: LinkingApply::Restarting,
+                    written: true,
+                    moved: None
+                }
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_tunnel_this_run_serves_saved_again_restarts_nothing() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, ingress) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let running = TunnelSetting {
+            ingress,
+            provider: TunnelProvider::Cloudflare(CloudflareTunnel::Quick),
+        };
+        // This run binds the ingress already, so it is not tried.
+        let _held = std::net::TcpListener::bind(ingress).unwrap();
+        let linking = tunnel_linking(files.clone(), namespace.path(), Some(running));
+        let change = linking
+            .linking
+            .set_tunnel(caller(), request(true, Some(TunnelMode::Quick)))
+            .await
+            .unwrap();
+        assert_eq!(change.applies, LinkingApply::Unchanged);
+        assert!(linking.restart.serving());
+    }
+
+    #[tokio::test]
+    async fn the_tunnel_needs_linking_on() {
+        let namespace = tempfile::tempdir().unwrap();
+        let files = files(Some(&off_at("0.0.0.0:47650")));
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        assert_eq!(
+            linking.linking.set_tunnel(caller(), request(true, None)).await,
+            Err(LinkingError::LinkingOff)
+        );
+        assert_eq!(native(&files).unwrap().get("tunnel"), None, "nothing saved");
+        assert_eq!(
+            linking.records(),
+            [
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Refused(LinkingError::LinkingOff)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_named_tunnel_needs_a_hostname_and_a_token_and_keeps_its_token_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, _) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        let named = TunnelRequest {
+            hostname: Some(address("https://gateway.example.com")),
+            ..request(true, Some(TunnelMode::Named))
+        };
+        assert_eq!(
+            linking.linking.set_tunnel(caller(), named.clone()).await,
+            Err(LinkingError::TunnelIncomplete),
+            "no token given or saved"
+        );
+        let token = TunnelToken::new("eyJ0b2tlbiI6InNlY3JldCJ9".into()).unwrap();
+        let change = linking
+            .linking
+            .set_tunnel(
+                caller(),
+                TunnelRequest {
+                    token: Some(token.clone()),
+                    ..named
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(change.mode, TunnelMode::Named);
+        let section = tunnel_section(&files);
+        assert_eq!(section["hostname"], "https://gateway.example.com");
+        let config = String::from_utf8(files.bytes.lock().unwrap().clone().unwrap()).unwrap();
+        assert!(!config.contains("secret") && !config.contains(token.expose()));
+        let kept = TunnelFiles::new(namespace.path());
+        assert_eq!(kept.read_token().unwrap(), Some(token));
+        let mode = std::fs::metadata(kept.token_path()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0);
+    }
+
+    #[tokio::test]
+    async fn the_saved_tunnel_reads_back_without_its_token_and_off_keeps_it() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, ingress) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        linking
+            .linking
+            .set_tunnel(
+                caller(),
+                TunnelRequest {
+                    hostname: Some(address("https://gateway.example.com")),
+                    token: Some(TunnelToken::new("token".into()).unwrap()),
+                    ..request(true, Some(TunnelMode::Named))
+                },
+            )
+            .await
+            .unwrap();
+        // A fresh run, after the restart.
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        linking
+            .linking
+            .set_tunnel(caller(), request(false, None))
+            .await
+            .unwrap();
+        assert_eq!(
+            linking.linking.tunnel().await,
+            Ok(SavedTunnel {
+                enabled: false,
+                mode: TunnelMode::Named,
+                hostname: Some(address("https://gateway.example.com")),
+                has_token: true,
+                ingress,
+            })
+        );
+        assert_eq!(tunnel_section(&files)["enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn an_ingress_this_machine_cannot_bind_is_refused_before_saving() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, ingress) = linking_on_with_ingress();
+        let _taken = std::net::TcpListener::bind(ingress).unwrap();
+        let files = files(Some(&written));
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        assert_eq!(
+            linking.linking.set_tunnel(caller(), request(true, None)).await,
+            Err(LinkingError::AddressInUse)
+        );
+        assert_eq!(tunnel_section(&files)["enabled"], false, "nothing saved");
+    }
+
+    #[tokio::test]
+    async fn off_with_no_tunnel_saved_writes_nothing() {
+        let namespace = tempfile::tempdir().unwrap();
+        let files = files(Some(r#"{"native":{"listenAddress":"0.0.0.0:47650"}}"#));
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        let change = linking
+            .linking
+            .set_tunnel(caller(), request(false, None))
+            .await
+            .unwrap();
+        assert_eq!(change.applies, LinkingApply::Unchanged);
+        assert_eq!(native(&files).unwrap().get("tunnel"), None);
     }
 }

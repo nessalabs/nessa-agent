@@ -1,4 +1,5 @@
-//! Durable evidence of each `pairing.setLinking` change, in
+//! Durable evidence of each `pairing.setLinking` and `pairing.setTunnel`
+//! change, in
 //! `<namespace>/conversations/audit/native-linking`: one private JSON file per
 //! record, named by its change and phase, published once and synced, as the
 //! MCP server settings' audit beside it is. The requested record and its
@@ -6,7 +7,7 @@
 //! `observedAtMs`, on the wall clock.
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingAuditUnavailable,
-    LinkingError, LinkingRestart,
+    LinkingError, LinkingRestart, LinkingSubject,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
@@ -68,12 +69,21 @@ fn stored(record: &LinkingAuditRecord) -> Value {
                     LinkingError::AddressInUse => "address_in_use",
                     LinkingError::Unavailable => "unavailable",
                     LinkingError::AuditUnavailable => "audit_unavailable",
+                    LinkingError::LinkingOff => "linking_off",
+                    LinkingError::TunnelIncomplete => "tunnel_incomplete",
                 },
             }),
         ),
     };
-    json!({
-        "kind": "native_linking",
+    let (kind, mode) = match record.subject {
+        LinkingSubject::Linking => ("native_linking", Value::Null),
+        LinkingSubject::Tunnel { mode } => (
+            "native_tunnel",
+            mode.map_or(Value::Null, |mode| json!(mode.as_str())),
+        ),
+    };
+    let mut value = json!({
+        "kind": kind,
         "operationId": record.operation_id,
         "phase": phase,
         "enabled": record.enabled,
@@ -86,7 +96,11 @@ fn stored(record: &LinkingAuditRecord) -> Value {
             "principalId": record.caller.principal_id,
             "credentialId": record.caller.credential_id,
         },
-    })
+    });
+    if let (LinkingSubject::Tunnel { .. }, Value::Object(fields)) = (record.subject, &mut value) {
+        fields.insert("mode".into(), mode);
+    }
+    value
 }
 
 impl LinkingAudit for DurableLinkingAudit {
@@ -99,7 +113,11 @@ impl LinkingAudit for DurableLinkingAudit {
             LinkingAuditPhase::Restart(LinkingRestart::Cancelled) => "cancelled",
         };
         create_directory(&self.directory).map_err(|_| LinkingAuditUnavailable)?;
-        let id = format!("native-linking-{}-{phase}", record.operation_id);
+        let subject = match record.subject {
+            LinkingSubject::Linking => "native-linking",
+            LinkingSubject::Tunnel { .. } => "native-tunnel",
+        };
+        let id = format!("{subject}-{}-{phase}", record.operation_id);
         let mut value = stored(record);
         if let Value::Object(fields) = &mut value {
             fields.insert("recordId".into(), json!(id));
@@ -144,6 +162,7 @@ mod tests {
                 principal_id: "owner".into(),
                 credential_id: "panel".into(),
             },
+            subject: LinkingSubject::Linking,
             enabled: true,
             running: false,
             phase: LinkingAuditPhase::Requested,
@@ -184,5 +203,34 @@ mod tests {
             read("native-linking-op-exec.json")["outcome"]["restart"],
             "exec"
         );
+    }
+
+    #[test]
+    fn a_tunnel_change_is_its_own_kind_with_its_mode() {
+        use crate::tunnel::application::TunnelMode;
+        let directory = tempfile::tempdir().unwrap();
+        let audit = DurableLinkingAudit::new(directory.path().to_owned(), Arc::new(Fixed));
+        let record = LinkingAuditRecord {
+            operation_id: "op".into(),
+            caller: LinkingCaller {
+                organization_id: "org".into(),
+                principal_id: "owner".into(),
+                credential_id: "panel".into(),
+            },
+            subject: LinkingSubject::Tunnel {
+                mode: Some(TunnelMode::Named),
+            },
+            enabled: true,
+            running: false,
+            phase: LinkingAuditPhase::Refused(LinkingError::TunnelIncomplete),
+        };
+        audit.record(&record).unwrap();
+        let outcome: Value = serde_json::from_slice(
+            &std::fs::read(directory.path().join("native-tunnel-op-outcome.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(outcome["kind"], "native_tunnel");
+        assert_eq!(outcome["mode"], "named");
+        assert_eq!(outcome["outcome"]["reason"], "tunnel_incomplete");
     }
 }

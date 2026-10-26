@@ -57,6 +57,8 @@ mod managed_adapter;
 mod native_linking;
 mod native_pairing;
 #[cfg(unix)]
+mod tunnel;
+#[cfg(unix)]
 mod opencode_profile;
 mod relay_command;
 

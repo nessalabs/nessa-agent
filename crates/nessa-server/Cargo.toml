@@ -106,6 +106,10 @@ libc = "0.2"
 # `nessa env serve` runs command leases' commands in process scopes of their
 # own, as the Nessa MCP shell tool does; the same pinned revision.
 shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "26bd7cb8843c1bc6c3eccfbbae8be926f8c49103" }
+# The web tunnel's loopback ingress accepts the provider's WebSockets
+# (`docs/design/auth/tunnel.md`); already in the build graph through axum and
+# nessa-client-core, same version.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Nessa-owned agent API keys live in the login keychain. This crate is already
@@ -135,5 +139,6 @@ tokio = { version = "1", features = ["test-util", "io-util"] }
 # library this workspace already compiles; nothing new is built.
 image = { version = "0.25.10", default-features = false }
 # Only to drive a real WebSocket write buffer over an in-memory duplex (row
-# R64); already in the build graph through axum, same version.
+# R64), and to dial the tunnel ingress in its tests; already in the build
+# graph through axum, same version.
 tokio-tungstenite = "0.29"

@@ -2480,6 +2480,81 @@ pub struct PairingSetLinkingResult {
     pub applies: PairingLinkingApply,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PairingTunnelMode {
+    #[serde(rename = "quick")]
+    Quick,
+    #[serde(rename = "named")]
+    Named,
+}
+impl PairingTunnelMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Quick => "quick",
+            Self::Named => "named",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingSetTunnelParams {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PairingTunnelMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingSetTunnelResult {
+    pub enabled: bool,
+    pub mode: PairingTunnelMode,
+    pub applies: PairingLinkingApply,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PairingTunnelStatus {
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "starting")]
+    Starting,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+}
+impl PairingTunnelStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingTunnelResult {
+    pub enabled: bool,
+    pub mode: PairingTunnelMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    pub has_token: bool,
+    pub ingress: String,
+    pub status: PairingTunnelStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServerReachResult {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub tunnel: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum PairingErrorCode {
     #[serde(rename = "pairing_not_configured")]
     PairingNotConfigured,
@@ -2501,6 +2576,10 @@ pub enum PairingErrorCode {
     PairingAddressInUse,
     #[serde(rename = "pairing_audit_unavailable")]
     PairingAuditUnavailable,
+    #[serde(rename = "pairing_linking_off")]
+    PairingLinkingOff,
+    #[serde(rename = "pairing_tunnel_incomplete")]
+    PairingTunnelIncomplete,
 }
 impl PairingErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -2515,6 +2594,8 @@ impl PairingErrorCode {
             Self::PairingUnavailable => "pairing_unavailable",
             Self::PairingAddressInUse => "pairing_address_in_use",
             Self::PairingAuditUnavailable => "pairing_audit_unavailable",
+            Self::PairingLinkingOff => "pairing_linking_off",
+            Self::PairingTunnelIncomplete => "pairing_tunnel_incomplete",
         }
     }
 }
@@ -3474,6 +3555,7 @@ pub mod product_method {
     pub const SESSION_AUTHENTICATE: &str = "session.authenticate";
     pub const AUTH_SESSION: &str = "auth.session";
     pub const SERVER_HEALTH: &str = "server.health";
+    pub const SERVER_REACH: &str = "server.reach";
     pub const CREDENTIAL_ISSUE: &str = "credential.issue";
     pub const CREDENTIAL_LIST: &str = "credential.list";
     pub const CREDENTIAL_REVOKE: &str = "credential.revoke";
@@ -3536,6 +3618,8 @@ pub mod product_method {
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
     pub const PAIRING_SET_LINKING: &str = "pairing.setLinking";
+    pub const PAIRING_SET_TUNNEL: &str = "pairing.setTunnel";
+    pub const PAIRING_TUNNEL: &str = "pairing.tunnel";
     pub const GITHUB_STATUS: &str = "github.status";
     pub const GITHUB_CONNECT: &str = "github.connect";
     pub const GITHUB_CANCEL: &str = "github.cancel";
@@ -3750,7 +3834,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 87
+                items.len() <= 90
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3777,6 +3861,7 @@ pub const PRODUCT_HANDSHAKE_METHOD: &str = "session.authenticate";
 pub const PRODUCT_READY_METHODS: &[&str] = &[
     "auth.session",
     "server.health",
+    "server.reach",
     "credential.issue",
     "credential.list",
     "credential.revoke",
@@ -3838,6 +3923,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.deny",
     "pairing.cancel",
     "pairing.setLinking",
+    "pairing.setTunnel",
+    "pairing.tunnel",
     "github.status",
     "github.connect",
     "github.cancel",
@@ -3875,6 +3962,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
 pub fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
         "server.health"
+        | "server.reach"
         | "agents.list"
         | "agents.subscribe"
         | "agents.unsubscribe"
@@ -3900,6 +3988,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "pairing.deny"
         | "pairing.cancel"
         | "pairing.setLinking"
+        | "pairing.setTunnel"
+        | "pairing.tunnel"
         | "github.status"
         | "github.connect"
         | "github.cancel"

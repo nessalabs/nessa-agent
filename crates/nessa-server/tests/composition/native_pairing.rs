@@ -163,6 +163,7 @@ fn loopback() -> (NativeConfig, std::net::TcpListener) {
             listen_address,
             relay: None,
             advertised_address: None,
+            tunnel: None,
         },
         listener,
     )
@@ -174,6 +175,7 @@ fn unpublished() -> NativeConfig {
         listen_address: "127.0.0.1:0".parse().unwrap(),
         relay: None,
         advertised_address: None,
+        tunnel: None,
     }
 }
 
@@ -265,6 +267,7 @@ async fn native_bind_failure_preserves_key_and_history() {
             listen_address: address,
             relay: None,
             advertised_address: None,
+            tunnel: None,
         },
         namespace.inputs(registry.clone()),
     )
@@ -378,6 +381,7 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
         peers: bound.peers.clone(),
         audit: bound.audit.clone(),
         announced: None,
+        tunnel: None,
     };
     assert_eq!(
         tokio::time::timeout(WAIT, running.join()).await.unwrap(),
@@ -447,6 +451,7 @@ async fn a_gateway_with_a_relay_answers_a_reader_that_reaches_only_the_relay() {
         listen_address: "127.0.0.1:0".parse().unwrap(),
         relay: Some(RelayAddress::try_from(relay_address.to_string()).unwrap()),
         advertised_address: None,
+        tunnel: None,
     };
     let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
@@ -512,6 +517,7 @@ async fn a_relay_that_cannot_be_reached_leaves_direct_readers_served() {
         listen_address: "127.0.0.1:0".parse().unwrap(),
         relay: Some(RelayAddress::try_from(nowhere.to_string()).unwrap()),
         advertised_address: None,
+        tunnel: None,
     };
     let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
@@ -592,6 +598,7 @@ async fn a_network_listener_is_announced_and_withdrawn_on_stop() {
         listen_address: listener.local_addr().unwrap(),
         relay: None,
         advertised_address: None,
+        tunnel: None,
     };
     let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
@@ -664,6 +671,7 @@ async fn an_ephemeral_network_listener_is_not_announced() {
         listen_address: "0.0.0.0:0".parse().unwrap(),
         relay: None,
         advertised_address: None,
+        tunnel: None,
     };
     let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await

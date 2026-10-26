@@ -3319,6 +3319,7 @@ name = "nessa-client-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "futures-util",
  "nessa-auth",
  "nessa-local-database",
  "nessa-local-storage",
@@ -3326,11 +3327,15 @@ dependencies = [
  "nessa-sdk",
  "nessa-sync",
  "regex",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "tungstenite",

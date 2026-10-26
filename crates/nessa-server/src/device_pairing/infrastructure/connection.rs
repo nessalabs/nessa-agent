@@ -10,7 +10,7 @@ use super::{
 };
 use nessa_auth::{
     adapters::pairing::{CryptoRng, NativeTransport, PairingCryptoError, RngCore},
-    application::pairing::{PairingStoreError, PairingWorkerFault},
+    application::pairing::{DeviceConnectionProof, PairingStoreError, PairingWorkerFault},
     domain::pairing::{AttemptFailure, PublicIntent},
 };
 use nessa_protocol::clock::Clock;
@@ -47,6 +47,11 @@ const ENVIRONMENT_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
 /// session or an environment moves to that shared pool like a direct one;
 /// only a paired key gets that far.
 pub(crate) const RELAY_CAPACITY: usize = 4;
+/// Bound on connections that came through the web tunnel, from before their
+/// WebSocket upgrade until they end: a pool of their own for the same reason
+/// as the relay's, since anyone with the tunnel's public address can open
+/// them (`docs/design/auth/tunnel.md`).
+pub(crate) const TUNNEL_CAPACITY: usize = 4;
 
 /// Redacted primary physical/protocol refusal, without peer input diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +91,12 @@ pub enum NativeConnectionFailure {
     EnvironmentUnregistered,
     /// Whether the key holds a credential to serve could not be read.
     EnvironmentUnverifiable,
+    /// A connection through the tunnel whose key holds no active credential:
+    /// closed after its handshake, before its first request is read.
+    TunnelUnregistered,
+    /// Whether a tunnel connection's key holds a credential could not be
+    /// read; closed the same way.
+    TunnelUnverifiable,
 }
 /// Primary failure and independent failure to settle the original charged attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,7 +126,8 @@ impl From<DeadlineError> for NativeConnectionError {
 
 /// One fixed eight-connection physical owner; admission queues no requests.
 /// A connection a relay joined comes in on a relay permit instead, from a
-/// pool of four, and holds it in place of a connection permit.
+/// pool of four, and holds it in place of a connection permit; one that came
+/// through the tunnel likewise on a tunnel permit, from a pool of four.
 /// A connection whose first envelope is `openProduct` moves to a pool of its
 /// own, also eight, and returns its connection permit, so product sessions
 /// never take the permits enrollment and pinned status need (design row PR10).
@@ -132,6 +144,15 @@ pub struct NativeEnrollmentConnections {
     environment: Pool,
     peers: Option<Arc<dyn EnvironmentPeers>>,
     relay: Pool,
+    tunnel: Pool,
+}
+
+/// Where an admitted connection came from, and the permit it holds when that
+/// is not the connection pool's.
+enum Source {
+    Direct,
+    Relay(RelayPermit),
+    Tunnel(TunnelPermit),
 }
 
 /// A pool a connection moves to from the connection pool, selected by its
@@ -184,6 +205,7 @@ impl NativeEnrollmentConnections {
             environment: Pool::new(ENVIRONMENT_CAPACITY),
             peers: None,
             relay: Pool::new(RELAY_CAPACITY),
+            tunnel: Pool::new(TUNNEL_CAPACITY),
         }
     }
     /// Serve a connection whose first envelope is `openProduct` with
@@ -220,12 +242,23 @@ impl NativeEnrollmentConnections {
             drained: self.drained.clone(),
         })
     }
+    /// A permit for one more connection through the tunnel, or `None` when
+    /// the tunnel pool is full or closed. The tunnel's ingress takes it
+    /// before it upgrades a WebSocket, and the connection holds it once
+    /// [`Self::start_tunneled`] admits it.
+    pub fn tunnel_permit(&self) -> Option<TunnelPermit> {
+        let permit = self.tunnel.capacity.clone().try_acquire_owned().ok()?;
+        Some(TunnelPermit(RelayPermit {
+            permit: Some(permit),
+            drained: self.drained.clone(),
+        }))
+    }
     pub(super) fn start<R: RngCore + CryptoRng + Send + 'static>(
         &self,
         stream: TcpStream,
         entropy: R,
     ) -> Result<NativeConnectionTask, NativeConnectionError> {
-        self.start_from(stream, entropy, None)
+        self.start_from(stream, entropy, Source::Direct)
     }
     /// Admit a connection the relay joined, on the relay permit it holds
     /// rather than a connection permit. A closed owner admits nothing.
@@ -235,13 +268,24 @@ impl NativeEnrollmentConnections {
         permit: RelayPermit,
         entropy: R,
     ) -> Result<NativeConnectionTask, NativeConnectionError> {
-        self.start_from(stream, entropy, Some(permit))
+        self.start_from(stream, entropy, Source::Relay(permit))
+    }
+    /// Admit a connection that came through the tunnel, on the tunnel permit
+    /// it holds. Its key must hold an active credential before anything it
+    /// sends is read. A closed owner admits nothing.
+    pub(super) fn start_tunneled<R: RngCore + CryptoRng + Send + 'static>(
+        &self,
+        stream: TcpStream,
+        permit: TunnelPermit,
+        entropy: R,
+    ) -> Result<NativeConnectionTask, NativeConnectionError> {
+        self.start_from(stream, entropy, Source::Tunnel(permit))
     }
     fn start_from<R: RngCore + CryptoRng + Send + 'static>(
         &self,
         stream: TcpStream,
         entropy: R,
-        relayed: Option<RelayPermit>,
+        source: Source,
     ) -> Result<NativeConnectionTask, NativeConnectionError> {
         let endpoint = WakeEndpoint::new(
             stream
@@ -250,24 +294,29 @@ impl NativeEnrollmentConnections {
         );
         let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())?;
         // The sweep a connection starts on: the connection pool's, or the
-        // relay pool's for one the relay joined.
-        let connections = match relayed {
-            Some(_) => self.relay.wake.clone(),
-            None => self.wake.clone(),
+        // relay's or tunnel's pool's for one that came that way.
+        let connections = match source {
+            Source::Direct => self.wake.clone(),
+            Source::Relay(_) => self.relay.wake.clone(),
+            Source::Tunnel(_) => self.tunnel.wake.clone(),
         };
         // `close` closes the semaphore under this lock, so a permit acquired here
         // is registered before any wake sweep, and a closed owner admits nothing.
         let mut wake = connections.lock().unwrap_or_else(PoisonError::into_inner);
-        let capacity = match &relayed {
-            Some(_) => &self.relay.capacity,
-            None => &self.capacity,
+        let capacity = match &source {
+            Source::Direct => &self.capacity,
+            Source::Relay(_) => &self.relay.capacity,
+            Source::Tunnel(_) => &self.tunnel.capacity,
         };
         if capacity.is_closed() {
             return Err(NativeConnectionFailure::Capacity.into());
         }
-        let permit = match relayed {
-            Some(mut relayed) => relayed.permit.take(),
-            None => self.capacity.clone().try_acquire_owned().ok(),
+        let tunneled = matches!(source, Source::Tunnel(_));
+        let permit = match source {
+            Source::Direct => self.capacity.clone().try_acquire_owned().ok(),
+            Source::Relay(mut relayed) | Source::Tunnel(TunnelPermit(mut relayed)) => {
+                relayed.permit.take()
+            }
         }
         .ok_or(NativeConnectionError::from(
             NativeConnectionFailure::Capacity,
@@ -302,7 +351,9 @@ impl NativeEnrollmentConnections {
             let _permit = permit;
             // Locals unwind physical IO and its runtime before the original permit.
             let runtime = gateway;
-            serve_exchange(&runtime, &handle, stream, deadline, entropy, admissions)
+            serve_exchange(
+                &runtime, &handle, stream, deadline, entropy, admissions, tunneled,
+            )
         });
         drop(wake);
         Ok(NativeConnectionTask {
@@ -320,6 +371,7 @@ impl NativeEnrollmentConnections {
         self.product.close();
         self.environment.close();
         self.relay.close();
+        self.tunnel.close();
     }
     /// The wake sweep from the first shutdown, if it has happened. A successful
     /// wake does not mean the worker has finished; `shutdown` reports that.
@@ -344,6 +396,11 @@ impl NativeEnrollmentConnections {
     pub fn relay_wake_report(&self) -> Option<NativeWakeReport> {
         self.relay.report()
     }
+    /// The tunnel connections' wake sweep from the first shutdown, if it has
+    /// happened; likewise not evidence of a drain.
+    pub fn tunnel_wake_report(&self) -> Option<NativeWakeReport> {
+        self.tunnel.report()
+    }
     /// Exclude new sockets and await actual blocked/unwinding closure drain,
     /// of connections, relayed connections, product sessions and
     /// environments alike. A relay permit a gateway took for a reader it is
@@ -358,6 +415,7 @@ impl NativeEnrollmentConnections {
                 && self.product.drained()
                 && self.environment.drained()
                 && self.relay.drained()
+                && self.tunnel.drained()
             {
                 return;
             }
@@ -474,10 +532,52 @@ impl std::fmt::Debug for RelayPermit {
         formatter.write_str("RelayPermit")
     }
 }
+/// A tunnel pool permit, taken before the tunnel's ingress upgrades a
+/// WebSocket and held by its connection once admitted. Dropping it wakes a
+/// shutdown waiting for the drain.
+pub struct TunnelPermit(RelayPermit);
+impl std::fmt::Debug for TunnelPermit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TunnelPermit")
+    }
+}
 /// What the blocking worker may move a connection to, by its first envelope.
 struct Admissions {
     product: Option<ProductAdmission>,
     environment: Option<EnvironmentAdmission>,
+}
+impl Admissions {
+    /// The tunnel's edge: whether the key a connection proved holds an
+    /// active credential, as a paired device or as an environment that may
+    /// serve. The same reads `openProduct` and `openEnvironment` make before
+    /// they take a permit, asked before anything the connection sends.
+    fn admit_tunneled(
+        &self,
+        handle: &Handle,
+        proof: &DeviceConnectionProof,
+    ) -> Result<(), NativeConnectionError> {
+        let mut unverifiable = false;
+        if let Some(product) = &self.product {
+            match product.sessions.admits(proof) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(_) => unverifiable = true,
+            }
+        }
+        if let Some(environment) = &self.environment {
+            match handle.block_on(environment.peers.admits(proof)) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(_) => unverifiable = true,
+            }
+        }
+        Err(if unverifiable {
+            NativeConnectionFailure::TunnelUnverifiable
+        } else {
+            NativeConnectionFailure::TunnelUnregistered
+        }
+        .into())
+    }
 }
 /// Admission to the product session pool, taken by the blocking worker when
 /// the first envelope is `openProduct`.
@@ -556,10 +656,17 @@ fn serve_exchange<R: RngCore + CryptoRng>(
     deadline: Arc<NativeDeadline>,
     mut entropy: R,
     admissions: Admissions,
+    tunneled: bool,
 ) -> Result<Served, NativeConnectionError> {
     stream.blocking()?;
     let channel = NativeTransport::accept(stream, gateway.identity())
         .map_err(|error| NativeConnectionError::from(NativeConnectionFailure::Crypto(error)))?;
+    // Through the tunnel, nothing is read from a key the gateway issued no
+    // credential to: no pairing, no status, no product (design row T2). The
+    // refusal is the close itself, with nothing said.
+    if tunneled {
+        admissions.admit_tunneled(handle, channel.device_proof())?;
+    }
     let mut channel = EnrollmentChannel::new(channel);
     let result = exchange(
         gateway,
@@ -605,7 +712,9 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
         | NativeConnectionFailure::Crypto(_)
         | NativeConnectionFailure::Io(_)
         | NativeConnectionFailure::WorkerFault(_)
-        | NativeConnectionFailure::ClaimReply(_) => false,
+        | NativeConnectionFailure::ClaimReply(_)
+        | NativeConnectionFailure::TunnelUnregistered
+        | NativeConnectionFailure::TunnelUnverifiable => false,
     }
 }
 /// How an exchange ended on a readable channel.
