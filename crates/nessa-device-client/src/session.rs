@@ -26,14 +26,15 @@ use nessa_client_core::{
         ProductWake, ThreadProductWake,
     },
     retained::{
-        FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
-        RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus,
-        RetainedOwnerStatus, RetainedPurge, RetainedTranscript, HANDSHAKE,
+        dial_gateway, FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache,
+        RetainedCataloguePage, RetainedDeviceReader, RetainedEnrollmentClient,
+        RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge, RetainedTranscript,
+        HANDSHAKE,
     },
 };
 use nessa_protocol::{
     clock::Clock, conversation::domain::ConversationId, pairing::wire::NativePairingStatus,
-    product::generated::ConversationViewCursor,
+    product::generated::ConversationViewCursor, tunnel::TunnelAddress,
 };
 use nessa_sync::replication::{catalogue::EntryKey, domain::Scope};
 use std::{
@@ -95,10 +96,16 @@ pub trait EnrollmentConnector: Send + Sync {
     /// Establish a bounded native TCP connection; no authority is inferred.
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError>;
 }
-struct SocketConnector;
+/// Dials the gateway directly, then through its web tunnel when one is known
+/// and the direct dial does not connect (`dial_gateway`). A tunnel never
+/// pairs: the gateway closes a tunnel connection whose key holds no
+/// credential, so enrollment still needs the local network.
+struct SocketConnector {
+    tunnel: Option<TunnelAddress>,
+}
 impl EnrollmentConnector for SocketConnector {
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError> {
-        TcpStream::connect_timeout(&address, HANDSHAKE)
+        dial_gateway(&address.to_string(), None, self.tunnel.as_ref(), HANDSHAKE)
             .map_err(|error| NativeClientError::Io(error.kind()))
     }
 }
@@ -389,10 +396,18 @@ struct ProductDependencies {
     wake: Arc<dyn ProductWake>,
     limits: ProductLimits,
 }
+impl ProductDependencies {
+    fn reaching(tunnel: Option<TunnelAddress>) -> Self {
+        Self {
+            connector: Arc::new(LocalProductConnector::reaching(tunnel)),
+            ..Self::default()
+        }
+    }
+}
 impl Default for ProductDependencies {
     fn default() -> Self {
         Self {
-            connector: Arc::new(LocalProductConnector),
+            connector: Arc::new(LocalProductConnector::default()),
             wake: Arc::new(ThreadProductWake::default()),
             limits: ProductLimits::default(),
         }
@@ -797,12 +812,16 @@ impl Drop for Operation<'_> {
 impl NativeSession {
     /// Composition entry: open an existing private directory beneath a trusted
     /// root. Cache creation is lazy; no socket or pairing is performed here.
+    /// `tunnel` is the gateway's web tunnel as it last named it
+    /// (`server.reach`): every dial falls back on it when the direct one does
+    /// not connect.
     pub fn open(
         root: &Path,
         directory: &Path,
         address: SocketAddr,
+        tunnel: Option<TunnelAddress>,
     ) -> Result<Self, SessionFailure> {
-        Self::open_with_clock(root, directory, address, Arc::new(Monotonic::new()))
+        Self::open_with_clock(root, directory, address, tunnel, Arc::new(Monotonic::new()))
     }
     /// Compose a private session over its host's monotonic elapsed-time clock.
     /// The clock controls retained reads and product socket budgets; it must
@@ -811,6 +830,7 @@ impl NativeSession {
         root: &Path,
         directory: &Path,
         address: SocketAddr,
+        tunnel: Option<TunnelAddress>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, SessionFailure> {
         let state = Arc::new(
@@ -827,10 +847,12 @@ impl NativeSession {
             address,
             wall,
             clock,
-            connector: Arc::new(SocketConnector),
+            connector: Arc::new(SocketConnector {
+                tunnel: tunnel.clone(),
+            }),
             entropy: Arc::new(OsEntropyFactory),
             runtime,
-            product: ProductDependencies::default(),
+            product: ProductDependencies::reaching(tunnel),
         })
     }
     fn compose(dependencies: Dependencies) -> Result<Self, SessionFailure> {
