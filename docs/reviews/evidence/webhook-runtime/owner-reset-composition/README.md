@@ -15,6 +15,12 @@ The latest [current-main integration](current-main-integration.md) is
 `3118f2d8a15f68825ecef3fe0c337368b3d7f889`. Earlier UI/platform results below
 retain their original source inputs.
 
+The subsequent main `aef11ea3b3d0c96f8c96fd9509f5657c58693780` and reviewed
+focused webhook CI addition are integrated at
+`108ce259cdc7b2628a19329181886de21cd88d3c`; the
+[focused coverage receipt](focused-browser-coverage.md) records exact CI checkout,
+the successful default Chromium witness and still-unexecuted focused cohorts.
+
 ## Behavior and ordering
 
 The exact native delivery is pinned before Sending through consumed settlement.
