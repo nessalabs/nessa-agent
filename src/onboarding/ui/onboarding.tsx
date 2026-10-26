@@ -31,7 +31,6 @@ import { AgentBackdrop } from "@nessa-ui/react/agent-card"
 import { AgentFigure } from "@nessa-ui/react/agent-figure/agent-figure"
 import { Button } from "@nessa-ui/react/button"
 import { StepDots } from "@nessa-ui/react/step-dots"
-import { TypeIn } from "@nessa-ui/react/type-in"
 import {
   SETUP_AGENTS,
   agentReadiness,
@@ -790,14 +789,6 @@ export function Onboarding({
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
   const held = useHeldKeys(state.step === "summon")
-  // Whether the welcome has finished typing its name: the line under it and
-  // its way on come in then. Back to the welcome types it again, so the rest
-  // waits for it again rather than standing under half a name.
-  const [typed, setTyped] = React.useState(false)
-  React.useEffect(() => {
-    if (state.step !== "welcome") setTyped(false)
-  }, [state.step])
-
   // Each step is a different subtree, so a button that moves setup on takes its
   // own focus with it and leaves the caret on `<body>`. A keyboard user then
   // tabs from the top of the document every time and a screen reader is told
@@ -814,28 +805,12 @@ export function Onboarding({
   if (state.step === "welcome") {
     return (
       <SetupPane ref={step} step={state.step}>
-        <div className="flex flex-col gap-3" data-typed={typed ? "" : undefined}>
-          <h1
-            id={SETUP_HEADING_ID}
-            aria-label="Welcome to Nessa"
-            className={PANE_HEADING}
-          >
-            <TypeIn
-              text="Welcome to Nessa"
-              plain={11}
-              play={open}
-              delay={250}
-              onTyped={() => setTyped(true)}
-            />
+        <div className="flex flex-col gap-3">
+          <h1 id={SETUP_HEADING_ID} className={PANE_HEADING}>
+            Welcome to Nessa
           </h1>
-          <p className="nessa-setup-after nessa-text-5 text-muted-foreground">
-            Your personal sidekick
-          </p>
-          <Button
-            size="lg"
-            className={`nessa-setup-after mt-4 ${PANE_PILL}`}
-            onClick={onBegin}
-          >
+          <p className="nessa-text-5 text-muted-foreground">Your personal sidekick</p>
+          <Button size="lg" className={`mt-4 ${PANE_PILL}`} onClick={onBegin}>
             Get started
           </Button>
         </div>
