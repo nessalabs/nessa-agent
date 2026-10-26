@@ -134,6 +134,10 @@
       "params": "AttachmentBeginParams",
       "grant": "conversation.write"
     },
+    "attachment.write": {
+      "params": "AttachmentWriteParams",
+      "grant": "conversation.write"
+    },
     "agents.list": {
       "params": null,
       "grant": "server.read"

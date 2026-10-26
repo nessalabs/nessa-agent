@@ -283,6 +283,7 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.peek",
         "channel.list",
         "attachment.begin",
+        "attachment.write",
         "artifact.read",
         "agents.list",
         "server.health",
