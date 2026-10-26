@@ -2227,7 +2227,15 @@ behind the `LinkingAnnouncer` port). Only addresses the listener answers on
 are announced: `0.0.0.0` names each interface's IPv4 addresses, `[::]` both
 families, a single address only itself, and loopback never. The host record
 is the gateway's own (`nessa-<id>.local.`), never the machine's `.local`
-name, which the operating system's responder owns. The desktop's code and its orb carry only the
+name, which the operating system's responder owns. On macOS the gateway
+does not send the announcement itself: it registers it with the system's
+Bonjour responder (`announcer_macos`, `DNSServiceRegister`). The gateway runs
+as a background launch agent, and Local Network privacy silently drops a
+process's own multicast unless that exact signed binary was allowed, which a
+background process cannot ask for; the responder sends it with no
+permission. There the instance is the computer's name, the host is the
+machine's own `.local` name, and an unspecified listener is announced on
+every interface (the phone resolves IPv4). The desktop's code and its orb carry only the
 eight symbols, so this is how a phone that scanned them finds the gateway.
 It says nothing the listener does not already answer to anyone who connects,
 and grants nothing: the code and the owner's approval still decide. It is
