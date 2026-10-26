@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, canonical cursors and causal delivery outcomes compose with owned product commands and signed sending; acknowledgement and retained cleanup stay distinct.
-sourceRevision: "c790639702213d79bad32aaa148e2744ca7a9d1d"
+sourceRevision: "69351af72cbd73179f7f8765424251ecf4a20b99"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -688,3 +688,18 @@ CI/platform/browser/default-and-raised-stress remain required. The existing
 inner diagrams describe the same authority and durable states and are unchanged;
 no new renderer or browser result is claimed. Only these three feature pages and
 their linked source changes are newly reconciled, not unrelated Auth/SDK pages.
+
+## Subsecond owner observation correction
+
+Source `69351af72cbd73179f7f8765424251ecf4a20b99` corrects cursor/reset admission
+to compare Auth issue seconds with the integer-second projection of the native
+registration observation. The exact original milliseconds remain part of native
+registration identity and reset CAS. No state, transition, authority fence or
+retention limit changes; the diagrams above remain applicable.
+
+The strengthened cursor and public reset/replay controls use2345ms, retaining
+native2345 while Auth records2seconds. The old guard fails the cursor control;
+the corrected complete webhook suite passes295/295 without retention exclusions.
+An independent affected review covers the time/identity relationship and existing
+timestamp-substitution/ABA controls. This source checkpoint does not establish a
+corrected remote platform or browser-stress pass.

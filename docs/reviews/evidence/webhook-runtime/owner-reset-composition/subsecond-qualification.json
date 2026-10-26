@@ -1,0 +1,63 @@
+{
+  "source": "69351af72cbd73179f7f8765424251ecf4a20b99",
+  "base": "0d0b12f32ceface5bf2f556c85d67fe3ff7cf06c",
+  "productionScope": "single Auth-second/native-millisecond comparison; exact native generation unchanged",
+  "preservedFailures": [
+    {
+      "kind": "published Chromium stress036",
+      "run": 40252725334,
+      "job": 121348333981,
+      "code": "forbidden"
+    },
+    {
+      "kind": "old guard with2345ms control",
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101
+    },
+    {
+      "kind": "first corrected gateway probe without scripted source turn",
+      "code": "invalid_request",
+      "claimedPass": false
+    }
+  ],
+  "restored": {
+    "webhooks": {
+      "passed": 295,
+      "failed": 0,
+      "retentionExclusions": 0,
+      "seconds": 19.15,
+      "processLocalUmask": "022"
+    },
+    "requiredClippy": "seven packages, all-targets, -D warnings; exit0",
+    "architecture": "passed",
+    "formatting": "passed",
+    "independentFocusedControls": 16,
+    "gatewayProbe": {
+      "authentication": true,
+      "issuance": true,
+      "create": true,
+      "scriptedCanonicalTurn": true,
+      "share": true,
+      "cursor": true,
+      "observedHead": true,
+      "queued": 25,
+      "attempted": 0,
+      "ownedCleanup": true,
+      "browser": false,
+      "recipient": false
+    }
+  },
+  "review": {
+    "originalReportSha256": "73954063bf9d283a0ebd31fa8a8c471971ff0187c794c6a7a69d99d22635f0fd",
+    "publishedTechnicalExcerptSha256": "217b86174baf8fd0e08c27dfc6b309cefe69721ce992126b7b50c2433c96670a",
+    "findings": [],
+    "newWholeFeatureRound": false
+  },
+  "notQualified": [
+    "corrected published-head platform CI",
+    "corrected browser/default stress",
+    "raised webhook3",
+    "webhook-specific WebKit"
+  ]
+}

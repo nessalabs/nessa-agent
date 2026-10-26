@@ -1,0 +1,18 @@
+Production guard from0d0b12f32; strengthened2345ms fixture; exit101
+running 1 test
+
+thread 'webhooks::infrastructure::product_tests::delivery::owner_query::default_and_false_cursor_skip_head_admission_and_capacity_while_requested_head_refuses_exhaustion' (267301) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery/owner_query.rs:196:5:
+assertion `left == right` failed: {"type":"res","id":"5","ok":false,"error":{"code":"forbidden","message":"forbidden"}}
+  left: Bool(false)
+ right: true
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::product_tests::delivery::owner_query::default_and_false_cursor_skip_head_admission_and_capacity_while_requested_head_refuses_exhaustion ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::product_tests::delivery::owner_query::default_and_false_cursor_skip_head_admission_and_capacity_while_requested_head_refuses_exhaustion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4135 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

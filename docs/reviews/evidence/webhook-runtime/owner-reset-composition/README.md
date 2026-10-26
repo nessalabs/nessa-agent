@@ -1,6 +1,7 @@
 # Owner reset and retained outcome composition
 
-Source checkpoint: `c790639702213d79bad32aaa148e2744ca7a9d1d`.
+Original assembled source checkpoint: `c790639702213d79bad32aaa148e2744ca7a9d1d`.
+Owner cursor/reset time-precision correction: `69351af72cbd73179f7f8765424251ecf4a20b99`.
 Current main `919079a7b13f3e4e8600cc7584b097641f8992c7` is preserved,
 including native discovery and UI pin `dac8ff435525ad91cb95365fce80bb768a58b582`.
 The reviewed two-file verifier correction from `942e66bf14f0a48091a9f81699cd2b3c9d60093b`
@@ -82,6 +83,10 @@ under round three, not a fourth full review, counter reset or relabeling of the
 original report as finding-free.
 
 ## Remaining gates and exclusions
+
+The later owner cursor/reset precision correction and its preserved browser
+failure, deterministic control, independent review and actual gateway probe are
+recorded in the [subsecond correlation receipt](subsecond-precision.md).
 
 The published-head CI failures and narrowly reviewed fixture correction are
 tracked in the [CI correction receipt](ci-fixture-repair.md). Original failures
