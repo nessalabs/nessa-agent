@@ -1,4 +1,4 @@
-//! Device-side enrollment, retained sync, and the phone send outbox, independent
+//! Device-side enrollment, local product sessions, retained sync and phone send outbox, independent
 //! of the gateway runtime.
 //! `pairing` owns native enrollment; `retained` reads an owner's or granted
 //! peer's records, projects saved evidence and composes enrollment with purging;
@@ -20,3 +20,5 @@ mod read_only_sync;
 pub mod retained;
 #[cfg(feature = "cli")]
 pub use composition::error::CommandError;
+
+pub mod local_product;

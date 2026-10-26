@@ -103,3 +103,7 @@ phase budgets and wire versions are unchanged by the crate extraction.
 Build the example with `cargo build -p nessa-client-core --example read_only_sync`.
 See [the example design](../../docs/design/read-only-sync-example.md) for its
 commands and separate captured-check/durable-progress contract.
+
+`src/local_product.rs` owns the bounded numeric-loopback authenticated product
+transport shared by local command consumers. The connection closes on drop;
+consumers own command interpretation and the gateway rechecks policy.
