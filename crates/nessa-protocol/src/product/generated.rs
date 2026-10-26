@@ -587,6 +587,25 @@ pub struct AttachmentBeginResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentWriteParams {
+    pub ticket: String,
+    pub offset: u64,
+    pub data: String,
+    pub last: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentWriteResult {
+    pub received: u64,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub digest: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub mime_type: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub size: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationUsageLimit {
     pub provider: String,
     pub recovery: String,
@@ -3585,6 +3604,7 @@ pub mod product_method {
     pub const CONVERSATION_REORDER: &str = "conversation.reorder";
     pub const ARTIFACT_READ: &str = "artifact.read";
     pub const ATTACHMENT_BEGIN: &str = "attachment.begin";
+    pub const ATTACHMENT_WRITE: &str = "attachment.write";
     pub const AGENTS_LIST: &str = "agents.list";
     pub const AGENTS_SET_NATIVE_HOOKS: &str = "agents.setNativeHooks";
     pub const AGENTS_SUBSCRIBE: &str = "agents.subscribe";
@@ -3834,7 +3854,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 90
+                items.len() <= 91
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3891,6 +3911,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.reorder",
     "artifact.read",
     "attachment.begin",
+    "attachment.write",
     "agents.list",
     "agents.setNativeHooks",
     "agents.subscribe",
@@ -4024,6 +4045,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.delete"
         | "conversation.reorder"
         | "attachment.begin"
+        | "attachment.write"
         | "conversation.setApprovalMode"
         | "agents.install"
         | "mcp.callTool"

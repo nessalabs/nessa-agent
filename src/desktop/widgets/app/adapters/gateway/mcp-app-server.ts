@@ -137,6 +137,10 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.AttachmentCapacity]: "failed",
   [ConversationErrorCode.AttachmentStorageUnavailable]: "failed",
   [ConversationErrorCode.AttachmentCleanupUnavailable]: "failed",
+  [ConversationErrorCode.UploadTicketInvalid]: "failed",
+  [ConversationErrorCode.UploadFailed]: "failed",
+  [ConversationErrorCode.UnsupportedImage]: "failed",
+  [ConversationErrorCode.ImageTooLarge]: "failed",
   [ConversationErrorCode.ConversationErasureIncomplete]: "failed",
 }
 

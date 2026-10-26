@@ -36,7 +36,8 @@ when {
      "conversation.close", "conversation.archive", "conversation.unarchive", "conversation.delete",
      "conversation.rename", "conversation.reorder", "conversation.subscribe", "conversation.subscribeList",
      "conversation.subscribeEvents", "conversation.peek",
-     "conversation.unsubscribe", "attachment.begin"].contains(context.method)
+     "conversation.unsubscribe", "attachment.begin",
+     "attachment.write"].contains(context.method)
 };
 // A live conversation is conversation.subscribe. The chat list is
 // conversation.subscribeList. The payloadless watch methods are not this purpose.

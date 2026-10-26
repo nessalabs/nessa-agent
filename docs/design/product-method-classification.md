@@ -156,6 +156,7 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `conversation.reorder` | `conversation` | Control | Controls | Request(CatalogueWrite) |
 | `artifact.read` | `attachment::dispatch_read` | Ordinary | ArtifactReads | ManifestThenArtifactRead |
 | `attachment.begin` | `attachment` | Ordinary | UploadBegins | Request(CatalogueWrite) |
+| `attachment.write` | `attachment::dispatch_write` | Ordinary | Requests | Manifest |
 | `agents.list` | `socket` | Ordinary | Requests | Manifest |
 | `agents.setNativeHooks` | `socket` | Ordinary | Requests | Manifest |
 | `agents.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowAgents |
