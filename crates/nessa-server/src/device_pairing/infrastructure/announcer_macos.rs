@@ -189,38 +189,35 @@ mod tests {
         assert!(txt_record(&"x".repeat(300)).is_err());
     }
 
-    /// The real responder: the registration is browsable through `dns-sd`
-    /// while it lives and gone once withdrawn. It counts browse results, so a
-    /// gateway already announcing on the network does not confuse it. It
-    /// talks to mDNSResponder, so it runs on request on a Mac:
-    /// `cargo test -- --ignored`.
+    /// The real responder: the registration resolves through `dns-sd` to its
+    /// port and gateway id while it lives, and is gone once withdrawn. It
+    /// looks for its own port and id, not a count of browse results: one
+    /// service is listed once per interface, and a gateway already announcing
+    /// on the network is listed too. It talks to mDNSResponder, so it runs on
+    /// request on a Mac: `cargo test -- --ignored`.
     #[test]
     #[ignore = "registers with this Mac's Bonjour responder"]
     fn a_registration_is_browsable_until_withdrawn() {
-        let browse = || {
+        let listed = || {
             let mut child = Command::new("dns-sd")
-                .args(["-B", "_nessa-link._tcp", "local."])
+                .args(["-Z", "_nessa-link._tcp", "local."])
                 .stdout(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
             std::thread::sleep(Duration::from_secs(3));
             child.kill().unwrap();
-            String::from_utf8(child.wait_with_output().unwrap().stdout)
-                .unwrap()
-                .lines()
-                .filter(|line| line.contains(" Add "))
-                .count()
+            let zone = String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap();
+            zone.contains(" 47999 ") && zone.contains("\"gw=gateway-under-test\"")
         };
-        let before = browse();
         let announced = SystemAnnouncer
             .announce(&LinkingAnnouncement {
                 address: "0.0.0.0:47999".parse().unwrap(),
                 gateway: "gateway-under-test".into(),
             })
             .unwrap();
-        let during = browse();
+        let during = listed();
         announced.withdraw();
-        let after = browse();
-        assert_eq!((during, after), (before + 1, before));
+        let after = listed();
+        assert_eq!((during, after), (true, false));
     }
 }
