@@ -45,7 +45,8 @@
  *               strip is drawn for the chats, each pane has one header in
  *               the titlebar's row, clear of the window's controls, and its
  *               picture runs up to the window's top edge — with the session
- *               list shown and with the panes alone
+ *               list shown and with the panes alone; with the list hidden,
+ *               choosing the channel in the sidebar shows it again
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -611,6 +612,29 @@ async function studioWithTheCorner(page, failures) {
 
 /** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
 const LIGHTS_END = 76
+
+/**
+ * Choosing a channel shows its sessions: with the session list hidden, a
+ * click on the main conversation's channel in the sidebar shows the list
+ * again and leaves the one pane as it was. The person can hide it again.
+ */
+async function channelShowsList(page, failures) {
+  const list = (state) => page.locator(`${css.workspace}[data-list="${state}"]`)
+  await page.keyboard.press(keys.toggleSessionList)
+  if (!(await waitFor(async () => (await list("closed").count()) === 1, 5_000))) {
+    failures.push("the session list did not hide")
+    return
+  }
+  await page
+    .locator(`${css.sidebar} nav`)
+    .getByText("Conversations", { exact: true })
+    .first()
+    .click({ timeout: 10_000 })
+  if (!(await waitFor(async () => (await list("open").count()) === 1, 5_000)))
+    failures.push("choosing a channel left the session list hidden")
+  const panes = await page.locator(css.pane).count()
+  if (panes !== 1) failures.push(`choosing a channel left ${panes} panes, not 1`)
+}
 
 /** The compact rail and the window bar keep separate geometry. */
 async function aroundTheLights(page, rail, failures) {
@@ -2904,9 +2928,12 @@ const steps = {
       return
     }
     await run.page.keyboard.press(keys.toggleSidebar)
+    await channelShowsList(run.page, failures)
+    if (failures.length) return
     // The main conversation is the pane left. Not opened from its row: the
     // row beside it quotes the window, the main conversation's title with it.
-    // Asked from the main conversation's composer: it is the whole window now.
+    // Asked from the main conversation's composer: it is the whole window now,
+    // the session list shown again by the channel.
     await windowRead(
       run,
       run.main.id,
@@ -2917,6 +2944,7 @@ const steps = {
         said.you?.position === "full" &&
         said.you.focused === true &&
         said.windows?.length === 1 &&
+        said.windows[0].sessionList === "open" &&
         said.windows[0].panes.length === 1,
     )
   },
