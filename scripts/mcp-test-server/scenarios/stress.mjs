@@ -108,6 +108,11 @@ export const WATCH_CALLS = 12
 /** How long a `trace` turn waits after each call but the last. */
 export const TRACE_PAUSE_MS = 400
 /**
+ * How long a `trace` turn holds after its last call before it answers: the
+ * run is still at work for that long, for the window to be looked at live.
+ */
+export const TRACE_HOLD_MS = 8000
+/**
  * The calls a `trace` turn makes, in order: what each is called with, which
  * the gateway keeps as its input, and how each ends.
  */
@@ -240,14 +245,16 @@ export function stressScenario({
       },
       {
         // Calls before the answer, one of them failing, with a pause after
-        // each so the bars of the waterfall start apart.
+        // each so the bars of the waterfall start apart, and a longer one
+        // after the last while the run is still live.
         when: STRESS.trace,
         steps: [
           ...TRACE_CALLS.flatMap(({ tool, arguments: args }, index) => [
             { do: "tool", tool, arguments: args },
-            ...(index < TRACE_CALLS.length - 1
-              ? [{ do: "pause", ms: TRACE_PAUSE_MS }]
-              : []),
+            {
+              do: "pause",
+              ms: index < TRACE_CALLS.length - 1 ? TRACE_PAUSE_MS : TRACE_HOLD_MS,
+            },
           ]),
           { do: "text", chunks: [SAYS.trace, "${prompt.text}"] },
           { do: "end" },

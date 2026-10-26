@@ -330,7 +330,7 @@ export const Transcript = memo(function Transcript({
               {transcript.interactionNotice}
             </p>
           ) : null}
-          {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
+          <LiveRow activity={transcript?.activity ?? null} after={messages} />
           {(transcript?.questions ?? []).map((question) => (
             <QuestionCard
               key={JSON.stringify([
