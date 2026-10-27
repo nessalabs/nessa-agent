@@ -32,6 +32,42 @@ unchanged. Statecharts do not need new transitions or checkpoints for an asserti
 a test user's reload actions, or accessor availability. The desktop verification
 checklist records the reload regression.
 
+## Second hosted run and approval-receipt repair
+
+Hosted rerun [40446076479](https://github.com/nessalabs/nessa-agent/actions/runs/40446076479)
+at `4c977dad81dc2f2ebd13607dff241c4149427c93` confirmed the prior fixes: frontend,
+all platform jobs, Windows desktop/server compilation and other checks passed.
+Its only underlying failure was stress step039 GitHub: the row became signed out
+after approval. The resulting aggregate failure is not a second underlying fault.
+
+A deterministic application test independently reproduced a matching race:
+completion took terminal ownership but projected SignedOut before waiting for its
+audit/storage receipts. A Settings poll could then stop before the later Connected
+publication. `4ff387934` captures the failing regression; `e684e77f2` adds an
+internal Saving projection that remains publicly Connecting until both receipts.
+The precise hosted interleaving was not observed directly; the source contract
+violation was independently falsified and repaired.
+
+The original completion still owns terminal evidence. Saving owns no second poll
+or audit, and remains generation-bound. Lock/reopen and queued disconnect tests
+cover both receipt boundaries, alongside existing failure/rollback and real-store
+fence tests. See [independent implementation review](saving-review.md).
+
+Verified on the repaired source:
+
+- GitHub/relay/product tests in the eight-package CI selection: **67 passed**.
+- Strict all-target Clippy in the same package selection: **passed**.
+- GitHub live-event browser checks, Chromium/WebKit: **3/3 held**.
+- Full default Chromium conversation stress: **48/48 held**, including039 GitHub,
+  at-rest automatic-denial checks, followers and console checks.
+- Architecture, formatting and 134-page documentation validation: **passed**;
+  the owning connection diagram parses. Only the affected state page advances
+  its source checkpoint to the reviewed implementation commit.
+
+No public wire contract, permission, deadline, capacity or Cloudflare plan changed.
+The PR stays draft pending hosted verification of the new head. Historical failures
+and the separately tracked observations below are retained, not waived or closed.
+
 ## Separate observations retained
 
 - Full local script suite after the package-list repair: **455 passed, 1 failed,

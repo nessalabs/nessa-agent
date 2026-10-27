@@ -118,14 +118,15 @@ waiting.
 | G11 | connecting | token; account read refused | signed out, `last: rejected`; the token is dropped | connect-ended |
 | G12 | connecting | token; account read never answers (or keeps failing) before the code would expire | signed out, `last: unreachable` | connect-ended |
 | G13 | connecting | token; the record cannot be kept | signed out, `last: audit_unavailable`; never saved, never given out | — |
-| G14 | connecting | token; the file cannot be saved | the file is deleted (a save can fail after writing it), then signed out, `last: store_unavailable`; never given out | connected, then connect-ended: the later record is what holds |
-| G15 | connecting | cancel, or disconnect | signed out, `last: cancelled`, poll stopped; stands even when its record cannot be kept, which is refused `github_audit_unavailable` and adds `unrecorded` | connect-cancelled |
+| G14 | connecting | token; the encrypted entry cannot be saved | rollback deletion is attempted (a save can fail after writing it), then signed out, `last: store_unavailable`; never given out | connected, then connect-ended: the later record is what holds |
+| G15 | connecting, before approval completion owns the gate | cancel, or disconnect | signed out, `last: cancelled`, poll stopped; stands even when its record cannot be kept, which is refused `github_audit_unavailable` and adds `unrecorded` | connect-cancelled |
+| G15a | approval receipts pending | cancel, or disconnect | waits for completion under the same generation gate; cancel leaves a completed sign-in held, while disconnect deletes it; a failed completion retains its actual result | existing completion/cancel/disconnect records |
 | G16 | signed out (after G15) | the cancelled attempt's late answer | dropped: not the attempt waiting (`a_cancelled_attempts_late_approval_is_dropped`) | — |
-| G17 | connected | disconnect | `disconnect-requested` recorded first, then the file deleted, then signed out; if `disconnected` is refused, still signed out with `unrecorded`, refused `github_audit_unavailable` | disconnect-requested, disconnected |
-| G18 | connected | disconnect, the file cannot be deleted | still connected, refused `github_storage_unavailable`; if `disconnect-failed` is refused too, connected with `unrecorded` | disconnect-failed |
+| G17 | connected | disconnect | `disconnect-requested` recorded first, then the encrypted entry deleted, then signed out; if `disconnected` is refused, still signed out with `unrecorded`, refused `github_audit_unavailable` | disconnect-requested, disconnected |
+| G18 | connected | disconnect, the encrypted entry cannot be deleted | still connected, refused `github_storage_unavailable`; if `disconnect-failed` is refused too, connected with `unrecorded` | disconnect-failed |
 | G19 | signed out | cancel, or disconnect | answers signed out; disconnect first deletes any credential entry left by G14 (refused `github_storage_unavailable` if it cannot) | — |
-| G20 | (start) | the gateway starts | the saved sign-in, or signed out; a file that cannot be read is signed out with `last: store_unavailable` | — |
-| G21 | connecting | the gateway stops | the attempt is gone; next start is signed out | — |
+| G20 | (start) | the gateway starts | no secret is loaded while the vault is locked; after unlock, restore the saved sign-in or signed out; unreadable saved data reports `last: store_unavailable` | — |
+| G21 | connecting | the gateway stops | the code attempt is gone; an approved credential durably saved before the stop can be restored after unlocking the vault | — |
 
 Disconnect forgets the token on this gateway. Revoking it at GitHub needs the
 app's client secret, which a desktop app cannot keep, so the row says to use

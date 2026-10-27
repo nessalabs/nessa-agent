@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "7307eb9d6a9d54f37026323ad7e35bae7c33039f"
+sourceRevision: "e684e77f20910b8e4c56e920005baa8d9b4d32f0"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -27,6 +27,7 @@ sources:
   - crates/nessa-server/src/github_relay/infrastructure/selection.rs
   - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
   - crates/nessa-server/src/product/github.rs
+  - crates/nessa-server/src/github/application/connections.rs
   - src/desktop/settings/ui/github-row.tsx
   - src/desktop/settings/ui/github-live-help.tsx
   - crates/nessa-server/src/github_relay/application/catch_up.rs
@@ -82,6 +83,10 @@ stateDiagram-v2
     LocalCommitted --> Authorizing: wake-up or reconnect resumes saved cursor
     Gap --> Authorizing: owner explicitly acknowledges missing range
 ```
+
+GitHub approval remains pending while the audit and encrypted-credential receipts
+are written. Settings reports connected only after both receipts finish; a pending
+save does not report signed out. See the [GitHub connection lifecycle](../../../design/github-connect.md).
 
 ## The cloud receipt
 
