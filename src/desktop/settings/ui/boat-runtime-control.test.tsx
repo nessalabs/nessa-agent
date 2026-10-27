@@ -33,6 +33,51 @@ async function save() {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
   })
 }
+it("a late save cannot replace a newly connected gateway's settings", async () => {
+  let finish: ((value: BoatRuntimeSettings) => void) | undefined
+  const old = {
+    runtimeSettings: async () => unlimited,
+    setRuntimeSettings: () =>
+      new Promise<BoatRuntimeSettings>((resolve) => {
+        finish = resolve
+      }),
+  }
+  await act(async () => root.render(<BoatRuntimeControl gateway={old} />))
+  await select("14400")
+  await save()
+  expect(finish).toBeDefined()
+  const fresh = {
+    runtimeSettings: async (): Promise<BoatRuntimeSettings> => ({
+      defaultLifetime: { mode: "after", seconds: 28_800 },
+    }),
+    setRuntimeSettings: vi.fn(async (): Promise<BoatRuntimeSettings> => {
+      throw new Error("unexpected save")
+    }),
+  }
+  await act(async () => root.render(<BoatRuntimeControl gateway={fresh} />))
+  await act(async () => finish?.({ defaultLifetime: { mode: "after", seconds: 14_400 } }))
+  expect(host.querySelector("select")?.value).toBe("28800")
+  expect(host.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true)
+  expect(fresh.setRuntimeSettings).not.toHaveBeenCalled()
+})
+it("preserves a custom saved duration after discarding a preset draft", async () => {
+  const setRuntimeSettings = vi.fn(async (): Promise<BoatRuntimeSettings> => {
+    throw new Error("unexpected save")
+  })
+  const gateway = {
+    runtimeSettings: async (): Promise<BoatRuntimeSettings> => ({
+      defaultLifetime: { mode: "after", seconds: 12_345 },
+    }),
+    setRuntimeSettings,
+  }
+  await act(async () => root.render(<BoatRuntimeControl gateway={gateway} />))
+  expect(host.querySelector("select")?.value).toBe("12345")
+  await select("14400")
+  await select("12345")
+  await save()
+  expect(setRuntimeSettings).not.toHaveBeenCalled()
+  expect(host.querySelector("select")?.value).toBe("12345")
+})
 it("saves an ordinary global default without receiving token capabilities", async () => {
   let stored = unlimited
   const setRuntimeSettings = vi.fn(
