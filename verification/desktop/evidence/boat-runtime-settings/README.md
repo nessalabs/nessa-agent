@@ -1,6 +1,10 @@
 # Boat lifetime verification
 
-Current source: `49080c0477f23e752bb7dd90dc80e093a9d12558`, based on PR #1158 after #1166 merged.
+The [mainline integration receipts](mainline/README.md) record the later assembled
+source, matching worker protocol, new provider workflow, pane clipping repair
+and client scope correction. Results below retain their earlier attribution.
+
+Earlier reviewed source: `49080c0477f23e752bb7dd90dc80e093a9d12558`, based on PR #1158 after #1166 merged.
 Its base merge tree is identical to the originally reviewed #1166 head
 `33b0fc6534cc30507061665cbc7d3f04cce48e66`. macOS arm64, production browser
 builds. Provider/backend evidence remains attributed to

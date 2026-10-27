@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Opening beside a pane first looks for space on the right, then below."
 parent: "desktop-workspace"
-sourceRevision: "0769cc8b2dd72b8b6b2b215f9060c4354388e14a"
+sourceRevision: "e213c1ccb370ced51a9f4ea794cd58441a0717c1"
 sources:
   - "src/desktop/workspace/ui/panes/panes.css"
   - "src/desktop/styles.test.ts"
@@ -23,6 +23,8 @@ sources:
   - "src/desktop/workspace/model/window-fit.test.ts"
   - "verification/desktop/scripts/responsive.mjs"
   - "verification/desktop/scripts/safe-area.mjs"
+  - "verification/desktop/scripts/columns.mjs"
+  - "verification/desktop/scripts/conversation-stress.mjs"
   - "docs/adr/done/253-split-panes-component.md"
 diagramLinks: {}
 ---
@@ -43,6 +45,12 @@ A corner pane's header text and controls keep clear of the window controls
 while a side column reopens and the pane flies to its new position. The
 header returns to its normal inset after landing. Its background picture
 can still extend behind the window controls.
+
+The pane root clips overflowing content; its transcript owns scrolling. Focusing
+a descendant does not scroll the root or move its header out of the titlebar.
+`columns.mjs --only pane-clipping` checks this with an overflowing focus fixture
+in both browser engines and layouts; the conversation stress `window` step also
+measures root offsets and header geometry after its long preceding sequence.
 
 ```mermaid
 stateDiagram-v2

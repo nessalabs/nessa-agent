@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: 49080c0477f23e752bb7dd90dc80e093a9d12558
+sourceRevision: "e213c1ccb370ced51a9f4ea794cd58441a0717c1"
 summary: Channels place main agents and threads on Local or Boat and override the default cloud VM lifetime.
 parent: gateway
 sources:
@@ -31,6 +31,8 @@ sources:
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
   - src/desktop/workspace/ui/source-list/sidebar-row.tsx
   - src/desktop/workspace/ui/source-list/source-list.css
+  - packages/nessa-client/src/presentation/boat-api.ts
+  - packages/nessa-client/src/presentation/boat-api.test.ts
 diagramLinks: {}
 ---
 
@@ -84,6 +86,12 @@ the requested target. The gateway-wide override map uses the shared configuratio
 byte bound, rather than one owner's channel quota. These
 preferences are independent of the encrypted Boat token and can be edited without
 unlocking the credential vault.
+
+The client captures the requested target once and uses it for both dispatch and
+response binding. Non-enumerable or accessor properties cannot change the target
+between those steps; inherited scope refuses before dispatch. The read/write
+regressions in `boat-api.test.ts` exercise these cases with the actual outgoing
+request, including valid channel responses.
 
 The configuration adapter owns each accepted settings save, including after its
 socket caller disappears. It uses the existing configuration lock and atomic

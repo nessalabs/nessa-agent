@@ -110,9 +110,20 @@ the final CI package selection passed 3907 server tests with 15 existing ignores
 CI remains pending. Exact checkpoints,
 receipts, screenshots, review dispositions and exclusions live in
 [verification evidence](../../../verification/desktop/evidence/boat-runtime-settings/README.md).
-The channel-workspaces state page names its exact reviewed source. The worker
-lease protocol and published image remain unchanged because lifetime is
-gateway-side policy.
+The channel-workspaces state page names its exact reviewed source. Lifetime is
+gateway-side policy and did not itself change the worker lease protocol.
+
+The subsequent mainline integration inherits worker protocol
+`066217f7701b98b9` and its matching prebuilt image. A new real provider workflow
+passed at backend `f7a2a1f73`, with all four owned VMs independently confirmed
+absent. Fresh assembled-source review closed clean in round two at
+`e213c1ccb370ced51a9f4ea794cd58441a0717c1`, after correcting request scope capture
+for JavaScript accessors and non-enumerable properties. The settings matrix
+passes both engines/layouts and raised channel stress passes 9/9 per engine.
+The CI pane-root scrolling repair is tracked in #1184; WebKit's separate GitHub
+keyboard failure is tracked in #1186 without a baseline-cause claim. Broad
+verification and final-head CI remain pending. Exact new attribution and review
+exclusions are in the [mainline evidence](../../../verification/desktop/evidence/boat-runtime-settings/mainline/README.md).
 
 Cloud wake, automatic idle detection, renewing active finite lifetimes and
 altering already running VM deadlines are separate capabilities.
