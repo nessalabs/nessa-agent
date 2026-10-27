@@ -26,7 +26,12 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       // the files only by the path the turn named.
       content:
         local?.content ??
-        referencedContent(message.userText, message.attachments, message.files),
+        referencedContent(
+          message.userText,
+          message.attachments,
+          message.files,
+          message.uploads,
+        ),
       receipt: waiting.has(message.executionId)
         ? "queued"
         : message.status === "queued"
@@ -83,7 +88,12 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       from: "user",
       content:
         local?.content ??
-        referencedContent(pending.text, pending.attachments, pending.files),
+        referencedContent(
+          pending.text,
+          pending.attachments,
+          pending.files,
+          pending.uploads,
+        ),
       receipt: "queued",
       executionId: pending.executionId,
       actionId: local?.actionId,

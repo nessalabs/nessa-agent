@@ -78,6 +78,7 @@ fn image() -> UserMessage {
             ImageReference::new(Sha256Digest::from_bytes([3; 32]), ImageMediaType::Png, 6).unwrap(),
         ],
         Vec::new(),
+        Vec::new(),
     )
     .unwrap()
 }

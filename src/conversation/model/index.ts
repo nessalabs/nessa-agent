@@ -45,6 +45,8 @@ export {
   type ImageRefusal,
   type LinkedFile,
   type LinkedFileReferencePart,
+  type UploadedFileReference,
+  type UploadedFileReferencePart,
   type StoredImageType,
   type UploadFailure,
   type UploadState,

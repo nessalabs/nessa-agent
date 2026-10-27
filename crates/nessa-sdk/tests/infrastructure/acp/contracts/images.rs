@@ -105,6 +105,7 @@ fn message(id: &str, text: Option<&str>, images: Vec<ImageReference>) -> Executi
             text.map(|text| PromptText::new(text).unwrap()),
             images,
             Vec::new(),
+            Vec::new(),
         )
         .unwrap(),
         estimated_input_tokens: 10,

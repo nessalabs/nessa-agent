@@ -101,8 +101,13 @@ fn prompt_for(paths: &[&str]) -> String {
         .iter()
         .map(|path| LinkedFile::new((*path).into()).expect("the domain accepts this path"))
         .collect();
-    let message = UserMessage::new(Some(PromptText::new("look").unwrap()), Vec::new(), files)
-        .expect("a message of text and files");
+    let message = UserMessage::new(
+        Some(PromptText::new("look").unwrap()),
+        Vec::new(),
+        files,
+        Vec::new(),
+    )
+    .expect("a message of text and files");
     let blocks = content_blocks(&message, ImageBlocks::none()).unwrap();
     blocks[1..]
         .iter()
@@ -468,6 +473,7 @@ async fn nothing_is_opened_resolved_or_followed_to_build_a_link() {
         None,
         Vec::new(),
         vec![LinkedFile::new(missing.to_str().unwrap().into()).unwrap()],
+        Vec::new(),
     )
     .unwrap();
     assert_eq!(fits_one_frame(&message, 1024 * 1024), Ok(()));

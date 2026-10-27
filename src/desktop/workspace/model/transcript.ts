@@ -17,6 +17,7 @@ import type {
   Note,
   ImageReferencePart,
   LinkedFileReferencePart,
+  UploadedFileReferencePart,
   UsageLimitNotice,
 } from "../../../conversation"
 
@@ -35,7 +36,9 @@ export type Part =
   /** Sent inputs retain references, distinct from files the agent published. */
   | {
       readonly kind: "attachments"
-      readonly content: readonly (ImageReferencePart | LinkedFileReferencePart)[]
+      readonly content: readonly (
+        ImageReferencePart | LinkedFileReferencePart | UploadedFileReferencePart
+      )[]
     }
   | {
       readonly kind: "step"

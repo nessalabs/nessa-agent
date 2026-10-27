@@ -43,6 +43,7 @@ impl RecordingSource {
             ConversationApprovalMode::Full => ApprovalMode::Full,
         };
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(
                 Provider::new(self.factory.clone())
                     .with_model(model)
@@ -213,6 +214,7 @@ impl Fixture {
         .unwrap();
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents,
                 storage: storage.clone(),
@@ -415,6 +417,7 @@ async fn a_conversation_in_a_channel_starts_with_its_defaults_in_its_folder() {
             caller("person", "say"),
             "say".to_owned(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -752,6 +755,7 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
             caller("person", "say"),
             "say".to_owned(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },

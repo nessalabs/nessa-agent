@@ -100,6 +100,7 @@ lease_protocol!(
     "../conversation/infrastructure/ssh_environment/sftp.rs",
     "../../../nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs",
     "../../../nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs",
+    "../../../nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs",
     "../../../nessa-sdk/src/infrastructure/harness_process.rs",
     "../../../nessa-sdk/src/infrastructure/process.rs",
     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",

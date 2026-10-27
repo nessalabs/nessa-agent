@@ -721,6 +721,7 @@ pub(super) fn providers(
         // advertised `promptCapabilities.image`, so an agent that takes none is
         // offered none without this having to know which those are.
         let build::ProviderComposition {
+            workspace,
             provider,
             execution_audit,
             sandbox,
@@ -765,6 +766,7 @@ pub(super) fn providers(
         providers.insert(
             agent,
             ConversationAgent {
+                workspace,
                 provider,
                 execution_audit,
                 reserved_output_tokens: runtime.output_tokens,
@@ -796,6 +798,7 @@ pub(super) fn provider_for(
     policy: &ValidatedOpenCodePolicy,
 ) -> Result<ConversationAgent, RunError> {
     let build::ProviderComposition {
+        workspace,
         provider,
         execution_audit,
         sandbox,
@@ -810,6 +813,7 @@ pub(super) fn provider_for(
         Some(policy),
     )?;
     Ok(ConversationAgent {
+        workspace,
         provider,
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
@@ -839,6 +843,7 @@ pub(super) fn provider_for_fixed(
         ..configured.clone()
     };
     let build::ProviderComposition {
+        workspace,
         provider,
         execution_audit,
         sandbox,
@@ -853,6 +858,7 @@ pub(super) fn provider_for_fixed(
         None,
     )?;
     Ok(ConversationAgent {
+        workspace,
         provider,
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
@@ -1029,6 +1035,7 @@ pub(super) mod build {
     use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc};
 
     pub(in crate::composition) struct ProviderComposition {
+        pub(in crate::composition) workspace: Option<String>,
         pub(in crate::composition) provider: Arc<dyn AgentProvider>,
         pub(in crate::composition) execution_audit: Arc<dyn ExecutionAudit>,
         /// The sandbox profiles the binding declares it can set up.
@@ -1306,6 +1313,7 @@ pub(super) mod build {
             )
             .map_err(invalid)?,
         );
+        let published_workspace = workspace.to_str().map(str::to_owned);
         let mut acp = launch_configuration(
             config,
             runtime,
@@ -1381,6 +1389,7 @@ pub(super) mod build {
             }
         };
         Ok(ProviderComposition {
+            workspace: published_workspace,
             provider,
             execution_audit: audit,
             sandbox,
