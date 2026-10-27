@@ -22,7 +22,7 @@ fn delivery_preserves_original_input_and_appends_confirmed_paths_in_order() {
         ImageReference::new(Sha256Digest::from_bytes([2; 32]), ImageMediaType::Png, 1).unwrap();
     let original = UserMessage::new(
         None,
-        vec![image.clone()],
+        vec![image],
         vec![linked.clone()],
         vec![upload.clone(), notes.clone()],
     )
