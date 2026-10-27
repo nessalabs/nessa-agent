@@ -939,6 +939,7 @@ impl ConversationService {
                         report.caller.clone(),
                         report.execution.clone(),
                         SubmittedMessage {
+                            uploads: Vec::new(),
                             text: text.clone(),
                             ..Default::default()
                         },

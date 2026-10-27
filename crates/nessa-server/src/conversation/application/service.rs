@@ -102,7 +102,10 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::{ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UserMessage},
+    prompts::{
+        ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UploadedFileReference,
+        UserMessage,
+    },
     questions::{QuestionChoice, QuestionId},
     sessions::ExecutionSessionId,
 };
@@ -343,6 +346,9 @@ pub(super) fn blank_text(text: &str) -> bool {
 /// agent nobody has selected is still the agent yesterday's conversations need.
 #[derive(Clone)]
 pub struct ConversationAgent {
+    /// Canonical local workspace selected with this exact provider generation.
+    /// The execution environment's reported workspace takes precedence remotely.
+    pub workspace: Option<String>,
     /// What opens an execution session for it.
     pub provider: Arc<dyn AgentProvider>,
     /// The same durable audit sink injected into the provider and prepared Agent.
@@ -829,6 +835,8 @@ impl Slot {
     }
 }
 struct Inner {
+    input_file_slots: Arc<Semaphore>,
+    input_files: Option<Arc<super::InputFileDelivery>>,
     workspace: Option<String>,
     /// Every agent this server can start, and which of them a creation that
     /// names none is made on.
@@ -1150,6 +1158,7 @@ fn admission_evidence_error(failure: &AdmissionEvidenceFailure) -> ConversationE
 /// tests. Grouped rather than passed one by one, so that adding one does not
 /// add another positional argument at every call site.
 pub struct ConversationDependencies {
+    pub(crate) input_files: Option<Arc<super::InputFileDelivery>>,
     /// Every configured agent, and the one a caller that names none gets.
     pub agents: ConversationAgents,
     pub storage: Arc<dyn SessionStorage>,
@@ -1367,6 +1376,7 @@ impl ConversationService {
         mcp_apps: Option<McpAppPorts>,
     ) -> Result<Self, ConversationError> {
         let ConversationDependencies {
+            input_files,
             agents,
             storage,
             message_commit_clock,
@@ -1396,7 +1406,9 @@ impl ConversationService {
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                input_file_slots: Arc::new(Semaphore::new(16)),
                 workspace,
+                input_files,
                 agents,
                 storage,
                 message_commit_clock,
@@ -2096,6 +2108,17 @@ impl ConversationService {
                                 manager.expect_handoff(handoff);
                             }
                             let tool_source = checked_source(agent);
+                            if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
+                                let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                                if let Some(workspace) = workspace {
+                                    let local = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| delivery.local.clone());
+                                    opening.fence.set_input_files(Arc::new(super::ConversationInputFiles::new(
+                                        attachments.clone(), service.inner.file_link_audit.clone(), service.inner.clock.clone(), record.organization().clone(), record.owner().clone(), id.clone(), opening.lease.clone(), hold.clone(), workspace, local, opening.fence.input_stop(),
+                                            service.inner.input_file_slots.clone(),
+                                            delivery.timer.clone(),
+                                    )));
+                                }
+                            }
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
                                 manager,
@@ -2290,6 +2313,7 @@ impl ConversationService {
                             let workspace = opening
                                 .workspace
                                 .as_ref()
+                                .or(configured.workspace.as_ref())
                                 .or(channel_folder.as_ref())
                                 .or(service.inner.workspace.as_ref());
                             if let Some(workspace) = workspace {
@@ -3493,8 +3517,29 @@ impl ConversationService {
             .into_iter()
             .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
             .collect::<Result<Vec<_>, _>>()?;
-        let message =
-            UserMessage::new(prompt, images, files).map_err(|_| ConversationError::InvalidInput)?;
+        let message = UserMessage::new(
+            prompt,
+            images,
+            files,
+            message
+                .uploads
+                .into_iter()
+                .map(|file| {
+                    UploadedFileReference::new(
+                        Sha256Digest::parse(&file.digest)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                        nessa_sdk::domain::common::value_objects::MediaType::parse(
+                            &file.media_type,
+                        )
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                        file.size,
+                        file.name,
+                    )
+                    .map_err(|_| ConversationError::InvalidInput)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+        .map_err(|_| ConversationError::InvalidInput)?;
         Ok((execution, message))
     }
 
@@ -3986,6 +4031,56 @@ impl ConversationService {
                     {
                         return Err(ConversationError::AttachmentNotFound.into());
                     }
+                }
+            }
+            if !message.uploads().is_empty() && !known {
+                let attachments = service
+                    .inner
+                    .attachments
+                    .as_ref()
+                    .ok_or(ConversationError::AttachmentNotFound)?;
+                let timer = service
+                    .inner
+                    .input_files
+                    .as_ref()
+                    .ok_or(ConversationError::AttachmentNotFound)?
+                    .timer
+                    .as_ref();
+                for file in message.uploads() {
+                    if !crate::timer::within(
+                        timer,
+                        timer.now() + std::time::Duration::from_secs(10),
+                        attachments.holds_file(&caller.organization_id, &id, file),
+                    )
+                    .await
+                    .map_err(|_| ConversationError::AttachmentNotFound)??
+                    {
+                        return Err(ConversationError::AttachmentNotFound.into());
+                    }
+                }
+                for (index, file) in message.uploads().iter().enumerate() {
+                    super::input_files::record_input(
+                        timer,
+                        service.inner.file_link_audit.as_ref(),
+                        super::InputFileAudit {
+                            conversation: id.clone(),
+                            organization: caller.organization_id.clone(),
+                            execution: execution_id.clone(),
+                            lease: None,
+                            attempt: format!("submission-{}-{index}", execution_id),
+                            file: file.clone(),
+                            stage: super::InputFileStage::Submitted,
+                            destination: None,
+                            delivered: false,
+                            failure: None,
+                            initiator: Some((
+                                caller.principal_id.clone(),
+                                caller.surface_id.clone(),
+                            )),
+                            observed_at_ms: service.inner.clock.unix_milliseconds(),
+                        },
+                    )
+                    .await?;
                 }
             }
             // A message naming paths is recorded before it is admitted, and
@@ -4625,7 +4720,11 @@ impl ConversationService {
     /// Record in the conversation's summary that `message` was accepted.
     async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
         let at_ms = self.inner.clock.unix_milliseconds();
-        let first_file = message.files().first().map(LinkedFile::name);
+        let first_file = message
+            .files()
+            .first()
+            .map(LinkedFile::name)
+            .or_else(|| message.uploads().first().map(|file| file.name()));
         self.change_summary(id, |previous| {
             Some(ConversationSummary::after_message(
                 previous,
@@ -5092,7 +5191,7 @@ impl ConversationService {
                         // need the files. An agent that did not close keeps its
                         // saved invocations, and one of those may be a turn that
                         // names images and has not settled.
-                        let may_release = closed || !awaits_images(snapshot.as_ref());
+                        let may_release = closed || !awaits_uploaded_input(snapshot.as_ref());
                         (
                             result.map(|_| ()).map_err(ConversationError::Agent),
                             may_release,
@@ -7340,12 +7439,13 @@ fn offers_notes(known: bool, is_app: bool, mode: &SubmissionMode) -> bool {
     !known && !is_app && matches!(mode, SubmissionMode::Queue)
 }
 
-fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
+fn awaits_uploaded_input(snapshot: Option<&SessionSnapshot>) -> bool {
     let Some(snapshot) = snapshot else {
         return true;
     };
     snapshot.invocations.iter().any(|record| {
-        !record.request.user_message.images().is_empty()
+        (!record.request.user_message.images().is_empty()
+            || !record.request.user_message.uploads().is_empty())
             && record.result.is_none()
             && !record.scheduling.last().is_some_and(|event| {
                 matches!(

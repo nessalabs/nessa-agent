@@ -285,6 +285,7 @@ fn agent(out: &mut String, error: &AgentError) {
         A::RefusedAfterSave => "refused-after-save",
         A::AfterSaveUnavailable => "after-save-unavailable",
         A::UnknownApp(error) => return typed(out, "unknown-app", error),
+        A::UserFile(error) => return typed(out, "user-file", error),
         A::UserImage(error) => return typed(out, "user-image", error),
         A::ImageInputRefused(refusal) => return typed(out, "image-input-refused", refusal),
         A::MessageTooLarge {

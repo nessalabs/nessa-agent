@@ -207,6 +207,7 @@ impl Fixture {
         let clock = Arc::new(ManualClock(AtomicU64::new(1_700_000_000_000)));
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: access_policy(),
                 agents: only(Arc::new(Provider::new(provider.clone()))),
                 storage: backend,
@@ -337,6 +338,7 @@ impl Fixture {
                     caller(&action),
                     action.clone(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: action.clone(),
                         ..SubmittedMessage::default()
                     },

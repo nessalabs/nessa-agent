@@ -330,6 +330,14 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         .len()
         .saturating_add(std::mem::size_of_val(message.images()))
         .saturating_add(std::mem::size_of_val(message.files()))
+        .saturating_add(std::mem::size_of_val(message.uploads()))
+        .saturating_add(
+            message
+                .uploads()
+                .iter()
+                .map(|file| file.name().len() + file.media_type().as_str().len())
+                .sum::<usize>(),
+        )
         .saturating_add(
             message
                 .files()

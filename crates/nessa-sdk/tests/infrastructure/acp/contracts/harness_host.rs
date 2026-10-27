@@ -52,17 +52,35 @@ impl HarnessHost for LocalHost {
             .lock()
             .unwrap()
             .push(launch.environment.clone());
+        let opencode = self.mode == "opencode-echo";
+        let fixture = if opencode {
+            "opencode_acp_test_handler.py"
+        } else {
+            "claude_acp_test_handler.py"
+        };
         let mut command = tokio::process::Command::new("/usr/bin/python3");
         command
             .arg(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/infrastructure/acp/contracts/fixtures/claude_acp_test_handler.py"),
+                    .join("tests/infrastructure/acp/contracts/fixtures")
+                    .join(fixture),
             )
-            .arg(self.mode)
+            .arg(if opencode { "echo" } else { self.mode })
             .current_dir(&self.workspace)
             .env_clear()
             .envs(launch.environment);
-        let process = SupervisedHarness::start(command)?;
+        if opencode {
+            command
+                .env("NESSA_REFUSED_OPENCODE_DATA_HOME", "/refused-data")
+                .env("NESSA_REFUSED_OPENCODE_HOME", "/refused-home")
+                .env("NESSA_REFUSED_OPENCODE_DB", "/refused-db")
+                .env("OPENCODE_DB", self.workspace.join("sessions.sqlite"));
+        }
+        let process = if opencode {
+            OpencodeAcpProvider::start_on_host(command)?
+        } else {
+            SupervisedHarness::start(command)?
+        };
         Ok(HarnessProcess {
             control: Box::new(Counted {
                 inner: process.control,
@@ -148,17 +166,55 @@ async fn a_binding_on_a_host_runs_there_with_the_same_events_approvals_and_close
     }
 }
 
-#[test]
-fn a_binding_that_cannot_run_elsewhere_says_so() {
-    let (_root, binding) = test_opencode_binding("default", 16);
+#[tokio::test]
+async fn opencode_runs_on_the_host_with_its_model_and_cleanup() {
+    let _process_slot = process_test_slot().await;
+    let (_here, binding) = test_opencode_binding("echo", 16);
+    let there = tempfile::tempdir().unwrap();
     let host = Arc::new(LocalHost {
-        workspace: PathBuf::from("/srv/work"),
-        mode: "permission",
+        workspace: std::fs::canonicalize(there.path()).unwrap(),
+        mode: "opencode-echo",
         launches: Mutex::new(Vec::new()),
         cleanups: Arc::new(AtomicUsize::new(0)),
     });
-    assert!(matches!(
-        binding.on_host(host),
-        Err(AgentError::Unsupported(_))
-    ));
+    let provider = binding.on_host(host.clone()).unwrap();
+    let mut opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    assert_eq!(
+        opened.session.capabilities().model().model_id(),
+        "exact-fixture-model"
+    );
+    assert_eq!(
+        opened
+            .session
+            .execute(prompt("hosted"), Arc::new(|| Ok(())))
+            .await
+            .into_result()
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(MessageChunk::text("hosted"))
+    );
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Finished(ExecutionOutcome::Completed)
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert!(host.cleanups.load(Ordering::SeqCst) > 0);
+    assert!(host
+        .launches
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|launch| launch.is_empty()));
+    assert_gone(&there, "pid");
 }

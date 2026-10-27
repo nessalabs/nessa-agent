@@ -87,6 +87,7 @@ fn listing(limits: ConversationLimits) -> Listing {
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(CountingStorage::default()),
@@ -146,6 +147,7 @@ fn stored(limits: ConversationLimits) -> Stored {
     let storage = Arc::new(CountingStorage::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -308,6 +310,7 @@ fn ids(entries: &[ConversationListEntry]) -> Vec<String> {
 }
 fn message(text: &str) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         ..SubmittedMessage::default()
     }
@@ -788,6 +791,7 @@ async fn a_message_of_files_alone_is_titled_by_its_first_file() {
             owner(),
             "files".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: " ".into(),
                 images: Vec::new(),
                 files: vec![
@@ -1378,6 +1382,7 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
     let asked = Arc::new(AskedLimit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
@@ -1507,6 +1512,7 @@ fn answering(
         .collect();
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: policy,
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),

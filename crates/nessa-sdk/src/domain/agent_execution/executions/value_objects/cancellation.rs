@@ -37,7 +37,7 @@ impl InvocationCancellation {
             (SchedulingCause::SessionClosed, SchedulingInitiator::Caller)
                 | (SchedulingCause::Suspended, SchedulingInitiator::Caller)
                 | (
-                    SchedulingCause::RunnerStopped,
+                    SchedulingCause::RunnerStopped | SchedulingCause::TurnStopped,
                     SchedulingInitiator::Automatic
                 )
         ) {

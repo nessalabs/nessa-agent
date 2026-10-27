@@ -243,6 +243,8 @@ pub struct ConversationMessage {
     pub user_text: String,
     pub attachments: Vec<ConversationAttachment>,
     pub files: Vec<ConversationLinkedFile>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub uploads: Vec<ConversationUploadedFile>,
     /// The app that wrote this turn on the person's behalf; absent when the
     /// person wrote it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -301,6 +303,8 @@ pub struct ConversationPending {
     pub text: String,
     pub attachments: Vec<ConversationAttachment>,
     pub files: Vec<ConversationLinkedFile>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub uploads: Vec<ConversationUploadedFile>,
     /// As [`ConversationMessage::app`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
@@ -1266,4 +1270,26 @@ pub struct ConversationPart {
     /// `review`, `hook`, or `deadline` on a local notice; empty on every other part.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub notice_kind: String,
+}
+
+/// Original stored-file input; no execution-specific placement path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationUploadedFile {
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub name: String,
+}
+impl From<&nessa_sdk::domain::agent_execution::prompts::UploadedFileReference>
+    for ConversationUploadedFile
+{
+    fn from(file: &nessa_sdk::domain::agent_execution::prompts::UploadedFileReference) -> Self {
+        Self {
+            digest: file.digest().to_string(),
+            mime_type: file.media_type().as_str().into(),
+            size: file.size(),
+            name: file.name().into(),
+        }
+    }
 }

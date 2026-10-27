@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import {
   appendFileSync,
@@ -14,6 +14,7 @@ import { createConnection } from "node:net"
 import { isAbsolute, join } from "node:path"
 import process from "node:process"
 import { createInterface } from "node:readline"
+import { fileURLToPath } from "node:url"
 import { fixtureCorrelation } from "./evidence.mjs"
 
 const [evidencePath, statePath, supervisorPortText, supervisorNonce] =
@@ -173,6 +174,18 @@ async function receive(message) {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: `running:${expectedExecutionId}` },
     })
+    if (expectedExecutionId.startsWith("uploaded-file-")) {
+      const links = params.prompt.filter((block) => block.type === "resource_link")
+      assert.equal(links.length, 1, "one original phone file per check")
+      const path = fileURLToPath(links[0].uri)
+      assert.equal(path.startsWith(sessionWorkspace + "/"), true)
+      const digest = createHash("sha256").update(readFileSync(path)).digest("hex")
+      record({ type: "input-file", providerSessionId, expectedExecutionId, digest })
+      update(providerSessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `file-sha256:${digest}` },
+      })
+    }
     if (expectedExecutionId === "execution-answer") {
       const permissionRequestId = `review-${expectedExecutionId}`
       const toolCallId = `tool-${expectedExecutionId}`

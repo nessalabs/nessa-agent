@@ -524,6 +524,8 @@ pub struct SubmittedImage {
 /// and a caller that forgets one should not compile.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SubmittedMessage {
+    /// Non-image uploads held by this conversation.
+    pub uploads: Vec<SubmittedUpload>,
     pub text: String,
     /// Images already uploaded into this conversation, in attachment order.
     pub images: Vec<SubmittedImage>,
@@ -642,6 +644,12 @@ pub enum ConversationFileLinkCause {
 /// sink refuses the submission: an agent given a path with no record of who
 /// pointed it there is the thing this prevents.
 pub trait ConversationFileLinkAudit: Send + Sync {
+    /// Stored-input submission and automatic delivery evidence. An adapter that
+    /// cannot commit this evidence refuses uploaded input rather than faking success.
+    fn record_input(&self, _record: super::InputFileAudit) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Err(ConversationError::Audit) })
+    }
+
     fn record(&self, record: ConversationFileLinkAuditRecord) -> ConversationFuture<'_, ()>;
 }
 
@@ -671,6 +679,16 @@ pub struct AttachmentRelease {
 /// whether *this* conversation holds exactly those bytes, so a digest learned
 /// elsewhere cannot be used to read another owner's upload.
 pub trait ConversationAttachments: Send + Sync {
+    /// Exact held stored input. An adapter without general-file support refuses it.
+    fn holds_file<'a>(
+        &'a self,
+        _organization: &'a OrganizationId,
+        _conversation: &'a ConversationId,
+        _file: &'a nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Whether the configured upload store prepares images for conversations.
     fn offers_images(&self) -> bool;
     /// Whether the conversation holds an upload whose digest, media type, and
@@ -762,4 +780,13 @@ pub enum ArtifactKept {
     Held,
     /// The conversation already held exactly this file; nothing was read.
     AlreadyHeld,
+}
+
+/// Original stored input, before domain validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmittedUpload {
+    pub digest: String,
+    pub media_type: String,
+    pub size: u64,
+    pub name: String,
 }

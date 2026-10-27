@@ -171,6 +171,7 @@ impl ScheduledCommandEvidence {
         let fingerprint = super::mutation::submission_fingerprint(
             execution,
             &super::SubmittedMessage {
+                uploads: Vec::new(),
                 text: prompt.into(),
                 ..Default::default()
             },
@@ -2139,6 +2140,7 @@ impl ConversationService {
                 false,
                 row.execution_id.clone(),
                 super::SubmittedMessage {
+                    uploads: Vec::new(),
                     text: row.prompt.clone(),
                     ..Default::default()
                 },
@@ -2716,6 +2718,7 @@ fn scheduled_submit_binding(
         &schedule_caller(row)?,
         &row.execution_id,
         &super::SubmittedMessage {
+            uploads: Vec::new(),
             text: row.prompt.clone(),
             ..Default::default()
         },

@@ -541,6 +541,14 @@ pub struct ImageAttachment {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UploadedFileAttachment {
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub name: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkedFile {
     pub path: String,
 }
@@ -620,6 +628,8 @@ pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
     pub attachments: Vec<ImageAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
@@ -644,6 +654,8 @@ pub struct ConversationPending {
     pub execution_id: String,
     pub text: String,
     pub attachments: Vec<ImageAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
@@ -905,6 +917,8 @@ pub struct ConversationSendParams {
     pub execution_id: String,
     pub text: String,
     pub attachments: Vec<ImageAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
     pub files: Vec<LinkedFile>,
 }
 #[derive(Deserialize, Serialize)]
@@ -1013,6 +1027,8 @@ pub struct ConversationReceiptParams {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<ImageAttachment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<LinkedFile>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

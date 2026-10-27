@@ -10,7 +10,7 @@ use crate::conversation::application::{
     ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
     QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
     RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
-    UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
@@ -511,6 +511,7 @@ async fn answer(
                             || params.text.is_some()
                             || params.attachments.is_some()
                             || params.files.is_some()
+                            || params.uploads.is_some()
                         {
                             return Err(ConversationError::InvalidInput);
                         }
@@ -1181,6 +1182,7 @@ fn requested_conversation_from_receipt(
         || params.text.is_some()
         || params.attachments.is_some()
         || params.files.is_some()
+        || params.uploads.is_some()
     {
         return Err(ConversationError::InvalidInput);
     }
@@ -1201,6 +1203,18 @@ fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
 }
 fn submitted_message(params: &ConversationSendParams) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone(),
         images: params
             .attachments
@@ -1235,6 +1249,18 @@ fn submitted_message_from_receipt(
         return Err(ConversationError::InvalidInput);
     }
     Ok(SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone().ok_or(ConversationError::InvalidInput)?,
         images: params
             .attachments

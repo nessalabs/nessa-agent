@@ -79,6 +79,8 @@ export {
   type ImageReference,
   type ImageReferencePart,
   type LinkedFileReferencePart,
+  type UploadedFileReference,
+  type UploadedFileReferencePart,
   type UploadFailure,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,

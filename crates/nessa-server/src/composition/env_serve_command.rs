@@ -34,10 +34,7 @@ use crate::{
     },
     timer::{Timer, TokioTimer},
 };
-use nessa_protocol::{
-    agents::AgentId,
-    lease::{Hello, Unavailability},
-};
+use nessa_protocol::lease::{Hello, Unavailability};
 use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 use tokio::{
@@ -168,7 +165,11 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
     let auth = Environment::auth_directory_from_system()
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     let config = RuntimeConfig::load(&auth).map_err(not_configured)?;
-    let launcher = launcher(&config).map_err(not_configured)?;
+    let mut launcher = launcher(&config).map_err(not_configured)?;
+    let opencode_database = auth.join("environment").join("opencode-sessions.sqlite");
+    nessa_local_storage::create_directory(&auth.join("environment"))
+        .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    launcher.opencode_database(opencode_database);
     let policy = CedarLeasePolicy::new().map_err(|error| not_configured(RunError::Agent(error)))?;
     let commands = config.env_serve.commands.then(|| {
         let supervisor = SupervisorBuilder::new().build();
@@ -256,9 +257,6 @@ fn launcher(config: &RuntimeConfig) -> Result<ConfiguredLauncher, RunError> {
     let workspace = absolute(&agents.workspace)?;
     let mut specs = HashMap::new();
     for (agent, runtime) in agents.agents() {
-        if agent == AgentId::Opencode {
-            continue;
-        }
         let executable = runtime.command.executable();
         if !executable.is_absolute() {
             return Err(RunError::Agent(format!(

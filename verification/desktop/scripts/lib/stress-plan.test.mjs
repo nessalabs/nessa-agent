@@ -14,6 +14,7 @@ test("every required step appears as often as its number says", () => {
   const knobs = knobsFrom({ rounds: "40", seed: "9" }, {})
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
+  assert.equal(count("inputFiles"), knobs.inputFiles)
   assert.equal(count("model"), knobs.modelSwitches)
   assert.equal(count("pairedCatalogue"), 1)
   assert.equal(
@@ -137,6 +138,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
   const steps = plan(
     knobsFrom(
       {
+        inputFiles: "0",
         windows: "0",
         linkings: "0",
         rails: "0",

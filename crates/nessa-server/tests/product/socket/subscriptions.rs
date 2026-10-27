@@ -317,6 +317,7 @@ fn conversation_service_with_summaries(
 ) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
+ input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             // Agents that can change approval mode (row S20).
             agents: mode_agents(
@@ -1158,6 +1159,7 @@ async fn a_revoked_grant_ends_the_subscription_before_the_next_batch() {
             caller(&fixture.session, "after-revoke".into()),
             "turn-1".into(),
             SubmittedMessage {
+ uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },
@@ -1205,6 +1207,7 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
             caller(&fixture.session, "while-full".into()),
             "turn-1".into(),
             SubmittedMessage {
+ uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },
