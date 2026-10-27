@@ -184,6 +184,8 @@ pub struct ProductRouteState {
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
     /// Shared vault; each socket attaches a distinct non-owning lease.
     pub(crate) vault: Option<Arc<super::VaultRoutes>>,
+    #[cfg(unix)]
+    pub(crate) workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
     pub(crate) vault_lease: Option<nessa_vault::application::Lease>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
@@ -323,6 +325,8 @@ impl ProductRouteState {
             github: None,
             vault: None,
             vault_lease: None,
+            #[cfg(unix)]
+            workspaces: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -416,6 +420,14 @@ impl ProductRouteState {
     }
 
     /// Register the reusable vault independently of provider configuration.
+    #[cfg(unix)]
+    pub(crate) fn with_workspaces(
+        mut self,
+        workspaces: Arc<crate::workspaces::application::Workspaces>,
+    ) -> Self {
+        self.workspaces = Some(workspaces);
+        self
+    }
     pub fn with_vault(mut self, vault: Arc<super::VaultRoutes>) -> Self {
         self.vault = Some(vault);
         self

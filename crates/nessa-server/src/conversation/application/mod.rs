@@ -390,3 +390,10 @@ mod local_golden_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
+
+pub(crate) use placement::{ThreadEnvironments, BOAT};
+
+#[cfg(unix)]
+mod artifact_channels;
+#[cfg(unix)]
+pub(crate) use artifact_channels::{ArtifactChannel, ArtifactChannels};

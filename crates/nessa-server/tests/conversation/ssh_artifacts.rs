@@ -16,9 +16,7 @@
 //! a paired connection is never asked to fetch one.
 use super::{
     audit::{EnvironmentAudit, EnvironmentEvent},
-    connector::{
-        ArtifactChannel, ArtifactChannels, ArtifactTransport, LeaseConnection, LeaseConnector,
-    },
+    connector::{ArtifactTransport, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
     install::{Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture},
     sftp::tests::scripted::{ScriptedSftp, SftpScript},
@@ -27,9 +25,9 @@ use crate::attachments::application::{AttachmentAuditRecord, AttachmentLimits};
 use crate::attachments::infrastructure::ConversationHolds;
 use crate::attachments_test_support::{self as attachments, Fixture, CONVERSATION};
 use crate::conversation::application::{
-    ArtifactKept, ArtifactOffer, ConversationAttachments, Environment, EnvironmentFuture,
-    EnvironmentLease, FetchAsk, FetchFailure, FetchPlaced, HeldSource, HeldSourceFailure,
-    PublishAsk, PublishFailure, PublishedArtifact,
+    ArtifactChannel, ArtifactChannels, ArtifactKept, ArtifactOffer, ConversationAttachments,
+    Environment, EnvironmentFuture, EnvironmentLease, FetchAsk, FetchFailure, FetchPlaced,
+    HeldSource, HeldSourceFailure, PublishAsk, PublishFailure, PublishedArtifact,
 };
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
@@ -407,6 +405,7 @@ impl LeaseConnector for Connector {
             .extend([toward_gateway, toward_host]);
         let (from_environment, to_environment) = split(gateway);
         Ok(LeaseConnection {
+            mcp_relay: None,
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),

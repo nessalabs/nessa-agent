@@ -314,7 +314,9 @@ impl AgentProvider for ClaudeAcpProvider {
         &self.capabilities
     }
     fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
-        let config = self.config.on_host(host.workspace().to_path_buf());
+        let config = self
+            .config
+            .on_host(host.workspace().to_path_buf(), host.mcp_relay());
         config.validate()?;
         Ok(Arc::new(Self {
             config,

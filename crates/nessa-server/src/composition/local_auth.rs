@@ -229,6 +229,37 @@ pub(super) async fn product_state(
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
     let vault = super::vault::compose(namespace);
+    #[cfg(unix)]
+    let workspace_service = Arc::new(
+        crate::workspaces::application::Workspaces::new(
+            Arc::new(crate::workspaces::infrastructure::VaultSettings(
+                vault.vault.clone(),
+            )),
+            Arc::new(crate::workspaces::infrastructure::BoatProvider {
+                // SAFETY: geteuid has no preconditions.
+                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
+                    libc::geteuid()
+                }),
+                relay_program: std::env::current_exe().map_err(setup_error)?,
+            }),
+            Arc::new(crate::workspaces::infrastructure::FileAssignments(
+                namespace.join("boat-workspaces"),
+            )),
+        )
+        .with_image(crate::workspaces::infrastructure::worker_image()),
+    );
+    #[cfg(unix)]
+    let workspace_environments: Arc<dyn crate::conversation::application::ThreadEnvironments> =
+        Arc::new(crate::conversation::infrastructure::ThreadWorkspaces {
+            service: workspace_service.clone(),
+            audit:
+                crate::conversation::infrastructure::ssh_environment::DurableEnvironmentAudit::new(
+                    namespace.join("boat-environment-audit"),
+                    Arc::new(SystemClock),
+                )
+                .map_err(setup_error)?,
+            environments: Default::default(),
+        });
     let inventory =
         Arc::new(CommittedInventory::open(namespace, Arc::new(SystemClock)).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
@@ -320,6 +351,8 @@ pub(super) async fn product_state(
                     packaged_agents,
                     record_origin.clone(),
                     ConversationSettings {
+                        #[cfg(unix)]
+                        workspace_environments: workspace_environments.clone(),
                         read_work_budget: limits.read_work_budget(),
                         live_conversations: limits.live_conversations(),
                         agent_idle: limits.agent_idle(),
@@ -426,6 +459,10 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    #[cfg(unix)]
+    {
+        product = product.with_workspaces(workspace_service);
+    }
     #[cfg(unix)]
     if let Some(github) = github {
         product = product.with_github(github.routes);
@@ -637,6 +674,8 @@ type PairedParts = (
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    #[cfg(unix)]
+    workspace_environments: Arc<dyn crate::conversation::application::ThreadEnvironments>,
     /// How much work one passive read may do.
     read_work_budget: std::time::Duration,
     /// The most conversations open, each with its agent, at once.
@@ -983,6 +1022,7 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
+        workspace_environments,
         read_work_budget,
         live_conversations,
         agent_idle,
@@ -1301,6 +1341,7 @@ async fn conversations(
         serving,
         organization,
     )?;
+    let environment = environment.with_workspaces(workspace_environments);
     let dependencies = ConversationDependencies {
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,

@@ -2619,3 +2619,23 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 - `src/vault`: application dialog controller, gateway/native adapters, and UI.
   No UI or RPC exposes stored secrets. `verification/desktop/scripts/vault.mjs`
   tests the native lease through the real gateway and browser dialog.
+
+## Channel workspaces
+
+`crates/nessa-server/src/workspaces/` owns Boat connection settings and VM
+allocation receipts: `domain` contains values and failures; `application` orders
+allocation through Settings, Assignments and Provider ports; `infrastructure`
+implements encrypted vault settings, private receipt files, Boat/workspace-sdk
+preparation and scoped SSH access. Tests live in `tests/workspaces`; real-provider
+verification lives in `scripts/workspaces`, with the single-file local MCP fixture
+under `scripts/mcp-test-server`.
+
+Conversation placement and main-agent identity remain in `conversation`.
+`conversation/infrastructure/workspaces.rs` adapts a workspace stream into the
+existing remote lease environment. `application/artifact_channels.rs` is the port
+for artifact streams. `channels.sql` owns the current schema; its two forward
+migrations preserve Local defaults and add the main replacement journal.
+
+The desktop composes a narrow Boat settings gateway into `BoatRow`. Channel draft
+placement is a projection sent to the gateway, and navigation uses the gateway's
+current main conversation ID. See [ADR 1160](adr/todo/1160-boat-workspaces.md).

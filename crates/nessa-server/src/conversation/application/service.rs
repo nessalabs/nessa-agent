@@ -1647,10 +1647,23 @@ impl ConversationService {
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
+        let channel_environment = channel.as_ref().and_then(|channel| {
+            match if id == channel.coordinator_id() {
+                channel.execution().coordinator
+            } else {
+                channel.execution().threads
+            } {
+                crate::conversation::domain::WorkspacePlacement::Local => None,
+                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
+            }
+        });
         service
             .inner
             .environment
-            .place(&id, requested.environment.as_deref())
+            .place(
+                &id,
+                requested.environment.as_deref().or(channel_environment),
+            )
             .await?;
         service.place_in_channel(&id, channel.as_ref()).await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;

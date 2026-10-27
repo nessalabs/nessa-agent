@@ -1305,6 +1305,21 @@ async function makeChannel(
   } else {
     await flow.getByRole("button", { name: "Make one for me" }).click()
   }
+  if (!(await asking("placement"))) return null
+  // Both choices must remain independent, and Local must not allocate a VM.
+  const coordinatorLocation = flow.getByLabel("Main agent location")
+  const workerLocation = flow.getByLabel("New threads location")
+  await coordinatorLocation.selectOption("boat")
+  if ((await workerLocation.inputValue()) !== "local")
+    failures.push("changing coordinator placement also changed worker placement")
+  await coordinatorLocation.selectOption("local")
+  await workerLocation.selectOption("boat")
+  if ((await coordinatorLocation.inputValue()) !== "local")
+    failures.push("changing worker placement also changed coordinator placement")
+  await workerLocation.selectOption("local")
+  await photograph(`${name}-3-placement`)
+  await flow.locator(".new-channel-placement").focus()
+  await page.keyboard.press(keys.enter)
   if (!(await asking("model"))) return null
   await photograph(`${name}-3-model`)
   await page.keyboard.press(keys.enter)
@@ -1358,6 +1373,15 @@ async function makeChannel(
   const { channels } = await run.client.channels.list()
   const listed = channels.find((channel) => channel.name === name)
   if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  if (
+    listed &&
+    (listed.coordinatorPlacement !== "local" ||
+      listed.threadPlacement !== "local" ||
+      !listed.coordinatorConversationId)
+  )
+    failures.push(
+      `the channel ${name} did not retain its Local placements and main identity`,
+    )
   return listed ?? null
 }
 

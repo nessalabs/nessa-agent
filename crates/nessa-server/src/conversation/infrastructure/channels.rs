@@ -23,8 +23,14 @@ use std::{
 };
 
 const DEFINITION: &str = include_str!("channels.sql");
+const UPGRADES: &[nessa_local_database::Upgrade] = &[
+    nessa_local_database::Upgrade::new(1, include_str!("channels-workspaces.sql")),
+    nessa_local_database::Upgrade::new(2, include_str!("channels-coordinators.sql")),
+];
+const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement";
 const COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, \
-                       folder_made, agent, model, mode, notes, resources, created_at";
+                       folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement, \
+                       (SELECT coordinator FROM channel_coordinator_replacements WHERE channel = channels.channel ORDER BY generation DESC LIMIT 1)";
 
 /// Channels and their conversations, in one private SQLite file.
 pub struct LocalChannelStore {
@@ -35,7 +41,8 @@ impl LocalChannelStore {
     /// Open the database at `path`, in a private directory owned by this OS
     /// user, creating it when absent.
     pub fn open(path: &Path) -> Result<Self, OpenError> {
-        let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        let connection =
+            nessa_local_database::open(path, &Schema::new(DEFINITION)?.with_upgrades(UPGRADES)?)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -82,6 +89,9 @@ type Stored = (
     String,
     String,
     i64,
+    String,
+    String,
+    Option<String>,
 );
 
 fn stored(row: &Row<'_>) -> nessa_local_database::rusqlite::Result<Stored> {
@@ -99,6 +109,9 @@ fn stored(row: &Row<'_>) -> nessa_local_database::rusqlite::Result<Stored> {
         row.get(10)?,
         row.get(11)?,
         row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
+        row.get(15)?,
     ))
 }
 
@@ -117,15 +130,26 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         notes,
         resources,
         created_at,
+        coordinator_placement,
+        thread_placement,
+        coordinator,
     ) = row;
     let invalid = || unreadable(&id);
     let path = |text: String| ChannelPath::new(PathBuf::from(text)).map_err(|_| invalid());
     let resources: Vec<String> = serde_json::from_str(&resources).map_err(|_| invalid())?;
-    Channel::new(
+    let channel = Channel::new(
         ChannelId::new(&id).map_err(|_| invalid())?,
         OrganizationId::new(organization).map_err(|_| invalid())?,
         PrincipalId::new(owner).map_err(|_| invalid())?,
         ChannelParts {
+            execution: crate::conversation::domain::ChannelExecution {
+                coordinator: crate::conversation::domain::WorkspacePlacement::parse(
+                    &coordinator_placement,
+                )
+                .ok_or_else(invalid)?,
+                threads: crate::conversation::domain::WorkspacePlacement::parse(&thread_placement)
+                    .ok_or_else(invalid)?,
+            },
             name: ChannelName::new(&name).map_err(|_| invalid())?,
             folder: ChannelFolder {
                 path: path(folder)?,
@@ -145,7 +169,11 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         request_id,
         u64::try_from(created_at).map_err(|_| invalid())?,
     )
-    .map_err(|_| invalid())
+    .map_err(|_| invalid())?;
+    match coordinator {
+        Some(id) => Ok(channel.with_coordinator(ConversationId::new(&id).map_err(|_| invalid())?)),
+        None => Ok(channel),
+    }
 }
 
 fn by_request(
@@ -184,8 +212,8 @@ impl ChannelStore for LocalChannelStore {
             let written = connection
                 .execute(
                     &format!(
-                        "INSERT INTO channels ({COLUMNS}) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+                        "INSERT INTO channels ({WRITTEN_COLUMNS}) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
                          ON CONFLICT DO NOTHING"
                     ),
                     params![
@@ -203,6 +231,8 @@ impl ChannelStore for LocalChannelStore {
                         resources,
                         i64::try_from(made.created_at_ms())
                             .map_err(|_| ConversationError::InvalidInput)?,
+                        made.execution().coordinator.as_str(),
+                        made.execution().threads.as_str(),
                     ],
                 )
                 .map_err(failed)?;
@@ -345,14 +375,26 @@ impl ChannelStore for LocalChannelStore {
     }
 
     fn forget(&self, conversation: &ConversationId) -> ConversationFuture<'_, ()> {
-        let conversation = conversation.to_string();
+        let conversation = conversation.clone();
         self.run(move |connection| {
-            connection
-                .execute(
-                    "DELETE FROM channel_conversations WHERE conversation = ?1",
-                    [conversation],
-                )
-                .map_err(failed)?;
+            let transaction = connection.transaction().map_err(failed)?;
+            let found = transaction.query_row(
+                "SELECT channel FROM channel_conversations WHERE conversation = ?1",
+                [conversation.to_string()], |row| row.get::<_, String>(0),
+            ).optional().map_err(failed)?;
+            if let Some(id) = found {
+                let current = transaction.query_row(&format!("SELECT {COLUMNS} FROM channels WHERE channel = ?1"), [&id], stored).map_err(failed)?;
+                let current = channel(current)?;
+                if current.coordinator_id() == conversation {
+                    let next = uuid::Uuid::new_v4().to_string();
+                    transaction.execute(
+                        "INSERT INTO channel_coordinator_replacements (retired, channel, coordinator, generation, cause) SELECT ?1, ?2, ?3, COALESCE(MAX(generation), 0) + 1, 'coordinator_conversation_erased' FROM channel_coordinator_replacements WHERE channel = ?2",
+                        params![conversation.to_string(), id, next],
+                    ).map_err(failed)?;
+                }
+                transaction.execute("DELETE FROM channel_conversations WHERE conversation = ?1", [conversation.to_string()]).map_err(failed)?;
+            }
+            transaction.commit().map_err(failed)?;
             Ok(())
         })
     }

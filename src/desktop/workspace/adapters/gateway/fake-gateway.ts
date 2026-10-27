@@ -46,7 +46,9 @@ import type { WindowPublishClient } from "./window-publisher"
  * those. A window fake still has to answer, because the window's client
  * requires them.
  */
-export type FakeGatewayClient = GatewayClient &
+export type FakeGatewayClient = {
+  readonly boat: import("@nessa/client").BoatApi
+} & GatewayClient &
   WindowPublishClient & {
     readonly conversation: GatewayClient["conversation"] &
       SharingClient["conversation"] &
@@ -62,6 +64,9 @@ const defaultChannel: WireChannel = {
   agent: null,
   model: null,
   approvalMode: "ask",
+  coordinatorConversationId: null,
+  coordinatorPlacement: "local",
+  threadPlacement: "local",
   createdAtMs: 0,
 }
 
@@ -590,6 +595,13 @@ export function fakeGateway(
       }
   }
   const client: FakeGatewayClient = {
+    boat: {
+      status: async () => ({ state: "disconnected" as const }),
+      save: async () => {
+        throw new Error("Boat provisioning is unavailable in this fixture")
+      },
+      disconnect: async () => ({ state: "disconnected" as const }),
+    },
     conversation: {
       share: notShared,
       unshare: notShared,
@@ -835,6 +847,9 @@ export function fakeGateway(
             agent: params.agent,
             model: params.model,
             approvalMode: params.approvalMode ?? "ask",
+            coordinatorConversationId: null,
+            coordinatorPlacement: params.coordinatorPlacement ?? "local",
+            threadPlacement: params.threadPlacement ?? "local",
             createdAtMs: channels.length + 1,
           }
           channels.push({ requestId: params.requestId, params, channel })

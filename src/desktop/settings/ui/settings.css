@@ -1445,3 +1445,41 @@ html:not(.dark) .settings .settings-card {
     opacity: 0;
   }
 }
+
+/* Boat connection setup uses the same field and action controls as other accounts. */
+.settings-boat {
+  display: grid;
+  gap: 10px;
+  padding-block: 4px;
+  font-size: 12.5px;
+}
+.settings-boat p {
+  margin: 0;
+}
+.settings-boat form {
+  display: grid;
+  gap: 6px;
+}
+.settings-boat-fields {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.settings-boat-fields .settings-button {
+  flex: none;
+}
+.settings-boat-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-boat-note {
+  color: var(--desktop-faint);
+  line-height: 1.5;
+}
+@media (max-width: 480px) {
+  .settings-boat-fields {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -328,6 +328,7 @@ impl ConversationService {
             caller.organization_id.clone(),
             caller.principal_id.clone(),
             ChannelParts {
+                execution: resolved.execution,
                 name: resolved.name.clone(),
                 folder,
                 defaults: resolved.defaults.clone(),
@@ -475,7 +476,11 @@ impl ConversationService {
             .get(&channel)
             .await?
             .ok_or(ConversationError::Unavailable)?;
-        Ok(Some(AgentPlace::of(&found)))
+        let mut place = AgentPlace::of(&found);
+        if *id == found.coordinator_id() {
+            place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and its configured worker placement. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");
+        }
+        Ok(Some(place))
     }
 
     /// The stored channel `id` is in; `None` is the default one.

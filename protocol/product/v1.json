@@ -204,21 +204,28 @@
           "description": "Gateway audience to which the credential is bound."
         },
         "expiresAt": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Exclusive Unix seconds, or null for no expiry."
         },
         "grants": {
           "type": "array",
-          "items": { "$ref": "#/$defs/ProductGrant" },
+          "items": {
+            "$ref": "#/$defs/ProductGrant"
+          },
           "maxItems": 16,
           "description": "Current credential restrictions; not permanent authorization."
         },
         "methods": {
           "type": "array",
-          "items": { "type": "string" },
-          "maxItems": 92,
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 95,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -3132,7 +3139,14 @@
       "properties": {
         "state": {
           "type": "string",
-          "enum": ["live", "ending", "ended", "interrupted", "refused", "unreadable"],
+          "enum": [
+            "live",
+            "ending",
+            "ended",
+            "interrupted",
+            "refused",
+            "unreadable"
+          ],
           "description": "live: the agent may run. ending: an end was decided and cleanup is awaited. ended: cleanup was confirmed. interrupted: cleanup was not confirmed within its deadline, so the agent's environment is not known to be released. refused: no lease was granted and nothing ran; refusal says why. unreadable: a record of this lease is of a kind this gateway cannot read."
         },
         "revision": {
@@ -3143,7 +3157,12 @@
         },
         "environment": {
           "type": "string",
-          "enum": ["here", "ssh", "peer"],
+          "enum": [
+            "here",
+            "ssh",
+            "peer",
+            "boat"
+          ],
           "description": "Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files."
         },
         "host": {
@@ -3155,17 +3174,31 @@
         },
         "sandbox": {
           "type": "string",
-          "enum": ["harness_default", "none"],
+          "enum": [
+            "harness_default",
+            "none"
+          ],
           "description": "The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. none: nothing encloses what runs beyond the account the environment runs as."
         },
         "cause": {
           "type": "string",
-          "enum": ["stopped", "closed", "revoked", "expired", "lost", "idle"],
+          "enum": [
+            "stopped",
+            "closed",
+            "revoked",
+            "expired",
+            "lost",
+            "idle"
+          ],
           "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. idle: the agent sat idle with nobody following the conversation, past limits.agentIdleSeconds, and the gateway stopped it; the conversation stays open and the next message starts the agent again, resuming its provider session."
         },
         "cleanup": {
           "type": "string",
-          "enum": ["confirmed", "forced", "not_held"],
+          "enum": [
+            "confirmed",
+            "forced",
+            "not_held"
+          ],
           "description": "What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; not_held, the environment holds nothing for the lease, though whether something started under it before the environment last started outlived it is not known. On an interrupted lease this is the evidence that arrived after its deadline."
         },
         "refusal": {
@@ -3194,7 +3227,10 @@
           "description": "Commands the agent started under this lease that have not yet ended; absent when none. Present only on a live or ending lease."
         }
       },
-      "required": ["state", "droppedEvents"]
+      "required": [
+        "state",
+        "droppedEvents"
+      ]
     },
     "ConversationRuntime": {
       "type": "object",
@@ -7621,14 +7657,20 @@
           "description": "The gateway made the folder, under its channels folder, because none was chosen. False for a chosen folder and for the default channel's."
         },
         "agent": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 32,
           "x-utf8MaxBytes": 32,
           "description": "The agent a new conversation in the channel starts on; null for the default channel, whose new conversations start on whatever the surface picks."
         },
         "model": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
@@ -7643,6 +7685,29 @@
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "When the channel was made, in Unix milliseconds; 0 for the default channel."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": [
+            "local",
+            "boat"
+          ],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": [
+            "local",
+            "boat"
+          ],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+        },
+        "coordinatorConversationId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity."
         }
       },
       "required": [
@@ -7653,7 +7718,10 @@
         "agent",
         "model",
         "approvalMode",
-        "createdAtMs"
+        "createdAtMs",
+        "coordinatorPlacement",
+        "threadPlacement",
+        "coordinatorConversationId"
       ]
     },
     "ChannelCreateParams": {
@@ -7716,9 +7784,30 @@
             "x-utf8MaxBytes": 4096
           },
           "description": "Existing absolute files and folders to attach, none twice, at most x-channelRules.maxResourceBytes of paths in all; omitted is none."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": [
+            "local",
+            "boat"
+          ],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": [
+            "local",
+            "boat"
+          ],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
         }
       },
-      "required": ["requestId", "name", "agent", "model"]
+      "required": [
+        "requestId",
+        "name",
+        "agent",
+        "model"
+      ]
     },
     "ChannelCreateResult": {
       "type": "object",
@@ -7857,6 +7946,65 @@
         "vault_migration_unavailable"
       ],
       "description": "Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault."
+    },
+    "BoatSaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Boat infrastructure token. Never returned or logged."
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "description": "Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription."
+    },
+    "BoatErrorCode": {
+      "description": "Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
+      "type": "string",
+      "enum": [
+        "vault_locked",
+        "boat_not_configured",
+        "invalid_request",
+        "boat_storage_unavailable",
+        "boat_resource_missing",
+        "boat_unreachable",
+        "boat_worker_unavailable",
+        "boat_environment_blocks_credentials",
+        "boat_provisioning_uncertain",
+        "boat_cleanup_uncertain"
+      ]
+    },
+    "BoatStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "locked",
+            "disconnected",
+            "connected"
+          ],
+          "description": "Locked when the vault cannot be read, disconnected when no connection is saved, or connected after validation and encrypted persistence."
+        },
+        "environment": {
+          "type": "string",
+          "description": "The dedicated Boat environment saved with this connection; present only while connected."
+        },
+        "image": {
+          "type": "string",
+          "description": "The release-owned shared worker image saved with this connection; present only while connected."
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
     }
   }
 }

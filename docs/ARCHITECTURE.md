@@ -1148,3 +1148,20 @@ in the encrypted vault. Existing OS entries are read only for a verified one-tim
 import; their sources are retired after matching encrypted receipts.
 See [the vault lifecycle](state/services/gateway/local-vault.md) and
 [ADR 1152](adr/todo/1152-local-vault.md).
+
+### Channel execution placement
+
+A channel independently places its main agent and its worker threads on Local or
+Boat. The channel store owns those choices and the current main conversation
+identity. The workspace context owns encrypted Boat connection settings and
+thread-to-VM allocation receipts. Workspace SDK prepares an attached workspace;
+conversation infrastructure carries existing agent leases over SSH, with scoped
+MCP relay forwarding and SFTP artifact channels. Authorization remains in the
+existing conversation, credential and MCP policies. The gateway never treats a
+missing VM as permission to allocate a replacement or fall back to Local.
+
+The main agent runs when messaged or notified by workers. Cloud wake endpoints,
+VM parking, live migration and local-folder mounts are outside this alpha. See
+[ADR 1160](adr/todo/1160-boat-workspaces.md) for ordering, failure and lifecycle
+contracts, and [workspace verification](../scripts/workspaces/README.md) for the
+opt-in provider test.

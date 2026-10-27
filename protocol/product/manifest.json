@@ -373,6 +373,18 @@
     "vault.lock": {
       "params": null,
       "grant": "credential.manage"
+    },
+    "boat.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.save": {
+      "params": "BoatSaveParams",
+      "grant": "credential.manage"
+    },
+    "boat.disconnect": {
+      "params": null,
+      "grant": "credential.manage"
     }
   },
   "events": {

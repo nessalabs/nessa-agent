@@ -3368,6 +3368,10 @@ pub struct Channel {
     pub model: Option<String>,
     pub approval_mode: ApprovalMode,
     pub created_at_ms: u64,
+    pub coordinator_placement: String,
+    pub thread_placement: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub coordinator_conversation_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3384,6 +3388,10 @@ pub struct ChannelCreateParams {
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator_placement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_placement: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3490,6 +3498,59 @@ impl VaultErrorCode {
             Self::VaultMigrationUnavailable => "vault_migration_unavailable",
         }
     }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatSaveParams {
+    pub token: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum BoatErrorCode {
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "boat_not_configured")]
+    BoatNotConfigured,
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "boat_storage_unavailable")]
+    BoatStorageUnavailable,
+    #[serde(rename = "boat_resource_missing")]
+    BoatResourceMissing,
+    #[serde(rename = "boat_unreachable")]
+    BoatUnreachable,
+    #[serde(rename = "boat_worker_unavailable")]
+    BoatWorkerUnavailable,
+    #[serde(rename = "boat_environment_blocks_credentials")]
+    BoatEnvironmentBlocksCredentials,
+    #[serde(rename = "boat_provisioning_uncertain")]
+    BoatProvisioningUncertain,
+    #[serde(rename = "boat_cleanup_uncertain")]
+    BoatCleanupUncertain,
+}
+impl BoatErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultLocked => "vault_locked",
+            Self::BoatNotConfigured => "boat_not_configured",
+            Self::InvalidRequest => "invalid_request",
+            Self::BoatStorageUnavailable => "boat_storage_unavailable",
+            Self::BoatResourceMissing => "boat_resource_missing",
+            Self::BoatUnreachable => "boat_unreachable",
+            Self::BoatWorkerUnavailable => "boat_worker_unavailable",
+            Self::BoatEnvironmentBlocksCredentials => "boat_environment_blocks_credentials",
+            Self::BoatProvisioningUncertain => "boat_provisioning_uncertain",
+            Self::BoatCleanupUncertain => "boat_cleanup_uncertain",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatStatus {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
@@ -3660,6 +3721,9 @@ pub mod product_method {
     pub const VAULT_SETUP: &str = "vault.setup";
     pub const VAULT_UNLOCK: &str = "vault.unlock";
     pub const VAULT_LOCK: &str = "vault.lock";
+    pub const BOAT_STATUS: &str = "boat.status";
+    pub const BOAT_SAVE: &str = "boat.save";
+    pub const BOAT_DISCONNECT: &str = "boat.disconnect";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -3850,7 +3914,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 92
+                items.len() <= 95
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3967,6 +4031,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "vault.setup",
     "vault.unlock",
     "vault.lock",
+    "boat.status",
+    "boat.save",
+    "boat.disconnect",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -4020,7 +4087,10 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "vault.status"
         | "vault.setup"
         | "vault.unlock"
-        | "vault.lock" => Some("credential.manage"),
+        | "vault.lock"
+        | "boat.status"
+        | "boat.save"
+        | "boat.disconnect" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"

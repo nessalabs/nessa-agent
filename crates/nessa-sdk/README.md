@@ -510,3 +510,30 @@ cleanup unconfirmed, preserving owned private directories. The
 conditions with the same explicitly selected SDK library test binary. The
 [canonical cleanup state](../../docs/state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630)
 describes the ordering evidence.
+
+### Hosted MCP stand-ins
+
+`HarnessHost::mcp_relay()` optionally supplies `HarnessMcpRelay`: a synchronous,
+side-effect-free mapping of an existing local stand-in command to a command the
+host's transport actually serves. The trait is `Send + Sync`; mappings may be
+requested concurrently and must not mutate approval or grant state. Returning
+`None` omits that server on the host. Hosts without a relay receive no local
+stand-in commands or their scoped credentials.
+
+The host and provider retain the relay transport for the hosted session's
+lifetime. Mapped stand-ins retain their existing per-open grants; mapping a
+command does not authorize a tool, widen the grant or copy a provider login.
+Revocation remains the relay's live grant check. Closing the hosted provider
+releases its stand-in owners; transport cleanup remains the host's responsibility.
+`hosted_stand_ins_require_an_explicit_relay_and_keep_only_its_mapped_commands`
+checks mapping, omission, scoped owner retention and local-variable removal.
+
+A managed attachment asks `AgentProvider::restores_saved_context` with the saved
+context ID and whether its SDK history has any admitted invocations. Claude
+declines an uninvoked context because its native session is persisted only on
+first prompt. Attachment records the replacement through the existing provider
+context transition. Any history with admitted work still requires native resume;
+a missing used context is an error, with saved inputs and context retained. Direct
+provider opens honor their explicit restore request. The regression
+`claude_replaces_only_uninvoked_context_and_requires_resume_after_work` exercises
+new context, durable reattachment, and missing used history against the ACP fixture.

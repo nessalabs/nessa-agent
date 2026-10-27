@@ -15,7 +15,7 @@ fn a_workspace_on_a_host_is_not_resolved_on_this_machine() {
     let (root, config, _) = test_acp_configuration("success", 16);
     let local = root.path().to_path_buf();
     assert!(config.workspace_paths.resolve(&local).is_some());
-    let hosted = config.on_host(local.clone());
+    let hosted = config.on_host(local.clone(), None);
     assert_eq!(
         hosted.workspace_paths.resolve(&local),
         None,

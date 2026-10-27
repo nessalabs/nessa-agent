@@ -524,6 +524,13 @@ fn catalogue() -> &'static [Limit] {
             owner: "MAX_EVENT_READERS in crates/nessa-server/src/conversation/application/agent_tools.rs",
             meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
         },
+        #[cfg(unix)]
+        Limit {
+            id: "boat.retained_environments",
+            tier: "fixed",
+            owner: "MAX_RETAINED_ENVIRONMENTS in crates/nessa-server/src/conversation/infrastructure/workspaces.rs",
+            meaning: "when full, release only environments with no opening caller, command or lease owner; if all are retained, refuse new opens as unavailable rather than grow or evict active work",
+        },
         Limit {
             id: "agent_tools.source_admissions",
             tier: "fixed",
@@ -726,6 +733,11 @@ pub(crate) fn effective_json(
     put("mcp.built_in_calls", count(MAX_BUILT_IN_CALLS));
     put("mcp.built_in_line_bytes", count(MAX_BUILT_IN_LINE_BYTES));
     put("agent_tools.waiting_reads", count(MAX_EVENT_READERS));
+    #[cfg(unix)]
+    put(
+        "boat.retained_environments",
+        count(crate::conversation::infrastructure::MAX_RETAINED_ENVIRONMENTS),
+    );
     put(
         "agent_tools.source_admissions",
         count(MAX_AGENT_TOOL_ADMISSIONS),

@@ -104,6 +104,11 @@ pub async fn capture_namespace(
         Box::new(DirectoryStore {
             kind: StoreKind::EnvironmentAudit,
             roots: vec![
+                labeled_root(namespace.join("boat-workspaces"), "boat-workspaces"),
+                labeled_root(
+                    namespace.join("boat-environment-audit"),
+                    "boat-environments",
+                ),
                 labeled_root(
                     namespace
                         .join("conversations")

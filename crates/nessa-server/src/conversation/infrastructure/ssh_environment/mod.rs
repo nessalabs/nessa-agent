@@ -15,7 +15,9 @@
 //!
 //! [`Environment`]: crate::conversation::application::Environment
 mod audit;
+pub(crate) use audit::EnvironmentAudit;
 mod connector;
+pub(crate) use connector::{ArtifactTransport, LeaseConnection, WorkspaceConnector};
 mod durable_audit;
 mod environment;
 mod install;
