@@ -48,6 +48,7 @@ fn agents_config() -> AgentsConfig {
         open_credentials: Default::default(),
         mcp_stand_ins: Default::default(),
         channel_instructions: None,
+        review_deadlines: crate::composition::agent::review_deadlines(),
         selected: None,
         runtimes: HashMap::new(),
     }
@@ -154,6 +155,42 @@ fn what_the_launch_is_given_is_what_it_carries() {
     )
     .images
     .is_none());
+}
+
+/// A review waits long enough to be answered from the phone, and the
+/// configuration file can say how long: what it says is what the launch arms.
+#[test]
+fn a_review_waits_the_configured_time_and_five_minutes_by_default() {
+    use nessa_sdk::domain::agent_execution::permissions::PermissionToolClass;
+    let wait = |config: &AgentsConfig| {
+        launch_configuration(
+            config,
+            &runtime(),
+            PathBuf::from("/workspace"),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            None,
+        )
+        .permission_deadlines
+        .for_class(PermissionToolClass::Other)
+        .wait()
+    };
+    let read = |extra: &str| {
+        serde_json::from_str::<AgentsConfig>(&format!(
+            r#"{{"catalog":"/runtime/models.json","workspace":"/workspace"{extra}}}"#
+        ))
+    };
+    assert_eq!(wait(&read("").unwrap()), Duration::from_secs(300));
+    assert_eq!(
+        wait(&read(r#","reviewWaitSeconds":45"#).unwrap()),
+        Duration::from_secs(45)
+    );
+    for refused in ["0", "86401"] {
+        let error = read(&format!(r#","reviewWaitSeconds":{refused}"#)).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("reviewWaitSeconds must be from 1 to 86400"));
+    }
 }
 
 /// Process plumbing and the native executable locator are the runtime, not
@@ -648,6 +685,7 @@ fn composed_provider(
         open_credentials: Default::default(),
         mcp_stand_ins: Default::default(),
         channel_instructions: None,
+        review_deadlines: crate::composition::agent::review_deadlines(),
         selected: None,
         runtimes: HashMap::new(),
     };

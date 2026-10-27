@@ -42,7 +42,11 @@ fn print_limits() -> Result<(), RunError> {
     let config = super::runtime_config::RuntimeConfig::load(&directory)?;
     let limits = config.limits()?;
     let session = config.session()?;
-    let document = crate::limits::effective_json(&limits, &session);
+    let review_wait = config
+        .agents
+        .as_ref()
+        .map_or(super::agent::REVIEW_WAIT, |agents| agents.review_wait());
+    let document = crate::limits::effective_json(&limits, &session, review_wait);
     let mut bytes = serde_json::to_vec(&document)
         .map_err(|error| RunError::RuntimeConfig(error.to_string()))?;
     bytes.push(b'\n');

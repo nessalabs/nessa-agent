@@ -826,6 +826,9 @@ async function runOnce(list, knobs, { evidence, label }) {
       mcpServer: launch.mcp,
       signedOut: launch.signedOut,
       limits: knobs.live ? { liveConversations: knobs.live } : undefined,
+      // Chaos leaves some reviews unanswered and counts the denials, at the
+      // desk's thirty seconds rather than the phone's five minutes.
+      reviewWaitSeconds: 30,
     })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })

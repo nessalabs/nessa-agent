@@ -50,6 +50,9 @@ use crate::mcp_servers::{domain::StoredMcpServer, infrastructure::stored_servers
 use nessa_auth::application::ports::Clock;
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
+use nessa_sdk::domain::agent_execution::permissions::{
+    PermissionDeadlinePolicy, MAX_PERMISSION_DEADLINE,
+};
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, UserImageSource},
@@ -66,7 +69,7 @@ use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 #[cfg(unix)]
 use std::{collections::BTreeMap, ffi::OsString, fs::File, path::Path, sync::Arc};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -123,6 +126,41 @@ pub(super) struct AgentsConfig {
     #[serde(skip)]
     #[cfg_attr(not(unix), allow(dead_code))]
     pub channel_instructions: Option<String>,
+    /// When an unanswered review settles (ADR 141): a read inside the
+    /// workspace is allowed after eight seconds, and any other review is
+    /// denied after `agents.reviewWaitSeconds`, [`REVIEW_WAIT`] when left out.
+    #[serde(
+        default = "review_deadlines",
+        rename = "reviewWaitSeconds",
+        deserialize_with = "review_wait"
+    )]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub review_deadlines: PermissionDeadlinePolicy,
+}
+
+/// How long a review other than a confined read waits for a person before
+/// the deadline denies it, unless `agents.reviewWaitSeconds` says otherwise.
+/// Long enough to take the phone out and answer there; the SDK's own thirty
+/// seconds is for a person at the desk.
+pub(crate) const REVIEW_WAIT: Duration = Duration::from_secs(5 * 60);
+
+pub(super) fn review_deadlines() -> PermissionDeadlinePolicy {
+    PermissionDeadlinePolicy::standard_waiting(REVIEW_WAIT).expect("the default review wait")
+}
+
+/// `agents.reviewWaitSeconds`, refused as the deadline refuses it: zero, or
+/// longer than a day.
+fn review_wait<'de, D>(deserializer: D) -> Result<PermissionDeadlinePolicy, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    PermissionDeadlinePolicy::standard_waiting(Duration::from_secs(seconds)).map_err(|_| {
+        serde::de::Error::custom(format!(
+            "reviewWaitSeconds must be from 1 to {}",
+            MAX_PERMISSION_DEADLINE.as_secs()
+        ))
+    })
 }
 
 /// How one agent is started, within the shared configuration above.
@@ -227,6 +265,13 @@ where
 }
 
 impl AgentsConfig {
+    /// How long a review other than a confined read waits for a person.
+    pub(super) fn review_wait(&self) -> Duration {
+        self.review_deadlines
+            .for_class(nessa_sdk::domain::agent_execution::permissions::PermissionToolClass::Other)
+            .wait()
+    }
+
     /// Each configured agent, in the order [`AgentId::ALL`] lists them.
     ///
     /// Silent about a name no adapter exists for; [`Self::unknown`] is what
@@ -1230,7 +1275,7 @@ pub(super) mod build {
             },
             permissions: PermissionOfferPolicy::once_only(),
             refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
-            permission_deadlines: nessa_sdk::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
+            permission_deadlines: config.review_deadlines.clone(),
             // All four from protocol/defaults/agent-startup-budgets.json,
             // which the client compiles in too: a client that gives up before
             // the gateway has finished failing never sees the typed answer.
