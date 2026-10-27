@@ -15,6 +15,7 @@ use nessa_client_core::retained::{
     ArtifactFreshness, ArtifactOpenError, ArtifactRequest, FetchFiles, FileStep,
 };
 use nessa_local_storage::create_directory_beneath;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use std::fs;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -460,21 +461,27 @@ fn a_refused_artifact_is_an_authority_failure_and_a_transport_failure_is_not() {
     assert!(!super::artifact_authority_refused(unreachable.outcome()));
     let fresh = ArtifactFetch::decided(Ok(ArtifactFreshness::LocalMatch { bytes: 2 }), 1);
     assert!(!super::artifact_authority_refused(fresh.outcome()));
-    for failure in [
-        ReadFailure::ConversationDeleted,
-        ReadFailure::ConversationNotFound,
-        ReadFailure::AttachmentNotFound,
-        ReadFailure::AttachmentUnavailable,
+    for code in [
+        ConversationErrorCode::ConversationDeleted,
+        ConversationErrorCode::ConversationNotFound,
+        ConversationErrorCode::AttachmentNotFound,
+        ConversationErrorCode::AttachmentUnavailable,
+        ConversationErrorCode::ConversationsNotConfigured,
+        ConversationErrorCode::InvalidRequest,
+        ConversationErrorCode::AttachmentCapacity,
     ] {
         let terminal = ArtifactFetch::decided(
             Err(ArtifactFault::progress(
-                ArtifactFaultKind::Gateway(failure),
+                ArtifactFaultKind::Gateway(ReadFailure::Product(code)),
                 0,
                 0,
             )),
             1,
         );
-        assert!(!super::artifact_authority_refused(terminal.outcome()));
+        assert!(
+            !super::artifact_authority_refused(terminal.outcome()),
+            "{code:?}"
+        );
     }
 }
 

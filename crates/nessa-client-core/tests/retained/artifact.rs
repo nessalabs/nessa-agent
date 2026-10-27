@@ -763,46 +763,51 @@ impl HeldFileSource for BusyOnce {
     }
 }
 
-struct TerminalRefusal {
-    code: ConversationErrorCode,
+struct ScriptedRefusal {
+    error: GatewayError,
     reads: Arc<AtomicUsize>,
 }
-impl HeldFileSource for TerminalRefusal {
+impl HeldFileSource for ScriptedRefusal {
     fn read(
         &mut self,
         _: &crate::read_only_sync::domain::HeldFile,
         _: HeldRange,
     ) -> Result<RangeAnswer, GatewayError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        Err(GatewayError::HeldFile(HeldFileRefusal::Conversation(
-            self.code,
-        )))
+        Err(self.error)
     }
 }
 
+fn refused_once(error: GatewayError) -> (ScriptedRefusal, Arc<AtomicUsize>) {
+    let reads = Arc::new(AtomicUsize::new(0));
+    (
+        ScriptedRefusal {
+            error,
+            reads: reads.clone(),
+        },
+        reads,
+    )
+}
+
 #[test]
-fn a_terminal_conversation_refusal_keeps_its_code() {
-    let cases = [
-        (
-            ConversationErrorCode::ConversationDeleted,
-            ReadFailure::ConversationDeleted,
-        ),
-        (
-            ConversationErrorCode::ConversationNotFound,
-            ReadFailure::ConversationNotFound,
-        ),
+fn a_held_file_product_code_stays_that_code() {
+    let codes = [
+        ConversationErrorCode::ConversationDeleted,
+        ConversationErrorCode::ConversationNotFound,
+        ConversationErrorCode::AttachmentNotFound,
+        ConversationErrorCode::AttachmentUnavailable,
+        ConversationErrorCode::ConversationsNotConfigured,
+        ConversationErrorCode::InvalidRequest,
+        ConversationErrorCode::AttachmentCapacity,
     ];
-    for (code, failure) in cases {
-        let bytes = b"ab";
+    for code in codes {
+        let failure = ReadFailure::Product(code);
         let conversation = conversation();
-        let digest = digest_of(bytes);
+        let digest = digest_of(b"ab");
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("file.bin");
-        let reads = Arc::new(AtomicUsize::new(0));
-        let mut source = TerminalRefusal {
-            code,
-            reads: reads.clone(),
-        };
+        let (mut source, reads) =
+            refused_once(GatewayError::HeldFile(HeldFileRefusal::Conversation(code)));
         let stop = ReadStop::new();
         let ending = running(stop.clone());
         let fault = confirmed_held_file(
@@ -831,79 +836,46 @@ fn a_terminal_conversation_refusal_keeps_its_code() {
             "{code:?}"
         );
     }
+    assert_ne!(
+        ReadFailure::Product(ConversationErrorCode::AttachmentNotFound),
+        ReadFailure::Product(ConversationErrorCode::AttachmentUnavailable)
+    );
     let conversation = conversation();
     let digest = digest_of(b"ab");
-    let root = tempfile::tempdir().unwrap();
-    let output = root.path().join("file.bin");
-    let mut other = TerminalRefusal {
-        code: ConversationErrorCode::InvalidRequest,
-        reads: Arc::new(AtomicUsize::new(0)),
-    };
-    let other_fault = confirmed_held_file(
-        &mut other,
+    let malformed_root = tempfile::tempdir().unwrap();
+    let malformed_output = malformed_root.path().join("file.bin");
+    let (mut malformed, _) = refused_once(GatewayError::Protocol);
+    let malformed_fault = confirmed_held_file(
+        &mut malformed,
         &Still,
-        &request(&conversation, &digest, &output),
+        &request(&conversation, &digest, &malformed_output),
         &running(ReadStop::new()),
         &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
     assert_eq!(
-        other_fault.kind(),
+        malformed_fault.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Protocol)
     );
-}
-
-#[test]
-fn an_attachment_refusal_keeps_its_code() {
-    let cases = [
-        (
-            ConversationErrorCode::AttachmentNotFound,
-            ReadFailure::AttachmentNotFound,
-        ),
-        (
-            ConversationErrorCode::AttachmentUnavailable,
-            ReadFailure::AttachmentUnavailable,
-        ),
-    ];
-    for (code, failure) in cases {
-        let conversation = conversation();
-        let digest = digest_of(b"ab");
-        let root = tempfile::tempdir().unwrap();
-        let output = root.path().join("file.bin");
-        let reads = Arc::new(AtomicUsize::new(0));
-        let mut source = TerminalRefusal {
-            code,
-            reads: reads.clone(),
-        };
-        let stop = ReadStop::new();
-        let ending = running(stop.clone());
-        let fault = confirmed_held_file(
-            &mut source,
-            &Still,
-            &request(&conversation, &digest, &output),
-            &ending,
-            &super::DiskArtifactFiles,
-        )
-        .unwrap()
-        .unwrap_err();
-        assert_eq!(
-            fault.kind(),
-            ArtifactFaultKind::Gateway(failure),
-            "{code:?}"
-        );
-        assert_ne!(failure, ReadFailure::Protocol);
-        assert_ne!(failure, ReadFailure::Refused);
-        assert_eq!(fault.reached(), 0);
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-        assert!(!output.exists());
-        stop.stop();
-        assert_eq!(
-            super::classify_artifact_fault(fault, &ending).kind(),
-            ArtifactFaultKind::Gateway(failure),
-            "{code:?}"
-        );
-    }
+    assert!(!malformed_output.exists());
+    let forbidden_root = tempfile::tempdir().unwrap();
+    let forbidden_output = forbidden_root.path().join("file.bin");
+    let (mut forbidden, _) = refused_once(GatewayError::HeldFile(HeldFileRefusal::Forbidden));
+    let forbidden_fault = confirmed_held_file(
+        &mut forbidden,
+        &Still,
+        &request(&conversation, &digest, &forbidden_output),
+        &running(ReadStop::new()),
+        &super::DiskArtifactFiles,
+    )
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        forbidden_fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Refused)
+    );
+    assert!(!forbidden_output.exists());
 }
 
 struct AlwaysBusy {

@@ -59,10 +59,7 @@ fn cache_error(error: ReadFailure) -> NativeViewError {
         ReadFailure::Protocol
         | ReadFailure::CursorAhead
         | ReadFailure::SubscriptionCapacity
-        | ReadFailure::ConversationDeleted
-        | ReadFailure::ConversationNotFound
-        | ReadFailure::AttachmentNotFound
-        | ReadFailure::AttachmentUnavailable => NativeViewError::InvalidTarget,
+        | ReadFailure::Product(_) => NativeViewError::InvalidTarget,
         ReadFailure::Cache
         | ReadFailure::Refused
         | ReadFailure::Unreachable

@@ -961,9 +961,8 @@ impl NativeArtifactFetch {
         })
     }
     /// Gateway refusal, when `fault` is gateway.
-    /// `ConversationDeleted`, `ConversationNotFound`, `AttachmentNotFound`,
-    /// and `AttachmentUnavailable` are typed `artifact.read` codes. They are
-    /// not an authority refusal.
+    /// [`NativeReadFailure::Product`] carries the gateway's product code.
+    /// It is not an authority refusal.
     pub fn gateway_failure(&self) -> Option<NativeReadFailure> {
         match self.value.outcome().err()?.kind() {
             ArtifactFaultKind::Gateway(failure) => Some(failure.into()),

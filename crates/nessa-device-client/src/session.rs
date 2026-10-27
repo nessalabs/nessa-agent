@@ -810,8 +810,7 @@ impl Driver {
 }
 /// A gateway fault that is this device's authority being refused. Status is
 /// asked again, as it is after a refused catalogue read. A stop, a local
-/// match, a transport failure, a terminal conversation code, and an
-/// attachment refusal are not.
+/// match, a transport failure, and a held-file product code are not.
 fn artifact_authority_refused(outcome: Result<ArtifactFreshness, ArtifactFault>) -> bool {
     matches!(
         outcome,

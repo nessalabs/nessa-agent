@@ -62,7 +62,7 @@ use nessa_protocol::product::generated::{
     MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
     PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
-use nessa_protocol::product_contract::generated::RecordReadErrorCode;
+use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordReadErrorCode};
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_protocol::tunnel::TunnelAddress;
@@ -247,23 +247,14 @@ pub enum ReadFailure {
     /// and it does not ask pinned status again. It is not an ungranted
     /// conversation.
     SubscriptionCapacity,
-    /// `artifact.read` answered `conversation_deleted`. The conversation is
-    /// gone. A catalogue or checkpoint read does not produce this, and it
-    /// does not ask pinned status again.
-    ConversationDeleted,
-    /// `artifact.read` answered `conversation_not_found`: this device has no
-    /// grant, or the gateway does not hold that conversation. A catalogue or
-    /// checkpoint read does not produce this, and it does not ask pinned
-    /// status again.
-    ConversationNotFound,
-    /// `artifact.read` answered `attachment_not_found`. The conversation does
-    /// not hold this file. A catalogue or checkpoint read does not produce
-    /// this, and it does not ask pinned status again.
-    AttachmentNotFound,
-    /// `artifact.read` answered `attachment_unavailable`. The artifact store
-    /// could not be read. A catalogue or checkpoint read does not produce
-    /// this, and it does not ask pinned status again.
-    AttachmentUnavailable,
+    /// `artifact.read` answered a conversation product code this client
+    /// recognizes. The code is the one the gateway sent, including a released
+    /// file, an unreadable artifact, a missing conversation, and any other
+    /// taught code. A catalogue or checkpoint read does not produce this, and
+    /// it does not ask pinned status again. `temporarily_unavailable` is
+    /// [`ReadFailure::Unreachable`]: the range was already retried. A response
+    /// this client was not taught is [`ReadFailure::Protocol`].
+    Product(ConversationErrorCode),
 }
 
 /// Stops a read in progress: the flag every physical read and write asks,

@@ -56,28 +56,61 @@ copied_enum!(
     ]
 );
 copied_enum!(NativeWorkerFault, PairingWorkerFault, [Panic, Cancelled]);
-copied_enum!(
-    NativeReadFailure,
-    ReadFailure,
-    [
-        Refused,
-        Unreachable,
-        Away,
-        ResetRequired,
-        Protocol,
-        Cache,
-        CacheUncertain,
-        CacheDamaged,
-        Quota,
-        Stopped,
-        CursorAhead,
-        SubscriptionCapacity,
-        ConversationDeleted,
-        ConversationNotFound,
-        AttachmentNotFound,
-        AttachmentUnavailable
-    ]
-);
+/// Existing core read failures. A recognized held-file product code is
+/// [`NativeReadFailure::Product`] and keeps the gateway's code string.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeReadFailure {
+    /// Existing same-named core variant.
+    Refused,
+    /// Existing same-named core variant.
+    Unreachable,
+    /// Existing same-named core variant.
+    Away,
+    /// Existing same-named core variant.
+    ResetRequired,
+    /// Existing same-named core variant.
+    Protocol,
+    /// Existing same-named core variant.
+    Cache,
+    /// Existing same-named core variant.
+    CacheUncertain,
+    /// Existing same-named core variant.
+    CacheDamaged,
+    /// Existing same-named core variant.
+    Quota,
+    /// Existing same-named core variant.
+    Stopped,
+    /// Existing same-named core variant.
+    CursorAhead,
+    /// Existing same-named core variant.
+    SubscriptionCapacity,
+    /// The gateway's conversation product code, as `ConversationErrorCode::as_str`.
+    Product {
+        /// Exact product code.
+        code: String,
+    },
+}
+impl From<ReadFailure> for NativeReadFailure {
+    fn from(value: ReadFailure) -> Self {
+        match value {
+            ReadFailure::Refused => Self::Refused,
+            ReadFailure::Unreachable => Self::Unreachable,
+            ReadFailure::Away => Self::Away,
+            ReadFailure::ResetRequired => Self::ResetRequired,
+            ReadFailure::Protocol => Self::Protocol,
+            ReadFailure::Cache => Self::Cache,
+            ReadFailure::CacheUncertain => Self::CacheUncertain,
+            ReadFailure::CacheDamaged => Self::CacheDamaged,
+            ReadFailure::Quota => Self::Quota,
+            ReadFailure::Stopped => Self::Stopped,
+            ReadFailure::CursorAhead => Self::CursorAhead,
+            ReadFailure::SubscriptionCapacity => Self::SubscriptionCapacity,
+            ReadFailure::Product(code) => Self::Product {
+                code: code.as_str().to_owned(),
+            },
+        }
+    }
+}
 copied_enum!(
     NativeKeyPublication,
     GatewayPublicationState,

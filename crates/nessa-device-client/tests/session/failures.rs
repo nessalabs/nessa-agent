@@ -1,5 +1,6 @@
 //! Foreign immutable failure views retain the original typed payload meaning.
 use super::*;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 #[test]
 fn private_acknowledgement_uncertainty_is_not_no_publication() {
     let failure = NativeEnrollmentFailure {
@@ -89,38 +90,37 @@ fn cursor_ahead_stays_distinct_from_an_ungranted_conversation() {
         NativeReadFailure::from(ReadFailure::SubscriptionCapacity),
         NativeReadFailure::Refused
     );
+    let released = NativeReadFailure::from(ReadFailure::Product(
+        ConversationErrorCode::AttachmentNotFound,
+    ));
+    let unavailable = NativeReadFailure::from(ReadFailure::Product(
+        ConversationErrorCode::AttachmentUnavailable,
+    ));
+    let unconfigured = NativeReadFailure::from(ReadFailure::Product(
+        ConversationErrorCode::ConversationsNotConfigured,
+    ));
     assert_eq!(
-        NativeReadFailure::from(ReadFailure::ConversationDeleted),
-        NativeReadFailure::ConversationDeleted
-    );
-    assert_eq!(
-        NativeReadFailure::from(ReadFailure::ConversationNotFound),
-        NativeReadFailure::ConversationNotFound
-    );
-    assert_ne!(
-        NativeReadFailure::from(ReadFailure::ConversationDeleted),
-        NativeReadFailure::Protocol
-    );
-    assert_ne!(
-        NativeReadFailure::from(ReadFailure::ConversationNotFound),
-        NativeReadFailure::Refused
-    );
-    assert_eq!(
-        NativeReadFailure::from(ReadFailure::AttachmentNotFound),
-        NativeReadFailure::AttachmentNotFound
+        released,
+        NativeReadFailure::Product {
+            code: "attachment_not_found".to_owned()
+        }
     );
     assert_eq!(
-        NativeReadFailure::from(ReadFailure::AttachmentUnavailable),
-        NativeReadFailure::AttachmentUnavailable
+        unavailable,
+        NativeReadFailure::Product {
+            code: "attachment_unavailable".to_owned()
+        }
     );
-    assert_ne!(
-        NativeReadFailure::from(ReadFailure::AttachmentNotFound),
-        NativeReadFailure::Protocol
+    assert_eq!(
+        unconfigured,
+        NativeReadFailure::Product {
+            code: "conversations_not_configured".to_owned()
+        }
     );
-    assert_ne!(
-        NativeReadFailure::from(ReadFailure::AttachmentUnavailable),
-        NativeReadFailure::Refused
-    );
+    assert_ne!(released, unavailable);
+    assert_ne!(released, NativeReadFailure::Protocol);
+    assert_ne!(unavailable, NativeReadFailure::Refused);
+    assert_ne!(unconfigured, NativeReadFailure::Protocol);
 }
 
 #[test]
