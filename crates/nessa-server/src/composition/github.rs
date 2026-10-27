@@ -1,6 +1,6 @@
 //! The GitHub sign-in, composed once per run: the Nessa GitHub App, GitHub
-//! over HTTPS, the OS sign-in entry, its audit, and what each agent open
-//! reads of it.
+//! over HTTPS, its encrypted app-session vault entry and audit, and what each
+//! agent open reads of it.
 //!
 //! `NESSA_GITHUB_APP` names a file describing another app in place of the
 //! released one, so the stress check can point a gateway at a fake GitHub on

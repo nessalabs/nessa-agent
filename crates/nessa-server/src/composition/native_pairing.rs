@@ -10,13 +10,15 @@
 //!                               audited in peer-gateways-audit/)
 //! bind:    PreparedNative --> TcpEnrollmentAccept --> the one NativeEnrollmentConnections
 //!          (with NativeSessions: the product state + the registry's device verifier)
+//!          --> the tunnel's loopback ingress, when one is on (`composition::tunnel`)
 //! start:   BoundNative --> listener task (failed --> watch)
 //!          --> PeerPoller (reads each peer)
+//!          --> the tunnel's ingress and its provider's program
 //!          --> LinkingAnnouncer (only on a network address) --> RunningNative
-//! stop:    signal_stop (announcement withdrawn, listener and poller) --> join: the poller's workers,
+//! stop:    signal_stop (announcement withdrawn, listener, poller, tunnel) --> join: the poller's workers,
 //!          then the peer commands closed (running ones waited for, bounded by PREEMPT),
 //!          then the peer audit closed and drained (bounded by AUDIT_DEADLINE),
-//!          then listener drain, then GatewayPairing::shutdown, then reconcile_cleanup
+//!          then the tunnel's ingress and supervisor, then listener drain, then GatewayPairing::shutdown, then reconcile_cleanup
 //! ```
 //! Arrows are construction and ownership handoffs, in order. Design rows
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
@@ -30,7 +32,7 @@ use crate::device_pairing::application::{Announced, LinkingAnnouncement, Linking
 use crate::device_pairing::infrastructure::{
     restore_gateway_identity, ConversationReceivers, EnvironmentPeers, GatewayPairing,
     InvitationEntropy, NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
-    PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY,
+    PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
 };
 use crate::peer_gateways::infrastructure::{
     DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
@@ -42,6 +44,9 @@ use crate::relay::gateway::{
     infrastructure::{IdentityKey, RelayedAccept, TcpRelayDial},
 };
 use crate::timer::TokioTimer;
+#[cfg(unix)]
+use crate::tunnel::infrastructure::ingress::TunnelIngress;
+use crate::tunnel::infrastructure::ingress::{Tunneled, TunneledAccept};
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,
@@ -119,9 +124,19 @@ pub(super) struct PreparedNative {
     /// and `bind` binds `address`. A test that reserved the port hands the
     /// listener here so the port stays owned until accept.
     bound_socket: Option<TcpListener>,
+    /// The web tunnel, when one is on.
+    #[cfg(unix)]
+    tunnel: Option<super::tunnel::PreparedTunnel>,
 }
 
 impl PreparedNative {
+    /// Serve the web tunnel `tunnel` as well.
+    #[cfg(unix)]
+    pub(super) fn with_tunnel(mut self, tunnel: super::tunnel::PreparedTunnel) -> Self {
+        self.tunnel = Some(tunnel);
+        self
+    }
+
     /// Record a pairing cancellation in the deletion inventory. The inventory
     /// is opened before `prepare`, and a cancellation commits inside Auth,
     /// which does not call the credential admin.
@@ -239,15 +254,17 @@ pub(super) async fn prepare(
             relay: config.relay.clone(),
             advertised_address: config.advertised_address,
             bound_socket: None,
+            #[cfg(unix)]
+            tunnel: None,
         },
         commands,
         peers,
     ))
 }
 
-/// The listening socket and the readers a relay joined, as the listener's one
-/// source of connections.
-type NativeAccept = RelayedAccept<TcpEnrollmentAccept>;
+/// The listening socket, the readers a relay joined and the connections that
+/// came through the tunnel, as the listener's one source of connections.
+type NativeAccept = TunneledAccept<RelayedAccept<TcpEnrollmentAccept>>;
 
 /// Native pairing with its socket bound and its one connection owner built.
 pub(super) struct BoundNative {
@@ -267,6 +284,10 @@ pub(super) struct BoundNative {
     peers: Arc<PeerCommands>,
     audit: Arc<DurablePeerAudit>,
     clock: Arc<dyn Clock>,
+    /// The tunnel's bound ingress and what it serves, started with the
+    /// listener.
+    #[cfg(unix)]
+    tunnel: Option<(TunnelIngress, super::tunnel::PreparedTunnel)>,
 }
 
 impl BoundNative {
@@ -330,6 +351,8 @@ pub(super) async fn bind(
         relay,
         advertised_address,
         bound_socket,
+        #[cfg(unix)]
+        tunnel,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let listener = match bound_socket {
@@ -378,10 +401,36 @@ pub(super) async fn bind(
         timer: Arc::new(TokioTimer::new()),
         joined,
     });
+    // Likewise with no tunnel: the listener's tunnel source is closed.
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    let (joined, tunneled) = mpsc::channel::<Tunneled>(TUNNEL_CAPACITY);
+    #[cfg(unix)]
+    // Bound only for a tunnel that runs, so a setting Settings can still
+    // fix (a token that cannot be read) never holds the port it would need.
+    // A port another program holds fails the tunnel, not the gateway.
+    let tunnel = match tunnel.filter(|tunnel| tunnel.setting().is_some()) {
+        Some(tunnel) => match TcpListener::bind(tunnel.ingress()).await {
+            Ok(listener) => Some((
+                TunnelIngress::new(listener, connections.clone(), joined),
+                tunnel,
+            )),
+            Err(error) => {
+                tracing::warn!(
+                    address = %tunnel.ingress(),
+                    %error,
+                    "the tunnel's ingress cannot be bound; the tunnel is not started"
+                );
+                tunnel.ingress_failed();
+                None
+            }
+        },
+        None => None,
+    };
+    let accept = TunneledAccept::new(RelayedAccept::new(socket, relayed), tunneled);
     Ok(BoundNative {
         gateway,
         audience,
-        listener: NativeEnrollmentListener::new(RelayedAccept::new(socket, relayed), connections),
+        listener: NativeEnrollmentListener::new(accept, connections),
         address: bound,
         configured: address,
         announcer: None,
@@ -389,6 +438,8 @@ pub(super) async fn bind(
         peers,
         audit,
         clock: wall,
+        #[cfg(unix)]
+        tunnel,
     })
 }
 
@@ -433,6 +484,16 @@ pub(super) struct RunningNative {
     audit: Arc<DurablePeerAudit>,
     /// The local-network announcement, withdrawn first on stop.
     announced: Option<Box<dyn Announced>>,
+    /// The tunnel's ingress and supervisor, and their stop: stopped with
+    /// the listener, joined before its drain (each bridge holds a tunnel
+    /// permit).
+    tunnel: Option<RunningTunnel>,
+}
+
+struct RunningTunnel {
+    stop: watch::Sender<bool>,
+    ingress: JoinHandle<()>,
+    supervisor: Option<JoinHandle<()>>,
 }
 
 /// Start serving. An accept failure that ends the listener is published on
@@ -468,8 +529,21 @@ pub(super) fn start(
         peers,
         audit,
         relay,
+        #[cfg(unix)]
+        tunnel,
         ..
     } = bound;
+    #[cfg(unix)]
+    let tunnel = tunnel.map(|(ingress, prepared)| {
+        let (stop, stopped) = watch::channel(false);
+        RunningTunnel {
+            ingress: tokio::spawn(ingress.serve(stopped.clone())),
+            supervisor: super::tunnel::start(prepared, stopped),
+            stop,
+        }
+    });
+    #[cfg(not(unix))]
+    let tunnel = None;
     let relay = relay.map(|relay| {
         let (stop, stopped) = watch::channel(false);
         (stop, tokio::spawn(relay.serve(Backoff::default(), stopped)))
@@ -494,6 +568,7 @@ pub(super) fn start(
         peers,
         audit,
         announced,
+        tunnel,
     }
 }
 
@@ -510,6 +585,9 @@ impl RunningNative {
         }
         if let Some((stop, _)) = &self.relay {
             stop.send_replace(true);
+        }
+        if let Some(tunnel) = &self.tunnel {
+            tunnel.stop.send_replace(true);
         }
         self.poller.signal_stop();
     }
@@ -544,6 +622,15 @@ impl RunningNative {
         if let Some((_, relay)) = self.relay.take() {
             if let Err(error) = relay.await {
                 tracing::error!(?error, "relay registration task fault");
+            }
+        }
+        // The tunnel's bridges, which hold tunnel permits, and its
+        // supervisor, which leaves the provider's program for the next run.
+        if let Some(tunnel) = self.tunnel.take() {
+            for task in std::iter::once(tunnel.ingress).chain(tunnel.supervisor) {
+                if let Err(error) = task.await {
+                    tracing::error!(?error, "tunnel task fault");
+                }
             }
         }
         let drained = match self.task.await {

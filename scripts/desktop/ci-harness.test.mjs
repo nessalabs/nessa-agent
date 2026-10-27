@@ -316,9 +316,19 @@ test("apt installs and every CI job are bounded", () => {
   assert.equal(script.match(/apt-get "\$\{apt_options\[@\]\}"/g)?.length, 2)
   // `update` is the command the mirror stalled in, so it is the one that is
   // retried. `install` stays after the loop: one attempt, its own ceiling.
+  // Ubuntu 26.04 names the WebKit driver webkitgtk-webdriver. `apt-cache show`
+  // still exits 0 for the old name, so the install reads the candidate.
   assert.match(
     script,
-    /for attempt in 1 2 3; do\r?\n {2}if sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 5m apt-get "\$\{apt_options\[@\]\}" update; then\r?\n {4}break\r?\n {2}fi\r?\n {2}if \[ "\$attempt" -eq 3 \]; then\r?\n {4}echo "apt-get update failed on all three attempts" >&2\r?\n {4}exit 1\r?\n {2}fi\r?\n {2}sleep \$\(\(attempt \* 15\)\)\r?\ndone\r?\nsudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "\$\{apt_options\[@\]\}" install -y \\/,
+    /for attempt in 1 2 3; do\r?\n {2}if sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 5m apt-get "\$\{apt_options\[@\]\}" update; then\r?\n {4}break\r?\n {2}fi\r?\n {2}if \[ "\$attempt" -eq 3 \]; then\r?\n {4}echo "apt-get update failed on all three attempts" >&2\r?\n {4}exit 1\r?\n {2}fi\r?\n {2}sleep \$\(\(attempt \* 15\)\)\r?\ndone\r?\n/,
+  )
+  assert.match(
+    script,
+    /candidate="\$\(LC_ALL=C apt-cache policy webkit2gtk-driver \| awk '\/\^  Candidate:\/ \{ print \$2; exit \}'\)"\r?\n {4}if \[ -z "\$candidate" \] \|\| \[ "\$candidate" = "\(none\)" \]; then\r?\n {6}resolved\+=\(webkitgtk-webdriver\)/,
+  )
+  assert.match(
+    script,
+    /sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "\$\{apt_options\[@\]\}" install -y \\\r?\n {2}"\$\{resolved\[@\]\}"/,
   )
   // 3×(5m+30s) + 15s + 30s + 45m + 30s. The install step has to cover it.
   const scriptBudget = aptScriptBudgetMinutes(script)

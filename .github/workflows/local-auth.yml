@@ -370,6 +370,15 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menuPanels') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menuPanels 1 --evidence "$STRESS_EVIDENCE/menu-panel-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-panel-webkit.log"
         timeout-minutes: 10
+      # The window's menus ship in WKWebView too: row height, icons, the
+      # check before its number, and picking a filter choice by its number.
+      - name: Run the menu stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menus') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menus 1 --evidence "$STRESS_EVIDENCE/menu-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-webkit.log"
+        timeout-minutes: 10
       # Settings' GitHub row runs in WebKit too: its actions show under the
       # pointer or focus, take no pointer while hidden, and Tab between them.
       - name: Run the GitHub stress step in WebKit
@@ -378,6 +387,15 @@ jobs:
           set -o pipefail
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'githubs') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --githubs 1 --evidence "$STRESS_EVIDENCE/github-webkit" 2>&1 | tee "$STRESS_EVIDENCE/github-webkit.log"
+        timeout-minutes: 10
+      # First-run setup ships in WKWebView too: the welcome is whole as it
+      # opens, and a summon sends nothing through the light behind it.
+      - name: Run the onboarding stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'onboardings') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --onboardings 1 --evidence "$STRESS_EVIDENCE/onboarding-webkit" 2>&1 | tee "$STRESS_EVIDENCE/onboarding-webkit.log"
         timeout-minutes: 10
       # Seeded random actions from several clients at once on the same
       # gateway build (conversation-chaos.mjs): a few short seeds here, many
@@ -519,8 +537,9 @@ jobs:
       # The package list is still one cargo invocation (`--no-run`), so feature
       # unification does not change. scripts/cargo-test-parallel.mjs then runs
       # the built test binaries two at a time and runs doctests with the same
-      # packages. Windows uses remaining; windows-server-tests owns its library
-      # executable. Linux/macOS use all. It does not raise libtest's thread count:
+      # packages. Windows remaining also runs the four seeded catalogue cases;
+      # windows-server-tests runs the complementary server library cases.
+      # Linux/macOS use all. It does not raise libtest's thread count:
       # the ACP
       # process-contract semaphore is process-local, and a process-per-test
       # runner would make that semaphore admit every contract test at once.

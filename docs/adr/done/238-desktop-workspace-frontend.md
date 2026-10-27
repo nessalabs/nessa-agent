@@ -939,6 +939,10 @@ links here):
 - **A selection is a fill.** No ring or border on a selected row or a
   highlighted menu item, in either theme.
 - **Menus lead with icons only when every item has one.**
+- **A menu is a solid card of 30px rows.** A row leads with its icon; a
+  chosen option's check and then its number or shortcut sit at the row's end,
+  the numbers in one column (nessa_ui's `lib/menu-recipe.ts`; the card in
+  `ui/menu/menu.css`). Where a menu numbers its choices, the number picks one.
 - **Shortcuts are right-aligned** in menus and tooltips, and named only where
   they work (`ui/layouts/shortcuts.ts` labels them).
 - **A key is written as the platform writes it**: ⌃⌥⇧⌘ on a Mac, and

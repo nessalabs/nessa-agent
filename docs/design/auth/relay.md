@@ -272,6 +272,36 @@ so typing it once at pairing is enough for the first relay.
 | RL19 | A reader whose direct dial is refused, or has not connected within the head start | The relay leg starts, and the first of the two to connect is used; both failing reports the relay's answer | R2b-1; for a peer's status dial, R2b-2 |
 | RL20 | A peer gateway kept with a relay whose address stops answering | Its status and its grant are read through the relay; the record keeps the relay across enrollment and `peer.relay` changes or clears it, audited | R2b-2 |
 
+The R2c positive retained-read controls consume successful partial reports by
+reading the **same cache** again: its durable catalogue and record checkpoints
+own continuation. They do not manufacture a cursor or start a fresh cache.
+`relay_reading/completion.rs` gives these controls six passes and thirty seconds
+in total, including faithful-proxy joins, with each read still capped at five
+seconds (or the smaller remaining fixture allowance). The two-conversation,
+301-fact corpus allows a catalogue pass, two record passes per conversation,
+and a final settled-walk confirmation. This is a fixture allowance, not a
+guarantee that every network or source will finish within it. A pass limit,
+expired total allowance, or any typed read failure fails the control; a late
+complete report cannot pass it. The real product clock and deadlines remain in
+use. Tests force a committed-catalogue partial read before continuing, and
+control stalled, refused and late continuations. The final completeness,
+transcript and checkpoint comparisons remain required. Tamper and impostor
+reads remain single-shot typed refusals with untouched-cache assertions.
+The fixture-owned proxy transport bounds accept, connect, reads and writes by
+one absolute deadline shared by every cloned stream. Thus joining a one-use
+proxy whose client never connected also finishes; native-clock and real
+loopback controls cover unused accept, a silent read and expired clone writes.
+
+| R2c fixture ordering | Expected result |
+| --- | --- |
+| Catalogue committed, records deferred by zero withdrawal allowance | Partial report; retain the same cache and resume its saved checkpoints |
+| Successful partial report before both limits | Another bounded read of that cache |
+| Complete report before both limits | Keep the final completeness and equality assertions |
+| No complete report in six passes, or total allowance expired | Fail with last report and elapsed time; never reset either limit |
+| Read refusal/failure, including after partial progress | Fail without retrying the typed failure |
+| Read expires before connecting to its faithful proxy | Proxy accept expires; joining it cannot wait for another client |
+| Tamper or impostor session | Single attempt, typed refusal, relay witness and empty cache still required |
+
 ## What the relay sees
 
 Measured in R5 by `a_joined_pair_costs_its_preamble_frames_over_a_direct_read`,

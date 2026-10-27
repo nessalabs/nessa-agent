@@ -13,6 +13,7 @@ import {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  onPathsDragged,
   host,
   loadAssignedGatewayEndpoint,
   onReviewNoticeOpened,
@@ -54,7 +55,7 @@ import {
   openReviewEvent,
   showWaitingReviews,
 } from "./workspace/adapters/gateway/review-notices"
-import { followWorkspace, loadWorkspace } from "./workspace"
+import { followWorkspace, loadWorkspace, type PathPicker } from "./workspace"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
@@ -131,12 +132,26 @@ if (nativeNotices) {
 // The system's pickers for a new channel's paths, in the app on macOS and
 // Windows. Linux has no picker of its own yet, and a browser none at all, so
 // there a channel's folder is made for it and it takes no resources.
-const channelPaths =
+const channelPaths: PathPicker | undefined =
   backend === "host" && (host.kind === "macos" || host.kind === "other")
     ? {
         home: homeFolder,
         folder: chooseChannelFolder,
         resources: chooseChannelResources,
+        drops: (watch) => {
+          // Listening is asked for, and answers later: a watch stopped before
+          // then stops the listener as soon as it is there.
+          let stop: (() => void) | null = null
+          let stopped = false
+          void onPathsDragged(watch).then(
+            (unlisten) => (stopped ? unlisten() : (stop = unlisten)),
+            (error: unknown) => console.warn("Dropped files will not be heard", error),
+          )
+          return () => {
+            stopped = true
+            stop?.()
+          }
+        },
       }
     : undefined
 const dependencies = createDesktopDependencies({

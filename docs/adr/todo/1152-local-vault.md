@@ -201,3 +201,24 @@ per-generation mutation gate still orders disconnect/cancel/restore with save.
 | Vault locks or its owner closes during save | Drop stale Saving projection; original completion owns remaining evidence, and its old-generation result cannot publish |
 | Disconnect arrives during save | Same-generation gate orders it after save, then deletes the resulting stored credential |
 | Denial, expiry or cancel | The existing terminal paths continue projecting SignedOut; Saving is specific to approved credentials awaiting receipts |
+
+## Mainline integration before landing
+
+The completion integrates current main at
+`d0d253e0201d8644a47f001df97e17f39bb92545` into the reviewed vault/relay/Boat
+stack. It preserves both existing contracts; it does not add a second credential
+owner or relax approval, retention or stage boundaries.
+
+| Concurrent feature boundaries | Integration invariant and verification |
+| --- | --- |
+| Mainline lease sources and Boat release worker | Publish a credential-free image for the exact compiled fingerprint; require the release worker to be available in CI and verify a fresh clone before pinning |
+| Mainline web tunnel and relay TLS | Keep inbound WebSocket handshake plus outbound TLS; retain both typed product routes and CLI options |
+| Mainline setup/credentials and app-session vault | Vault remains the GitHub/inbox credential owner; lock/close fences old generations; provider API-key storage remains separate |
+| Channel file drops and Boat placement | Keep both independent UI groups and their browser checks; no implicit file mounting |
+| CI runner changes and vault coverage | Keep the shipping Linux baseline and all eight vault-inclusive package selections; retain current aggregate checks |
+| Mainline paired-channel catalogue fixture and Boat execution | Construct the existing Local execution value in the new fixture; retain grant-scoped channel IDs and prove the real socket test still compiles/runs |
+| Mainline focus repair and protected-use dialogs | Keep #1171's bounded close callbacks and exact focus assertions; current main's linked-device contract remains intact |
+
+Generated Rust/TypeScript product payloads are rebuilt from the combined schema
+and manifest, not resolved by choosing one generated side. The final integration
+gets a fresh source review, affected local checks and hosted full-platform CI.

@@ -1,0 +1,107 @@
+{
+  "source": "4a3120e2d3eed25de87c14a2c2ab49b64ad4cb56",
+  "base": "6a278df920562700a25df832d0361ed7c036b20f",
+  "checks": {
+    "native": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-native-cohort.log",
+      "sha256": "7fa8a20fdaf6f3c35156a539ae58a381c5dc16fe91a4fc7dc0b802761d071a86",
+      "summary": "test result: ok. 37 passed; 0 failed; 1 ignored; 0 measured; 3372 filtered out; finished in 19.59s"
+    },
+    "device": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-device-client.log",
+      "sha256": "9cf2e2af1c4864d065899720f12e4f3d12451273e6e01da1c71e133c361add65",
+      "summary": "test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s"
+    },
+    "subscriptions": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-subscriptions-final.log",
+      "sha256": "ef3a29025373f8edf3bc7a71f4a4adf7cdde1e7cb70b5040d3904e48404c873b",
+      "summary": "test result: ok. 107 passed; 0 failed; 1 ignored; 0 measured; 3302 filtered out; finished in 41.51s"
+    },
+    "metadata": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-store-final.log",
+      "sha256": "e24ad913c9632e24ccc5337078c0a09be637233f8b6e353a9993c4c128967a47",
+      "summary": "test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 3330 filtered out; finished in 1.68s"
+    },
+    "server": {
+      "exit": 101,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-server-full.log",
+      "sha256": "b7322cac401185e3048f87d0219f11f4af3d2419c96169e357e8cf508bddb40e",
+      "summary": "test result: FAILED. 3399 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 133.12s"
+    },
+    "native_filter_revert": {
+      "exit": 101,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-native-filter-revert.log",
+      "sha256": "440b2dac365098a5e673ec352f5f70bee777ad61fe94e3bc71256b0897164444",
+      "summary": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3409 filtered out; finished in 0.71s"
+    },
+    "native_filter_restored": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-native-filter-restored.log",
+      "sha256": "0416aabf2088d4372e41e340ac0c2a5a838dccd7f637a289d286dc726e526174",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3409 filtered out; finished in 4.61s"
+    },
+    "library": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-library-qualified.log",
+      "sha256": "aee9c6ef5af93a708ef33af61b58391dd558d2c27e2aa987fe9e571ba79dbbb3",
+      "summary": "397 passed; 0 failed"
+    },
+    "clippy": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-clippy.log",
+      "sha256": "1a87e9dae2d0016974e72548c6edcd6851761a11c85737e06c0bffcf5fbb58b6"
+    },
+    "architecture": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-architecture-qualified.log",
+      "sha256": "6acaed2404f95a78cf6e4add967038e60af2eaf8cdbe41085fdff10f3051a60c"
+    },
+    "protocol": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-protocol.log",
+      "sha256": "30fe030f6b3515e29829ea7b3e10fa6fb9dad09d77a11be884c9ec8d2c84c9e6"
+    },
+    "follower_revert": {
+      "exit": 1,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-follower-revert.log",
+      "sha256": "a9d5678d34960cdbe5dd9a94acd3fdc7dc62c010e3a5d5ae1ed61e4b3df366d8"
+    },
+    "follower_restored": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-follower-restored.log",
+      "sha256": "34b914cfbfc043fd111c5d345837138e733640ddd62b284b9d290f9b01f43874"
+    },
+    "helper_negative": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-helper-final.log",
+      "sha256": "2215a8fd1dbc2642377ede49894185f35736658de0247ce02871b8cace610085"
+    },
+    "helper_preflight": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-native-helper-preflight.json",
+      "sha256": "c9016d7563fa29ce37fe9f2aeb1f645a492238c332a7724ef27da6014fa954fc"
+    },
+    "helper_raised": {
+      "exit": 0,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-native-raised-helper.json",
+      "sha256": "257c8b26238e14377dc98a8f5256cb552c4a5121f52142c36c11d6bda5375d09"
+    },
+    "browser_install_denied": {
+      "exit": 1,
+      "raw_log": "/workspace/scratch/965-cloud-recovery/logs/965-browsers.log",
+      "sha256": "dafe392759f722f361cbf2407adefdf777aadcc7480c659a86a3607b7eeaf3fe"
+    },
+    "server_binary": {
+      "path": "/workspace/nessa-agent/target/debug/deps/nessa_server-eccc95dc5b1d0d60",
+      "sha256": "30d5f6b8352861ca4a1848c7eb1ef12094ded3e12b140f8a99d1c3ef672aa655",
+      "reverted_then_restored_hash_matches_original": true
+    }
+  },
+  "review": "pending explicit reconstructed-candidate cycle authorization",
+  "intended_pr_publication": false,
+  "merge_verified": false
+}

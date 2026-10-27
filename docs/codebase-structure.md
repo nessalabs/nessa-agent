@@ -73,7 +73,7 @@ src-tauri/src/
     contracts/            what other contexts and the frontend may see
 src-tauri/examples/
   page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
-    server/              portable real-socket regressions for its HTTP control fixture
+    server/              bounded HTTP control fixture's portable real-socket, fragmented-request and deadline regressions
 src-tauri/tests/
   page_load_server.rs     runs the fixture regressions in the desktop host suite
 verification/             scripts that drive real browsers against the running app
@@ -385,6 +385,10 @@ against a private scripted gateway.
   import against that direction, in every form of import it reads, and the
   window's composition (`main.tsx`, `dependencies.ts`), which imports them
   all, is outside the rule.
+  A third-party package that runs as a plugin surface or as its own process
+  is planned in [the application framework](design/application-framework.md).
+  The plan is not built. It starts from this widget host and from the MCP App
+  mount, and it reuses the [access grant](design/access-grants.md).
 - Subagents are the desktop window's vertical for the agents a conversation
   puts to work ([ADR 329](adr/todo/329-subagents.md)): `src/desktop/subagents/`
   (its map is `index.ts`) owns the child as the panel shows it
@@ -1009,7 +1013,7 @@ the existing scheduler owner before an applied switch is committed.
 `conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`, with unchanged-preset publication/recovery in `tests/conversation/approval_mode/unchanged.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
-`product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
+`product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`, with scoped-list privacy and cancellation tests under `subscriptions/paired_lists.rs`; `paired_lists/stress.rs` owns seeded catalogue histories and `paired_lists/settlement.rs` gates final reply-summary publication to test their completion boundary. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
 
 Usage-limit preference commands in the workspace source and classic panel's
 `src/conversation/adapters/gateway/effects.ts` complete after their existing
@@ -1019,7 +1023,7 @@ before reopening. Workspace ordering regressions live in
 
 `product/subscription/events.rs` follows committed semantic events through the same connection and delivery owners. `conversation/application/service/event_read.rs` owns target admission, shared `EventProgress` correlation of reader outputs with their start/prior checkpoint, and the metadata-only projection from the SDK reader; it never opens an Agent. Event consumers share that continuity validator before publishing data or retaining checkpoints. Event subscriptions retain a replay cursor rather than replacing a conversation view. Their socket regressions are `tests/product/socket/subscriptions/events.rs`, with delivery deadline tests in `tests/product/subscription_event_delivery.rs`; shared continuity and projection regressions are `tests/conversation/event_read.rs`.
 
-Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
+Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, admits a device's grant-scoped list and observation while preserving peer refusals, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -2313,8 +2317,13 @@ scope/progress/generation for consumers to compare. `retained/device.rs` compose
 the existing enrollment worker and purge policy, collecting status/purge effects
 inside physical admission and exposing original durable purge receipts separately.
 The native adapter below provides generated Swift binding and linked library
-execution. Phone repository/enrollment/authority wiring, artifact exports and
-durable deletion remain later ADR 782 slices. `src/outbox/` keeps a typed phone
+execution. `retained/phone.rs` is the phone publication lease and catalogue
+presence: a stamp reads only its lease instance and bound receiver, and a missing catalogue row
+is not a tombstone. `retained/artifact.rs` fetches one held file through the
+existing range owner and reports local integrity separately from a gateway
+confirmation. Busy-range retries wait on an injected pause; `ThreadPause` is
+the operating-system wait, and session composition supplies it. The product iOS application is not in this repository.
+`src/outbox/` keeps a typed phone
 send before `conversation.send` and reads `conversation.receipt` before any
 later send; its ordering is [phone outbox](design/phone-outbox.md). The phone
 application and the desktop saved-tabs caller are later.
@@ -2543,9 +2552,14 @@ watchdog for refusal and budget ordering; the contract is in
 `docs/design/native-session-verification-997.md`. `NativeSession::open_with_clock`
 accepts the protocol clock at composition; `open` keeps the production default.
 Core's `retained/active.rs` validates fresh status against the current immutable
-issued record before product selection. Release Apple packaging is verified;
-the actual phone repository remains unfinished under issue 782. This module does not supply native
-authority from a panel token or an arbitrary saved cache target.
+issued record before product selection. Release Apple packaging is verified.
+`NativeSession` binds a `PhoneLease` to the issued receiver and refuses a
+replaced stamp before a saved read or held-file fetch. A successful purge
+releases the lease even when the status has no observation. Catalogue presence and
+artifact freshness are on that same session. A local match reports the session
+clock. This module does not supply native
+authority from a panel token or an arbitrary saved cache target. Physical-device
+execution remains unverified.
 
 `swift/NativeSessionWorker.swift` is the generated API's dispatch adapter: one
 admission reserved before enqueue, a per-call stop latch and a cancellation-independent
@@ -2562,8 +2576,9 @@ native I/O before physical drain joins those captures. Neither wrapper allocates
 transport IDs, implements request deadlines or copies private device keys.
 `scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
 from a frozen checkout; generated declarations remain build output, not hand-edited
-source. Nessa iOS embeds a reviewed dynamic package; its production native
-profile/enrollment and retained history repository remain unfinished.
+source. The phone publication lease, catalogue presence and held-file fetch are
+the retained repository this package exports. A product iOS application is not
+in this repository, and physical-device execution remains unverified.
 
 ## Agent thread tools
 

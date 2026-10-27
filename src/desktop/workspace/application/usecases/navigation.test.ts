@@ -44,10 +44,26 @@ describe("choosing what the list shows", () => {
     expect(shown(state)).toEqual(["a"])
   })
 
-  it("opens the channel's most pressing session when the list is hidden", () => {
+  it("shows the list again when it is hidden, leaving the panes alone", () => {
     const hidden = toggleSessionList(loaded(), { open: false })
-    expect(shown(selectChannel(hidden, { channelId: "desktop" }))).toEqual(["b"])
-    expect(shown(selectChannel(hidden, { channelId: "empty" }))).toEqual(["a"])
+    const state = selectChannel(hidden, { channelId: "desktop" })
+    expect(state.view).toEqual({ channelId: "desktop" })
+    expect(state.chrome.sessionList).toEqual({ open: true, folded: false })
+    expect(shown(state)).toEqual(["a"])
+    // The person can still hide it afterwards.
+    expect(toggleSessionList(state, { open: false }).chrome.sessionList.open).toBe(false)
+  })
+
+  it("shows a list the window folded for room", () => {
+    const folded = loaded()
+    const state = selectChannel(
+      {
+        ...folded,
+        chrome: { ...folded.chrome, sessionList: { open: true, folded: true } },
+      },
+      { channelId: "gateway" },
+    )
+    expect(state.chrome.sessionList).toEqual({ open: true, folded: false })
   })
 
   it("ignores a channel it does not have", () => {

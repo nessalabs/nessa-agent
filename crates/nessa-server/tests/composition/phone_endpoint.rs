@@ -68,6 +68,7 @@ async fn endpoint_discloses_actual_bound_port_and_current_source_without_allocat
         listen_address: listener.local_addr().unwrap(),
         relay: None,
         advertised_address: None,
+        tunnel: None,
     };
     let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
@@ -178,6 +179,7 @@ async fn endpoint_refuses_absent_and_unbound_native_destinations() {
         listen_address: "0.0.0.0:0".parse().unwrap(),
         relay: None,
         advertised_address: Some("192.0.2.10".parse().unwrap()),
+        tunnel: None,
     };
     let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
@@ -217,6 +219,7 @@ async fn endpoint_publishes_the_configured_address_for_a_wildcard_bind() {
         listen_address: listener.local_addr().unwrap(),
         relay: None,
         advertised_address: Some(advertised),
+        tunnel: None,
     };
     let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await

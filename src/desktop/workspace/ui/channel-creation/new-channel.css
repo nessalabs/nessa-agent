@@ -288,6 +288,14 @@
   line-height: 22px;
 }
 
+/* One line, always: a narrow window clips a hint rather than wrapping it. */
+.new-channel-hint,
+.new-channel-field:placeholder-shown {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .new-channel-field {
   max-height: 132px;
   padding: 0;
@@ -370,4 +378,59 @@
   color: var(--desktop-faint);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/*
+ * The drop target: while files are dragged over the window as it asks for
+ * them, the whole flow takes them. A dashed rim inside its edge and one
+ * line in the middle say so; the questions dim beneath. It takes no pointer:
+ * the host, not the page, receives the drop.
+ */
+.new-channel-scroll,
+.new-channel-composer {
+  transition: opacity var(--desktop-fast);
+}
+
+.new-channel[data-dropping] .new-channel-scroll,
+.new-channel[data-dropping] .new-channel-composer {
+  opacity: 0.35;
+}
+
+.new-channel-drop {
+  position: absolute;
+  z-index: 1;
+  inset: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px dashed color-mix(in oklab, var(--foreground) 45%, transparent);
+  border-radius: calc(var(--desktop-radius) - 4px);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  pointer-events: none;
+  animation: new-channel-in var(--desktop-fast) var(--nessa-motion-easing-standard);
+}
+
+/* The line in the middle, on a pill of its own so it reads over the rows. */
+.new-channel-drop-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+  border-radius: var(--desktop-radius-pill);
+  background: color-mix(in oklab, var(--foreground) 7%, var(--background));
+  box-shadow: 0 16px 48px -16px rgb(0 0 0 / 70%);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.new-channel-drop-label svg {
+  width: 18px;
+  height: 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-channel-drop {
+    animation: none;
+  }
 }

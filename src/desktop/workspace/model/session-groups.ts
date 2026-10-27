@@ -114,18 +114,6 @@ export function matchesSearch(session: SessionSummary, query: string): boolean {
     .includes(wanted)
 }
 
-/** The session most worth opening: one waiting on the person, then one running, then the newest. */
-export function mostPressing(
-  sessions: readonly SessionSummary[],
-): SessionSummary | undefined {
-  const newest = [...sessions].sort(byRecency)
-  return (
-    newest.find((session) => session.status === "needs-you") ??
-    newest.find((session) => session.status === "running") ??
-    newest[0]
-  )
-}
-
 /** How many sessions a channel discloses in the sidebar before "Show all". */
 export const branchCap = 3
 

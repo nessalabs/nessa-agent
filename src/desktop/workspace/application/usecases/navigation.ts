@@ -6,7 +6,6 @@
 import { byRecency } from "../../model/workspace-index"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { chosen, fitted } from "../../../model/side-column"
-import { mostPressing } from "../../model/session-groups"
 import {
   clampColumn,
   foldToFit,
@@ -15,7 +14,6 @@ import {
 } from "../../model/window-fit"
 import {
   channelOf,
-  drawnColumns,
   keepShownFailures,
   listedSessions,
   sameContent,
@@ -70,21 +68,17 @@ export function closeInFront(
 }
 
 /**
- * Shows a channel's sessions in the list. With the list hidden, choosing a
- * channel still shows something of it: its most pressing session opens in
- * the focused pane.
+ * Shows a channel's sessions in the list. Choosing a channel is asking to
+ * see its sessions, so a list the person hid, or the window folded, is
+ * shown again (`toggleSessionList`); they can hide it once more. The panes
+ * are left as they are.
  */
 export function selectChannel(
   state: WorkspaceState,
   { channelId }: { channelId: string },
 ): WorkspaceState {
   if (!channelOf(state, channelId)) return state
-  const viewed: WorkspaceState = { ...state, view: { channelId } }
-  if (drawnColumns(state.chrome).sessionList) return viewed
-  const pick = mostPressing(
-    listedSessions(state).filter((session) => session.channelId === channelId),
-  )
-  return pick ? openSession(viewed, { sessionId: pick.id }) : viewed
+  return toggleSessionList({ ...state, view: { channelId } }, { open: true })
 }
 
 /**

@@ -4,7 +4,9 @@
  * an agent would. An answered question folds into a ✓ line; clicking the line
  * asks it again. The composer bar at the foot takes the typed answers (the
  * name, the notes) and holds Create, which is ready as soon as the channel
- * has a name: every other question has an answer already.
+ * has a name: every other question has an answer already. While it asks for
+ * files and folders, any dragged onto the window are taken too: the whole
+ * flow is the drop target, lit while a drag is over it.
  *
  * The rules are `usecases/channel-creation.ts`; this draws the store's flow
  * and dispatches its commands. The kit draws the controls (`Button`, `Kbd`,
@@ -16,6 +18,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   type KeyboardEvent,
   type RefObject,
 } from "react"
@@ -41,6 +44,7 @@ import {
   createChannel,
   draftChannel,
   removeChannelResource,
+  watchChannelDrops,
 } from "../../adapters/store/commands"
 import {
   useWorkspaceDispatch,
@@ -86,8 +90,8 @@ const composerHints: Record<ChannelStep, string> = {
   folder: "Pick above, then press ↩",
   placement: "Choose above, then press ↩",
   model: "Pick above, then press ↩",
-  notes: "Notes for every agent here, or press ↩ to skip",
-  resources: "Add files or folders above, or create without any",
+  notes: "Notes for agents here, or ↩ to skip",
+  resources: "Add or drop files, or create",
 }
 
 /** The steps whose answer is typed in the composer's field. */
@@ -122,7 +126,11 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
   const field = useRef<HTMLTextAreaElement>(null)
   const steps = channelStepsFor(pickable)
   const { draft, asking, creating, failure } = flow
-  const ready = canCreate(draft) && !creating
+  const landing = flow.landing.length > 0
+  const ready = canCreate(draft) && !creating && !landing
+  // Watched the whole time the flow is open, so a drop's paths are heard
+  // even after the question moves on; only the files question is lit.
+  const dropping = useDrops(!creating) && asking === "resources"
 
   useCovers(layer)
   useFocusReturns()
@@ -163,7 +171,12 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
   const failedAtCreate = failure && failureStep(failure) === null ? failure : null
 
   return (
-    <section ref={layer} className="new-channel" aria-label="New channel">
+    <section
+      ref={layer}
+      className="new-channel"
+      aria-label="New channel"
+      data-dropping={dropping || undefined}
+    >
       <div className="new-channel-band" aria-hidden="true" />
       <div className="new-channel-rule" aria-hidden="true" />
       <div className="new-channel-scroll">
@@ -254,12 +267,15 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
               // Return goes on from anywhere in the layer that is not a field.
               aria-hidden="true"
             >
-              {asking ? composerHints[asking] : `Ready to make #${draft.name.trim()}`}
+              {landing
+                ? "Adding what you dropped…"
+                : asking
+                  ? composerHints[asking]
+                  : `Ready to make #${draft.name.trim()}`}
             </span>
           )}
           <span className="new-channel-count" aria-label="Questions answered">
-            {flow.answered.filter((step) => steps.includes(step)).length} of{" "}
-            {steps.length}
+            {flow.answered.filter((step) => steps.includes(step)).length}/{steps.length}
           </span>
           {creating ? (
             <LoadingText className="new-channel-creating">Creating</LoadingText>
@@ -278,8 +294,38 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
           )}
         </div>
       </form>
+      {dropping ? (
+        <div className="new-channel-drop" aria-hidden="true">
+          <span className="new-channel-drop-label">
+            <DesktopIcon name="folderAdd" />
+            Drop to add to the channel
+          </span>
+        </div>
+      ) : null}
+      <span className="sr-only" aria-live="polite">
+        {dropping ? "Drop files or folders to add them to the channel" : ""}
+      </span>
     </section>
   )
+}
+
+/**
+ * Watches for files and folders dragged onto the window while `watching`:
+ * answers whether a drag is over it now. What is dropped is added by the
+ * command (`watchChannelDrops`), as a pick's answer is.
+ */
+function useDrops(watching: boolean): boolean {
+  const dispatch = useWorkspaceDispatch()
+  const [over, setOver] = useState(false)
+  useEffect(() => {
+    if (!watching) return
+    const stop = dispatch(watchChannelDrops({ dragging: setOver }))
+    return () => {
+      stop()
+      setOver(false)
+    }
+  }, [dispatch, watching])
+  return watching && over
 }
 
 /**
@@ -542,7 +588,7 @@ function ResourcesAnswer({ flow }: { flow: ChannelCreation }) {
       {resources.length > 0 ? (
         <ul role="list">
           {resources.map((path) => (
-            <li key={path}>
+            <li key={path} data-kind={flow.kinds[path] ?? "file"}>
               <DesktopIcon name={flow.kinds[path] === "folder" ? "folder" : "file"} />
               <span className="new-channel-resource-name">{pathName(path)}</span>
               <code className="new-channel-resource-path">{homeShort(path, home)}</code>

@@ -3,7 +3,7 @@ id: local-vault
 title: Local vault
 kind: statechart
 status: implemented
-sourceRevision: "7307eb9d6a9d54f37026323ad7e35bae7c33039f"
+sourceRevision: "ada97db780cd9457f6e1a5efdaa30eda2e64f1d3"
 summary: A passphrase unlocks encrypted local credentials for one native app session.
 parent: gateway
 sources:
@@ -58,7 +58,7 @@ One native app retains one authenticated child connection over private pipes.
 Window reloads share that connection. Closing its input interrupts pending work
 and invalidates the unique server-side owner before a late key can publish.
 Another app connection cannot take over or lock a live owner's unlock.
-GitHub cache and storage work retain the unlock generation that admitted them.
+GitHub credential cache and secret-entry work retain the unlock generation that admitted them.
 A delayed result cannot overwrite or delete a newer session's credentials.
 Locking terminates a pending sign-in with its original operation and caller,
 even when the key-close audit reports failure. Secret

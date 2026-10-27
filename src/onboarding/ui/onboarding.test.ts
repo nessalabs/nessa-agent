@@ -140,7 +140,7 @@ describe("the agent picker's rows", () => {
 })
 
 describe("the welcome", () => {
-  it("names the window with the whole line while it types", () => {
+  it("shows its whole line at once", () => {
     const markup = renderToStaticMarkup(
       React.createElement(Onboarding, {
         state: beginOnboarding(),
@@ -154,7 +154,11 @@ describe("the welcome", () => {
         onRetryGateway: () => {},
       }),
     )
-    expect(markup).toContain('aria-label="Welcome to Nessa"')
+    // The whole line is there from the first frame, the name painted still
+    // rather than typed in letter by letter.
+    expect(markup).toMatch(
+      /<h1[^>]*>Welcome to <span data-slot="gradient-text"[^>]*>Nessa<\/span><\/h1>/,
+    )
     expect(markup).toContain("Your personal sidekick")
     // The way on is there from the start, so the step never lacks one.
     expect(markup).toContain("Get started")

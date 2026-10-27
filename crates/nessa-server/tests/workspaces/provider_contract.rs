@@ -1,5 +1,5 @@
-//! Actual sanitized Boat v1 response shapes must retain the fields our adapter
-//! uses for workspace allocation and pinned host authentication.
+//! Sanitized provider responses and the published release worker retain the
+//! workspace allocation, protocol and pinned host identities we consume.
 use workspace_sdk::boat_client::{SandboxInfoResponse, SandboxState, SshKeyResponse};
 
 #[test]
@@ -21,4 +21,12 @@ fn boat_v1_receipts_keep_workspace_and_ssh_trust_identity() {
         .parse::<std::net::SocketAddr>()
         .is_ok());
     assert!(ssh.host_key.unwrap().starts_with("ssh-ed25519 "));
+}
+
+#[test]
+fn shipping_worker_covers_the_compiled_lease_protocol() {
+    assert!(
+        crate::workspaces::infrastructure::worker_image().is_some(),
+        "publish and pin the credential-free worker for this lease protocol before shipping"
+    );
 }

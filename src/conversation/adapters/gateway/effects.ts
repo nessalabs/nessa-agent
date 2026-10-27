@@ -396,6 +396,11 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   attachment_not_found: "unavailable",
   attachment_storage_unavailable: "unavailable",
   attachment_unavailable: "unavailable",
+  // An upload's pieces' refusals; no read is ever answered with them.
+  upload_ticket_invalid: "unavailable",
+  upload_failed: "unavailable",
+  unsupported_image: "unavailable",
+  image_too_large: "unavailable",
   audit_unavailable: "unavailable",
   conversation_capacity: "unavailable",
   conversation_closed: "unavailable",

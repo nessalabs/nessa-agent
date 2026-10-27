@@ -1770,7 +1770,7 @@ locally.
 | Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
 | Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
 | Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; replay-to-live view and list subscriptions from the client's cursor, the desktop workspace and the conversation panel off polling (#702) | Read grants checked per batch where subscriptions admit one (`authorize_batch`); the phone on the same subscriptions | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702), G |
-| Phone reads | Device client with private cache and finite checkpoint passes; live conversation activity through `conversation.subscribe`, the only live read path since the product-socket watch was deleted (#257). One-use pairing (#264) and authenticated direct reads (#265) done | Grant-scoped list subscription once #724 scopes the catalogue, and the optional relay (#266) | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262, #724 |
+| Phone reads | Device client with private cache and finite checkpoint passes; live conversation activity through `conversation.subscribe`, the only live read path since the product-socket watch was deleted (#257). One-use pairing (#264) and authenticated direct reads (#265) done | Grant-scoped device list subscriptions are supported; CLI catalogue follow and the optional relay (#266) remain separate | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262, #724 |
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
 | SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), F [#703](https://github.com/nessalabs/nessa-agent/issues/703) |
@@ -2042,10 +2042,12 @@ Named so they are not mistaken for settled:
   announcement reveals.
 - **Which tools a policy can gate, per binding.** The share dialog must
   say it; the answer comes from the #142 declaration and the 0014 survey.
-- **Listener hardening for a tunnel.** What the native handshake must
-  withstand before a public tunnel is recommended rather than merely
-  possible: rate limits per source, invitation-closed behavior, and a
-  measured handshake budget.
+- **Listener hardening for a tunnel.** Answered in
+  [reaching the gateway through a tunnel](auth/tunnel.md#the-edge-before-anything-runs):
+  a tunnel connection whose key holds no credential is closed right after
+  the TLS handshake, so pairing stays on the local network, and tunnel
+  connections take a pool of their own. Rate limits per source stay open:
+  every tunnel connection arrives from `cloudflared` on loopback.
 - **Delegating to an environment.** How a parent names the child's
   environment under ADR 329, and how the child's artifacts are delivered
   as results.

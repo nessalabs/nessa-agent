@@ -49,6 +49,16 @@ export const rangeLabels: Readonly<Record<AgentsRange, string>> = {
 export const scopes: readonly AgentsScope[] = ["ongoing", "all"]
 export const ranges: readonly AgentsRange[] = ["any", "today", "week", "month"]
 
+/**
+ * The digit that picks each choice while the menu is open, shown at the end
+ * of its row: the scopes first, then the spans, in the order offered, from 1.
+ */
+const keyed: readonly (AgentsScope | AgentsRange)[] = [...scopes, ...ranges]
+
+export function choiceKey(choice: AgentsScope | AgentsRange): string {
+  return String(keyed.indexOf(choice) + 1)
+}
+
 const day = 24 * 60 * 60 * 1000
 
 function startOfDay(at: number): number {

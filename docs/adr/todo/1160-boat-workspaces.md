@@ -206,7 +206,8 @@ channel transaction is a retryable summary-cleanup failure; the deletion cannot
 publish its finished tombstone until the replacement journal commits. Failed
 history erasure preserves the current main ID.
 
-The pinned worker was built from source `00efca5ef94d1a43635989f521daca91558353ea`,
+The original worker (historical, superseded below) was built from source
+`00efca5ef94d1a43635989f521daca91558353ea`,
 lease protocol `b698f20053f8bb7c`, Workspace SDK
 `33b8382d72657d176baca19797d8d146803f3d89`. Its Nessa binary SHA-256 is
 `bd83ce27d670741d9b378762f68c928563c249b73a0103bc587ed8a4cc73e089`;
@@ -228,3 +229,28 @@ provider-side inspection still links the VM to the durable intent if both local
 stores are unavailable. No automatic replacement is authorized. Recovery audit
 files use the existing private, timestamped EnvironmentAudit store and backup
 inventory; their thread ID links the original conversation creation/lease actor.
+
+
+## Mainline worker refresh for the first landing
+
+Integrating main changes the fingerprinted environment dial/pairing sources. The
+original `b698f20053f8bb7c` worker correctly refuses the new gateway contract.
+The current worker was rebuilt from integration source
+`29af2efb974ddb90a95c8921c4192a3603684af8` and reports lease protocol
+`066217f7701b98b9`. Its stripped Linux binary SHA-256 is
+`e2c9d38b652ee798bca1de09e9b539233aa0c205b79c7880604e9553f885f825`. The
+Workspace SDK and supervisor revision/digest above remain unchanged.
+
+The named snapshot `nessa-worker-066217f7-29af2ef-linux-x64` contains only the
+credential-free worker runtime, with updated BUILD.json and Cargo.lock. Source
+and build caches stayed in a separate disposable builder. A fresh clone verified
+the protocol and checksum, absence of build inputs and known personal credential
+paths, and an empty user SSH-key directory before publication. All three owned
+build/image/check VMs were deleted with provider-confirmed absence. The saved
+artifact remains available; old published artifacts were preserved.
+
+The existing `worker_image` boundary still refuses unmatched protocols.
+`shipping_worker_covers_the_compiled_lease_protocol` now makes a stale shipping
+release mapping fail the normal test selection. It fails against the old pin;
+updating the verified artifact mapping must make it pass. This does not relax
+protocol matching, invent a compatibility alias or replace a retained VM.

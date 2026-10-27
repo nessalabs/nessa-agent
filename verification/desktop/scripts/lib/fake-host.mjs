@@ -43,6 +43,9 @@ export const STARTING = {
  * (`resources`, an array per pick), each taken once, in order; a pick with
  * none queued is a cancel. Each pick is counted in `window.__fakeHostPicked`
  * with the kind it asked for. The home folder is `window.__fakeHostHome`.
+ * Files dragged onto the window are a step's to send, as the host's
+ * `nessa://paths-dragging`, `nessa://paths-drop-began` and
+ * `nessa://paths-dropped` (`__fakeHostEmit`).
  *
  * Every window may ask for setup again (`replay_onboarding`, from Settings),
  * which is counted in `window.__fakeHostReplays`. Given `setup`, the page is
@@ -70,6 +73,13 @@ export function gatewayHost({
 }) {
   // Setup and the panel both wait for the host to say it is up.
   const started = setup || panel
+  // The host's events for files and folders dragged onto the window. Here,
+  // not beside the function: the page runs this function's text alone.
+  const DRAGGED_EVENTS = new Set([
+    "nessa://paths-dragging",
+    "nessa://paths-drop-began",
+    "nessa://paths-dropped",
+  ])
   // The host's typed refusals (`SurfaceCommandError`). The page maps the
   // reason; a sentence here would be an untyped failure.
   const notReady = { reason: "not-ready" }
@@ -86,6 +96,17 @@ export function gatewayHost({
   window.__fakeHostPicks = { folders: [], resources: [] }
   window.__fakeHostPicked = []
   window.__fakeHostHome = "/home/person"
+  // Who listens for which host event, so a step can send one as the host
+  // would, once something is listening for it.
+  const listening = []
+  const listeners = (event) =>
+    listening.filter((each) => each.event === event && handlers.has(each.id))
+  window.__fakeHostListening = (event) => listeners(event).length
+  window.__fakeHostEmit = (event, payload) => {
+    const reached = listeners(event)
+    for (const { id } of reached) handlers.get(id)({ event, id, payload })
+    return reached.length
+  }
   window.__TAURI_INTERNALS__ = {
     transformCallback: (callback) => {
       const id = ++callbacks
@@ -117,14 +138,23 @@ export function gatewayHost({
       if (started && command === "host_startup")
         return Promise.resolve({ state: "ready" })
       // The gateway it manages is up: the stack's gateway is already running,
-      // and nothing about it changes, so a listener is taken and never told.
+      // and nothing about it changes, so its listener is never told. Other
+      // events reach a page only when a step plays the host (`__fakeHostEmit`).
       if (started && command === "gateway_startup")
         return Promise.resolve({ revision: 1, state: "ready" })
-      if (started && command === "plugin:event|listen") {
+      // Every window listens for files dragged onto it, which a step sends
+      // as the host does (`__fakeHostEmit`).
+      const dragged = DRAGGED_EVENTS.has(args?.event)
+      if ((started || dragged) && command === "plugin:event|listen") {
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ ??= { unregisterListener() {} }
+        listening.push({ event: args.event, id: args.handler })
         return Promise.resolve(args.handler)
       }
-      if (started && command === "plugin:event|unlisten") return Promise.resolve(null)
+      if ((started || dragged) && command === "plugin:event|unlisten") {
+        const at = listening.findIndex((each) => each.id === args.eventId)
+        if (at >= 0) listening.splice(at, 1)
+        return Promise.resolve(null)
+      }
       if (panel && command === "panel_size")
         return Promise.resolve({ width: innerWidth, height: innerHeight })
       // No agent chosen in setup: a new chat starts on the gateway's default.

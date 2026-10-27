@@ -1,5 +1,8 @@
 # Local vault verification
 
+See [mainline completion](completion.md) for the integration with current main,
+matching worker publication, fresh reviews and separately tracked baseline limits.
+
 See the [CI follow-up](ci-followup.md) for repairs and newer verification after the first hosted run.
 
 Implementation source: `7307eb9d6a9d54f37026323ad7e35bae7c33039f`, stacked on

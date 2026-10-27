@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * The menu parts: one list of items renders in a dropdown or a context menu,
- * both on the window's glass, and a chosen item is marked to blink as its
+ * both on the window's menu card, and a chosen item is marked to blink as its
  * menu closes — unless its handler kept the menu open.
  */
 import { act, type ReactNode } from "react"
@@ -77,7 +77,7 @@ function Items({ onOpen, onPin }: { onOpen: () => void; onPin: () => void }) {
   )
 }
 
-it("draws a dropdown on the window's glass and marks the chosen item as it closes", () => {
+it("draws a dropdown on the window's menu card and marks the chosen item as it closes", () => {
   const onOpen = vi.fn()
   render(
     <DropdownMenu defaultOpen modal={false}>
