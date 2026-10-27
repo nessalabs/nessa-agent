@@ -92,7 +92,7 @@ fn public_original_proof_cold_restore_and_raw_parent_drop_preserve_exact_facts_w
     assert_eq!(replay.digest(), proof.digest());
     assert!(parent.local_enrollment().unwrap().is_none());
     assert!(matches!(
-        parent.catalogue_page(None, 1),
+        parent.bind_saved_receiver(),
         Err(NativeCallError::Session { failure }) if failure.kind() == NativeSessionFailureKind::NoCredential
     ));
     let no_credential = parent.open_product("instance".into()).err().unwrap();

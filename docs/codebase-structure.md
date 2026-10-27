@@ -385,6 +385,10 @@ against a private scripted gateway.
   import against that direction, in every form of import it reads, and the
   window's composition (`main.tsx`, `dependencies.ts`), which imports them
   all, is outside the rule.
+  A third-party package that runs as a plugin surface or as its own process
+  is planned in [the application framework](design/application-framework.md).
+  The plan is not built. It starts from this widget host and from the MCP App
+  mount, and it reuses the [access grant](design/access-grants.md).
 - Subagents are the desktop window's vertical for the agents a conversation
   puts to work ([ADR 329](adr/todo/329-subagents.md)): `src/desktop/subagents/`
   (its map is `index.ts`) owns the child as the panel shows it
@@ -2329,8 +2333,13 @@ scope/progress/generation for consumers to compare. `retained/device.rs` compose
 the existing enrollment worker and purge policy, collecting status/purge effects
 inside physical admission and exposing original durable purge receipts separately.
 The native adapter below provides generated Swift binding and linked library
-execution. Phone repository/enrollment/authority wiring, artifact exports and
-durable deletion remain later ADR 782 slices. `src/outbox/` keeps a typed phone
+execution. `retained/phone.rs` is the phone publication lease and catalogue
+presence: a stamp reads only its lease instance and bound receiver, and a missing catalogue row
+is not a tombstone. `retained/artifact.rs` fetches one held file through the
+existing range owner and reports local integrity separately from a gateway
+confirmation. Busy-range retries wait on an injected pause; `ThreadPause` is
+the operating-system wait, and session composition supplies it. The product iOS application is not in this repository.
+`src/outbox/` keeps a typed phone
 send before `conversation.send` and reads `conversation.receipt` before any
 later send; its ordering is [phone outbox](design/phone-outbox.md). The phone
 application and the desktop saved-tabs caller are later.
@@ -2559,9 +2568,14 @@ watchdog for refusal and budget ordering; the contract is in
 `docs/design/native-session-verification-997.md`. `NativeSession::open_with_clock`
 accepts the protocol clock at composition; `open` keeps the production default.
 Core's `retained/active.rs` validates fresh status against the current immutable
-issued record before product selection. Release Apple packaging is verified;
-the actual phone repository remains unfinished under issue 782. This module does not supply native
-authority from a panel token or an arbitrary saved cache target.
+issued record before product selection. Release Apple packaging is verified.
+`NativeSession` binds a `PhoneLease` to the issued receiver and refuses a
+replaced stamp before a saved read or held-file fetch. A successful purge
+releases the lease even when the status has no observation. Catalogue presence and
+artifact freshness are on that same session. A local match reports the session
+clock. This module does not supply native
+authority from a panel token or an arbitrary saved cache target. Physical-device
+execution remains unverified.
 
 `swift/NativeSessionWorker.swift` is the generated API's dispatch adapter: one
 admission reserved before enqueue, a per-call stop latch and a cancellation-independent
@@ -2578,8 +2592,9 @@ native I/O before physical drain joins those captures. Neither wrapper allocates
 transport IDs, implements request deadlines or copies private device keys.
 `scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
 from a frozen checkout; generated declarations remain build output, not hand-edited
-source. Nessa iOS embeds a reviewed dynamic package; its production native
-profile/enrollment and retained history repository remain unfinished.
+source. The phone publication lease, catalogue presence and held-file fetch are
+the retained repository this package exports. A product iOS application is not
+in this repository, and physical-device execution remains unverified.
 
 ## Agent thread tools
 
