@@ -17,6 +17,13 @@ use std::{
     sync::atomic::Ordering,
 };
 
+#[cfg_attr(
+    not(any(unix, test)),
+    expect(
+        dead_code,
+        reason = "only Unix gateway composition constructs this adapter; platform tests check refusal"
+    )
+)]
 pub(crate) struct LocalInputFiles;
 impl LocalInputFilePlacement for LocalInputFiles {
     fn place(

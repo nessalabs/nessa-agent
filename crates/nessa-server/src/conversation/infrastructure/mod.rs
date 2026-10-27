@@ -207,4 +207,5 @@ mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
 
 mod input_files;
+#[cfg(any(unix, test))]
 pub(crate) use input_files::LocalInputFiles;

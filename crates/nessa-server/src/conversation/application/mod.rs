@@ -254,9 +254,11 @@ pub use artifacts::{
 pub(crate) use artifacts::{
     ArtifactBudget, ArtifactCollector, FetchRequests, FetchTaken, PublishRequests,
 };
+// Input resolution holds a lease on every host, independently of composition.
+pub(crate) use environment::LeaseHold;
 #[cfg(any(unix, test))]
 pub(crate) use environment::{
-    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseHold, LeaseRelease,
+    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseRelease,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
