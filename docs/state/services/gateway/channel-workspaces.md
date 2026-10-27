@@ -3,10 +3,11 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: ec87466224be10085fc1183af8668727d581d3c9
+sourceRevision: 67fda00b720a0d09535905691c0fc092340ddcba
 summary: A channel independently places its main agent and new threads on Local or Boat.
 parent: gateway
 sources:
+  - crates/nessa-server/src/conversation/application/placement.rs
   - crates/nessa-server/src/composition/local_auth.rs
   - crates/nessa-server/src/conversation/infrastructure/ssh_environment/audit.rs
   - crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
@@ -51,6 +52,11 @@ second resource. An observer disappearing does not cancel the allocation task's
 receipt publication. Closing or deleting chat history preserves workspace files
 and VM identity. Users manage VM stop/delete in Boat. Runtime TTL is one hour;
 alpha has no idle parking or active TTL renewal.
+
+The placement contract owns one retention bound shared by the operational
+catalogue on every platform and the Unix connection cache. At capacity, only
+unborrowed environments with no lease or command owner can be evicted; otherwise
+a new opening is refused. Eviction does not delete the VM assignment.
 
 Boat connects the user's existing provider subscription. Nessa stores only the
 infrastructure connection in its encrypted vault. A matching prebuilt worker
