@@ -480,6 +480,39 @@ export interface AttachmentBeginResult {
   /** When stored: length in bytes of what the conversation holds. Null when an upload is required. */
   size: number | null
 }
+/** Send one piece of an upload over the session itself, for a surface that cannot reach `PUT /attachments`, such as a phone over its native link. Pieces go in order, one at a time, each starting where the last ended: the piece at offset 0 starts the upload, and the one marked `last` ends it and answers with what the conversation now keeps. As with `PUT /attachments`, the ticket is the whole authority and the first piece spends it. An upload whose pieces stop for longer than the upload deadline is refused. A refused piece ends its upload: begin again for a new ticket. */
+export interface AttachmentWriteParams {
+  /** The secret single-use ticket `attachment.begin` answered with. Do not log it. */
+  ticket: string
+  /** First byte of this piece: 0 for the first, then the bytes of every piece before it. */
+  offset: number
+  /** This piece's bytes, standard base64 with padding: at most 32768 bytes. Only a last piece may be empty. */
+  data: string
+  /** Whether this piece ends the upload. Its answer carries the stored file. */
+  last: boolean
+}
+/** How much of the upload the gateway has taken, and after the last piece the file the conversation now keeps, which is what `conversation.send` refers to. As with `PUT /attachments`, for an image that is the normalized image, so its digest, type and size can differ from what was sent. */
+export interface AttachmentWriteResult {
+  /** Bytes taken so far: where the next piece starts. */
+  received: number
+  /** After the last piece: digest of what the conversation holds. Null before it. */
+  digest: string | null
+  /** After the last piece: media type of what the conversation holds. Null before it. */
+  mimeType: string | null
+  /** After the last piece: length in bytes of what the conversation holds. Null before it. */
+  size: number | null
+}
+/** A provider usage limit on a failed turn. resetsAtMs is present only for a timed reset whose instant parsed. autoResuming is present only when this gateway has accepted a one-shot continuation for the turn. */
+export interface ConversationUsageLimit {
+  /** The harness that reported the limit. OpenCode is not a value. */
+  provider: "claude" | "codex"
+  /** How the limit can end. timed_reset carries resetsAtMs. user_action needs the person and never carries a reset. unknown is a usage limit with no trustworthy reset. */
+  recovery: "timed_reset" | "user_action" | "unknown"
+  /** Absolute Unix milliseconds when a timed reset ends, kept only inside 2024-01-01 through 2100-01-01 UTC. */
+  resetsAtMs?: number
+  /** True only when a continuation for this turn is scheduled or being delivered and the gateway preference is on. */
+  autoResuming?: boolean
+}
 /** One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag. */
 export interface ConversationMessage {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
@@ -498,8 +531,10 @@ export interface ConversationMessage {
   error?: string
   /** The provider adapter explicitly requires authentication for this failed turn. Generic provider codes and diagnostic text do not establish this fact. */
   authenticationRequired?: boolean
-  /** This failed authentication refusal also failed independent required work. The person-facing diagnostic stays in error. Absent for a pure refusal, and absent when the failure is not an authentication refusal. */
+  /** This failed turn also failed independent required work, beside an authentication refusal or a usage limit. The person-facing diagnostic stays in error. Absent for a pure refusal or a pure usage limit. */
   requiredWorkFailed?: boolean
+  /** A provider usage limit on this failed turn. Absent when the turn did not end in one. autoResuming is present only after a continuation has been scheduled. */
+  usageLimit?: ConversationUsageLimit
   /** Execution that consumed this injected steering input; its shared reply answers this input. */
   steeringTarget?: string
   /** Provider observations in execution order; offsets address the retained SDK event sequence. */
@@ -628,7 +663,7 @@ export interface ConversationTool {
   status: string
   /** Bounded provider-observed tool output and file changes; omitted content is marked. */
   details: string
-  /** Exact tool arguments observed through a permission request, or empty when unavailable. */
+  /** The call's input, one JSON object encoded: the arguments the agent reported with the call, or those its permission request asked with, whichever came last and fit. Empty when none was reported or none fit — never cut. */
   input: string
   /** The MCP server and tool the call went to, as the agent's harness named them (Claude's harness replaces characters outside [A-Za-z0-9_-] in a tool name with _); absent for a harness's own tools and where the harness does not say which server. */
   mcp?: ConversationMcpTool
@@ -636,6 +671,25 @@ export interface ConversationTool {
   structuredContent?: string
   /** The hooks choice of the process start this tool call ran under, saved with the call so it survives a gateway restart. Absent when that start recorded none: a harness without the choice, or a call saved before it was recorded. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on. */
   nativeHooks?: NativeHooksChoice
+  /** When the gateway first heard of the call, in Unix milliseconds, saved with the call so it survives a restart. Absent for a call saved before the time was recorded. */
+  startedAtMs?: number
+  /** When the gateway heard the call completed or failed, in Unix milliseconds. Absent while the call runs, for a call that never settled, and for a call saved before the time was recorded. */
+  endedAtMs?: number
+  /** The files the call changed, as the agent reported them and in its order, at most 16. The same changes are written into details as text; these are for a reader that draws them, and the first a view gives up for room, before any turn. Absent when the call reported none. */
+  changes?: ConversationToolChange[]
+  /** The call changed files changes does not list: more than 16, one whose path is past its bound, or the list was given up for room. A reader totalling changes knows the total is not the call's. Absent when changes lists every file the call reported. */
+  changesCut?: boolean
+}
+/** One file a tool call changed: its path, and its text before and after. */
+export interface ConversationToolChange {
+  /** The file's path as the agent named it, unresolved. A change to a file whose path is longer than 4096 bytes is not listed, and changesCut says so. */
+  path: string
+  /** The text before the change, cut past 7000 bytes. Absent when the agent did not say — a file it created reads that way — which differs from an empty file. */
+  before?: string
+  /** The text after the change, which may be empty, cut past 7000 bytes. */
+  after: string
+  /** A side was longer than 7000 bytes and is cut, so the two sides do not say the whole change. */
+  cut: boolean
 }
 /** An MCP tool's identity: the server by the name it was configured under, and the tool on it; the UI the tool declared, when known; and the arguments the gateway's connection saw for the call, when it could match them. */
 export interface ConversationMcpTool {
@@ -685,6 +739,8 @@ export interface ConversationView {
   artifacts: ConversationArtifact[]
   /** Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
   notes: ConversationNote[]
+  /** Switches to another agent or model, and the fork the conversation began as, in the order they were recorded; empty before any. */
+  handoffs: ConversationHandoff[]
   /** Records this read could not apply, oldest first, at most 32. Empty when every record could be read. A chat with no turns may still list these. Each is one line in the transcript. The line is where a future report action attaches; this view carries no report control. */
   unreadable: ConversationUnreadable[]
   /** True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read. */
@@ -701,8 +757,12 @@ export interface ConversationView {
   approvalModeChange?: ApprovalModeChange
   /** Pending correlated model change; the confirmed selection remains authoritative. */
   modelChange?: ModelChange
+  /** Whether this gateway schedules one continuation when a usage limit resets. The preference is the gateway's, shared by every conversation, and defaults to false. The card copies Auto-resuming only when a schedule for that turn has been accepted. */
+  usageLimitAutoContinue?: boolean
   /** Native effect boundary of the last confirmed model change. */
   modelChangeEffect?: ModelChangeEffect
+  /** The conversation's selected catalog model, present whether or not an agent is open. */
+  model: string
 }
 /** One file its agent published under a lease: read from the environment, verified by its digest, held, and then recorded with the lease as its cause. The record outlives the hold. The bytes are never in the view. */
 export interface ConversationArtifact {
@@ -733,6 +793,8 @@ export interface ConversationCreateParams {
   approvalMode?: ApprovalMode
   /** Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, or peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with. */
   environment?: string
+  /** The channel the conversation is in for its whole life, one channel.list returns: its agent works in that channel's folder and is told the channel's notes and resources. Omitted, or default, is the default channel, whose folder is the gateway's configured workspace. A channel other than default runs on the gateway's own machine, so it is refused invalid_request beside an environment. channel_not_found when the caller has no such channel. Ignored when the conversation already exists, which stays in the channel it was created in. */
+  channelId?: string
 }
 /** Conversation ready for read and admission. */
 export interface ConversationCreateResult {
@@ -771,6 +833,8 @@ export interface ConversationSummary {
   running: boolean
   /** Somebody archived the conversation and nothing has been said in it since. */
   archived: boolean
+  /** The channel the conversation was created in, one channel.list returns. Absent for a conversation in the default channel. */
+  channelId?: string
 }
 /** Conversations the authenticated caller owns, newest first, at most 500, and whether that is all of them. */
 export interface ConversationListResult {
@@ -902,6 +966,8 @@ export interface ConversationReceiptParams {
   approvalMode?: ApprovalMode
   /** Creation hint. Omitted when the original creation named no environment. */
   environment?: string
+  /** Creation hint. Omitted when the original creation named no channel. */
+  channelId?: string
 }
 /** Whether a receipt for that request is saved. Found is false when the principal has no such request. A deleted conversation is refused instead of answering found. */
 export interface ConversationReceiptResult {
@@ -1214,6 +1280,14 @@ export interface ConversationRuntime {
   /** Catalog reasoning capability. */
   reasoning: boolean
 }
+/** Which local decision a notice records. review is a declined review. hook is a permission-review hook that stopped the turn or closed the session. deadline is a deadline that settled its review. The three may share one decimal id. */
+export const ConversationNoticeKind = {
+  Review: "review",
+  Hook: "hook",
+  Deadline: "deadline",
+} as const
+export type ConversationNoticeKind =
+  (typeof ConversationNoticeKind)[keyof typeof ConversationNoticeKind]
 /** One ordered observation fragment in a bounded execution projection; offsets may have gaps. */
 export interface ConversationPart {
   /** Zero-based SDK observation offset within the owning execution, used to preserve order. */
@@ -1224,8 +1298,10 @@ export interface ConversationPart {
   text: string
   /** The tool call's identity, which names its entry in tools; empty otherwise. */
   toolId: string
-  /** Stable execution-scoped declined-review identity for a local notice; empty otherwise. */
+  /** Decimal identity of a local notice; empty otherwise. A review notice uses the declined-review id. A hook notice and a deadline notice use the permission id. Those identities are independent, so one decimal may name each of them; noticeKind says which decision it is. */
   noticeId: string
+  /** Which local decision this notice is. Absent on every part that is not a local notice. */
+  noticeKind?: ConversationNoticeKind
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
@@ -1669,7 +1745,7 @@ export const McpServersErrorCode = {
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -1710,6 +1786,10 @@ export const ConversationErrorCode = {
   AttachmentCapacity: "attachment_capacity",
   AttachmentStorageUnavailable: "attachment_storage_unavailable",
   AttachmentCleanupUnavailable: "attachment_cleanup_unavailable",
+  UploadTicketInvalid: "upload_ticket_invalid",
+  UploadFailed: "upload_failed",
+  UnsupportedImage: "unsupported_image",
+  ImageTooLarge: "image_too_large",
   ConversationDeleted: "conversation_deleted",
   ConversationErasureIncomplete: "conversation_erasure_incomplete",
   McpAppUnknown: "mcp_app_unknown",
@@ -1735,6 +1815,7 @@ export const ConversationErrorCode = {
   Revoked: "revoked",
   RevokedAfterSave: "revoked_after_save",
   UnavailableAfterSave: "unavailable_after_save",
+  ChannelNotFound: "channel_not_found",
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
@@ -1836,6 +1917,20 @@ export interface AgentOption {
   defaultModel: string
   /** Models runnable by this agent. */
   models: AgentModelOption[]
+}
+/** Turn this gateway's usage-limit continuation preference on or off. The preference is shared by every conversation on this gateway. Turning it on schedules a continuation for each currently blocked eligible turn. Turning it off cancels open schedules. */
+export interface ConversationSetUsageLimitAutoContinueParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** True schedules continuations when a usage limit names a future reset. False cancels open schedules. The default, before any command, is false. */
+  enabled: boolean
+}
+/** The preference now in effect for this gateway. */
+export interface ConversationSetUsageLimitAutoContinueResult {
+  /** Original action identifier. */
+  requestId: string
+  /** Whether continuations will be scheduled. */
+  enabled: boolean
 }
 /** Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent. */
 export interface AgentsSetNativeHooksParams {
@@ -2228,9 +2323,10 @@ export interface PhoneAuthorizationStatus {
   /** Typed activation interruption, when present. */
   activationStopped?: PairingActivationStop
 }
-/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
+/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner and reads what is shared with it. ownerPhone: the owner's own phone; its credential acts as the owner over every conversation the owner has, now and later, reading and writing as the owner phone purpose allows, with no per-conversation share. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
 export const PairingEnrollee = {
   Device: "device",
+  OwnerPhone: "ownerPhone",
   Gateway: "gateway",
   Environment: "environment",
 } as const
@@ -2378,7 +2474,63 @@ export interface PairingSetLinkingResult {
   /** How the saved choice takes effect. */
   applies: PairingLinkingApply
 }
-/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). */
+/** How the web tunnel is carried. quick: a free Cloudflare quick tunnel at a random trycloudflare.com address, which changes whenever cloudflared starts again (it is kept running across gateway restarts, so it changes only when cloudflared itself has to start again). named: a tunnel made in the person's Cloudflare account, at their own hostname, which never changes. */
+export const PairingTunnelMode = { Quick: "quick", Named: "named" } as const
+export type PairingTunnelMode = (typeof PairingTunnelMode)[keyof typeof PairingTunnelMode]
+/** Turn the web tunnel on or off for this gateway, so a paired phone reaches it from anywhere. Needs native linking on. The gateway saves the choice in its config.json (the token in a private file beside its state, never in config.json) and, when the running gateway does not already match it, restarts itself to apply it. A field left out keeps what is saved. */
+export interface PairingSetTunnelParams {
+  /** True turns the tunnel on; false turns it off and keeps its other settings. Sending the same request again changes nothing, so a retry is safe. */
+  enabled: boolean
+  /** Quick or named. Left out, the saved mode, or quick when none is saved. */
+  mode?: PairingTunnelMode
+  /** A named tunnel's public address, https://host or https://host:port, with no path. Left out, the saved one. */
+  hostname?: string
+  /** A named tunnel's token from Cloudflare's dashboard: printable ASCII with no spaces. Left out, the saved one. It is never sent back. */
+  token?: string
+}
+/** Result of pairing.setTunnel. */
+export interface PairingSetTunnelResult {
+  /** The saved choice. */
+  enabled: boolean
+  /** The saved mode. */
+  mode: PairingTunnelMode
+  /** How the saved choice takes effect. */
+  applies: PairingLinkingApply
+}
+/** Where the running gateway's tunnel stands. off: this run has no tunnel. starting: it is being started, or started again. ready: it answers at address. failed: the last attempt failed for failure; it is tried again. */
+export const PairingTunnelStatus = {
+  Off: "off",
+  Starting: "starting",
+  Ready: "ready",
+  Failed: "failed",
+} as const
+export type PairingTunnelStatus =
+  (typeof PairingTunnelStatus)[keyof typeof PairingTunnelStatus]
+/** Result of pairing.tunnel: the saved tunnel setting and the running tunnel. The token is never included. */
+export interface PairingTunnelResult {
+  /** Whether the saved setting turns the tunnel on. */
+  enabled: boolean
+  /** The saved mode, quick when none is saved. */
+  mode: PairingTunnelMode
+  /** The saved named tunnel's address, when one is saved. */
+  hostname?: string
+  /** Whether a named tunnel's token is saved. */
+  hasToken: boolean
+  /** The loopback address the tunnel forwards to: where a named tunnel's public hostname must point in Cloudflare's dashboard, as http://<ingress>. */
+  ingress: string
+  /** The running tunnel's status. */
+  status: PairingTunnelStatus
+  /** The running tunnel's public address, when it is ready. */
+  address?: string
+  /** Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready. */
+  failure?: string
+}
+/** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
+export interface ServerReachResult {
+  /** The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages. */
+  tunnel: string | null
+}
+/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking and pairing.setTunnel, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). pairing.setTunnel refuses with the same codes: pairing_busy and pairing_unavailable as above, pairing_address_in_use when the tunnel's loopback ingress cannot be bound, and pairing_audit_unavailable as above. pairing_linking_off: pairing.setTunnel cannot turn the tunnel on while native linking is off; nothing was saved. pairing_tunnel_incomplete: a named tunnel needs a hostname and a token, given or saved; nothing was saved. */
 export const PairingErrorCode = {
   PairingNotConfigured: "pairing_not_configured",
   PairingNotFound: "pairing_not_found",
@@ -2390,8 +2542,69 @@ export const PairingErrorCode = {
   PairingUnavailable: "pairing_unavailable",
   PairingAddressInUse: "pairing_address_in_use",
   PairingAuditUnavailable: "pairing_audit_unavailable",
+  PairingLinkingOff: "pairing_linking_off",
+  PairingTunnelIncomplete: "pairing_tunnel_incomplete",
 } as const
 export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
+/** The GitHub account a sign-in belongs to. */
+export interface GithubAccount {
+  /** GitHub's numeric id for the account, which never changes. */
+  id: number
+  /** The account's login, which can change. */
+  login: string
+}
+/** Where the gateway's GitHub sign-in stands. signed_out: no token is held, and agents are given none. connecting: a code is waiting for the person to enter it on GitHub. connected: a token is held and every agent opened from now on is given it. */
+export const GithubConnectState = {
+  SignedOut: "signed_out",
+  Connecting: "connecting",
+  Connected: "connected",
+} as const
+export type GithubConnectState =
+  (typeof GithubConnectState)[keyof typeof GithubConnectState]
+/** Why the latest sign-in ended without signing in. expired: the code ran out before it was entered. denied: the person refused it on GitHub. cancelled: it was cancelled here. rejected: GitHub refused the Nessa app itself. unreachable: GitHub could not be reached. store_unavailable: the token could not be kept, or a kept one could not be read at startup. audit_unavailable: its record could not be kept, so the token was dropped. */
+export const GithubConnectEnd = {
+  Expired: "expired",
+  Denied: "denied",
+  Cancelled: "cancelled",
+  Rejected: "rejected",
+  Unreachable: "unreachable",
+  StoreUnavailable: "store_unavailable",
+  AuditUnavailable: "audit_unavailable",
+} as const
+export type GithubConnectEnd = (typeof GithubConnectEnd)[keyof typeof GithubConnectEnd]
+/** The code a sign-in waits for. */
+export interface GithubCode {
+  /** What the person enters on GitHub. */
+  userCode: string
+  /** Where they enter it. */
+  verificationUri: string
+  /** Whole seconds left before the code expires, when this was answered. */
+  expiresInSeconds: number
+}
+/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
+export interface GithubConnection {
+  /** Where the sign-in stands. */
+  state: GithubConnectState
+  /** Present exactly when connected. */
+  account?: GithubAccount
+  /** Present exactly when connecting. */
+  code?: GithubCode
+  /** When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect. */
+  last?: GithubConnectEnd
+  /** The gateway could not keep the last change in its audit, and that change still stands. With last: how the attempt ended. Connected: a sign-out that failed. Signed out with no last: the sign-out. Absent when it is on record, and with last audit_unavailable, which already says so. */
+  unrecorded?: true
+  /** Where the person chooses the repositories the Nessa app may use. A token reaches only those. */
+  installUrl: string
+}
+/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
+export const GithubErrorCode = {
+  GithubNotConfigured: "github_not_configured",
+  GithubUnreachable: "github_unreachable",
+  GithubRejected: "github_rejected",
+  GithubStorageUnavailable: "github_storage_unavailable",
+  GithubAuditUnavailable: "github_audit_unavailable",
+} as const
+export type GithubErrorCode = (typeof GithubErrorCode)[keyof typeof GithubErrorCode]
 /** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
 export interface PeerEnrollParams {
   /** The peer gateway's native listen address, as an IP address and port (`192.0.2.7:7443`, `[2001:db8::7]:7443`). No name is resolved. */
@@ -2609,6 +2822,39 @@ export interface ConversationNoteAuthor {
   /** The verified surface it was left from. */
   surface: string
 }
+/** A point after which the conversation's agent ran in a new session that had not seen the turns before it: a switch to another agent or model (conversation.switchAgent), or the fork the conversation began as (conversation.fork). The first turn after it was given those turns as text. Show it as a line in the transcript, after the turn it follows. */
+export interface ConversationHandoff {
+  /** The conversation's own name for the handoff. */
+  handoffId: string
+  /** A switch to another agent or model, or the fork the conversation began as. */
+  kind: "switch" | "fork"
+  /** When it was recorded, in milliseconds since the Unix epoch, on the gateway's clock. */
+  atMs: number
+  /** The last turn the conversation held when it was recorded, which it is shown after; absent before any turn, as a fork always is. */
+  afterExecutionId?: string
+  /** A switch's agent and model before it; present exactly for a switch. */
+  from?: ConversationHandoffAgent
+  /** A switch's agent and model after it; present exactly for a switch. */
+  to?: ConversationHandoffAgent
+  /** A fork's copied turns, oldest first, shown before everything the conversation said itself. Absent for a switch, and when the view left them all out. */
+  turns?: ConversationCarriedTurn[]
+  /** Copied turns left out, by the copy's own bounds or by this view's; absent when none were. */
+  omittedTurns?: number
+}
+/** An agent and model a switch left or went to. */
+export interface ConversationHandoffAgent {
+  /** The agent, as agents.list names it; absent when the history's provider is one this gateway has no agent for. */
+  agent?: string
+  /** The model, as the agent's catalog names it. */
+  model: string
+}
+/** One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only. */
+export interface ConversationCarriedTurn {
+  /** What was said in the turn, when it said anything in text. */
+  said?: string
+  /** The agent's final reply, when it gave one. */
+  reply?: string
+}
 /** Leave a note in one conversation (conversation.message). A note is saved with its author, the caller's principal and surface and the authority it was admitted under, and starts or steers no turn: a next_turn note waits for the next turn a person starts (see ConversationMessageDelivery). The conversation's owner leaves one from its own surfaces; a paired device needs a comment or drive grant on that conversation, and is refused forbidden under a read grant and conversation_not_found where it holds none. The same requestId with the same text and delivery, from the same surface under the same authority, answers the first receipt unchanged, however long after; any other note under that requestId is refused idempotency_conflict. A conversation keeps at most 1024 notes, and one author (a principal under one authority) leaves at most 20 in any 60 seconds; past either it is refused message_quota_exceeded and nothing is saved. At most 64 next_turn notes wait for a turn at once, not counting one past its 24 hours, which the next turn retires; past that a next_turn note is refused message_quota_exceeded too. A deleted conversation refuses it conversation_deleted. */
 export interface ConversationMessageParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -2783,6 +3029,26 @@ export interface ConversationSetModelParams {
   /** Exact model identifier within the conversation provider. */
   model: string
 }
+/** Carry the conversation on under another agent, in a new session of it that is given the conversation's earlier turns as text with its next message; the transcript shows a handoff line where it happened. Refused busy while a turn runs or waits; refused invalid_request for the agent the conversation already runs on (use conversation.setModel). applied is false when the switch was not made, and the conversation stays on its agent. */
+export interface ConversationSwitchAgentParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The agent to carry on under, as agents.list names it. */
+  agent: string
+  /** Exact model identifier within that agent's catalog. */
+  model: string
+}
+/** Start a new conversation from a copy of another's turns, on the same agent, model, approval preset and environment. The new conversation's agent is given the copied turns as text with its first message, and its transcript shows them first. Idempotent for a retry of one request; the conversation identity is the caller's, as for conversation.create. */
+export interface ConversationForkParams {
+  /** The new conversation, a fresh canonical lowercase hyphenated UUID. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The conversation to copy, which must be the caller's own. */
+  sourceConversationId: string
+}
 /** Durably confirmed model and approval preset, with native effect timing. */
 export interface ConversationSetModelResult {
   /** Original action identifier. */
@@ -2874,6 +3140,77 @@ export interface WorkspaceWindow {
   /** The panes' columns, left to right. */
   columns: WorkspaceColumn[]
 }
+/** Why the gateway refused a channel method. invalid_request: a name, notes, path or model that is not one a channel holds (a relative path, or resources past x-channelRules.maxResourceBytes, among them), or an agent this gateway has no runtime for. forbidden: the access policy does not let the caller make or list channels; a paired device never may. conversations_not_configured: this gateway runs no conversations. channel_folder_not_found: the chosen folder does not exist. channel_folder_not_a_directory: the chosen folder is a file. channel_folder_refused: the chosen folder is one agents must not work in: the root of a drive, a system folder or one that holds a system folder, the home folder or one that holds it, or the gateway's own data folder, one that holds it, or anything inside it other than a folder under its channels folder. channel_resource_not_found: a file or folder to attach does not exist. channel_limit_reached: the caller keeps the most channels a person may (x-channelRules.maxChannels). channel_request_conflict: the requestId already made another channel; nothing was made. channel_storage_unavailable: the channel or its folder could not be saved or made; nothing was kept. temporarily_unavailable: the gateway is busy or stopping; ask again. */
+export const ChannelErrorCode = {
+  InvalidRequest: "invalid_request",
+  Forbidden: "forbidden",
+  ConversationsNotConfigured: "conversations_not_configured",
+  ChannelFolderNotFound: "channel_folder_not_found",
+  ChannelFolderNotADirectory: "channel_folder_not_a_directory",
+  ChannelFolderRefused: "channel_folder_refused",
+  ChannelResourceNotFound: "channel_resource_not_found",
+  ChannelLimitReached: "channel_limit_reached",
+  ChannelRequestConflict: "channel_request_conflict",
+  ChannelStorageUnavailable: "channel_storage_unavailable",
+  TemporarilyUnavailable: "temporarily_unavailable",
+} as const
+export type ChannelErrorCode = (typeof ChannelErrorCode)[keyof typeof ChannelErrorCode]
+/** One channel as a list names it: where its conversations' agents work and what a new conversation in it starts with (agent, model, approval preset). Its notes and resources are told to its agents and are not listed. */
+export interface Channel {
+  /** The channel's id: default for the default channel, else ch_ and ten base32 characters the gateway chose. */
+  channelId: string
+  /** What the channel is called. */
+  name: string
+  /** The absolute folder its conversations' agents work in, resolved. */
+  folder: string
+  /** The gateway made the folder, under its channels folder, because none was chosen. False for a chosen folder and for the default channel's. */
+  folderMade: boolean
+  /** The agent a new conversation in the channel starts on; null for the default channel, whose new conversations start on whatever the surface picks. */
+  agent: string | null
+  /** The model a new conversation in the channel starts on; null for the default channel. */
+  model: string | null
+  /** The preset a new conversation in the channel starts with; ask for the default channel. */
+  approvalMode: ApprovalMode
+  /** When the channel was made, in Unix milliseconds; 0 for the default channel. */
+  createdAtMs: number
+}
+/** Make a channel (channel.create). Repeating the same requestId with the same channel answers the channel it made; with another, channel_request_conflict. The folder is the one path a request may name, and only here: a conversation names its channel, never a folder. */
+export interface ChannelCreateParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** What the channel is called: trimmed, 1 to x-channelRules.maxNameChars characters, no control characters. */
+  name: string
+  /** An existing absolute folder the channel's agents work in. Omitted, the gateway makes one under its channels folder, named by the channel's id. */
+  folder?: string
+  /** The agent a new conversation in the channel starts on. */
+  agent: string
+  /** The model a new conversation in the channel starts on. */
+  model: string
+  /** The preset a new conversation in the channel starts with; default ask. */
+  approvalMode?: ApprovalMode
+  /** Notes every agent in the channel is told; omitted is none. */
+  notes?: string
+  /** Existing absolute files and folders to attach, none twice, at most x-channelRules.maxResourceBytes of paths in all; omitted is none. */
+  resources?: string[]
+}
+/** The channel channel.create made, or made earlier under the same requestId. */
+export interface ChannelCreateResult {
+  channel: Channel
+}
+/** Which page of the caller's channels to list (channel.list). Empty for the first. */
+export interface ChannelListParams {
+  /** The cursor an earlier page returned: list the channels made after that one. An id the caller has no channel under is refused invalid_request. */
+  after?: string
+}
+/** One page of the caller's channels (channel.list): the default channel first on the first page, then the rest in the order they were made. */
+export interface ChannelListResult {
+  /** This page's channels, as many as fit one frame. Only the first page holds the default channel, and only when the gateway has a workspace. */
+  channels: Channel[]
+  /** False when the frame bound left some out: the later ones made, listed from cursor. */
+  complete: boolean
+  /** Present exactly when complete is false: the last channel on this page, to send back as after for the next one. */
+  cursor?: string
+}
 /** Tell the gateway what this connection's desktop window shows now (workspace.publish), so the person's agents can read it with the read_window tool. Each publication replaces this connection's previous one; one with a lower revision than the one held is not applied. A publication with no window withdraws it. The gateway keeps a window only while its connection is open: a closed connection withdraws it, and a window that connects again publishes again, under the same windowId, which replaces whatever an older connection of that window still holds. */
 export interface WorkspacePublishParams {
   /** The window's own id, made once when it opens and kept across its connections, so a connection it left behind never reads as a second window. */
@@ -2937,11 +3274,20 @@ export const mcpServerRules = {
   argMaxBytes: 8192,
   environmentNameMaxBytes: 256,
 } as const
+/** A channel's bounds, as x-channelRules publishes them: at most maxChannels per person; a name of 1 to maxNameChars characters once trimmed; notes of at most maxNotesBytes bytes; at most maxResources files and folders of at most maxResourceBytes bytes of paths in all; each path at most maxPathBytes bytes. The gateway refuses past them (invalid_request, channel_limit_reached); a client may refuse early by reading these. */
+export const channelRules = {
+  maxChannels: 1000,
+  maxNameChars: 80,
+  maxNotesBytes: 8192,
+  maxResources: 32,
+  maxResourceBytes: 16384,
+  maxPathBytes: 4096,
+} as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 78,
+  maxReadyMethods: 91,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3161,6 +3507,7 @@ export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",
   ServerHealth: "server.health",
+  ServerReach: "server.reach",
   CredentialIssue: "credential.issue",
   CredentialList: "credential.list",
   CredentialRevoke: "credential.revoke",
@@ -3190,11 +3537,13 @@ export const ProductMethod = {
   ConversationReorder: "conversation.reorder",
   ArtifactRead: "artifact.read",
   AttachmentBegin: "attachment.begin",
+  AttachmentWrite: "attachment.write",
   AgentsList: "agents.list",
   AgentsSetNativeHooks: "agents.setNativeHooks",
   AgentsSubscribe: "agents.subscribe",
   AgentsUnsubscribe: "agents.unsubscribe",
   ConversationSetApprovalMode: "conversation.setApprovalMode",
+  ConversationSetUsageLimitAutoContinue: "conversation.setUsageLimitAutoContinue",
   AgentsInstallOptions: "agents.installOptions",
   AgentsInstall: "agents.install",
   ConversationCatalogueHead: "conversation.catalogueHead",
@@ -3221,6 +3570,12 @@ export const ProductMethod = {
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
   PairingSetLinking: "pairing.setLinking",
+  PairingSetTunnel: "pairing.setTunnel",
+  PairingTunnel: "pairing.tunnel",
+  GithubStatus: "github.status",
+  GithubConnect: "github.connect",
+  GithubCancel: "github.cancel",
+  GithubDisconnect: "github.disconnect",
   PeerEnroll: "peer.enroll",
   PeerList: "peer.list",
   PeerForget: "peer.forget",
@@ -3234,9 +3589,13 @@ export const ProductMethod = {
   ConversationPermissionRules: "conversation.permissionRules",
   ConversationRevokePermissionRule: "conversation.revokePermissionRule",
   WorkspacePublish: "workspace.publish",
+  ChannelCreate: "channel.create",
+  ChannelList: "channel.list",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
   ConversationPeek: "conversation.peek",
   ConversationSetModel: "conversation.setModel",
+  ConversationSwitchAgent: "conversation.switchAgent",
+  ConversationFork: "conversation.fork",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3252,6 +3611,7 @@ export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
   "auth.session",
   "server.health",
+  "server.reach",
   "credential.issue",
   "credential.list",
   "credential.revoke",
@@ -3281,11 +3641,13 @@ export const productReadyMethods = [
   "conversation.reorder",
   "artifact.read",
   "attachment.begin",
+  "attachment.write",
   "agents.list",
   "agents.setNativeHooks",
   "agents.subscribe",
   "agents.unsubscribe",
   "conversation.setApprovalMode",
+  "conversation.setUsageLimitAutoContinue",
   "agents.installOptions",
   "agents.install",
   "conversation.catalogueHead",
@@ -3312,6 +3674,12 @@ export const productReadyMethods = [
   "pairing.deny",
   "pairing.cancel",
   "pairing.setLinking",
+  "pairing.setTunnel",
+  "pairing.tunnel",
+  "github.status",
+  "github.connect",
+  "github.cancel",
+  "github.disconnect",
   "peer.enroll",
   "peer.list",
   "peer.forget",
@@ -3325,15 +3693,20 @@ export const productReadyMethods = [
   "conversation.permissionRules",
   "conversation.revokePermissionRule",
   "workspace.publish",
+  "channel.create",
+  "channel.list",
   "conversation.subscribeEvents",
   "conversation.peek",
   "conversation.setModel",
+  "conversation.switchAgent",
+  "conversation.fork",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
   "session.authenticate": null,
   "auth.session": null,
   "server.health": "server.read",
+  "server.reach": "server.read",
   "credential.issue": "credential.manage",
   "credential.list": "credential.manage",
   "credential.revoke": "credential.manage",
@@ -3363,11 +3736,13 @@ export const productMethodGrants = {
   "conversation.reorder": "conversation.write",
   "artifact.read": "conversation.read",
   "attachment.begin": "conversation.write",
+  "attachment.write": "conversation.write",
   "agents.list": "server.read",
   "agents.setNativeHooks": "credential.manage",
   "agents.subscribe": "server.read",
   "agents.unsubscribe": "server.read",
   "conversation.setApprovalMode": "conversation.write",
+  "conversation.setUsageLimitAutoContinue": "credential.manage",
   "agents.installOptions": "server.read",
   "agents.install": "conversation.write",
   "conversation.catalogueHead": "conversation.read",
@@ -3394,6 +3769,12 @@ export const productMethodGrants = {
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
   "pairing.setLinking": "credential.manage",
+  "pairing.setTunnel": "credential.manage",
+  "pairing.tunnel": "credential.manage",
+  "github.status": "credential.manage",
+  "github.connect": "credential.manage",
+  "github.cancel": "credential.manage",
+  "github.disconnect": "credential.manage",
   "peer.enroll": "credential.manage",
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
@@ -3407,9 +3788,13 @@ export const productMethodGrants = {
   "conversation.permissionRules": "conversation.write",
   "conversation.revokePermissionRule": "conversation.write",
   "workspace.publish": "conversation.write",
+  "channel.create": "conversation.write",
+  "channel.list": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
   "conversation.peek": "conversation.write",
   "conversation.setModel": "conversation.write",
+  "conversation.switchAgent": "conversation.write",
+  "conversation.fork": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

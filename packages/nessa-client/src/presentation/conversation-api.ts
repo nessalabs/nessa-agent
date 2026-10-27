@@ -34,6 +34,7 @@ import type {
   ConversationReorderResult,
   ConversationRevokePermissionRuleResult,
   ConversationSetApprovalModeResult,
+  ConversationSetUsageLimitAutoContinueResult,
   ConversationSetModelResult,
   ConversationCapability,
   ConversationShareResult,
@@ -62,6 +63,7 @@ import {
   conversationMutation,
   conversationReorder,
   conversationApprovalMode,
+  conversationUsageLimitAutoContinue,
   conversationModel,
   conversationShareResult,
   conversationShares,
@@ -128,8 +130,14 @@ export type ConversationCreateOptions = ConversationActionOptions & {
   agent?: string
   /** Initial catalog model when a new conversation is created. */
   model?: string
-  /** Initial provider preset; omitted selects ask. */
+  /** Initial provider preset; omitted selects ask, or the channel's preset. */
   approvalMode?: ApprovalMode
+  /** The channel this conversation is in for its whole life: one
+   * `channels.list()` returned. Omitted is the default channel. Its agent,
+   * model and preset fill in what is omitted here. One the gateway does not
+   * name for this person is refused as `channel_not_found`, with `uncertain`
+   * false. */
+  channelId?: string
   /** The SSH destination this conversation's agent runs on for its whole
    * life: one `agents.list` returned under `environments`. Omitted runs it on
    * the gateway's own machine. One the gateway does not name is refused as
@@ -168,12 +176,47 @@ export type ConversationApi = {
     mode: ApprovalMode,
     options?: ConversationActionOptions,
   ) => Promise<ConversationSetApprovalModeResult>
+  /**
+   * Turn this gateway's usage-limit continuation preference on or off.
+   * The preference is shared by every conversation on this gateway.
+   * Turning it on schedules a continuation for each currently blocked
+   * eligible turn. Turning it off cancels open schedules.
+   */
+  setUsageLimitAutoContinue: (
+    enabled: boolean,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationSetUsageLimitAutoContinueResult>
   /** Change model within this provider. Acknowledgement describes the native effect boundary. */
   setModel: (
     conversationId: string,
     model: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationSetModelResult>
+  /**
+   * Carry the conversation on under another agent and model. The next message
+   * opens a new session of that agent, which is given the earlier turns as
+   * text; `read()` lists the switch in `handoffs`, where the transcript draws
+   * a line. Refused while a turn runs or waits, and for the agent the
+   * conversation already runs on (use `setModel`). `applied` is false when
+   * the switch was not made.
+   */
+  switchAgent: (
+    conversationId: string,
+    agent: string,
+    model: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /**
+   * Start a new conversation from a copy of `sourceConversationId`'s turns, on
+   * its agent, model, approval preset and environment. The source must be
+   * the caller's own. The new one's first `read()` lists the copied turns in
+   * `handoffs`. IDs are generated when
+   * options are omitted, and a retry of one request opens the same fork.
+   */
+  fork: (
+    sourceConversationId: string,
+    options?: Pick<ConversationCreateOptions, "conversationId" | "requestId">,
+  ) => Promise<ConversationCreateResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
   /**
@@ -790,6 +833,8 @@ export function createConversationApi(
         options.approvalMode === undefined ? {} : { approvalMode: options.approvalMode }
       const environment =
         options.environment === undefined ? {} : { environment: options.environment }
+      const channelId =
+        options.channelId === undefined ? {} : { channelId: options.channelId }
       return mutate(
         ProductMethod.ConversationCreate,
         {
@@ -799,6 +844,7 @@ export function createConversationApi(
           ...model,
           ...approvalMode,
           ...environment,
+          ...channelId,
         },
         (value) => conversationId(value, id),
       )
@@ -814,6 +860,28 @@ export function createConversationApi(
         false,
       )
     },
+    switchAgent: (id, agent, model, options = {}) => {
+      validConversationId(id)
+      boundedText(model, "Model", 256)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      // The agent name is the gateway's to refuse, as for `create`.
+      return mutate(
+        ProductMethod.ConversationSwitchAgent,
+        { conversationId: id, requestId, agent, model },
+        (value) => conversationMutation(value, requestId),
+        false,
+      )
+    },
+    fork: (source, options = {}) => {
+      validConversationId(source)
+      const id = validConversationId(options.conversationId ?? newId())
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return mutate(
+        ProductMethod.ConversationFork,
+        { conversationId: id, requestId, sourceConversationId: source },
+        (value) => conversationId(value, id),
+      )
+    },
     setApprovalMode: (id, mode, options = {}) => {
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
@@ -822,6 +890,17 @@ export function createConversationApi(
         { conversationId: id, requestId, mode },
         (value) => conversationApprovalMode(value, requestId, mode),
         false,
+      )
+    },
+    setUsageLimitAutoContinue: async (enabled, options = {}) => {
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return conversationUsageLimitAutoContinue(
+        await session.request(ProductMethod.ConversationSetUsageLimitAutoContinue, {
+          requestId,
+          enabled,
+        }),
+        requestId,
+        enabled,
       )
     },
     list: async (options = {}) =>

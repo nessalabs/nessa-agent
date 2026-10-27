@@ -100,6 +100,7 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
         state_root,
         state_directory,
         address,
+        None,
         Arc::new(ManualClock::default()),
     )
     .unwrap();
@@ -140,7 +141,7 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
     assert!(partial.progress().facts() <= partial.progress().applied());
     native.close().unwrap();
     drop(gateway);
-    let offline = NativeSession::open(state_root, state_directory, address).unwrap();
+    let offline = NativeSession::open(state_root, state_directory, address, None).unwrap();
     let offline_stamp = offline.bind_saved_receiver().unwrap();
     let RetainedTranscript::Retained(saved) = offline
         .published_transcript(&offline_stamp, &conversation, Uuid::nil())
@@ -170,7 +171,7 @@ fn native_budget_after_catalogue_progress_is_incomplete_without_a_refusal_rechec
     let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
     let clock = Arc::new(ManualClock::default());
     let native =
-        NativeSession::open_with_clock(state_root, state_directory, address, clock.clone())
+        NativeSession::open_with_clock(state_root, state_directory, address, None, clock.clone())
             .unwrap();
     let stop = ReadStop::new();
     let phase = root.join("budget-head-entered");
@@ -221,7 +222,7 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
     let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
     let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
-    let open = || NativeSession::open(state_root, state_directory, address).unwrap();
+    let open = || NativeSession::open(state_root, state_directory, address, None).unwrap();
     let native = open();
     let refresh = native.refresh(ReadStop::new()).unwrap();
     assert!(matches!(

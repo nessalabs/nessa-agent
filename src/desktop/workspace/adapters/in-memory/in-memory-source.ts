@@ -13,7 +13,7 @@
  * a new value, and a value it has handed out stays as it was.
  */
 import { conversationTitle } from "@nessa/client"
-import type { SessionSummary } from "../../model/workspace-index"
+import type { Channel, SessionSummary } from "../../model/workspace-index"
 import {
   atWork,
   emptyTranscript,
@@ -98,12 +98,14 @@ export interface AuditEntry {
     | "unpin"
     | "archive"
     | "rename"
+    | "fork"
     | "delete"
     | "let-go"
     | "answer-question"
     | "decline-question"
     | "stop"
     | "set-access"
+    | "usage-limit-auto-continue"
   /** The approval answered, or let go. */
   readonly approvalId?: string
   /** The question answered or declined, and the execution it belongs to. */
@@ -147,6 +149,11 @@ export interface InMemorySource extends WorkspaceSource {
   audit(): readonly AuditEntry[]
   /** Stops every scripted reply and refuses every later call; nothing is emitted afterwards. */
   dispose(): void
+  /**
+   * Lists a channel made beside it (`in-memory-channels.ts`) in every later
+   * index, in the seed's first section; once per id. Answers it as listed.
+   */
+  addChannel(channel: Omit<Channel, "sectionId">): Channel
 }
 
 export function inMemorySource(
@@ -157,6 +164,8 @@ export function inMemorySource(
   const archived = new Set<string>()
   const sessions = new Map(seed.index.sessions.map((session) => [session.id, session]))
   const transcripts = new Map(seed.transcripts)
+  // The seed's channels, then each made since, in the order they were.
+  let channels: readonly Channel[] = seed.index.channels
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
   // Each session's running script, so a new message or `dispose` can stop it.
   const scripts = new Map<string, Set<() => void>>()
@@ -395,7 +404,7 @@ export function inMemorySource(
 
   /** The channel a session is in — or, not begun yet, the one it starts in. */
   const channelName = (sessionId: string, starting?: string) =>
-    seed.index.channels.find(
+    channels.find(
       (channel) => channel.id === (sessions.get(sessionId)?.channelId ?? starting),
     )?.name ?? ""
 
@@ -521,10 +530,17 @@ export function inMemorySource(
   }
 
   return {
+    addChannel: (made) => {
+      const held = channels.find((channel) => channel.id === made.id)
+      if (held) return held
+      const channel = { ...made, sectionId: seed.index.sections[0]?.id ?? "" }
+      channels = [...channels, channel]
+      return channel
+    },
     index: () =>
       live(() => ({
         sections: seed.index.sections,
-        channels: seed.index.channels,
+        channels,
         sessions: [...sessions.values()],
       })),
     transcript: (sessionId) =>
@@ -694,6 +710,19 @@ export function inMemorySource(
           access: { mode, modes: ["ask", "auto", "full"] },
         }).revision
       }),
+    setUsageLimitAutoContinue: (enabled, initiator) =>
+      audited(
+        { sessionId: "gateway", action: "usage-limit-auto-continue", initiator },
+        () => {
+          let revision = 0
+          for (const transcript of transcripts.values())
+            revision = putTranscript({
+              ...transcript,
+              usageLimitAutoContinue: enabled,
+            }).revision
+          return revision
+        },
+      ),
     setPinned: (sessionId, pinned, initiator) =>
       audited(
         { sessionId, action: pinned ? "pin" : "unpin", initiator },
@@ -718,6 +747,51 @@ export function inMemorySource(
           ? session.revision
           : putSession({ ...session, title }).revision
       }),
+    // As the gateway: a new session listed as this one is, whose transcript
+    // is the turns copied and the line saying so, and that has said nothing
+    // of its own yet.
+    fork: (sessionId, initiator) => {
+      const forked = crypto.randomUUID()
+      return audited({ sessionId, action: "fork", initiator }, () => {
+        const session = known(sessionId)
+        const copied = transcriptOf(sessionId).messages.flatMap((message) =>
+          message.role === "user" || message.role === "agent"
+            ? [
+                {
+                  id: `/handoff:${forked}/${message.id}`,
+                  role: message.role,
+                  at: message.at,
+                  parts: message.parts.filter((part) => part.kind === "text"),
+                },
+              ]
+            : [],
+        )
+        putTranscript({
+          ...emptyTranscript(forked),
+          messages: [
+            ...copied,
+            {
+              id: `/handoff:${forked}`,
+              role: "handoff",
+              at: schedule.now(),
+              parts: [],
+              handoff: { kind: "fork", omittedTurns: 0 },
+            },
+          ],
+        })
+        putSession({
+          ...session,
+          id: forked,
+          status: "idle",
+          now: undefined,
+          pinned: false,
+          unread: false,
+          startedAt: schedule.now(),
+          updatedAt: schedule.now(),
+        })
+        return session.revision
+      }).then(() => forked)
+    },
     // As the gateway: nothing of it is kept, and its id is never begun again.
     delete: (sessionId, initiator) =>
       audited({ sessionId, action: "delete", initiator }, () => {

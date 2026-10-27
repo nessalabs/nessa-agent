@@ -26,18 +26,52 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 /// match to be restored. This function is the complete list of its inputs;
 /// the `AcpConfig` field docs that state their membership link here.
 ///
-/// Hashed: the executable's path, the ordered arguments, the context
-/// environment, the workspace, whether tools are enabled, the token limits,
-/// the permission decisions, and the composed system prompt. Changing any of
-/// them changes the identity, and a saved conversation whose context would be
-/// restored is refused before launch; one whose saved context is not restored
-/// (opened on another worker of a pool) goes on under the new fingerprint
-/// (`context_changes_reject_restore_before_launch_but_credentials_rotate_without_persistence`,
-/// `fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments`).
+/// Hashed, and this is the whole list:
+/// - every entry of [`AcpConfig::environment`], in key order. That is the
+///   identity environment: vendor account directories and endpoint or
+///   profile selectors (`ANTHROPIC_BASE_URL`, `AWS_PROFILE`, and the same
+///   kind of variable);
+/// - every [`AcpConfig::arguments`] entry, in order. That includes an
+///   absolute path: `--config` `/profiles/staging.toml` selects a profile
+///   the same way `--profile` `staging` does. Nothing here infers a staged
+///   runtime path from the shape of an argument;
+/// - the workspace, whether tools are enabled, the token limits, the
+///   permission decisions, and the composed system prompt.
 ///
-/// Not hashed:
+/// The provider name and the model sit beside this hash on
+/// [`ProviderIdentity`]. Changing a hashed input changes the identity. A
+/// saved conversation whose fingerprint differs opens a new native session;
+/// it is refused only when the provider name or the model differs. The rows
+/// are `docs/design/restoration-fingerprint.md`.
+/// (`a_semantic_argument_changes_the_restoration_identity`,
+/// `a_config_path_changes_the_restoration_identity_and_a_moved_staged_runtime_does_not`,
+/// `a_bundled_runtime_path_does_not_change_the_restoration_identity`,
+/// `a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_without_persistence`,
+/// `plumbing_environment_does_not_change_the_fingerprint`,
+/// `fingerprint_tracks_workspace_policy_prompt_and_limits`).
+///
+/// Not hashed. These are the launch fingerprint ([`launch_fingerprint`]),
+/// which warm-up records separately:
+/// - the executable path. A release stages the bundled binary under a new
+///   directory and the stress relocation renames the file, so the path does
+///   not choose which native session to resume. Which implementation a
+///   conversation belongs to is the provider name, the model, the arguments,
+///   and the identity environment;
+/// - [`AcpConfig::staged_runtime_arguments`]: the bundled adapter entry and
+///   any other path composition recorded as the staged runtime it placed.
+///   The same release moves them with the executable. A path in
+///   [`AcpConfig::arguments`] is not one of these, however absolute it is;
+/// - [`AcpConfig::runtime_environment`]: `PATH`, `TMPDIR`, `USER`,
+///   `LOGNAME`, `CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`. On macOS `PATH` is
+///   the login shell's path, rewritten into the launchd job on every app
+///   update, and `TMPDIR` differs between launchd and an app-launched child.
+///   Composition puts those keys there rather than in
+///   [`AcpConfig::environment`].
+///
+/// Also not hashed:
 /// - the credential environment, so credentials rotate without stranding a
-///   conversation;
+///   conversation, and the open credentials (`AcpConfig::open_credentials`)
+///   for the same reason: a sign-in that begins or ends between opens;
 /// - the stand-in grants (`AcpConfig::stand_ins`), fresh on every open;
 /// - the MCP servers (`AcpConfig::mcp_servers`): their names, commands and
 ///   arguments. They are attached to each provider open, like the grants, and
@@ -46,10 +80,10 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 ///   list (`adding_an_mcp_server_keeps_the_identity_and_restores`,
 ///   `editing_...`, `moving_an_mcp_servers_command_...`, `removing_...`).
 ///
-/// What follows from this for the gateway — the one-time change of every
-/// saved identity, and what still strands a saved conversation — is in
+/// What follows from this for the gateway — what a fingerprint change does,
+/// and what still strands a saved conversation — is in
 /// `docs/design/mcp-connections.md`, "MCP servers and the restoration
-/// identity".
+/// identity", and `docs/design/restoration-fingerprint.md`.
 pub(crate) fn fingerprint(
     config: &AcpConfig,
     limits: TokenLimits,
@@ -63,11 +97,15 @@ pub(crate) fn model_change_context(config: &AcpConfig, prompt: Option<&SystemPro
     fingerprint_fields(config, None, prompt)
 }
 
-fn fingerprint_fields(
-    config: &AcpConfig,
-    limits: Option<TokenLimits>,
-    prompt: Option<&SystemPrompt>,
-) -> String {
+/// The launch fingerprint warm-up records beside the restoration fingerprint.
+///
+/// Hashed: the executable path, every staged-runtime argument, every
+/// argument, and every entry of [`AcpConfig::runtime_environment`], in key
+/// order. A moved staged runtime changes this and leaves [`fingerprint`]
+/// unchanged, so a saved conversation resumes and the next warm-up prepares
+/// the new tree. An argument, including an absolute `--config` value,
+/// changes this and [`fingerprint`].
+pub(crate) fn launch_fingerprint(config: &AcpConfig) -> String {
     let mut hash = Sha256::new();
     field(
         &mut hash,
@@ -77,15 +115,35 @@ fn fingerprint_fields(
             .as_os_str()
             .as_encoded_bytes(),
     );
-    hash.update((config.arguments.len() as u64).to_be_bytes());
-    for argument in &config.arguments {
-        field(&mut hash, argument.as_encoded_bytes());
+    hash_arguments(&mut hash, &config.staged_runtime_arguments);
+    hash_arguments(&mut hash, &config.arguments);
+    hash.update((config.runtime_environment.len() as u64).to_be_bytes());
+    for (key, value) in &config.runtime_environment {
+        field(&mut hash, key.as_encoded_bytes());
+        field(&mut hash, value.as_encoded_bytes());
     }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+fn hash_arguments(hash: &mut Sha256, arguments: &[std::ffi::OsString]) {
+    hash.update((arguments.len() as u64).to_be_bytes());
+    for argument in arguments {
+        field(hash, argument.as_encoded_bytes());
+    }
+}
+
+fn fingerprint_fields(
+    config: &AcpConfig,
+    limits: Option<TokenLimits>,
+    prompt: Option<&SystemPrompt>,
+) -> String {
+    let mut hash = Sha256::new();
     hash.update((config.environment.len() as u64).to_be_bytes());
     for (key, value) in &config.environment {
         field(&mut hash, key.as_encoded_bytes());
         field(&mut hash, value.as_encoded_bytes());
     }
+    hash_arguments(&mut hash, &config.arguments);
     field(&mut hash, config.workspace.as_os_str().as_encoded_bytes());
     hash.update([u8::from(config.tools_enabled)]);
     if let Some(limits) = limits {

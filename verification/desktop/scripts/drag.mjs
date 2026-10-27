@@ -33,6 +33,7 @@
  *   peek-press-while-hiding  the revealed sidebar stays while a drag owns it
  *   reduced-motion       live panes stay still; releasing commits without motion
  *   compact-drag-card     a row-sized card keeps its size and follows the pointer
+ *   compact-glass-release compact cards never acquire or pulse pane-preview glass flags
  *   stationary-drag-target  chats keep their geometry and material; only the target highlights
  *   stationary-layout-flight  closing one pane never suppresses stationary chats
  *   stationary-drop-commit    a committed swap never suppresses untouched chats
@@ -60,6 +61,7 @@ import { content, css, keys, modules, storage, zoneSaid } from "./lib/selectors.
 import {
   latestShapeFrame,
   recordShapeFrames,
+  recordedDropSettled,
   stopShapeFrames,
 } from "./lib/shape-sampler.mjs"
 import {
@@ -73,6 +75,7 @@ import {
   panes,
   recordFrames,
   recordZones,
+  sweepZoneEvidence,
   residueFailures,
   settled,
   state,
@@ -141,6 +144,18 @@ function insideGrid(frames) {
         )
   }
   return out.length ? [`${out.length} pane-frames outside the grid, e.g. ${out[0]}`] : []
+}
+
+/** Every frame's drop outline starts below the titlebar row, never up under its tabs. */
+function belowBar(frames) {
+  const under = frames.filter(
+    (f) => f.placeholder && f.barBottom !== null && f.placeholder.y < f.barBottom - 0.5,
+  )
+  return under.length
+    ? [
+        `${under.length} frames drew the drop outline under the titlebar, e.g. top ${Math.round(under[0].placeholder.y)} above ${Math.round(under[0].barBottom)}`,
+      ]
+    : []
 }
 
 function insideWindow(frames) {
@@ -432,14 +447,16 @@ async function stationaryThrough(page, { focus, count, change }) {
   )
     failures.push("the action changed no pane geometry")
   if (samples.length < 2) failures.push("no layout change frames were sampled")
-  if (samples.some((sample) => sample.flight))
-    failures.push("workspace bounds started a FLIP")
+  // Panes that move travel to their new boxes (`--desktop-flight`); one that
+  // keeps its box is never flown, hidden or held (below).
   for (const sample of samples) {
     if (sample.measuring) failures.push("the temporary measurement hold reached paint")
     for (const pane of sample.panes) {
       if (!stationary.includes(pane.key)) continue
       if (pane.quiet === "hidden" || pane.flying || pane.restoring)
-        failures.push(`stationary pane ${pane.key} was suppressed`)
+        failures.push(
+          `stationary pane ${pane.key} was suppressed (${pane.quiet === "hidden" ? "hidden" : pane.flying ? "flying" : "restoring"})`,
+        )
       if (pane.fill !== colors.find((old) => old.key === pane.key)?.fill)
         failures.push(`stationary pane ${pane.key} changed its material`)
     }
@@ -518,6 +535,7 @@ const checks = {
         ...followsPointer(during, liftedAt, glideMs).map((f) => `follows-pointer: ${f}`),
         ...insideGrid(during).map((f) => `inside-grid: ${f}`),
         ...insideWindow(during).map((f) => `inside-window: ${f}`),
+        ...belowBar(during).map((f) => `below-bar: ${f}`),
         ...oneWay(during).map((f) => `one-way: ${f}`),
         ...(during.some((f) => f.selection)
           ? [
@@ -538,19 +556,9 @@ const checks = {
       await page.mouse.move(middle.x + middle.w * 0.45, middle.y + dy, { steps: 30 })
       await frames(page, 2)
       const recorded = await zones.take()
-      observations.push({ dy, recorded })
-      // A sweep's direction is judged while moving. A late rendering frame
-      // may arrive after the model's legitimate rest transition at the edge.
-      // These timestamps attribute observation, not the model's decision.
-      const said = recorded
-        .filter((entry) => entry.at - entry.lastMoveAt < restAfter)
-        .map((entry) => entry.said)
-      if (!said.length)
-        failures.push(`sweeping left at top+${dy}px announced no zone at all`)
-      if (said.some((z) => zoneSaid.vertical.test(z)))
-        failures.push(
-          `sweeping left at top+${dy}px picked a vertical zone: ${said.join(" → ")}`,
-        )
+      const evidence = sweepZoneEvidence(recorded, restAfter, zoneSaid.vertical)
+      observations.push({ dy, recorded, ...evidence })
+      failures.push(...evidence.failures.map((failure) => `top+${dy}px: ${failure}`))
       await letGo(page, { escape: true })
     }
     return { failures, observations }
@@ -1155,14 +1163,15 @@ Object.assign(checks, {
     const placeholders = await still.locator(css.dragPlaceholder).count()
     const recorded = await shapes.stop()
     const before = list.map((p) => p.key)
+    const expected = [before[1], before[0], ...before.slice(2)]
     const landing = await recordShapes(still)
     await still.mouse.up()
-    await settled(still)
-    // Nothing flies with less motion: the drop's marks go two frames on.
-    await frames(still, 4)
+    // No finite animation need exist before the deferred arrangement paints.
+    const committed = await recordedDropSettled(still, expected)
     const landed = await landing.stop()
     const after = await order(still)
     const failures = []
+    if (!committed) failures.push("released swap did not settle within its budget")
     if (!said) throw new CannotRun("no swap was offered over the pane beside it")
     // Targeting leaves the existing pane where it is.
     const drawn = recorded.at(-1)?.panes.find((p) => p.key === next.key) ?? next
@@ -1205,10 +1214,91 @@ Object.assign(checks, {
         `released, a pane was drawn off where it landed: ${px(jumped[0])} (${jumped.length} frames)`,
       )
     if (!placeholders) failures.push("no placeholder marks where the drop would land")
-    if (after.join(",") !== [before[1], before[0], ...before.slice(2)].join(","))
+    if (after.join(",") !== expected.join(","))
       failures.push(`released on the swap shown: ${before} became ${after}`)
     failures.push(...residueFailures(await dragResidue(still)))
-    return { failures }
+    return { committed, before, after, failures }
+  },
+  "compact-glass-release": async (_page, layout, fresh) => {
+    const cases = []
+    const failures = []
+    for (const motion of ["full", "reduced"])
+      for (const end of ["cancel", "drop"]) {
+        const page = await fresh({ prefs: { [storage.motion]: motion } })
+        const list = await threeColumns(page, layout)
+        const before = list.map((pane) => pane.key)
+        const expected =
+          end === "cancel" ? before : [before[1], before[0], ...before.slice(2)]
+        const observation = await page.evaluateHandle(
+          (names) => {
+            const writes = []
+            const collect = (records) => {
+              for (const record of records)
+                writes.push({
+                  name: record.attributeName,
+                  // oldValue catches an add/remove pair within one delivery.
+                  held:
+                    record.oldValue !== null ||
+                    record.target.hasAttribute(record.attributeName),
+                })
+            }
+            const observer = new MutationObserver(collect)
+            observer.observe(document, {
+              subtree: true,
+              attributes: true,
+              attributeOldValue: true,
+              attributeFilter: names,
+            })
+            return {
+              initial: names.filter((name) => document.querySelector(`[${name}]`)),
+              stop() {
+                collect(observer.takeRecords())
+                observer.disconnect()
+                return { initial: this.initial, writes }
+              },
+            }
+          },
+          [marks.pressing, marks.blur],
+        )
+        const shapes = await recordShapes(page)
+        let evidence
+        try {
+          await lift(page, 0)
+          const next = list[1]
+          // Approach from the left: stay inside Swap, not on the midpoint
+          // where fractional DOM rounding can leave a settling pointer in Left.
+          // The unchanged zonesAt model holds this input in compact-glass.test.mjs.
+          await page.mouse.move(next.x + next.w / 2 + 1, next.y + next.h / 2, {
+            steps: 20,
+          })
+          if (!(await zoneSays(page, zoneSaid.swap)))
+            throw new CannotRun("no swap was offered for compact glass release")
+          if (end === "cancel") await page.keyboard.press(keys.escape)
+          await page.mouse.up()
+          await page.waitForSelector(css.dragGhost, { state: "hidden", timeout: 3000 })
+          const committed = await recordedDropSettled(page, expected)
+          // The full-pane glass release owns four deferred frames. Observe past
+          // that chain even when compact-card geometry settles immediately.
+          await frames(page, 9)
+          evidence = await observation.evaluate((observer) => observer.stop())
+          const acquired = evidence.writes.filter((write) => write.held)
+          const after = await order(page)
+          const residue = residueFailures(await dragResidue(page))
+          if (evidence.initial.length || acquired.length)
+            failures.push(
+              `${motion} ${end}: glass acquired/pulsed ${acquired.length} times; initial ${evidence.initial}`,
+            )
+          if (!committed || after.join(",") !== expected.join(","))
+            failures.push(`${motion} ${end}: expected ${expected}, got ${after}`)
+          failures.push(...residue.map((failure) => `${motion} ${end}: ${failure}`))
+          cases.push({ motion, end, committed, before, after, ...evidence })
+        } finally {
+          if (!evidence) await observation.evaluate((observer) => observer.stop())
+          await observation.dispose()
+          await shapes.stop()
+        }
+      }
+    return { cases, failures }
   },
   "compact-drag-card": async (page, layout, fresh, run) => {
     const { own, other } = await sideBySide(page, layout)
@@ -1401,7 +1491,7 @@ Usage: node verification/desktop/scripts/drag.mjs [options]
   --reduced-motion Every check with the system's reduced motion on.
   --shots <dir>    Screenshots from compact-drag-card go there.
 
-sweep-across-zones covers follows-pointer, inside-grid, inside-window, one-way
+sweep-across-zones covers follows-pointer, inside-grid, inside-window, below-bar, one-way
 and no-selection in one recorded drag. Side columns are hidden first so the
 panes have the room. A check made for one layout runs only there.
 boundary-jitter reads the model's edgeReach from the dev server; under

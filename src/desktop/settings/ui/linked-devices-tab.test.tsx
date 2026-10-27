@@ -5,16 +5,21 @@
  */
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { ClockProvider } from "../../../clock"
 import type {
   LinkedDevicesConnection,
   LinkedDevicesGateway,
 } from "../adapters/linked-devices-gateway"
 import type { Outcome, ReadValue } from "../model/linked-devices"
+import type { TunnelChange, TunnelRead } from "../model/tunnel"
 import { LinkedDevicesProvider, LinkedDevicesTab } from "./linked-devices-tab"
 
 let root: Root
 let host: HTMLDivElement
+// The window's injected clock, as composition gives it; a test moves it.
+let clockOffset = 0
+const now = () => Date.now() + clockOffset
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -29,6 +34,7 @@ beforeEach(() => {
       removeEventListener: () => {},
       dispatchEvent: () => false,
     })) as typeof window.matchMedia
+  clockOffset = 0
   host = document.createElement("div")
   document.body.append(host)
   root = createRoot(host)
@@ -39,24 +45,58 @@ afterEach(async () => {
   host.remove()
 })
 
-function gateway(read: () => Promise<Outcome<ReadValue>>): LinkedDevicesGateway & {
+const tunnelOff: TunnelRead = {
+  enabled: false,
+  mode: "quick",
+  hasToken: false,
+  ingress: "127.0.0.1:47651",
+  status: "off",
+}
+
+function gateway(
+  read: () => Promise<Outcome<ReadValue>>,
+  tunnel: () => Promise<Outcome<TunnelRead>> = async () => ({
+    ok: true,
+    value: tunnelOff,
+  }),
+): LinkedDevicesGateway & {
   switchWaitMs: number
   creates: number
   linkings: boolean[]
+  tunnels: TunnelChange[]
   tell: (connection: LinkedDevicesConnection) => void
 } {
+  // Every part of the tab that follows the connection hears each change.
+  const followers = new Set<(connection: LinkedDevicesConnection) => void>()
   const gate = {
     pollMs: 0,
     switchWaitMs: 60_000,
     creates: 0,
     linkings: [] as boolean[],
-    tell: (_connection: LinkedDevicesConnection) => {},
+    tunnels: [] as TunnelChange[],
+    tell: (connection: LinkedDevicesConnection) => {
+      for (const follower of [...followers]) follower(connection)
+    },
     follow(handler: (connection: LinkedDevicesConnection) => void) {
-      gate.tell = handler
+      followers.add(handler)
       handler({ type: "connected" })
-      return () => {}
+      return () => {
+        followers.delete(handler)
+      }
     },
     read,
+    tunnel,
+    setTunnel: async (change: TunnelChange) => {
+      gate.tunnels.push(change)
+      return {
+        ok: true as const,
+        value: {
+          enabled: change.enabled,
+          mode: change.mode ?? ("quick" as const),
+          applies: "restarting" as const,
+        },
+      }
+    },
     create: async () => {
       gate.creates += 1
       return {
@@ -113,7 +153,11 @@ function gateway(read: () => Promise<Outcome<ReadValue>>): LinkedDevicesGateway 
 
 async function mount(node: React.ReactNode) {
   await act(async () => {
-    root.render(<StrictMode>{node}</StrictMode>)
+    root.render(
+      <StrictMode>
+        <ClockProvider now={now}>{node}</ClockProvider>
+      </StrictMode>,
+    )
   })
 }
 
@@ -235,7 +279,7 @@ describe("Linked devices", () => {
     expect(host.textContent).not.toContain("has not come back yet")
   })
 
-  it("L5: Pair sends one create under StrictMode and shows the code and both orbs", async () => {
+  it("L5: Pair sends one create under StrictMode and shows the code and one orb in a modal", async () => {
     let listed = false
     const gate = gateway(async () => {
       if (!listed) {
@@ -266,16 +310,234 @@ describe("Linked devices", () => {
     expect(pair?.disabled).toBe(false)
     await act(async () => pair?.click())
     expect(gate.creates).toBe(1)
-    expect(host.querySelector("[data-slot='pairing-code-value']")?.textContent).toBe(
+    const dialog = document.querySelector("[data-slot='dialog']")
+    expect(dialog?.textContent).toContain("Pair a device")
+    expect(dialog?.querySelector("[data-slot='pairing-code-value']")?.textContent).toBe(
       "ABCD2345",
     )
-    expect(host.querySelector("[data-slot='signal-orb']")).not.toBeNull()
-    expect(host.querySelector("[data-slot='qr-orb']")).not.toBeNull()
-    expect(document.activeElement?.getAttribute("data-linked-action")).toBe("cancel")
+    expect(dialog?.querySelectorAll("[data-slot='signal-orb']")).toHaveLength(1)
+    expect(document.querySelector("[data-slot='qr-orb']")).toBeNull()
+    // The page keeps one row, which no longer offers Pair a device.
+    expect(host.querySelector("[data-slot='pairing-code']")).toBeNull()
+    expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
+
+    // Closing the modal leaves the code open; the row shows it again.
+    await act(async () =>
+      dialog
+        ?.querySelector<HTMLButtonElement>("[data-slot='dialog-close-button']")
+        ?.click(),
+    )
+    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+    expect(gate.creates).toBe(1)
+    const show = host.querySelector<HTMLButtonElement>("[data-linked-action='show']")
+    expect(show).not.toBeNull()
+    // The Pair button that opened it is gone: focus goes to the row's Show code,
+    // once Radix's own restore has left it resting.
+    await act(async () => new Promise((done) => setTimeout(done, 0)))
+    expect(document.activeElement).toBe(show)
+    await act(async () => show?.click())
+    expect(
+      document.querySelector("[data-slot='dialog'] [data-slot='pairing-code-value']")
+        ?.textContent,
+    ).toBe("ABCD2345")
+  })
+
+  it("cancelling the code in the modal closes it and offers Pair a device again", async () => {
+    let reads = 0
+    const available = {
+      invitationId: "00112233445566778899aabbccddeeff",
+      phase: "available" as const,
+      expiresAtMs: Date.now() + 60_000,
+    }
+    const gate = gateway(async () => {
+      reads += 1
+      return reads === 2
+        ? { ok: true, value: { kind: "on", enrollments: [available], devices: [] } }
+        : { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const cancel = document.querySelector<HTMLButtonElement>(
+      "[data-slot='dialog'] [data-linked-action='cancel']",
+    )
+    expect(cancel?.disabled).toBe(false)
+    await act(async () => cancel?.click())
+    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+    expect(host.querySelector("[data-linked-action='pair']")).not.toBeNull()
+    expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
+  })
+
+  it("focus waits on the row while the read after a cancel is out, then takes Pair", async () => {
+    let reads = 0
+    let answerRead: (() => void) | undefined
+    const available = {
+      invitationId: "00112233445566778899aabbccddeeff",
+      phase: "available" as const,
+      expiresAtMs: Date.now() + 60_000,
+    }
+    const gate = gateway(async () => {
+      reads += 1
+      if (reads === 3) await new Promise<void>((done) => (answerRead = done))
+      return reads === 2
+        ? { ok: true, value: { kind: "on", enrollments: [available], devices: [] } }
+        : { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    // Radix closes its focus scope on one timer; the kit's fallback focus
+    // runs on a second. Keep the gateway read held while both callbacks run,
+    // without waiting on elapsed host time or changing the injected clock.
+    // One virtual millisecond admits the nested zero-delay timer clamp, but
+    // does not admit a genuinely delayed fallback.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    try {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            "[data-slot='dialog'] [data-linked-action='cancel']",
+          )
+          ?.click(),
+      )
+      await act(async () => vi.advanceTimersByTimeAsync(1))
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+    expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
+    await act(async () => answerRead?.())
+    expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
+  })
+
+  it("a live code whose deadline the injected clock passes drops its orb", async () => {
+    let reads = 0
+    const gate = gateway(async () => {
+      reads += 1
+      return {
+        ok: true,
+        value: {
+          kind: "on",
+          enrollments:
+            reads === 1
+              ? []
+              : [
+                  {
+                    invitationId: "00112233445566778899aabbccddeeff",
+                    phase: "available",
+                    expiresAtMs: Date.now() + 60_000,
+                  },
+                ],
+          devices: [],
+        },
+      }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const dialog = () => document.querySelector("[data-slot='dialog']")
+    expect(dialog()?.querySelectorAll("[data-slot='signal-orb']")).toHaveLength(1)
+    // Only the window's clock moves past the 60 s deadline; the next second's
+    // tick reads it and the orb goes, with the code still drawn.
+    clockOffset = 61_000
+    await act(async () => new Promise((done) => setTimeout(done, 1_100)))
+    expect(dialog()?.querySelector("[data-slot='signal-orb']")).toBeNull()
+    expect(dialog()?.querySelector("[data-slot='pairing-code-value']")?.textContent).toBe(
+      "ABCD2345",
+    )
+  })
+
+  it("a failed New code is said in the modal, and an expired code draws no orb", async () => {
+    let reads = 0
+    const gate = gateway(async () => {
+      reads += 1
+      return {
+        ok: true,
+        value: {
+          kind: "on",
+          enrollments:
+            reads === 1
+              ? []
+              : [
+                  {
+                    invitationId: "00112233445566778899aabbccddeeff",
+                    phase: "available",
+                    expiresAtMs: Date.now() - 1,
+                  },
+                ],
+          devices: [],
+        },
+      }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const dialog = () => document.querySelector("[data-slot='dialog']")
+    expect(dialog()?.querySelector("[data-slot='signal-orb']")).toBeNull()
+    await act(async () =>
+      dialog()
+        ?.querySelector<HTMLButtonElement>("[data-linked-action='refresh']")
+        ?.click(),
+    )
+    expect(dialog()?.querySelector("[data-linked-notice]")?.textContent).toContain(
+      "Another pairing is in progress",
+    )
+    expect(host.querySelector("[data-linked-notice]")).toBeNull()
+  })
+
+  it("a device that used the code is approved from the modal, not twice on the page", async () => {
+    let reads = 0
+    const claimed = {
+      invitationId: "00112233445566778899aabbccddeeff",
+      phase: "claimed" as const,
+      expiresAtMs: Date.now() + 60_000,
+      deviceKey: "11".repeat(32),
+      fingerprint: "182ff9da701fd144e2fd2cd41da8ddba979eb01b2bf7fcc3376f4b1b2ecee4e7",
+    }
+    const gate = gateway(async () => {
+      reads += 1
+      return reads === 1
+        ? { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+        : { ok: true, value: { kind: "on", enrollments: [claimed], devices: [] } }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const dialog = document.querySelector("[data-slot='dialog']")
+    expect(
+      dialog?.querySelector("[data-slot='pairing-code']")?.getAttribute("data-state"),
+    ).toBe("used")
+    expect(dialog?.querySelector("[data-slot='signal-orb']")).toBeNull()
+    expect(dialog?.querySelector("[data-linked-action='approve']")).not.toBeNull()
+    expect(host.querySelector("[data-linked-action='approve']")).toBeNull()
   })
 
   it("L21: approve, deny and revoke rest while the gateway cannot be reached", async () => {
-    let tell: ((connection: LinkedDevicesConnection) => void) | undefined
     const gate = gateway(async () => ({
       ok: true,
       value: {
@@ -290,14 +552,11 @@ describe("Linked devices", () => {
               "182ff9da701fd144e2fd2cd41da8ddba979eb01b2bf7fcc3376f4b1b2ecee4e7",
           },
         ],
-        devices: [{ credentialId: "device-1", issuedAt: 1_700_000_000 }],
+        devices: [
+          { credentialId: "device-1", issuedAt: 1_700_000_000, fullAccess: false },
+        ],
       },
     }))
-    gate.follow = (handler) => {
-      tell = handler
-      handler({ type: "connected" })
-      return () => {}
-    }
     await mount(
       <LinkedDevicesProvider gateway={gate}>
         <LinkedDevicesTab />
@@ -307,7 +566,7 @@ describe("Linked devices", () => {
       host.querySelector<HTMLButtonElement>(`[data-linked-action='${action}']`)?.disabled
     expect(enabled("approve")).toBe(false)
     expect(enabled("revoke")).toBe(false)
-    await act(async () => tell?.({ type: "unreachable" }))
+    await act(async () => gate.tell({ type: "unreachable" }))
     expect(enabled("approve")).toBe(true)
     expect(enabled("deny")).toBe(true)
     expect(enabled("revoke")).toBe(true)
@@ -354,7 +613,9 @@ describe("Linked devices", () => {
       value: {
         kind: "on",
         enrollments: [],
-        devices: [{ credentialId: "device-1", issuedAt: 1_700_000_000 }],
+        devices: [
+          { credentialId: "device-1", issuedAt: 1_700_000_000, fullAccess: false },
+        ],
       },
     }))
     gate.revoke = async () => {
@@ -378,5 +639,86 @@ describe("Linked devices", () => {
     )
     expect(revokes).toBe(1)
     expect(host.textContent).toContain("next time it reads")
+  })
+})
+
+describe("Web tunnel", () => {
+  const linkedOn = async () => ({
+    ok: true as const,
+    value: { kind: "on" as const, enrollments: [], devices: [] },
+  })
+  const tunnelSwitch = () =>
+    host.querySelector<HTMLButtonElement>("[data-tunnel] [role='switch']")
+
+  it("is drawn only while linking is on", async () => {
+    const gate = gateway(async () => ({ ok: true, value: { kind: "off" } }))
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    expect(host.querySelector("[data-tunnel]")).toBeNull()
+  })
+
+  it("turns a quick tunnel on with one change and shows its address once ready", async () => {
+    let read: TunnelRead = tunnelOff
+    const gate = gateway(linkedOn, async () => ({ ok: true, value: read }))
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    expect(host.querySelector("[data-tunnel]")?.getAttribute("data-tunnel-status")).toBe(
+      "off",
+    )
+    expect(host.textContent).toContain("only on the same network")
+    expect(host.textContent).toContain("changes whenever cloudflared has to start again")
+    expect(host.querySelector("[data-tunnel-field]")).toBeNull()
+    await act(async () => tunnelSwitch()?.click())
+    expect(gate.tunnels).toEqual([{ enabled: true, mode: "quick" }])
+    expect(tunnelSwitch()?.getAttribute("aria-checked")).toBe("true")
+    expect(tunnelSwitch()?.disabled).toBe(true)
+    read = {
+      ...tunnelOff,
+      enabled: true,
+      status: "ready",
+      address: "https://a-b.trycloudflare.com",
+    }
+    await act(async () => gate.tell({ type: "unreachable" }))
+    await act(async () => gate.tell({ type: "connected" }))
+    expect(host.querySelector("[data-tunnel-address]")?.textContent).toBe(
+      "https://a-b.trycloudflare.com",
+    )
+    expect(tunnelSwitch()?.disabled).toBe(false)
+    expect(host.textContent).not.toContain("Restarting the gateway")
+  })
+
+  it("a named tunnel takes a hostname and a token, shows where to route it, and never shows the token back", async () => {
+    const gate = gateway(linkedOn, async () => ({
+      ok: true,
+      value: {
+        ...tunnelOff,
+        mode: "named",
+        hostname: "https://n.example",
+        hasToken: true,
+      },
+    }))
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    const field = (name: string) =>
+      host.querySelector<HTMLInputElement>(`[data-tunnel-field='${name}']`)
+    expect(field("hostname")?.value).toBe("https://n.example")
+    expect(field("token")?.value).toBe("")
+    expect(field("token")?.type).toBe("password")
+    expect(field("token")?.placeholder).toContain("Saved")
+    expect(host.textContent).toContain("route this hostname to http://127.0.0.1:47651")
+    expect(host.textContent).toContain("Its address never changes")
+    await act(async () => tunnelSwitch()?.click())
+    expect(gate.tunnels).toEqual([
+      { enabled: true, mode: "named", hostname: "https://n.example" },
+    ])
   })
 })

@@ -25,6 +25,7 @@ vi.mock("../../host", () => ({
   chooseAttachmentFiles: () => Promise.resolve(null),
   readAttachmentBytes: () => Promise.resolve(null),
   hasNativeHost: () => true,
+  onSetupRecorded: () => Promise.resolve(() => {}),
   onAttachmentReadying: () => Promise.resolve(() => {}),
   onAttachmentBatch: () => Promise.resolve(() => {}),
 }))

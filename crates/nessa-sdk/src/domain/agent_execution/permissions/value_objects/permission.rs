@@ -591,6 +591,32 @@ impl CustomPermissionCancellationReason {
     pub fn explanation(&self) -> &str {
         &self.explanation
     }
+
+    /// The stop this hook refusal applies, when it ends the turn or closes
+    /// the session. A continue refusal is `None`: the turn keeps running.
+    pub fn hook_stop(&self) -> Option<RefusalOutcome> {
+        let name = self.code.strip_prefix(Self::HOOK_REFUSAL_PREFIX)?;
+        match name {
+            "end_turn" => Some(RefusalOutcome::EndTurn),
+            "close_session" => Some(RefusalOutcome::CloseSession),
+            _ => None,
+        }
+    }
+
+    /// The runner's hook withdrawal, for tests outside this crate.
+    ///
+    /// Construction does not withdraw a review. The live controller still
+    /// requires the hook's own actor.
+    #[cfg(feature = "test-support")]
+    pub fn hook_refusal_for_test(
+        session: &ExecutionSessionId,
+        execution: &ExecutionId,
+        review: &PermissionId,
+        outcome: RefusalOutcome,
+        explanation: impl Into<String>,
+    ) -> Result<Self, ExecutionError> {
+        Self::hook_refusal(session, execution, review, outcome, explanation)
+    }
 }
 
 #[cfg(test)]

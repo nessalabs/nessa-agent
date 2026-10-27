@@ -13,6 +13,7 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationSetUsageLimitAutoContinueResult,
   ConversationSetModelResult,
   ConversationShareResult,
   ConversationSharesResult,
@@ -410,6 +411,21 @@ export function conversationApprovalMode(
     throw new Error("Conversation mode result contradicts the requested change")
   return item as unknown as ConversationSetApprovalModeResult
 }
+
+/** Confirm the reply belongs to the requested preference and names that choice. */
+export function conversationUsageLimitAutoContinue(
+  value: unknown,
+  requestId: string,
+  requested: boolean,
+): ConversationSetUsageLimitAutoContinueResult {
+  const item = record(value)
+  exact(item, ["requestId", "enabled"])
+  if (identity(item, "requestId") !== requestId || item.enabled !== requested)
+    throw new Error(
+      "Conversation usage-limit preference contradicts the requested change",
+    )
+  return item as unknown as ConversationSetUsageLimitAutoContinueResult
+}
 /** Correlate the model reply before a caller can display its selection. */
 export function conversationModel(
   value: unknown,
@@ -447,12 +463,15 @@ export function conversationView(value: unknown, expected: string): Conversation
     "notes",
     "unreadable",
     "unreadableTruncated",
+    "usageLimitAutoContinue",
+    "handoffs",
     "title",
     "approvalMode",
     "approvalModes",
     "approvalModeChange",
     "modelChange",
     "modelChangeEffect",
+    "model",
   ])
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
@@ -466,6 +485,11 @@ export function conversationView(value: unknown, expected: string): Conversation
     serverNowMs < 1
   )
     throw new Error("Invalid conversation serverNowMs")
+  if (
+    item.usageLimitAutoContinue !== undefined &&
+    typeof item.usageLimitAutoContinue !== "boolean"
+  )
+    throw new Error("Conversation response has invalid usageLimitAutoContinue")
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
@@ -492,6 +516,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.modelChangeEffect !== undefined)
     oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
+  text(item, "model", 256, false)
   if (item.interactionViewError !== undefined)
     text(item, "interactionViewError", 2048, false)
   const messages = items(item, "messages", 128)
@@ -515,6 +540,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "steeringTarget",
       "authenticationRequired",
       "requiredWorkFailed",
+      "usageLimit",
       "parts",
       "steeringOffset",
     ])
@@ -528,6 +554,29 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Conversation response has invalid authenticationRequired")
     if (message.authenticationRequired === true && message.status !== "failed")
       throw new Error("Conversation authentication refusal requires a failed turn")
+    if (message.usageLimit !== undefined) {
+      const limit = record(message.usageLimit)
+      exact(limit, ["provider", "recovery", "resetsAtMs", "autoResuming"])
+      oneOf(text(limit, "provider"), ["claude", "codex"])
+      const recovery = text(limit, "recovery")
+      oneOf(recovery, ["timed_reset", "user_action", "unknown"])
+      if (message.status !== "failed")
+        throw new Error("Conversation usage limit requires a failed turn")
+      if (recovery === "timed_reset") {
+        const resetsAtMs = limit.resetsAtMs
+        if (
+          typeof resetsAtMs !== "number" ||
+          !Number.isSafeInteger(resetsAtMs) ||
+          resetsAtMs < 1_704_067_200_000 ||
+          resetsAtMs > 4_102_444_800_000
+        )
+          throw new Error("Conversation usage limit has no reset instant")
+      } else if (limit.resetsAtMs !== undefined) {
+        throw new Error("Conversation usage limit carries a reset it cannot use")
+      }
+      if (limit.autoResuming !== undefined && typeof limit.autoResuming !== "boolean")
+        throw new Error("Conversation usage limit has invalid autoResuming")
+    }
     if (
       message.requiredWorkFailed !== undefined &&
       typeof message.requiredWorkFailed !== "boolean"
@@ -550,7 +599,15 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Invalid steering offset")
     let previousOffset = -1
     for (const part of items(message, "parts", 512)) {
-      exact(part, ["offset", "kind", "text", "toolId", "noticeId", "messageId"])
+      exact(part, [
+        "offset",
+        "kind",
+        "text",
+        "toolId",
+        "noticeId",
+        "noticeKind",
+        "messageId",
+      ])
       if (!Number.isSafeInteger(part.offset) || (part.offset as number) <= previousOffset)
         throw new Error("Invalid part order")
       previousOffset = part.offset as number
@@ -559,6 +616,14 @@ export function conversationView(value: unknown, expected: string): Conversation
       text(part, "text")
       const toolId = text(part, "toolId", 256)
       const noticeId = text(part, "noticeId", 20)
+      const noticeKind = part.noticeKind
+      if (
+        noticeKind !== undefined &&
+        noticeKind !== "review" &&
+        noticeKind !== "hook" &&
+        noticeKind !== "deadline"
+      )
+        throw new Error("Conversation local notice has no source")
       if (kind === "tool") {
         if (!toolId.length) throw new Error("Conversation tool part has no tool identity")
         const key = JSON.stringify([executionId, toolId])
@@ -570,16 +635,18 @@ export function conversationView(value: unknown, expected: string): Conversation
         throw new Error("Conversation non-tool part has a tool identity")
       }
       if (kind === "local_notice") {
+        if (noticeKind !== "review" && noticeKind !== "hook" && noticeKind !== "deadline")
+          throw new Error("Conversation local notice has no source")
         if (
           !/^[1-9][0-9]{0,19}$/.test(noticeId) ||
           (noticeId.length === 20 && noticeId > "18446744073709551615")
         )
           throw new Error("Conversation local notice has no valid identity")
-        const key = JSON.stringify([executionId, noticeId])
+        const key = JSON.stringify([executionId, noticeKind, noticeId])
         if (noticePartIds.has(key))
           throw new Error("Conversation response repeats a local notice identity")
         noticePartIds.add(key)
-      } else if (noticeId.length) {
+      } else if (noticeId.length || noticeKind !== undefined) {
         throw new Error("Conversation non-notice part has a notice identity")
       }
       if (part.messageId !== undefined) identity(part, "messageId")
@@ -604,9 +671,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Injected conversation state is incomplete")
     if (message.error !== undefined) text(message, "error", 2048, false)
     if (message.requiredWorkFailed === true) {
-      if (message.authenticationRequired !== true || status !== "failed")
+      const typedRefusal =
+        message.authenticationRequired === true || message.usageLimit !== undefined
+      if (!typedRefusal || status !== "failed")
         throw new Error(
-          "Conversation required-work failure belongs on an authentication refusal",
+          "Conversation required-work failure belongs on a failed authentication refusal or usage limit",
         )
       if (message.error === undefined)
         throw new Error("Conversation required-work failure has no diagnostic")
@@ -690,6 +759,10 @@ export function conversationView(value: unknown, expected: string): Conversation
       "mcp",
       "structuredContent",
       "nativeHooks",
+      "startedAtMs",
+      "endedAtMs",
+      "changes",
+      "changesCut",
     ])
     // Absent when the process start the call ran under recorded no choice.
     if (Object.hasOwn(tool, "nativeHooks")) {
@@ -745,6 +818,29 @@ export function conversationView(value: unknown, expected: string): Conversation
     }
     if (tool.structuredContent !== undefined)
       text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)
+    // When the gateway heard the call start and settle; absent on calls saved
+    // before it kept them, and the end absent while the call runs. Wall-clock
+    // times, so an end before its start (a clock step) is the reader's to clamp.
+    for (const key of ["startedAtMs", "endedAtMs"]) {
+      const at = tool[key]
+      if (at !== undefined && (!Number.isSafeInteger(at) || (at as number) < 0))
+        throw new Error(`Invalid conversation tool ${key}`)
+    }
+    // The files the call changed, as the agent reported them; absent when it
+    // reported none. Each side is cut to its bound, and says so.
+    if (tool.changes !== undefined) {
+      for (const change of items(tool, "changes", 16)) {
+        exact(change, ["path", "before", "after", "cut"])
+        text(change, "path", 4096, false)
+        if (change.before !== undefined) text(change, "before", 7000)
+        text(change, "after", 7000)
+        if (typeof change.cut !== "boolean")
+          throw new Error("Invalid conversation tool change")
+      }
+    }
+    // Present only when changes leaves out files the call changed.
+    if (tool.changesCut !== undefined && typeof tool.changesCut !== "boolean")
+      throw new Error("Invalid conversation tool changesCut")
   }
   if (!item.truncated) {
     for (const toolKey of toolIds) {
@@ -788,6 +884,12 @@ export function conversationView(value: unknown, expected: string): Conversation
     unreadIds.add(id)
   }
   flag(item, "unreadableTruncated")
+  const handoffIds = new Set<string>()
+  for (const handoff of items(item, "handoffs", 256)) {
+    const id = conversationHandoff(handoff)
+    if (handoffIds.has(id)) throw new Error("Repeated conversation handoff id")
+    handoffIds.add(id)
+  }
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",
@@ -1076,6 +1178,56 @@ function conversationUnreadable(item: Record<string, unknown>): string {
   return id
 }
 
+/**
+ * A handoff the view lists: a switch carries the agent and model either side
+ * of it and no copied turns, a fork the copied turns and neither agent.
+ */
+function conversationHandoff(item: Record<string, unknown>): string {
+  exact(item, [
+    "handoffId",
+    "kind",
+    "atMs",
+    "afterExecutionId",
+    "from",
+    "to",
+    "turns",
+    "omittedTurns",
+  ])
+  const id = text(item, "handoffId", 64, false)
+  const kind = text(item, "kind")
+  oneOf(kind, ["switch", "fork"])
+  time(item, "atMs")
+  if (item.afterExecutionId !== undefined) identity(item, "afterExecutionId")
+  const switched = kind === "switch"
+  for (const key of ["from", "to"]) {
+    if ((item[key] !== undefined) !== switched)
+      throw new Error(`Invalid conversation handoff ${key}`)
+    if (item[key] === undefined) continue
+    const agent = record(item[key])
+    exact(agent, ["agent", "model"])
+    if (agent.agent !== undefined) text(agent, "agent", 32, false)
+    text(agent, "model", 256, false)
+  }
+  if (item.turns !== undefined) {
+    if (switched) throw new Error("Invalid conversation handoff turns")
+    for (const turn of items(item, "turns", 256)) {
+      exact(turn, ["said", "reply"])
+      for (const key of ["said", "reply"])
+        if (turn[key] !== undefined) text(turn, key, 8192, false)
+    }
+  }
+  if (item.omittedTurns !== undefined) {
+    const omitted = item.omittedTurns
+    if (
+      !Number.isSafeInteger(omitted) ||
+      (omitted as number) < 0 ||
+      (omitted as number) > 4294967295
+    )
+      throw new Error("Invalid conversation handoff omittedTurns")
+  }
+  return id
+}
+
 /** One note the view lists: the published shape, closed. */
 function conversationNote(item: Record<string, unknown>) {
   exact(item, [
@@ -1195,6 +1347,7 @@ function summaryRow(
     "updatedAtMs",
     "running",
     "archived",
+    "channelId",
   ])
   const conversationId = identity(row, "conversationId")
   if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
@@ -1203,6 +1356,13 @@ function summaryRow(
   flag(row, "running")
   flag(row, "archived")
   if (row.archived !== archived) throw new Error(filter)
+  // A conversation in the default channel carries no channelId; one in a made
+  // channel names it, and naming "default" would be a second way to say none.
+  if (
+    Object.hasOwn(row, "channelId") &&
+    (typeof row.channelId !== "string" || !madeChannelIdPattern.test(row.channelId))
+  )
+    throw new Error("Invalid conversation channelId")
   return {
     conversationId,
     title: optionalText(row, "title", bounds.maxConversationTitleBytes),
@@ -1211,8 +1371,11 @@ function summaryRow(
     updatedAtMs: time(row, "updatedAtMs"),
     running: row.running as boolean,
     archived: row.archived as boolean,
+    ...(Object.hasOwn(row, "channelId") ? { channelId: row.channelId as string } : {}),
   }
 }
+
+const madeChannelIdPattern = /^ch_[a-z2-7]{10}$/
 
 /**
  * The caller's conversations as the gateway listed them. Each row is checked

@@ -1,6 +1,7 @@
 use crate::application::agent_execution::agents::{
     AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, AttachmentFailureCode,
-    AttachmentPhase, ProviderDiagnostic,
+    AttachmentPhase, ProviderDiagnostic, UsageLimit, UsageLimitKind, UsageLimitProvider,
+    UsageLimitRecovery,
 };
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::{
@@ -24,6 +25,81 @@ impl<'de> Deserialize<'de> for SavedProviderDiagnostic {
         ProviderDiagnostic::restore(String::deserialize(deserializer)?)
             .map(Self)
             .map_err(de::Error::custom)
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum SavedUsageLimitProvider {
+    Claude,
+    Codex,
+}
+impl From<SavedUsageLimitProvider> for UsageLimitProvider {
+    fn from(value: SavedUsageLimitProvider) -> Self {
+        match value {
+            SavedUsageLimitProvider::Claude => Self::Claude,
+            SavedUsageLimitProvider::Codex => Self::Codex,
+        }
+    }
+}
+impl From<UsageLimitProvider> for SavedUsageLimitProvider {
+    fn from(value: UsageLimitProvider) -> Self {
+        match value {
+            UsageLimitProvider::Claude => Self::Claude,
+            UsageLimitProvider::Codex => Self::Codex,
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum SavedUsageLimitKind {
+    FiveHour,
+    SevenDay,
+    ModelSpecific,
+    Overage,
+    Unspecified,
+}
+impl From<SavedUsageLimitKind> for UsageLimitKind {
+    fn from(value: SavedUsageLimitKind) -> Self {
+        match value {
+            SavedUsageLimitKind::FiveHour => Self::FiveHour,
+            SavedUsageLimitKind::SevenDay => Self::SevenDay,
+            SavedUsageLimitKind::ModelSpecific => Self::ModelSpecific,
+            SavedUsageLimitKind::Overage => Self::Overage,
+            SavedUsageLimitKind::Unspecified => Self::Unspecified,
+        }
+    }
+}
+impl From<UsageLimitKind> for SavedUsageLimitKind {
+    fn from(value: UsageLimitKind) -> Self {
+        match value {
+            UsageLimitKind::FiveHour => Self::FiveHour,
+            UsageLimitKind::SevenDay => Self::SevenDay,
+            UsageLimitKind::ModelSpecific => Self::ModelSpecific,
+            UsageLimitKind::Overage => Self::Overage,
+            UsageLimitKind::Unspecified => Self::Unspecified,
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum SavedUsageLimitRecovery {
+    TimedReset,
+    UserAction,
+    Unknown,
+}
+impl From<SavedUsageLimitRecovery> for UsageLimitRecovery {
+    fn from(value: SavedUsageLimitRecovery) -> Self {
+        match value {
+            SavedUsageLimitRecovery::TimedReset => Self::TimedReset,
+            SavedUsageLimitRecovery::UserAction => Self::UserAction,
+            SavedUsageLimitRecovery::Unknown => Self::Unknown,
+        }
+    }
+}
+impl From<UsageLimitRecovery> for SavedUsageLimitRecovery {
+    fn from(value: UsageLimitRecovery) -> Self {
+        match value {
+            UsageLimitRecovery::TimedReset => Self::TimedReset,
+            UsageLimitRecovery::UserAction => Self::UserAction,
+            UsageLimitRecovery::Unknown => Self::Unknown,
+        }
     }
 }
 /// An image encoding as saved: a closed set, so an unknown one is a corrupt
@@ -259,6 +335,13 @@ pub(super) enum SavedError {
         cleanup_error: Option<Box<SavedError>>,
     },
     AuthenticationRequired {
+        diagnostic: Option<SavedProviderDiagnostic>,
+    },
+    UsageLimitReached {
+        provider: SavedUsageLimitProvider,
+        kind: SavedUsageLimitKind,
+        recovery: SavedUsageLimitRecovery,
+        resets_at_ms: Option<u64>,
         diagnostic: Option<SavedProviderDiagnostic>,
     },
     Provider {
@@ -503,6 +586,22 @@ impl TryFrom<SavedError> for AgentError {
             SavedError::AuthenticationRequired { diagnostic } => Self::AuthenticationRequired {
                 diagnostic: diagnostic.map(|value| value.0),
             },
+            SavedError::UsageLimitReached {
+                provider,
+                kind,
+                recovery,
+                resets_at_ms,
+                diagnostic,
+            } => Self::UsageLimitReached(
+                UsageLimit::restore(
+                    provider.into(),
+                    kind.into(),
+                    recovery.into(),
+                    resets_at_ms,
+                    diagnostic.map(|value| value.0),
+                )
+                .map_err(|reason| StorageError::Corrupt(reason.into()))?,
+            ),
             SavedError::Provider { code, diagnostic } => Self::Provider {
                 code,
                 diagnostic: diagnostic.map(|value| value.0),
@@ -624,6 +723,13 @@ impl From<AgentError> for SavedError {
             },
             AgentError::AuthenticationRequired { diagnostic } => Self::AuthenticationRequired {
                 diagnostic: diagnostic.map(SavedProviderDiagnostic),
+            },
+            AgentError::UsageLimitReached(limit) => Self::UsageLimitReached {
+                provider: limit.provider().into(),
+                kind: limit.kind().into(),
+                recovery: limit.recovery().into(),
+                resets_at_ms: limit.resets_at_ms(),
+                diagnostic: limit.diagnostic().cloned().map(SavedProviderDiagnostic),
             },
             AgentError::Provider { code, diagnostic } => Self::Provider {
                 code,

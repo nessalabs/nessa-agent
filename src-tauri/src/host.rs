@@ -50,10 +50,58 @@ pub const UPDATE_FAILED: &str = "nessa://update-failed";
 /// not one — macOS sends it nowhere a person looks, and the release Windows
 /// build has no console at all.
 pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
+/// Whether a drag carrying files or folders is over the desktop window; the
+/// payload is `{ dragging }`. The window's drag and drop belongs to the host,
+/// so the page has no drag events of its own to draw a drop target from.
+pub const PATHS_DRAGGING: &str = "nessa://paths-dragging";
+/// A drop landed on the desktop window; the payload is `{ drop }`, the name
+/// its [`PATHS_DROPPED`] answer will carry. Sent at the gesture, before the
+/// paths are looked at, so the page binds the drop to what it was over then
+/// rather than to whatever is open when the answer comes.
+pub const PATHS_DROP_BEGAN: &str = "nessa://paths-drop-began";
+/// Files and folders dropped on the desktop window; the payload is
+/// `{ drop, paths, unread }`, `unread` counting paths past what a channel
+/// holds, which the host did not look at, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
+/// the channel pickers': the gateway checks each again before using it.
+pub const PATHS_DROPPED: &str = "nessa://paths-dropped";
+/// Setup recorded a finish, and with it the agent it chose. Sent to every
+/// window: one that already asked which agent setup chose asks again.
+pub const SETUP_RECORDED: &str = "nessa://setup-recorded";
 /// The managed gateway's startup projection changed. The payload is
 /// [`GatewayStartup`]; a snapshot command carries the same revisioned value so
 /// subscribing before asking cannot lose or reorder a transition.
 pub const GATEWAY_STARTUP: &str = "nessa://gateway-startup";
+/// How many staged runtime files have finished `sync_all`.
+///
+/// The payload is [`RuntimeCopy`]. The host retains the latest one and the
+/// `runtime_copy` command returns it, so a window that listens after the
+/// report was emitted still reads it. It is not [`GatewayStartup`]: setup
+/// keeps answering agent readiness from that projection while this count
+/// moves. Linux does not stage a bundled runtime, so the event and the
+/// retained report exist only where the copy runs and in tests.
+#[cfg(any(target_os = "macos", test))]
+pub const RUNTIME_COPY: &str = "nessa://runtime-copy";
+
+/// Sync progress for the private runtime copy. `Settled` means reporting
+/// stopped. It does not say whether the fingerprint directory was renamed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg(any(target_os = "macos", test))]
+pub struct RuntimeCopy {
+    pub state: RuntimeCopyState,
+    pub files_completed: u64,
+    pub files_total: u64,
+    pub bytes_completed: u64,
+    pub bytes_total: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg(any(target_os = "macos", test))]
+pub enum RuntimeCopyState {
+    Copying,
+    Settled,
+}
 /// A waiting review's notice was opened. Sent to the desktop window, which has
 /// just been brought forward; the payload is the conversation id to open.
 /// Only the hosts with a notice center send it.
@@ -268,6 +316,138 @@ mod tests {
                 "StartupStep is missing {step}"
             );
         }
+    }
+
+    /// `RuntimeCopy` is the host struct. The shell interface has to name the
+    /// same camelCase fields and the same kebab-case states, or a rename
+    /// compiles on both sides and setup reads `undefined`.
+    #[test]
+    fn shell_runtime_copy_matches_the_host() {
+        let host = include_str!("host.rs");
+        let shell = include_str!("../../src/host/window.ts");
+        let struct_at = host
+            .find("pub struct RuntimeCopy {")
+            .expect("host.rs is missing RuntimeCopy");
+        let attribute = serde_attribute_before(host, struct_at);
+        assert!(
+            attribute.starts_with("#[serde(rename_all = \"camelCase\")]"),
+            "RuntimeCopy fields cross the seam in camelCase"
+        );
+        let body = item_body(host, struct_at);
+
+        let shell_at = shell
+            .find("export interface RuntimeCopy")
+            .expect("src/host/window.ts is missing RuntimeCopy");
+        let declared = &shell[shell_at..];
+        let shell_close = declared.find('}').expect("RuntimeCopy closes");
+        let declared = &declared[..shell_close];
+
+        let mut counted = 0;
+        for line in body.lines() {
+            let Some(rest) = line.trim().strip_prefix("pub ") else {
+                continue;
+            };
+            let Some((name, ty)) = rest.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            let ty = ty.trim().trim_end_matches(',');
+            if ty == "RuntimeCopyState" {
+                let union = runtime_copy_states(host);
+                assert!(
+                    declared.contains(&format!("{name}: {union}")),
+                    "RuntimeCopy.{name} is not the host's {union}"
+                );
+                continue;
+            }
+            let camel = snake_to_camel(name);
+            assert!(
+                declared.contains(&format!("{camel}: number")),
+                "src/host/window.ts RuntimeCopy is missing {camel}"
+            );
+            counted += 1;
+        }
+        assert!(
+            counted >= 4,
+            "only {counted} RuntimeCopy counters were found; the scrape is broken"
+        );
+    }
+
+    // `#[cfg(test)]` is what the platform-gate scan reads. A `}` in a string
+    // above these helpers makes them look top-level, outside `mod tests`.
+    #[cfg(test)]
+    fn serde_attribute_before(source: &str, at: usize) -> &str {
+        let prelude = &source[..at];
+        let serde_at = prelude
+            .rfind("#[serde(")
+            .expect("the item is missing its serde attribute");
+        &prelude[serde_at..]
+    }
+
+    #[cfg(test)]
+    fn item_body(source: &str, at: usize) -> &str {
+        let body = &source[at..];
+        let close = body.find('}').expect("the item closes");
+        &body[..close]
+    }
+
+    #[cfg(test)]
+    fn runtime_copy_states(host: &str) -> String {
+        let enum_at = host
+            .find("pub enum RuntimeCopyState {")
+            .expect("host.rs is missing RuntimeCopyState");
+        let attribute = serde_attribute_before(host, enum_at);
+        assert!(
+            attribute.starts_with("#[serde(rename_all = \"kebab-case\")]"),
+            "RuntimeCopyState crosses the seam in kebab-case"
+        );
+        let mut states = Vec::new();
+        for line in item_body(host, enum_at).lines().skip(1) {
+            let line = line.trim().trim_end_matches(',');
+            if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
+                continue;
+            }
+            assert!(
+                line.chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
+                "RuntimeCopyState variant {line} is not a plain name"
+            );
+            states.push(format!("\"{}\"", variant_to_kebab(line)));
+        }
+        assert!(
+            !states.is_empty(),
+            "no RuntimeCopyState variants were found; the scrape is broken"
+        );
+        states.join(" | ")
+    }
+
+    #[cfg(test)]
+    fn snake_to_camel(name: &str) -> String {
+        let mut out = String::new();
+        let mut upper = false;
+        for ch in name.chars() {
+            if ch == '_' {
+                upper = true;
+            } else if upper {
+                out.extend(ch.to_uppercase());
+                upper = false;
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    #[cfg(test)]
+    fn variant_to_kebab(variant: &str) -> String {
+        let mut out = String::new();
+        for (index, ch) in variant.chars().enumerate() {
+            if ch.is_uppercase() && index > 0 {
+                out.push('-');
+            }
+            out.extend(ch.to_lowercase());
+        }
+        out
     }
 
     #[test]

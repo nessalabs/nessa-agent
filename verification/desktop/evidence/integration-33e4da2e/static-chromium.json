@@ -1,0 +1,395 @@
+{
+  "sourceCommit": "33e4da2ea35272e41648fa33f7f9a06d4773f93e",
+  "mode": "dev",
+  "browser": "installed system Chromium",
+  "sourceFilesUnchangedDuringRun": true,
+  "sha256": {
+    "src/desktop/split-panes/ui/split-panes.tsx": "56729582de2281cda8f8ab84abc5dba0e1bf2e37d36d07d02ad9ca8839fbb6a2",
+    "src/conversation/ui/usage-limit-card.tsx": "4d120a878cdf75314a013f766b03e709f66837789afe8ca791d42a6c21b827e6",
+    "src/desktop/workspace/adapters/gateway/gateway-source.ts": "2c36d2b729a645e9a15f27bce963d1109ce8c66f15fc7ba7b0cc49565398014c",
+    "src/conversation/adapters/gateway/effects.ts": "fec3768c70fb2f3af09f6094a2a7a8db5ab6f4bddf6bb4704f5e682ca4e94214",
+    "verification/desktop/scripts/smoke.mjs": "3425b51d75ac178f029c12d38989d34b67f681a6e0543842e4beb38c3612c2a0",
+    "verification/desktop/scripts/usage-limit.mjs": "4a237f6aedc9c80995c4b0d7567d1335429e884ee0e747cd4d79648dcf772783",
+    "verification/desktop/scripts/resize-observers.mjs": "eb1f92c12e1dcf31c57c9fe6f1623143dffc8e7f3627d80ca9ae7a3d00b28ad1",
+    "verification/desktop/scripts/drag.mjs": "fb895d5f7418d05d09ebfeb662f23d7da64e7851d65beaefe93bf8d27bc56307"
+  },
+  "checks": [
+    {
+      "check": "smoke",
+      "ok": true,
+      "passed": 17,
+      "total": 17,
+      "started": "2026-10-22T04:50:30.449Z",
+      "finished": "2026-10-22T04:51:13.596Z",
+      "command": "node --import <installed-system-chromium-preload> verification/desktop/scripts/smoke.mjs --engine chromium --channel bundled --url <local-desktop> --layout columns,sidebar --out <private-result-json>",
+      "results": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "loads",
+          "panes": 1,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "ambient-grain",
+          "type": "image/png",
+          "width": 160,
+          "height": 160,
+          "opacity": "0.06",
+          "blend": "normal",
+          "repeat": "repeat",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "draft-unlisted",
+          "rows": {
+            "before": 9,
+            "after": 9
+          },
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "send",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "split",
+          "panes": {
+            "before": 1,
+            "after": 2
+          },
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "settings",
+          "advanced": {
+            "tabs": [],
+            "dek": "Early features you can try before they are finished.",
+            "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+            "controls": 2,
+            "offered": ["true", "false"]
+          },
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "overview",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "console",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "console",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "loads",
+          "panes": 1,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "ambient-grain",
+          "type": "image/png",
+          "width": 160,
+          "height": 160,
+          "opacity": "0.06",
+          "blend": "normal",
+          "repeat": "repeat",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "draft-unlisted",
+          "rows": {
+            "before": 12,
+            "after": 12
+          },
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "send",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "split",
+          "panes": {
+            "before": 1,
+            "after": 2
+          },
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "settings",
+          "advanced": {
+            "tabs": [],
+            "dek": "Early features you can try before they are finished.",
+            "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+            "controls": 2,
+            "offered": ["true", "false"]
+          },
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "overview",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "console",
+          "failures": [],
+          "ok": true
+        }
+      ]
+    },
+    {
+      "check": "usage-limit",
+      "ok": true,
+      "passed": 9,
+      "total": 9,
+      "started": "2026-10-22T04:50:31.835Z",
+      "finished": "2026-10-22T04:51:14.416Z",
+      "command": "node --import <installed-system-chromium-preload> verification/desktop/scripts/usage-limit.mjs --engine chromium --channel bundled --url <local-desktop> --layout columns --out <private-result-json>",
+      "results": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "console",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "timed",
+          "engine": "chromium",
+          "width": 360,
+          "passed": true,
+          "detail": "Auto-resuming Oct 21 at 4:00 PM",
+          "resetTransitions": 0,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "unknown",
+          "engine": "chromium",
+          "width": 360,
+          "passed": true,
+          "detail": "Reset time unknown",
+          "resetTransitions": 0,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "user-action",
+          "engine": "chromium",
+          "width": 360,
+          "passed": true,
+          "detail": "An account change is required before this thread can continue.",
+          "resetTransitions": 0,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "scheduling-failed",
+          "engine": "chromium",
+          "width": 360,
+          "passed": true,
+          "detail": "Scheduling failed.",
+          "resetTransitions": 2,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "timed",
+          "engine": "chromium",
+          "width": 1000,
+          "passed": true,
+          "detail": "Auto-resuming Oct 21 at 4:00 PM",
+          "resetTransitions": 0,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "unknown",
+          "engine": "chromium",
+          "width": 1000,
+          "passed": true,
+          "detail": "Reset time unknown",
+          "resetTransitions": 0,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "user-action",
+          "engine": "chromium",
+          "width": 1000,
+          "passed": true,
+          "detail": "An account change is required before this thread can continue.",
+          "resetTransitions": 0,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "scheduling-failed",
+          "engine": "chromium",
+          "width": 1000,
+          "passed": true,
+          "detail": "Scheduling failed.",
+          "resetTransitions": 2,
+          "errors": 0,
+          "failures": [],
+          "ok": true
+        }
+      ]
+    },
+    {
+      "check": "resize-observers",
+      "ok": true,
+      "passed": 3,
+      "total": 3,
+      "started": "2026-10-22T04:50:33.547Z",
+      "finished": "2026-10-22T04:51:07.877Z",
+      "command": "node --import <installed-system-chromium-preload> verification/desktop/scripts/resize-observers.mjs --engine chromium --channel bundled --url <local-desktop> --layout columns,sidebar --out <private-result-json>",
+      "results": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "console",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "fit-after-delivery",
+          "engine": "chromium",
+          "layout": "columns",
+          "viewportChanges": 30,
+          "nativeErrorCount": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "fit-after-delivery",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "viewportChanges": 30,
+          "nativeErrorCount": 0,
+          "failures": [],
+          "ok": true
+        }
+      ]
+    },
+    {
+      "check": "drag",
+      "ok": true,
+      "passed": 5,
+      "total": 5,
+      "started": "2026-10-22T04:50:34.862Z",
+      "finished": "2026-10-22T04:51:28.296Z",
+      "command": "node --import <installed-system-chromium-preload> verification/desktop/scripts/drag.mjs --engine chromium --channel bundled --url <local-desktop> --layout columns --only resize-mid-drag,return-interrupted --out <private-result-json>",
+      "results": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "console",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "return-interrupted",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "paused": {
+            "flights": 2,
+            "copies": 1
+          },
+          "copiesAfterResize": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "resize-mid-drag",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "return-interrupted",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "paused": {
+            "flights": 2,
+            "copies": 1
+          },
+          "copiesAfterResize": 0,
+          "failures": [],
+          "ok": true
+        },
+        {
+          "name": "resize-mid-drag",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "failures": [],
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "privacy": "Temporary local endpoints and raw console logs excluded; all pages use verification fixtures."
+}

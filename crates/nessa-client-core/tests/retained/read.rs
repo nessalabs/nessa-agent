@@ -710,7 +710,7 @@ fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
         .public_spki();
     let unused = RelayAddress::try_from("127.0.0.1:9".to_owned()).unwrap();
     for address in ["no-port", ":7443", "gw:port", "::1"] {
-        let refused = dial_gateway(address, Some((&unused, &pin)), Duration::from_secs(5))
+        let refused = dial_gateway(address, Some((&unused, &pin)), None, Duration::from_secs(5))
             .expect_err("not an address");
         assert_eq!(
             refused.kind(),
@@ -722,18 +722,24 @@ fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
     let not_a_key = dial_gateway(
         "127.0.0.1:0",
         Some((&unused, &[0; 44])),
+        None,
         Duration::from_secs(5),
     )
     .expect_err("a pin that is not a key");
     assert_eq!(not_a_key.kind(), std::io::ErrorKind::InvalidInput);
 
     let (relay, serving) = answering_relay(RelayFrame::Offline);
-    let offline = dial_gateway("127.0.0.1:0", Some((&relay, &pin)), Duration::from_secs(5))
-        .expect_err("nothing listens at the gateway's address");
+    let offline = dial_gateway(
+        "127.0.0.1:0",
+        Some((&relay, &pin)),
+        None,
+        Duration::from_secs(5),
+    )
+    .expect_err("nothing listens at the gateway's address");
     serving.join().unwrap();
     assert_eq!(RelayRefusal::carried(&offline), Some(RelayRefusal::Offline));
 
-    let direct = dial_gateway("127.0.0.1:0", None, Duration::from_secs(5))
+    let direct = dial_gateway("127.0.0.1:0", None, None, Duration::from_secs(5))
         .expect_err("nothing listens at the gateway's address");
     // Refused on Unix, an unusable address on Windows: either way not this
     // side's own setup, so a caller dials again.
@@ -741,6 +747,6 @@ fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
     assert_eq!(RelayRefusal::carried(&direct), None);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    let connected = dial_gateway(&address.to_string(), None, Duration::from_secs(5)).unwrap();
+    let connected = dial_gateway(&address.to_string(), None, None, Duration::from_secs(5)).unwrap();
     assert_eq!(connected.peer_addr().unwrap(), address);
 }

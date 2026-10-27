@@ -36,7 +36,7 @@ use nessa_client_core::{
 };
 use nessa_protocol::{
     clock::Clock, conversation::domain::ConversationId, pairing::wire::NativePairingStatus,
-    product::generated::ConversationViewCursor,
+    product::generated::ConversationViewCursor, tunnel::TunnelAddress,
 };
 use nessa_sync::replication::{catalogue::EntryKey, domain::Scope};
 use std::{
@@ -100,6 +100,9 @@ pub trait EnrollmentConnector: Send + Sync {
     /// Establish a bounded native TCP connection; no authority is inferred.
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError>;
 }
+/// Dials the gateway directly, never through its web tunnel: the gateway
+/// answers only a product or environment opening there, so enrollment, status
+/// and owner recovery need the local network.
 struct SocketConnector;
 impl EnrollmentConnector for SocketConnector {
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError> {
@@ -450,10 +453,18 @@ struct ProductDependencies {
     wake: Arc<dyn ProductWake>,
     limits: ProductLimits,
 }
+impl ProductDependencies {
+    fn reaching(tunnel: Option<TunnelAddress>) -> Self {
+        Self {
+            connector: Arc::new(LocalProductConnector::reaching(tunnel)),
+            ..Self::default()
+        }
+    }
+}
 impl Default for ProductDependencies {
     fn default() -> Self {
         Self {
-            connector: Arc::new(LocalProductConnector),
+            connector: Arc::new(LocalProductConnector::default()),
             wake: Arc::new(ThreadProductWake::default()),
             limits: ProductLimits::default(),
         }
@@ -921,12 +932,18 @@ impl Drop for Operation<'_> {
 impl NativeSession {
     /// Composition entry: open an existing private directory beneath a trusted
     /// root. Cache creation is lazy; no socket or pairing is performed here.
+    /// `tunnel` is the gateway's web tunnel as it last named it
+    /// (`server.reach`): a product dial falls back on it when the direct one
+    /// does not connect. Status, owner recovery and retained reads dial
+    /// directly, so an owner phone with a signed original, whose product
+    /// opening recovers first, still needs the local network.
     pub fn open(
         root: &Path,
         directory: &Path,
         address: SocketAddr,
+        tunnel: Option<TunnelAddress>,
     ) -> Result<Self, SessionFailure> {
-        Self::open_with_clock(root, directory, address, Arc::new(Monotonic::new()))
+        Self::open_with_clock(root, directory, address, tunnel, Arc::new(Monotonic::new()))
     }
     /// Compose a private session over its host's monotonic elapsed-time clock.
     /// The clock controls retained reads and product socket budgets; it must
@@ -935,6 +952,7 @@ impl NativeSession {
         root: &Path,
         directory: &Path,
         address: SocketAddr,
+        tunnel: Option<TunnelAddress>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, SessionFailure> {
         let state = Arc::new(
@@ -957,7 +975,7 @@ impl NativeSession {
             files: Arc::new(OsCacheFiles),
             artifacts: Arc::new(DiskArtifactFiles),
             runtime,
-            product: ProductDependencies::default(),
+            product: ProductDependencies::reaching(tunnel),
         })
     }
     fn compose(dependencies: Dependencies) -> Result<Self, SessionFailure> {

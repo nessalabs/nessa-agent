@@ -170,9 +170,10 @@ pub(super) fn continuation(
     snapshot: &SessionSnapshot,
 ) -> Result<Vec<InvocationContinuation>, StorageError> {
     // The last model change chose the provider and the model. The context
-    // part of the fingerprint may have changed since, when the conversation
-    // moved to where its saved context is not restored
-    // (`ProviderIdentityChanged`, which keeps the name and the model).
+    // part of the fingerprint may have changed since
+    // (`ProviderIdentityChanged`, which keeps the name and the model): the
+    // saved context was not restored here, or it was and a new native
+    // session was opened in its place.
     if snapshot.model_change.as_ref().is_some_and(|record| {
         let chosen = record.change().after();
         chosen.name() != snapshot.provider.name()
@@ -200,6 +201,7 @@ pub(super) fn continuation(
     }
     super::artifacts::validate_saved(snapshot)?;
     super::notes::validate_saved(snapshot)?;
+    super::handoffs::validate_saved(snapshot)?;
     let _ = super::queue_validation::replay(snapshot)?;
     snapshot
         .provider_context

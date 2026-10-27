@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef } from "react"
+import { memo, useCallback, useRef, useState } from "react"
 import {
   WidgetAnswerOf,
   WidgetBody,
@@ -7,6 +7,7 @@ import {
   type EscapeStack,
   type WidgetAnswer,
   type WidgetPlugin,
+  type WidgetCrumb,
   type WidgetRef,
 } from "../../../widgets"
 import { widgetWindowAttribute } from "../../adapters/dom/focus"
@@ -71,7 +72,8 @@ function WindowParts({
   const dispatch = useWorkspaceDispatch()
   const shortcuts = useWorkspaceFrame()
   const origin = widgetOrigin(answer)
-  const host = useWindowWidgetHost(widget, origin, steps)
+  const [crumb, setCrumb] = useState<WidgetCrumb | null>(null)
+  const host = useWindowWidgetHost(widget, origin, steps, setCrumb)
   // Back to the panes, focusing the pane showing the conversation, or
   // opening it in the focused pane.
   const toOrigin = useCallback(
@@ -85,15 +87,28 @@ function WindowParts({
         pane={null}
         multi={false}
         name={
-          <WidgetTrail origin={origin} title={widgetTitle(answer)} onOrigin={toOrigin} />
+          <WidgetTrail
+            origin={origin}
+            title={widgetTitle(answer)}
+            onOrigin={toOrigin}
+            inner={crumb}
+          />
         }
         actions={
-          <IconButton
-            icon="close"
-            label="Close"
-            shortcut={shortcuts.shortcut("closePane")}
-            onClick={host.close}
-          />
+          <>
+            {/* Expanded, the same place offers the way back to its chat's panel. */}
+            <IconButton
+              icon="restore"
+              label="Back to Panel"
+              onClick={() => host.open("panel")}
+            />
+            <IconButton
+              icon="close"
+              label="Close"
+              shortcut={shortcuts.shortcut("closePane")}
+              onClick={host.close}
+            />
+          </>
         }
       />
       <div className="workspace-pane-body">

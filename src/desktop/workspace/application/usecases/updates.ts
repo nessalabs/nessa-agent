@@ -390,8 +390,8 @@ function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
 }
 
 /**
- * The sessions on screen — in a pane, or in the open overview, bounded
- * (`shownIds`) — whose conversations are the source's to give: listed, and
+ * The sessions on screen — in a pane, in the open overview, or asked about
+ * by the session list's cards, each bounded (`shownIds`) — whose conversations are the source's to give: listed, and
  * spoken of by the source — a session whose first message is still on its
  * way has nothing to read yet. What the window reads, and reads again on a
  * resync (`effects.ts`).

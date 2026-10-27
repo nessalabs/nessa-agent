@@ -1,0 +1,96 @@
+{
+  "check": "usage-limit",
+  "ok": false,
+  "started": "2026-10-21T23:42:49.903Z",
+  "finished": "2026-10-21T23:43:17.560Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "timed",
+      "engine": "chromium",
+      "width": 360,
+      "passed": true,
+      "detail": "Auto-resuming Oct 21 at 4:00 PM",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "unknown",
+      "engine": "chromium",
+      "width": 360,
+      "passed": true,
+      "detail": "Reset time unknown",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "user-action",
+      "engine": "chromium",
+      "width": 360,
+      "passed": true,
+      "detail": "An account change is required before this thread can continue.",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "scheduling-failed",
+      "engine": "chromium",
+      "width": 360,
+      "cannotRun": false,
+      "error": "page.waitForFunction: Timeout 3000ms exceeded.",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "timed",
+      "engine": "chromium",
+      "width": 1000,
+      "passed": true,
+      "detail": "Auto-resuming Oct 21 at 4:00 PM",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "unknown",
+      "engine": "chromium",
+      "width": 1000,
+      "passed": true,
+      "detail": "Reset time unknown",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "user-action",
+      "engine": "chromium",
+      "width": 1000,
+      "passed": true,
+      "detail": "An account change is required before this thread can continue.",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "scheduling-failed",
+      "engine": "chromium",
+      "width": 1000,
+      "cannotRun": false,
+      "error": "page.waitForFunction: Timeout 3000ms exceeded.",
+      "failures": [],
+      "ok": false
+    }
+  ]
+}

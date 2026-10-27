@@ -337,6 +337,9 @@ describe("the agents overview", () => {
       host.querySelector('.agents-clear [data-slot="empty-state-title"]')?.textContent,
     ).toBe("Nothing needs you")
     expect(host.querySelector("[data-overview-listed]")).not.toBeNull()
+    expect(
+      host.querySelector(".agents-overview-surface")?.hasAttribute("data-bare"),
+    ).toBe(true)
   })
 
   it("covers on the frame after it opens, and draws the list on the frame after the title", async () => {
@@ -1369,13 +1372,21 @@ describe("the peek tells the turn's story", () => {
         ? "live"
         : `${part.getAttribute("data-role")}: ${part.textContent?.trim().slice(0, 12)}`,
     )
-    expect(told).toEqual(["user: Lay the pane", "agent: Readpanes.ts", "live"])
+    expect(told).toEqual(["user: Lay the pane", "agent: Ran 2 toolsR", "live"])
     const work = story?.querySelector('[data-role="agent"]')
+    // The run the agent wrote past is over: one line, its calls behind it.
     expect(
-      [...(work?.querySelectorAll(".workspace-steps li, p") ?? [])].map((part) =>
-        part.textContent?.trim(),
-      ),
-    ).toEqual(["Readpanes.tsx", "Editedgrid.tsx+4", "Laying the panes out as fractions."])
+      [
+        ...(work?.querySelectorAll(
+          "[data-slot=tool-trace-line], [data-slot=tool-trace-step], p",
+        ) ?? []),
+      ].map((part) => part.textContent?.trim()),
+    ).toEqual([
+      "Ran 2 tools",
+      "Readpanes.tsx",
+      "Editedgrid.tsx4 additions, 0 deletions+4-0",
+      "Laying the panes out as fractions.",
+    ])
   })
 
   it("says what is going on in the source's own line, and nothing where the source says nothing", async () => {
@@ -1428,7 +1439,7 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
           id: `run-${message + 1}`,
           role: "agent" as const,
           at: 900 + message,
-          working: true as const,
+          ...(message === 3 ? { working: true as const } : {}),
           parts: Array.from({ length: 10 }, (_, index) => ({
             kind: "step" as const,
             step: "read" as const,
@@ -1447,9 +1458,14 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
     await act(async () => row("run")?.click())
     await act(async () => settle(10))
     const story = host.querySelector(".agents-inline-peek .agents-peek-story")
-    const steps = [...(story?.querySelectorAll(".workspace-steps li") ?? [])]
-    expect(steps).toHaveLength(peekParts)
-    expect(steps.at(-1)?.textContent).toBe("Readfile-3-9.ts")
+    // Every part the peek keeps is a call in one of its runs, drawn as a row
+    // or counted in a run's earlier fold.
+    const steps = [...(story?.querySelectorAll("[data-slot=tool-trace-step]") ?? [])]
+    const folded = [
+      ...(story?.querySelectorAll("[data-slot=tool-trace-earlier]") ?? []),
+    ].map((fold) => Number(/(\d+) earlier/.exec(fold.textContent ?? "")?.[1] ?? 0))
+    expect(steps.length + folded.reduce((sum, count) => sum + count, 0)).toBe(peekParts)
+    expect(steps.at(-1)?.textContent).toContain("Readfile-3-9.ts")
     expect(story?.children[0].getAttribute("data-role")).toBe("user")
     const earlier = story?.children[1]
     expect(earlier?.textContent).toBe("Earlier in this turn · Open")

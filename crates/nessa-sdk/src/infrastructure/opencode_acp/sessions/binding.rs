@@ -25,6 +25,10 @@ use std::{
 };
 use tokio::process::Command;
 
+/// The provider name every session this binding opens records in its
+/// history, as its provider identity.
+pub const PROVIDER_NAME: &str = "opencode-acp";
+
 /// What an Opencode session launched by this binding is allowed to do, as the
 /// `OPENCODE_PERMISSION` value its process is started with.
 ///
@@ -260,7 +264,7 @@ impl OpencodeAcpProvider {
         }
         let capabilities =
             capabilities(model, limits, config.tools_enabled, config.images.is_some())?;
-        ProviderIdentity::new("opencode-acp", capabilities.model().model_id(), "")?;
+        ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
             capabilities,
@@ -324,10 +328,11 @@ impl OpencodeAcpProvider {
     fn launch_command(&self, private_home: &Path) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
-            .args(&self.config.arguments)
+            .args(self.config.command_arguments())
             .current_dir(&self.config.workspace)
             .env_clear()
             .envs(&self.config.environment)
+            .envs(&self.config.runtime_environment)
             .envs(&self.config.credential_environment)
             .env_remove("OPENCODE_CONFIG")
             .env_remove("OPENCODE_CONFIG_CONTENT")
@@ -463,9 +468,12 @@ impl AgentProvider for OpencodeAcpProvider {
     ) -> Option<crate::application::agent_execution::providers::ApprovalMode> {
         Some(crate::application::agent_execution::providers::ApprovalMode::Ask)
     }
+    fn launch_fingerprint(&self) -> String {
+        identity::launch_fingerprint(&self.config)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
-            "opencode-acp",
+            PROVIDER_NAME,
             self.capabilities.model().model_id(),
             // `None`: there is no prompt to hash, and hashing one that never
             // reached the process would tie restoration to text it never saw.
@@ -483,10 +491,15 @@ impl AgentProvider for OpencodeAcpProvider {
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         let traces = self.traces.clone();
+        // This open's credentials, read once for every start of its process.
+        let opened = Self {
+            config: self.config.with_open_credentials(),
+            ..self.clone()
+        };
         Box::pin(async move {
             acp_binding::open(
-                self.process_factory(),
-                self.config.clone(),
+                opened.process_factory(),
+                opened.config.clone(),
                 self.capabilities.clone(),
                 self.profile(),
                 self.audit.clone(),
@@ -537,6 +550,7 @@ fn isolated_config(mut config: AcpConfig) -> AcpConfig {
         "OPENCODE_DB",
     ] {
         config.environment.remove(OsStr::new(key));
+        config.runtime_environment.remove(OsStr::new(key));
         config.credential_environment.remove(OsStr::new(key));
     }
     config

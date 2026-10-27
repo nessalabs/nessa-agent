@@ -2,7 +2,7 @@
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it } from "vitest"
-import { IconButton } from "./icon-button"
+import { IconButton, IconLink } from "./icon-button"
 
 async function render(node: React.ReactNode) {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -83,4 +83,28 @@ it("draws a glyph of its own where a surface brings one", async () => {
   expect(button.querySelector("[data-own-glyph]")).not.toBeNull()
   expect(button.getAttribute("aria-label")).toBe("Calendar")
   await done()
+})
+
+it("draws a link in the same box, named and tipped by its label", async () => {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  const host = document.createElement("div")
+  document.body.append(host)
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <IconLink
+        icon="repositories"
+        label="Choose repositories"
+        href="https://example.com/"
+      />,
+    ),
+  )
+  const link = host.querySelector("a") as HTMLAnchorElement
+  expect(link.getAttribute("href")).toBe("https://example.com/")
+  expect(link.getAttribute("aria-label")).toBe("Choose repositories")
+  expect(link.dataset.tooltip).toBe("Choose repositories")
+  expect(link.className).toBe("desktop-icon-button")
+  expect(link.querySelector("svg")).not.toBeNull()
+  await act(async () => root.unmount())
+  host.remove()
 })

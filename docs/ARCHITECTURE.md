@@ -45,7 +45,7 @@ closing the window hides it with its Dock icon kept, so a click on the Dock
 opens it again; where there is no Dock either, closing it quits the app
 (`desktop_window::on_close`) — it is never destroyed while the app runs on,
 since nothing could open it again. On macOS an overlay titlebar retains the native traffic lights;
-a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
+the workspace's full-width titlebar places the sidebar toggle beside them, without
 a title label or divider. The host centres the native buttons 24px below the
 window's top (`platform/macos/traffic_lights.rs`), on the same centre as the
 titlebar's controls. It places them by their measured centre rather than a
@@ -55,16 +55,14 @@ notice (a title change does), so it checks them each time the main run loop
 is about to sleep and moves only a button that is off the row. `tauri.conf.json` sets no `trafficLightPosition`, so nothing else moves them.
 The inset is macOS-only; browser and other hosts use ordinary header padding.
 The surface uses the design system's dark theme. Back/forward controls are
-disabled because the single-view shell has no navigation history.
+disabled because the window keeps no navigation history yet.
 Its drag region and double-click maximize have desktop-scoped capabilities.
 
 `desktop.html` mounts `src/desktop/main.tsx`, which builds the window's
 dependencies (`dependencies.ts`) and store (`store.ts`) and renders
 `ui/desktop-window.tsx`: the workspace (below) in the layout chosen in
-Settings, or the classic shell. The classic shell, `ui/desktop-app.tsx`,
-composes the design system's AppShell frame and Sidebar with a Home link, an
-empty Recents group, and `ui/home.tsx` in the main area — the same home a new
-session's pane shows, its composer wired to that session through `Home`'s
+Settings. A new session's pane
+shows `ui/home.tsx`, its composer wired to that session through `Home`'s
 props: a night scene in text heading one stack
 from the top of the workspace with the greeting and composer (`model/night-scene.ts`, a dim and a lit
 layer of one grid, set one over the other by `ui/night-scene.tsx` as
@@ -120,29 +118,31 @@ heading, the text sits on the window beneath it and scrolls, with a thin
 translucent scrollbar kept for orientation and dragging, and the toolbar rests at the foot. It opens at seven
 lines and closes at three, apart so a draft near one threshold does not flip
 the layout, and the change is immediate, with no animation. In a narrow composer the project shows only its folder, so the model keeps
-its name. The app controls SidebarProvider from its shared layout; the
-provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
-Cmd/Ctrl+Alt+B for the right one.
-The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
-leading/trailing slots, optional labeled history actions, height, and native-control
-inset. It renders design-system Buttons and forwards native header props; it does
-not detect the OS, call Tauri, control Sidebar state, or own navigation history.
-Reuse it with AppShell by placing it before AppShellBody and passing a
-SidebarTrigger in `leading`. Each consuming app must configure its own native
-window and drag permissions. No changes to `nessa_ui` are required.
-
-Every surface, browser and native, uses the same titlebar, laid over the split
-view. The sidebar toggle sits at its leading edge (after the traffic lights on
-macOS) and the right-panel toggle at its trailing edge, and neither moves when a
-sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
-footer is the only identity; with the side rail turned on (a preview in
-Settings › Advanced › Experimental), the rail's toggle beside it, in the
-corner, doubles as its mark. Both sidebars are inset, rounded panes of
-translucent glass: the middle's colour is the base everywhere, and a pane is
-that base lifted by a faint tint, so it sits on top while the ambient light
-still carries through and the window reads as one surface; their content begins below the
-titlebar row, and closing one fades and
-slides it toward its edge while the split view animates its width.
+its name.
+The workspace keeps navigation in the window's top row, with New Session there
+in a layout without a session list, and at the head of the session list in one
+with it.
+Chats have no tabs: each pane's one header (its name, menu and close) is that
+row, and in the window's corner it starts after the navigation, so folding the
+sidebar cannot put a pane's actions behind it. The chat surface, the sidebar and
+each pane's header picture run up to the window's top edge, the picture behind
+the window's controls too. Only what opens in a chat's right panel is a tab,
+in the panel's own top row (`workspace/model/chat-panel.ts`).
+Column titles clear that group, moving below only where they cannot fit. The side rail (Settings › Advanced › Experimental) is a compact 48px
+column below that bar on every host, independent of the native traffic lights.
+Its toggle is nessa's mark at the sidebar's foot: wherever the rail is offered,
+Studio's square steps aside and the toggle stands in the footer's control-sized
+mark slot, on its line just before "nessa Studio"; with the rail open beside the
+sidebar it travels past the rail on the drawer's curve.
+The toggle remains available with both side columns closed. The workspace sidebar
+uses a soft gradient wash without a rounded card, rim or shadow. Its content clears the titlebar while the wash blends into the window's
+background. A rail item's full view covers the underlying workspace up to the
+window's top, including its cards and chat navigation controls. Each plugin
+keeps one top sidebar toggle for its rail, alongside the persistent bottom toggle.
+The workspace sidebar uses the window's theme lights for its frameless
+gradient. Its content begins below the titlebar row, and folding it slides it
+toward its edge on the drawer's curve (`--desktop-drawer`) while what stands
+beside it follows.
 Corner controls follow one geometry in `styles.css`: each sits the same
 distance from its pane's top and side edges, and its corner radius is the pane's
 radius minus that distance, so hover shapes are concentric with the pane. The
@@ -232,10 +232,14 @@ The workspace (`src/desktop/workspace/`,
 and what it is about: its index — sections hold channels, channels hold
 sessions — and sessions open in chat panes that split, stack, move and close.
 Two layouts, chosen in Settings › Workspace › Layout
-(`adapters/workspace-layout-preference.ts`; `classic` keeps the shell above),
+(`adapters/workspace-layout-preference.ts`),
 arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
 sidebar of channels under the Agents overview's entry, the chosen channel's
-session list (grouped Needs you, Running, Earlier; searchable; ⌥⌘S folds it),
+session list (its pinned sessions first, then grouped Needs you, Running,
+Earlier; searchable; ⌥⌘S folds it — each waiting row a compact request card,
+answered from the list: `ui/session-list/list-request.tsx`, with `listAskIds`
+the one rule for which rows ask and what the window reads and answers for
+them),
 and the panes. *Sessions in sidebar* (`ui/layouts/sessions-in-sidebar.tsx`)
 is one sidebar — search, the Agents overview's entry, then channels — where a
 channel discloses its newest sessions inline, with a quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns
@@ -246,7 +250,8 @@ workspace shell (`ui/layouts/workspace-shell.tsx`) coordinates everything else
 through `use-workspace-window.ts`, and `workspace-layout.tsx` renders it,
 the quick switcher included. Titlebar content starts at the one safe area,
 `--desktop-titlebar-safe-start` (the host's window controls and our cluster);
-nothing draws under the window's controls. A column's title sits inline in
+no control or text draws under the window's controls, though a pane's header
+picture runs behind them to the window's edge. A column's title sits inline in
 the titlebar row, after the controls, where it fits, and on its own row below
 where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
 session list, the sidebar and Settings' page). ResizeObserver reports update
@@ -257,7 +262,7 @@ commits its arrangement in an animation frame, avoiding a synchronous React
 flush that could mount pending neighboring observers during delivery.
 
 The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
-sidebar, in every layout but Classic, with nothing to turn on) takes the
+sidebar, in both layouts, with nothing to turn on) takes the
 content region while open, as a layer over the session list and the panes,
 which stay laid out beneath it — so a pane command asked meanwhile measures
 the room they really have, and first goes back to them. It lists what waits
@@ -272,6 +277,16 @@ pane's card (`onScreen`, one rule), and the conversations it shows are read
 and kept like a pane's, bounded (`retention.overviewConversations`); a peek is
 not reading the session, which stays unread.
 
+
+Each chat's right panel is owned by `workspace/application/workspace-state.ts`
+(`panels`, by session): `model/chat-panel.ts` holds its tabs and the one in
+front, and `application/usecases/chat-panel.ts` opens, shows and closes them.
+Opening a widget in the panel brings its chat to the front first — its pane
+focused, or shown in the focused pane — and asks the window to show the panel
+(`panelAsked`); the panel beside the panes always shows the focused chat's.
+A chat's panel goes with the chat.
+
+
 - `model/` is pure: the index's types (`workspace-index.ts`); how a
   window fits the side columns (`window-fit.ts`); why the source refused
   (`failure.ts`); what is kept of what no pane shows (`retention.ts`); a session's conversation, its messages and steps
@@ -280,7 +295,8 @@ not reading the session, which stays unread.
   draws it yet; a widget by reference (`widget-ref.ts`, until the widgets
   vertical of ADR 326 owns it); the revision rule every replacement follows
   (`revision.ts`); session grouping, search and time labels; and the new
-  session's lifecycle, a draft never listed and let go once no pane shows it,
+  session's lifecycle, a draft never listed and kept while a pane shows it or
+  something is typed in it,
   and a session the source never began going back to it when its last
   refused message is discarded.
 - `application/` owns the `WorkspaceSource` port (`ports.ts`: index,
@@ -342,9 +358,9 @@ surface can wrap; the workspace does. Its `model/` is pure: the pane layout
 item the host gives meaning to (the workspace's, a session), whose operations
 split, move, swap, nudge, close and even out, capped at four panes and three
 columns, an item never shown twice; its pixel rules (`pane-sizing.ts`):
-placements as fractions, the one fit rule every change of layout and every
+placements as fractions, the box those fractions draw (`paneBox`), the one fit rule every change of layout and every
 resize is held to (each pane at least 300 by 220 pixels, taking the host's
-spare room where that is what fits it), and edge drags held to it; where a
+spare room where that is what fits it), and edge drags held to it; the frame a pane insert, a scene's first text layout, and a drop's commit each take is [pane frame budget](design/pane-frame-budget.md); where a
 drag aims and what a drop does (`drop.ts`); what a press becomes, event by
 event (`drag.ts`). A host supplies one `SplitPanesSource`
 (`application/ports.ts`) that reads its layout, says when it changes — at
@@ -367,51 +383,17 @@ panes fly, their blur and deep shadows pause. A new pane fills in the frame
 after its shell. Less motion — Settings › Appearance › Motion, or the
 system's setting — skips every flight (`data-motion` on the root).
 
-The classic shell, `ui/desktop-app.tsx`, composes two existing Sidebar components inside the design
-system's SplitView panels. SplitView owns pointer capture, accessible separators,
-keyboard resizing, and collapse snapping. The left sidebar opens at 250px,
-with a 200px minimum and 450px maximum (`adapters/sidebar-sizing.ts`). The main workspace has a 350px expanded minimum. The right panel has a 200px
-minimum and takes precedence over the left: `fitSidebarWidths` gives the
-workspace its minimum, then the open right panel its minimum, then the left what
-it asked for (narrowing, then closing below 200px), then grows the right with
-what remains. Opening the right panel in a narrow window therefore narrows or
-closes the left, and the right closes rather than shrinking under 200px. Both
-fit together from a 750px window up. Asking for the left sidebar when there is
-no room beside the right panel closes the right to make room.
-It can use all remaining space, with no percentage cap. It defaults to 400px, leaving the remainder for
-the workspace; at a 1100px window with two 1px borders, that is 250px left,
-448px workspace, and 400px right. A window too narrow for 250px plus the
-workspace narrows the left to 200px before closing it. Its maximum while resizing is usable width minus the current left width
-minus 350px while the workspace is expanded. Dragging the right divider below
-350px of workspace snaps the workspace to zero and gives all its space to the
-right panel. Dragging back to 350px restores the workspace. Right-edge pointer
-and keyboard changes preserve the current left width, preventing propagation
-from collapsing the left sidebar.
-Dragging below half the effective minimum snaps that sidebar closed.
-
-The app's `useSidebarLayout` measures usable width excluding separators, converts
-pixel defaults to the SplitView percentage layout, and preserves sidebar pixel
-widths across window resizes. It uses the design system's layout validator for
-constraints, remembers expanded pixel widths for reopening, and owns width and
-visibility together. Sidebars stay inline, including in browsers.
-Closed panels are inert and hidden from assistive technology.
-
-Borders show a localized glow in the theme's edge colour, centered on the
-pointer during hover and drag, instead of highlighting the entire edge. Keyboard focus shows the same
-glow at the center. The low-opacity gradient fades across a 220px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
-toggle transitions animate for 340ms and respect reduced motion. The center
-uses 350px while expanded and is inert while snapped closed. On window shrink the same order applies: the left gives way first,
-then the right closes once it cannot keep 200px. The shell itself has a 350px
-minimum width. Right-edge resizing never changes the left sidebar. Widths
-animate only after the first measured layout has painted, so a window opens at
-its final layout instead of sliding in from equal thirds.
-
-The expand/restore button in the titlebar, beside the panel toggle, fills the
-app window with that panel. This is an in-app focus mode, not OS fullscreen: the native control
-row stays available. A fixed content layer preserves the measured split layout
-underneath; restore (or Escape) reveals the previous widths and open states.
-Hidden workspace/navigation panels are inert and resize separators are hidden.
-The right toggle exits this mode and closes the panel.
+The **right panel** (`ui/chrome/right-panel.tsx`) is a column beside the
+panes in both layouts. Its toggle and expand button stand at the titlebar's
+end; ⌥⌘B shows and hides it. Its edge resizes it between 260px and 560px,
+never more than a third of the window, and dragging the edge past its minimum
+folds it. Whether it is open and its width are remembered in the webview's
+storage (`model/right-panel.ts`); the side columns are fitted to the room left
+beside it, as beside the side rail. Expand covers the workspace, which stays
+laid out and inert beneath, until Escape or Restore; expanded is not
+remembered. It folds and unfolds on the drawer's curve, instantly with less
+motion. Until something opens in it, it says "Nothing open"
+([state chart](state/services/desktop/workspace/open-resize-expand-and-restore-the-right-panel.md)).
 
 The workspace layouts read the desktop store, a projection of one
 `WorkspaceSource`. Where that source comes from is
@@ -421,8 +403,9 @@ seeded in-memory workspace when a browser query names one, and the sample
 otherwise. The desktop app's own window
 connects to the local gateway under the panel's surface credential (#419):
 the host serves it the endpoint and the credential over IPC once the gateway
-the host started at launch is ready, and refuses it before then — it reads the
-gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
+the host started at launch is ready, holding the read while that startup is
+still running (up to `DESKTOP_STARTUP_WAIT`) and refusing it when startup
+failed or ran past the hold — it reads the gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
 after a failed connect it waits five poll rounds before it tries again, unless
 a person asks. A
 browser preview opened with `?gateway` connects over the session its origin
@@ -433,7 +416,9 @@ A window that cannot read the gateway says why
 pane arrangement is not kept between launches (the chosen
 layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
-entries, and `pnpm app` runs both windows.
+entries, and `pnpm app` runs both windows. For native layout previews,
+`VITE_NESSA_SAMPLE_WORKSPACE=1 pnpm app` explicitly selects the browser sample
+through the environment adapter; packaged builds and non-dev/ci stages reject it.
 
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
@@ -796,6 +781,7 @@ are written here.
 | A new host event or payload | `host.rs` and `src/host/window.ts` together |
 | Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `useFlushOnTurn` in `src/panel/adapters/` |
 | The conversation surface (tabs, drafts, empty transcript) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (local session), `adapters/store/` (projection) |
+| Switching a conversation's agent or forking its history | Gateway `conversation/application/service/handoffs.rs`, the `application/agent_switches.rs` contract and `infrastructure/store/agent_switches.rs` journal; SDK `application/agent_execution/sessions/handoffs.rs` owns committed handoff history. See [conversation handoffs](design/conversation-handoffs.md) and [usage-limit continuation](design/usage-limit-continuation.md) for selection invalidation ordering. |
 | Shared clock publication for aging labels | `src/clock/`; conversation and workspace own their label consumers |
 | The transcript chrome | `src/conversation/ui/` |
 | The panel chrome or composer | `src/panel/ui/app.tsx` |
@@ -856,6 +842,12 @@ especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
 The gateway now owns a prepared shared Agent for each authorized conversation. The
 conversation context owns durable creator/organization metadata and a bounded
 read projection; SDK Agent remains the sole scheduler and execution authority.
+Usage-limit continuations use the conversation application's scheduled-message
+store, separate from ordinary SDK resumption. Its SQLite dataset owns the
+preference, continuation rows, and per-model-request causal invalidations. A
+native model change records its invalidation before metadata marks that request
+applied; replay reads the request receipt and leaves later limits eligible.
+The ordering and tests are mapped in [usage-limit continuation](design/usage-limit-continuation.md).
 The projection also carries ordered runtime-owned declined-review notices from
 persisted invocation events, replacing selection with later local write evidence
 by identity without turning it into permission authority or provider output.
@@ -939,8 +931,8 @@ audit sink that cannot take that record refuses the send. This is local-only
 by construction. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
 
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
-Remote TLS/device provisioning, audio and video in a message, and more
-provider adapters remain separate features. Existing design proposals do not replace the implemented Agent contract.
+Audio and video in a message, and more provider adapters, remain separate
+features. Implemented native TLS enrollment is described below. Existing design proposals do not replace the implemented Agent contract.
 
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
@@ -950,11 +942,24 @@ gateway runtime and listener. The device client is owned by `nessa-client-core`.
 Both consume the JSON codec, framing and enrollment deadline socket in
 `crates/nessa-protocol` —
 owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
-It ends at Approved. When `config.json` names `native.listenAddress`, composition
-restores the gateway key before any bind, mounts the listener and joins its drain
-into the shutdown report, and the owner `pairing.*` product methods drive it;
-otherwise nothing native is opened. Receiver staging and Active publication are
-later slices. See [device pairing](design/auth/device-pairing.md).
+Exact-key approval is followed by implemented receiver staging and Active
+publication. The server application [activation owner](../crates/nessa-server/src/device_pairing/application/activation.rs)
+commits approval, stages the credential, pairs and remembers the stage-correlated
+receiver, confirms its current holding, and asks Auth to publish with fresh
+admission. Approved and Staging can remain retained when a later step stops;
+approval acknowledgement alone does not prove Active publication.
+[Status projection](../crates/nessa-server/src/device_pairing/application/read_status.rs)
+reports Active only with the current receiver holding and access epoch.
+[Activation regressions](../crates/nessa-server/tests/device_pairing/infrastructure/activation.rs)
+cover publication, retry joining, receiver revocation before publication and
+current-holding refusal. These are implemented source/test contracts, not a new
+native execution claim from this documentation pass.
+
+When `config.json` names `native.listenAddress`, composition restores the
+gateway key before any bind, mounts the listener and joins its drain into the
+shutdown report, and the owner `pairing.*` product methods drive it; otherwise
+nothing native is opened. See [device pairing](design/auth/device-pairing.md)
+and the [linked-device journey](state/services/desktop/workspace/linked-devices.md).
 
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 

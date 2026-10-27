@@ -10,18 +10,38 @@ import { useLayoutEffect, useRef } from "react"
  * number of pane columns changes, and once on mount — only then, so a column
  * the person opened by hand in a small window stays open until either
  * changes, and one the window folded for room returns once there is room.
- * Called as the change is laid out, before the frame paints: the fold lands in
- * the frame of the resize, and nothing is left waiting for a later effect for
- * a resize observer's synchronous render to flush out of turn.
+ *
+ * A resize, and the first mount, fold before paint: the fold is that frame,
+ * and nothing waits for a later effect that a resize observer's synchronous
+ * render would flush out of turn. A change in the number of pane columns
+ * folds on the next frame. A pane that takes the sidebar's spare room has
+ * already folded it in state (`arranged`); what the page paints of that
+ * fold waits until the new boxes (`usePaintedWithPanes`).
  */
 export function useFitOnResize(
   windowWidth: number,
   columns: number,
   fit: (windowWidth: number) => void,
+  /**
+   * False while something covers the workspace — a side rail item's full
+   * view: nothing is fitted under it, and uncovered, only a width or column
+   * count that changed meanwhile is fitted.
+   */
+  active = true,
 ) {
   const latest = useRef(fit)
   latest.current = fit
+  const seen = useRef<{ width: number; columns: number } | null>(null)
   useLayoutEffect(() => {
-    latest.current(windowWidth)
-  }, [windowWidth, columns])
+    if (!active) return
+    const previous = seen.current
+    seen.current = { width: windowWidth, columns }
+    if (previous === null || previous.width !== windowWidth) {
+      latest.current(windowWidth)
+      return
+    }
+    if (previous.columns === columns) return
+    const id = requestAnimationFrame(() => latest.current(windowWidth))
+    return () => cancelAnimationFrame(id)
+  }, [windowWidth, columns, active])
 }

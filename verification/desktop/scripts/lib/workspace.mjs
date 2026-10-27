@@ -2,7 +2,8 @@
  * Driving and reading the workspace: pane rects and order, opening panes
  * beside through the quick switcher (the same in both layouts), the side
  * columns, the drop zone the drag announces, whether one rect is inside
- * another, and a model module's rule or value read in the page.
+ * another, whether the panes are one flat surface, and a model module's rule
+ * or value read in the page.
  */
 import { CannotRun } from "./cli.mjs"
 import { css, keys, names, preferenceEvents, storage } from "./selectors.mjs"
@@ -10,6 +11,10 @@ import { css, keys, names, preferenceEvents, storage } from "./selectors.mjs"
 /** Open completed tool runs before inspecting their individual transcript steps. */
 export async function revealTranscriptWork(page) {
   for (const toggle of await page.locator(css.transcriptWorkToggle).all()) {
+    if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click()
+  }
+  // Each open run then shows the calls it folded before its last few.
+  for (const toggle of await page.locator(css.transcriptWorkEarlier).all()) {
     if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click()
   }
 }
@@ -100,6 +105,34 @@ export const frames = (page, n = 2) =>
 export const overviewListed = (page, timeout = 2000) =>
   until(page, (sel) => document.querySelector(sel) !== null, css.overviewListed, timeout)
 
+/** Focus can land on a mounted prefix; Down additionally needs a mounted successor. */
+export const overviewRowReady = (page, next = false) =>
+  until(
+    page,
+    ([columnSelector, itemSelector, needsNext]) => {
+      const column = document.querySelector(columnSelector)
+      const focused = document.activeElement?.closest(itemSelector)
+      if (!column || !focused) return false
+      const rows = [...column.querySelectorAll(itemSelector)]
+      const index = rows.indexOf(focused)
+      return index >= 0 && (!needsNext || index < rows.length - 1)
+    },
+    [css.overviewColumn, css.overviewItem, next],
+    2000,
+  )
+
+/** Full-list timing remains a separate assertion from mounted-prefix focus. */
+export async function overviewCompleteList(page) {
+  const started = performance.now()
+  const complete = await overviewListed(page)
+  return {
+    complete,
+    elapsedMs: performance.now() - started,
+    budgetMs: 2000,
+    failures: complete ? [] : ["the overview list did not finish drawing within 2000ms"],
+  }
+}
+
 /** How many requests the Agents overview lists (it must be open). */
 export const requestCount = (page) => page.locator(css.overviewRequest).count()
 
@@ -188,17 +221,24 @@ export async function recordZones(page) {
     const status = document.querySelector(sel)
     if (!status) return null
     const records = []
-    let lastMoveAt = performance.now()
+    let lastMoveAt = null
+    let lastMoveDeliveredAt = null
     let position
     const moved = (event) => {
       if (position?.x === event.clientX && position?.y === event.clientY) return
       position = { x: event.clientX, y: event.clientY }
       lastMoveAt = event.timeStamp
+      lastMoveDeliveredAt = performance.now()
     }
     document.addEventListener("pointermove", moved, true)
     const observer = new MutationObserver(() => {
       if (status.textContent)
-        records.push({ said: status.textContent, at: performance.now(), lastMoveAt })
+        records.push({
+          said: status.textContent,
+          at: performance.now(),
+          lastMoveAt,
+          lastMoveDeliveredAt,
+        })
     })
     observer.observe(status, { childList: true, characterData: true, subtree: true })
     return {
@@ -222,6 +262,40 @@ export async function recordZones(page) {
       }
     },
   }
+}
+
+/**
+ * DOM observation proves a moving sweep only inside the event's rest window.
+ * Delivery and observation gaps explain missing evidence, not model decisions
+ * (`workspace.test.mjs`). A later rest announcement remains in the receipt.
+ */
+export function sweepZoneEvidence(recorded, restAfter, vertical) {
+  const timing = recorded.map((entry) => ({
+    ...entry,
+    deliveryLagMs:
+      entry.lastMoveAt === null ? null : entry.lastMoveDeliveredAt - entry.lastMoveAt,
+    observationLagMs:
+      entry.lastMoveDeliveredAt === null ? null : entry.at - entry.lastMoveDeliveredAt,
+    sinceEventMs: entry.lastMoveAt === null ? null : entry.at - entry.lastMoveAt,
+  }))
+  const moving = timing.filter(
+    (entry) =>
+      entry.sinceEventMs !== null &&
+      entry.deliveryLagMs >= 0 &&
+      entry.observationLagMs >= 0 &&
+      entry.sinceEventMs < restAfter,
+  )
+  const failures = []
+  if (!timing.length) failures.push("no drop-zone announcement was observed")
+  else if (!moving.length)
+    failures.push(
+      `no drop-zone observation inside the ${restAfter}ms event rest window; ${timing.filter((entry) => entry.deliveryLagMs >= restAfter).length} delayed deliveries, ${timing.filter((entry) => entry.observationLagMs >= restAfter).length} delayed observations (model decision time unobserved)`,
+    )
+  if (moving.some((entry) => vertical.test(entry.said)))
+    failures.push(
+      `moving sweep picked a vertical zone: ${moving.map((e) => e.said).join(" → ")}`,
+    )
+  return { timing, moving, failures }
 }
 
 /**
@@ -377,7 +451,11 @@ export async function recordFrames(page) {
     const tick = (t) => {
       const ghost = document.querySelector(sel.dragGhost)
       const grid = document.querySelector(sel.paneGrid)
+      const outline = document.querySelector(sel.dragPlaceholder)
+      const bar = document.querySelector(sel.titlebar)
       window.__dragFrames.push({
+        placeholder: outline ? rect(outline) : null,
+        barBottom: bar ? bar.getBoundingClientRect().bottom : null,
         t,
         pointer: window.__verifyPointer ?? null,
         ghost:
@@ -505,4 +583,129 @@ export async function hoverPeekEdge(page, y, within = css.workspace) {
     .catch(() => null)
   const x = strip && strip.width > 0 ? strip.x + strip.width / 2 : 3
   await page.mouse.move(x, y)
+}
+
+/**
+ * What breaks the flat chat surface (`panes.css`), as it stands now: the
+ * surface reaches the window's top, right and bottom and is filled; no pane
+ * draws a fill or shadow of its own; each column hairline is 1px, mid-gutter
+ * between two panes, from the window's top to its bottom; each row hairline
+ * is 1px and ends at the surface's side, the window's edge or a column
+ * hairline. Empty when it holds. Its own `::after` is read, so the computed
+ * ends are the engine's, not this script's.
+ */
+export function flatSurfaceFailures(page) {
+  return page.evaluate(
+    ({ chat, pane, edge }) => {
+      const failures = []
+      const near = (a, b) => Math.abs(a - b) <= 1
+      const clear = "rgba(0, 0, 0, 0)"
+      const surface = document.querySelector(chat)
+      if (!surface) return ["no chat surface"]
+      const s = surface.getBoundingClientRect()
+      if (!near(s.top, 0) || !near(s.right, innerWidth) || !near(s.bottom, innerHeight))
+        failures.push(
+          `the surface stops short of the window: ${JSON.stringify(s.toJSON())} in ${innerWidth}x${innerHeight}`,
+        )
+      // The surface is the window's own ground — clear, so the header art
+      // runs up to the window's top edge — never a card: no rim, no corner.
+      const surfaceStyle = getComputedStyle(surface)
+      if (surfaceStyle.boxShadow !== "none" || parseFloat(surfaceStyle.borderRadius) > 0)
+        failures.push(`the surface draws a card: ${surfaceStyle.boxShadow}`)
+      const panes = [...document.querySelectorAll(pane)].map((element) => {
+        const style = getComputedStyle(element)
+        if (style.backgroundColor !== clear || style.boxShadow !== "none")
+          failures.push(
+            `a pane draws its own card: ${style.backgroundColor} ${style.boxShadow}`,
+          )
+        return element.getBoundingClientRect()
+      })
+      const line = (element) => {
+        const after = getComputedStyle(element, "::after")
+        const b = element.getBoundingClientRect()
+        return {
+          axis: element.dataset.axis,
+          content: after.content,
+          fill: after.backgroundColor,
+          thick: element.dataset.axis === "x" ? after.width : after.height,
+          // Across the line: where the hairline itself stands, from its own inset.
+          middle:
+            element.dataset.axis === "x"
+              ? b.left + parseFloat(after.left) + parseFloat(after.width) / 2
+              : b.top + parseFloat(after.top) + parseFloat(after.height) / 2,
+          // Its insets reach past the edge's own box.
+          start:
+            element.dataset.axis === "x"
+              ? b.top + parseFloat(after.top)
+              : b.left + parseFloat(after.left),
+          end:
+            element.dataset.axis === "x"
+              ? b.bottom - parseFloat(after.bottom)
+              : b.right - parseFloat(after.right),
+        }
+      }
+      const lines = [...surface.querySelectorAll(edge)].map(line)
+      const columns = lines.filter((l) => l.axis === "x")
+      for (const l of lines) {
+        if (l.content === "none" || l.thick !== "1px" || l.fill === clear)
+          failures.push(`a ${l.axis} hairline is not drawn: ${JSON.stringify(l)}`)
+      }
+      for (const l of columns) {
+        if (!near(l.start, 0) || !near(l.end, innerHeight))
+          failures.push(
+            `a column hairline runs ${l.start}…${l.end}, not the window's height`,
+          )
+        const before = panes.filter((p) => p.right <= l.middle)
+        const after = panes.filter((p) => p.left >= l.middle)
+        if (
+          !before.some((p) => after.some((q) => near(l.middle, (p.right + q.left) / 2)))
+        )
+          failures.push(`a column hairline at ${l.middle} is not mid-gutter`)
+      }
+      const rowGutters = panes.flatMap((above) => {
+        const below = panes
+          .filter(
+            (p) =>
+              near(p.left, above.left) &&
+              near(p.right, above.right) &&
+              p.top >= above.bottom,
+          )
+          .sort((a, b) => a.top - b.top)[0]
+        return below
+          ? [
+              {
+                middle: (above.bottom + below.top) / 2,
+                start: Math.max(
+                  s.left,
+                  ...columns.map((c) => c.middle).filter((x) => x < above.left),
+                ),
+                end: Math.min(
+                  s.right,
+                  ...columns.map((c) => c.middle).filter((x) => x > above.right),
+                ),
+              },
+            ]
+          : []
+      })
+      for (const l of lines.filter((l) => l.axis === "y")) {
+        if (
+          !rowGutters.some(
+            (g) =>
+              near(l.middle, g.middle) && near(l.start, g.start) && near(l.end, g.end),
+          )
+        )
+          failures.push(
+            `a row hairline at ${l.middle} is not mid-gutter between adjoining panes`,
+          )
+        const meets = (x, sides) =>
+          sides.some((side) => near(x, side)) || columns.some((c) => near(x, c.middle))
+        if (!meets(l.start, [s.left]) || !meets(l.end, [s.right]))
+          failures.push(
+            `a row hairline runs ${l.start}…${l.end}, meeting neither the surface's side nor a column hairline`,
+          )
+      }
+      return failures
+    },
+    { chat: css.chat, pane: css.pane, edge: css.paneEdge },
+  )
 }

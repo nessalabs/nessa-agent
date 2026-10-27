@@ -7,6 +7,7 @@ use super::{
     artifacts::WireArtifact,
     cancellation::Cancellation,
     errors::{Outcome, SavedError},
+    handoffs::WireHandoff,
     leases::WireLease,
     notes::{WireNote, WireNoteRetired},
     permissions::Actor,
@@ -227,6 +228,7 @@ enum WireChange<E = Event> {
     Artifact(WireArtifact),
     Note(WireNote),
     NoteRetired(WireNoteRetired),
+    Handoff(WireHandoff),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -348,6 +350,7 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
             SessionChange::Artifact(record) => Self::Artifact(record.into()),
             SessionChange::Note(record) => Self::Note(record.into()),
             SessionChange::NoteRetired(record) => Self::NoteRetired(record.into()),
+            SessionChange::Handoff(record) => Self::Handoff(record.into()),
         }
     }
 }
@@ -442,6 +445,7 @@ impl TryFrom<WireChange> for SessionChange {
             WireChange::Artifact(record) => Self::Artifact(record.decode()?),
             WireChange::Note(record) => Self::Note(record.decode()?),
             WireChange::NoteRetired(record) => Self::NoteRetired(record.decode()?),
+            WireChange::Handoff(record) => Self::Handoff(record.decode()?),
         })
     }
 }
@@ -682,14 +686,14 @@ mod tests {
     use crate::{
         application::agent_execution::{
             executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
-            permissions::ActionContext,
+            permissions::{ActionContext, ApprovalRuleReference, DeclinedReview},
             providers::ProviderIdentity,
             sessions::{InvocationRecord, SubmissionAcknowledgement},
         },
         domain::agent_execution::{
             executions::{GrantInitiator, Initiation, MessageChunk, MessageId},
             permissions::{
-                ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+                RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
                 ReviewDeclineStage,
             },
             prompts::{
@@ -729,6 +733,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -902,6 +907,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -956,6 +962,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation,
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1101,6 +1108,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1241,14 +1249,16 @@ mod tests {
             ("1", ReviewDeclineStage::WriteConfirmed),
             ("2", ReviewDeclineStage::WriteUnconfirmed),
         ] {
-            let selected = ReviewDeclineObservation::selected(
+            let selected = DeclinedReview::selected(
                 ReviewDeclineId::new(decline_id).unwrap(),
                 ReviewDecline::new(
                     Some("Read"),
                     ReviewDeclineReason::ToolNotReviewable,
-                    crate::domain::agent_execution::permissions::RefusalOutcome::Continue,
+                    RefusalOutcome::Continue,
                 ),
-            );
+                None,
+            )
+            .unwrap();
             events.push(ExecutionEvent::new(
                 id.clone(),
                 ExecutionUpdate::ReviewDeclined(selected.clone()),
@@ -1274,6 +1284,101 @@ mod tests {
             })
             .collect();
         assert_eq!(restored, events);
+    }
+
+    fn stopping_rule() -> ApprovalRuleReference {
+        ApprovalRuleReference::new(
+            "refuse-shell",
+            "1",
+            ActionContext::new("host", "policy", "grant").unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn declined_event(review: DeclinedReview) -> ExecutionEvent {
+        ExecutionEvent::new(
+            ExecutionId::new("one").unwrap(),
+            ExecutionUpdate::ReviewDeclined(review),
+        )
+    }
+
+    #[test]
+    fn a_stopping_rule_round_trips_and_a_disagreement_is_corrupt() {
+        let stopped = DeclinedReview::selected(
+            ReviewDeclineId::new("4").unwrap(),
+            ReviewDecline::new(
+                Some("Bash"),
+                ReviewDeclineReason::ToolNotReviewable,
+                RefusalOutcome::EndTurn,
+            ),
+            Some(stopping_rule()),
+        )
+        .unwrap();
+        let event = declined_event(stopped);
+        let bytes = encode_one(&SessionChange::ProviderObservation(event.clone())).unwrap();
+        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let SessionChange::ProviderObservation(restored) = decode_one(&bytes, &context).unwrap()
+        else {
+            panic!("decoded fact remains an observation");
+        };
+        let ExecutionUpdate::ReviewDeclined(review) = restored.update() else {
+            panic!("restored event is the declined review");
+        };
+        let rule = review.rule().expect("a restored stop names its rule");
+        assert_eq!(rule.rule_id(), "refuse-shell");
+        assert_eq!(rule.revision(), "1");
+        assert_eq!(rule.granted_by().principal_id(), "host");
+        assert_eq!(rule.granted_by().surface_id(), "policy");
+        assert_eq!(rule.granted_by().request_id(), "grant");
+        assert_eq!(restored, event);
+
+        let mut stripped: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        stripped["changes"][0]["ProviderObservation"]["update"]["ReviewDeclined"]
+            .as_object_mut()
+            .unwrap()
+            .remove("rule");
+        assert!(matches!(
+            decode_one(&serde_json::to_vec(&stripped).unwrap(), &context),
+            Err(StorageError::Corrupt(_))
+        ));
+
+        let continued = declined_event(
+            DeclinedReview::selected(
+                ReviewDeclineId::new("5").unwrap(),
+                ReviewDecline::new(
+                    Some("Read"),
+                    ReviewDeclineReason::UnreadableRequest,
+                    RefusalOutcome::Continue,
+                ),
+                None,
+            )
+            .unwrap(),
+        );
+        let continued_bytes = encode_one(&SessionChange::ProviderObservation(continued)).unwrap();
+        let mut attached: serde_json::Value = serde_json::from_slice(&continued_bytes).unwrap();
+        attached["changes"][0]["ProviderObservation"]["update"]["ReviewDeclined"]["rule"] = serde_json::json!({
+            "rule_id": "refuse-shell",
+            "revision": "1",
+            "granted_by": {
+                "principal_id": "host",
+                "surface_id": "policy",
+                "request_id": "grant"
+            }
+        });
+        assert!(matches!(
+            decode_one(&serde_json::to_vec(&attached).unwrap(), &context),
+            Err(StorageError::Corrupt(_))
+        ));
+
+        let mut oversized = attached;
+        oversized["changes"][0]["ProviderObservation"]["update"]["ReviewDeclined"]["outcome"] =
+            "EndTurn".into();
+        oversized["changes"][0]["ProviderObservation"]["update"]["ReviewDeclined"]["rule"]
+            ["rule_id"] = "r".repeat(257).into();
+        assert!(matches!(
+            decode_one(&serde_json::to_vec(&oversized).unwrap(), &context),
+            Err(StorageError::Corrupt(_))
+        ));
     }
 
     #[test]

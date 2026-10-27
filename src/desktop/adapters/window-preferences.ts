@@ -1,5 +1,6 @@
 import { useLayoutEffect } from "react"
 import { parseFlag, parseOptIn } from "../model/window-preferences"
+import { parsePanel, serializePanel } from "../model/right-panel"
 import { storedPreference } from "./stored-preference"
 
 /**
@@ -60,4 +61,12 @@ export const useSideRailPreference = storedPreference({
   key: "nessa.desktop.side-rail",
   event: "nessa:desktop-side-rail",
   parse: parseOptIn,
+}).usePreference
+
+/** The right panel's place: open or not, and its width (`model/right-panel.ts`). */
+export const usePanelPreference = storedPreference({
+  key: "nessa.desktop.right-panel",
+  event: "nessa:desktop-right-panel",
+  parse: parsePanel,
+  serialize: serializePanel,
 }).usePreference

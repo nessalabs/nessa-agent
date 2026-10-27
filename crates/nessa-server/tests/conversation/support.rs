@@ -11,7 +11,7 @@ use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
-    ProviderSessionErasers, PublishedArtifact, ReviewNoticeAudit, ReviewNoticeAuditFailure,
+    ProviderSessionErasers, PublishedArtifact, Reader, ReviewNoticeAudit, ReviewNoticeAuditFailure,
     ReviewNoticeAuditRecord, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
@@ -59,7 +59,7 @@ use nessa_sdk::domain::effective_capabilities::value_objects::{
 };
 use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, Modalities, ModelFeatures};
-use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+pub(crate) use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -205,6 +205,12 @@ pub(crate) struct MemoryRepository {
     /// under its lock, before its resolve.
     pub(crate) pending_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) model_requests: Mutex<HashMap<(ConversationId, String), ConversationModelRequest>>,
+    pub(crate) agent_switches: Mutex<
+        HashMap<
+            (ConversationId, String),
+            crate::conversation::application::ConversationAgentSwitch,
+        >,
+    >,
     pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
     pub(crate) lose_mode_intent_ack: AtomicBool,
     pub(crate) lose_mode_commit_ack: AtomicBool,
@@ -287,6 +293,115 @@ impl crate::conversation::application::ConversationModeAudit for RecordingModeAu
     }
 }
 impl ConversationRepository for MemoryRepository {
+    fn begin_agent_switch(
+        &self,
+        request: crate::conversation::application::ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        use crate::conversation::application::ConversationAgentSwitchState as State;
+        let result = (|| {
+            let records = self.records.lock().unwrap();
+            let current = records
+                .get(&request.conversation_id)
+                .ok_or(ConversationError::NotFound)?;
+            if current.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            let mut switches = self.agent_switches.lock().unwrap();
+            let key = (request.conversation_id.clone(), request.request_id.clone());
+            if let Some(existing) = switches.get(&key) {
+                return if existing.same_request(&request) {
+                    Ok(existing.clone())
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            let pending = switches.iter().any(|((id, _), switch)| {
+                id == &request.conversation_id && switch.state == State::Pending
+            });
+            if pending
+                || request.state != State::Pending
+                || current.agent() != Some(request.prior_agent)
+                || current.model() != &request.prior_model
+                || request.prior_agent == request.requested_agent
+            {
+                return Err(ConversationError::RequestConflict);
+            }
+            switches.insert(key, request.clone());
+            Ok(request)
+        })();
+        Box::pin(async move { result })
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        let pending = self
+            .agent_switches
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|((conversation, _), switch)| {
+                conversation == id
+                    && switch.state
+                        == crate::conversation::application::ConversationAgentSwitchState::Pending
+            })
+            .map(|(_, switch)| switch.clone());
+        Box::pin(async move { Ok(pending) })
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        let saved = self
+            .agent_switches
+            .lock()
+            .unwrap()
+            .get(&(id.clone(), request_id.to_owned()))
+            .cloned();
+        Box::pin(async move { Ok(saved) })
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        use crate::conversation::application::ConversationAgentSwitchState as State;
+        let result = (|| {
+            if state == State::Pending {
+                return Err(ConversationError::InvalidInput);
+            }
+            let mut records = self.records.lock().unwrap();
+            let mut switches = self.agent_switches.lock().unwrap();
+            let key = (id.clone(), request_id.to_owned());
+            let request = switches
+                .get(&key)
+                .ok_or(ConversationError::NotFound)?
+                .clone();
+            if request.state != State::Pending {
+                return if request.state == state {
+                    Ok(request)
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            if state == State::Applied {
+                let current = records.get(id).ok_or(ConversationError::NotFound)?;
+                let switched = current
+                    .clone()
+                    .with_agent_selection(request.requested_agent, request.requested_model.clone());
+                records.insert(id.clone(), switched);
+            }
+            let settled =
+                crate::conversation::application::ConversationAgentSwitch { state, ..request };
+            switches.insert(key, settled.clone());
+            Ok(settled)
+        })();
+        Box::pin(async move { result })
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -842,6 +957,7 @@ impl ConversationListing for MemoryListing {
         owner: &PrincipalId,
         archived: bool,
         limit: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         let records: Vec<Conversation> = self
             .repository
@@ -858,6 +974,7 @@ impl ConversationListing for MemoryListing {
                 match self.summaries.load(conversation.id()).await {
                     Ok(Some(summary)) if summary.archived() == archived => {
                         listed.conversations.push(ListedConversation {
+                            held: None,
                             conversation,
                             summary,
                         });
@@ -882,12 +999,32 @@ impl ConversationListing for MemoryListing {
             Ok(listed)
         })
     }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        let mut owners = Vec::new();
+        for record in self.repository.records.lock().unwrap().values() {
+            if record.deletion().is_some() {
+                continue;
+            }
+            let pair = (record.organization().clone(), record.owner().clone());
+            if !owners.contains(&pair) {
+                owners.push(pair);
+            }
+        }
+        owners.sort_by(|left, right| {
+            left.0
+                .as_str()
+                .cmp(right.0.as_str())
+                .then_with(|| left.1.as_str().cmp(right.1.as_str()))
+        });
+        Box::pin(async move { Ok(owners) })
+    }
     fn observe(
         &self,
         organization: &OrganizationId,
         owner: &PrincipalId,
         archived: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         let records: Vec<Conversation> = self
             .repository
@@ -908,6 +1045,7 @@ impl ConversationListing for MemoryListing {
                 match self.summaries.load(conversation.id()).await {
                     Ok(Some(summary)) if summary.archived() == archived => {
                         observed.conversations.push(ListedConversation {
+                            held: None,
                             conversation,
                             summary,
                         });
@@ -942,6 +1080,7 @@ impl ConversationListing for Unlisted {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
@@ -951,7 +1090,11 @@ impl ConversationListing for Unlisted {
         _: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
 }
@@ -1385,6 +1528,17 @@ impl ConversationAttachments for MemoryAttachments {
     }
 }
 
+/// The in-process environment a service fixture runs commands in.
+pub(crate) fn in_process_environment() -> crate::conversation::application::Environments {
+    crate::conversation::infrastructure::in_process_environment().into()
+}
+
+/// The clock a message commit records with when a test has no frozen clock.
+pub(crate) fn runtime_message_commit_clock(
+) -> Arc<dyn nessa_sdk::application::agent_execution::sessions::MessageCommitClock> {
+    Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new())
+}
+
 /// The deletion budgets every test service runs with. Test values, not the
 /// table's: composition's own test holds the gateway to the table.
 pub(crate) const DELETION_BUDGETS: ConversationDeletionBudgets = ConversationDeletionBudgets {
@@ -1674,6 +1828,8 @@ pub(crate) struct Provider {
     /// host ([`AgentProvider::on_host`]), that host's workspace, as a real
     /// binding's fingerprint takes the workspace it works in.
     context: String,
+    /// The provider name its identity carries, as a binding names itself.
+    name: String,
 }
 impl Provider {
     pub(crate) fn new(factory: Arc<ProviderFactory>) -> Self {
@@ -1684,7 +1840,13 @@ impl Provider {
             approval_mode: ApprovalMode::Ask,
             model: "test".into(),
             context: "test".into(),
+            name: "gateway-test".into(),
         }
+    }
+    /// The same provider under another binding's name: another agent.
+    pub(crate) fn with_name(mut self, name: &str) -> Self {
+        self.name = name.into();
+        self
     }
     pub(crate) fn with_model(mut self, model: &str) -> Self {
         self.model = model.into();
@@ -1692,7 +1854,7 @@ impl Provider {
             capabilities_for_model(self.factory.model_images.load(Ordering::SeqCst), model);
         self
     }
-    fn with_mode(mut self, mode: ApprovalMode) -> Self {
+    pub(crate) fn with_mode(mut self, mode: ApprovalMode) -> Self {
         self.approval_mode = mode;
         self
     }
@@ -1719,7 +1881,7 @@ impl AgentProvider for Provider {
         Some(self.approval_mode)
     }
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("gateway-test", &self.model, &self.context).unwrap()
+        ProviderIdentity::new(&self.name, &self.model, &self.context).unwrap()
     }
     fn on_host(
         &self,
@@ -2540,4 +2702,23 @@ impl ConversationAccessPolicyEvaluator for ObservedPolicy {
 /// admitted by the checked-in access policy.
 pub(crate) fn catalogue_entries(signed_in_as: &str) -> CatalogueEntryAccess {
     CatalogueEntryAccess::new(access_policy(), PrincipalId::new(signed_in_as).unwrap())
+}
+
+/// `text`, a path written from the root as on Unix (`/work/repo`), made
+/// absolute on this system: on Windows it is on drive `C:`.
+pub(crate) fn absolute(text: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{text}")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// An [`absolute`] path as it was written, for a test double to match on.
+pub(crate) fn unrooted(text: &str) -> &str {
+    if cfg!(windows) {
+        text.strip_prefix("C:").unwrap_or(text)
+    } else {
+        text
+    }
 }

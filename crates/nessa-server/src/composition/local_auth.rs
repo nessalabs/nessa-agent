@@ -14,7 +14,6 @@ use crate::mcp_servers::application::BuiltInServer;
 use crate::{
     agent_warm_up::{
         application::{AgentWarmUp, WarmUpSessionPorts},
-        domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
     agents::infrastructure::AgentLaunchFiles,
@@ -269,6 +268,24 @@ pub(super) async fn product_state(
         }
         _ => None,
     };
+    // The web tunnel rides the native listener. With none to run, a
+    // provider program an earlier run left running is ended.
+    #[cfg(unix)]
+    let tunnel = match (&settings.native, &native) {
+        (Some(config), Some(_)) => config
+            .tunnel
+            .as_ref()
+            .map(|tunnel| super::tunnel::prepare(namespace, tunnel)),
+        _ => None,
+    };
+    #[cfg(unix)]
+    if tunnel
+        .as_ref()
+        .and_then(super::tunnel::PreparedTunnel::setting)
+        .is_none()
+    {
+        super::tunnel::release_kept(namespace);
+    }
     let credential_namespace = CredentialNamespace::new(
         config.stage.as_str().to_owned(),
         config.instance().map(str::to_owned),
@@ -295,9 +312,23 @@ pub(super) async fn product_state(
     // for every command, passive read and share change (ADR 803 step 3).
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
+    // The GitHub sign-in, composed where agents are: they are what it is for.
+    #[cfg(unix)]
+    let github = match &settings.agents {
+        Some(_) => super::github::compose(namespace).await,
+        None => None,
+    };
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
         match (&settings.agents, receivers.clone()) {
             (Some(agents), Some(receivers)) => {
+                #[cfg(unix)]
+                let agents = &{
+                    let mut agents = agents.clone();
+                    if let Some(github) = &github {
+                        agents.open_credentials = github.credentials.clone();
+                    }
+                    agents
+                };
                 let mut built = conversations(
                     agents,
                     directory,
@@ -412,6 +443,10 @@ pub(super) async fn product_state(
     }
     product.browser_http_allowed = config.browser_http_allowed();
     #[cfg(unix)]
+    if let Some(github) = github {
+        product = product.with_github(github.routes);
+    }
+    #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
     // Composed whether or not native pairing runs: turning it on is how it
     // comes to run.
@@ -436,21 +471,38 @@ pub(super) async fn product_state(
                 .join("native-linking"),
             Arc::new(SystemClock),
         );
-        product = product.with_native_linking(Arc::new(super::native_linking::ConfigLinking::new(
+        let linking = super::native_linking::ConfigLinking::new(
             Arc::new(config),
             Arc::new(audit),
             native.is_some(),
             restart.clone(),
-        )));
+        )
+        .with_tunnel(
+            crate::tunnel::infrastructure::files::TunnelFiles::new(namespace),
+            match &tunnel {
+                Some(tunnel) => tunnel.running(),
+                None => tokio::sync::watch::channel(None).1,
+            },
+        );
+        product = product.with_native_linking(Arc::new(linking));
+        if let Some(tunnel) = &tunnel {
+            product = product.with_tunnel(tunnel.view());
+        }
     }
     let (listener_environments, connected_environments) = environment_peers.unzip();
     let native = match native {
         Some((prepared, commands, peers)) => {
             product = product.with_pairing(Arc::new(commands)).with_peers(peers);
-            Some(match listener_environments {
+            let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,
-            })
+            };
+            #[cfg(unix)]
+            let prepared = match tunnel {
+                Some(tunnel) => prepared.with_tunnel(tunnel),
+                None => prepared,
+            };
+            Some(prepared)
         }
         None => None,
     };
@@ -1152,14 +1204,11 @@ async fn conversations(
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     for agent in built.providers.values_mut() {
-        // The provider's own credential-free identity, rather than a
-        // hand-picked list of fields, computed from raw OS bytes rather than
-        // a lossy path conversion; what it makes a warm-up cover is stated on
-        // `RuntimeFingerprint`.
-        let identity = agent.provider.identity();
-        let runtime =
-            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
-                .map_err(|error| RunError::Agent(error.to_string()))?;
+        // The provider's own credential-free identity plus its launch
+        // fingerprint, rather than a hand-picked list of fields. What that
+        // makes a warm-up cover is stated on `RuntimeFingerprint`.
+        let runtime = super::warm_up::runtime_fingerprint_for(agent.provider.as_ref())
+            .map_err(|error| RunError::Agent(error.to_string()))?;
         let prepared = AgentWarmUp::new(
             agent.provider.clone(),
             agent.execution_audit.clone(),
@@ -1359,6 +1408,43 @@ async fn conversations(
                     cause,
                 )
             })?,
+    ));
+    // Channels and which conversation is in which; a channel with no chosen
+    // folder works in `<data>/channels/<id>`.
+    let channels_path = root.join("channels.sqlite3");
+    service.bind_channels(
+        Arc::new(
+            crate::conversation::infrastructure::LocalChannelStore::open(&channels_path).map_err(
+                |cause| RunError::opening(crate::core::Dataset::Channels, &channels_path, cause),
+            )?,
+        ),
+        Arc::new(
+            crate::conversation::infrastructure::LocalChannelFolders::new(
+                directory
+                    .parent()
+                    .expect("conversation root already validated"),
+                crate::env::home_folder_from_system(),
+            )
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+        ),
+    );
+    let scheduled_messages_path = root.join("scheduled-chat-messages.sqlite3");
+    service.bind_scheduled_messages(Arc::new(
+        crate::conversation::infrastructure::LocalScheduledMessages::open(&scheduled_messages_path)
+            .map_err(|cause| {
+                RunError::opening(
+                    crate::core::Dataset::ScheduledMessages,
+                    &scheduled_messages_path,
+                    cause,
+                )
+            })?,
+    ));
+    service.bind_usage_limit_preference_policy(Arc::new(
+        crate::conversation::infrastructure::CedarUsageLimitPreferencePolicy::new().map_err(
+            |_| {
+                RunError::Agent("the usage-limit preference policy bundle does not validate".into())
+            },
+        )?,
     ));
     conversation_tools.attach(service.clone());
     // A note's author is checked against the same grant table the socket

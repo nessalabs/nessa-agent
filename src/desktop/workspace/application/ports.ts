@@ -33,7 +33,13 @@ import type { FailureDiagnostic } from "../model/failure"
  * the window then resyncs only when it is opened or asked to (Try Again).
  */
 import type { StageMismatch, WorkspaceFailureReason } from "../model/failure"
-import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
+import type {
+  Channel,
+  ModelRef,
+  WorkspaceIndex,
+  SessionSummary,
+} from "../model/workspace-index"
+import type { ChannelDraft, ChannelFailure, ResourceKind } from "../model/channel-draft"
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { QuestionChoice, Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
@@ -198,7 +204,12 @@ export interface WorkspaceSource {
    * records the stop as this window's authenticated caller.
    */
   stop(sessionId: string, initiator: Initiator): Promise<void>
-  /** Same-provider model control; the subscription owns confirmed display. */
+  /**
+   * Model control. A model of the session's own provider is changed in its
+   * agent; one of another provider carries the conversation on under that
+   * provider's agent, and its transcript draws the line where it did
+   * (`HandoffMessage`). The subscription owns confirmed display.
+   */
   setModel(
     sessionId: string,
     model: ModelRef,
@@ -216,6 +227,15 @@ export interface WorkspaceSource {
    * refusal included, as this window's authenticated caller.
    */
   setAccess(sessionId: string, mode: AccessMode, initiator: Initiator): Promise<void>
+  /**
+   * Turns this gateway's usage-limit continuation preference on or off.
+   * It is shared by every conversation. Resolves after a fresh authoritative
+   * snapshot has reached subscribers for every currently followed conversation.
+   * That snapshot may include a newer choice from another client. A refresh
+   * failure rejects rather than projecting the receipt as a conversation.
+   * The gateway records the change as this window's caller.
+   */
+  setUsageLimitAutoContinue(enabled: boolean, initiator: Initiator): Promise<void>
   /**
    * Pins or unpins a session. Resolves once the session's changed summary has
    * reached subscribers: the window shows the pin from that update alone.
@@ -237,6 +257,15 @@ export interface WorkspaceSource {
    * title to change and is refused `unknown-session`.
    */
   rename(sessionId: string, title: string, initiator: Initiator): Promise<void>
+  /**
+   * Starts a new session from a copy of this one's turns, on its model and
+   * access, and answers its id once its summary has reached subscribers.
+   * Its transcript shows the copied turns first, then the line saying they
+   * were copied (`HandoffMessage`); its agent is given them with its first
+   * message. A session the source has not spoken of has nothing to copy and
+   * is refused `unknown-session`.
+   */
+  fork(sessionId: string, initiator: Initiator): Promise<string>
   /**
    * Deletes a session for good: its conversation, uploads and summary are
    * erased where the source keeps them. Resolves once its `session-removed`
@@ -354,6 +383,76 @@ export function sharingFailure(error: unknown): SharingFailure {
 }
 
 /**
+ * Making channels (`channel.create`): `adapters/gateway/channel-gateway.ts`
+ * over the window's client, `adapters/in-memory/in-memory-channels.ts` for
+ * the sample and tests. A made channel is answered with its id as the index
+ * names it, and the source's index lists it from then on. A call settles: it
+ * answers, or rejects with a typed `ChannelCreationError`. Asking again with
+ * the same `requestId` and the same draft answers the channel it made.
+ */
+export interface ChannelSource {
+  create(draft: ChannelDraft, requestId: string): Promise<Channel>
+}
+
+/** Why a channel was not made, by kind (`model/channel-draft.ts`), never a sentence. */
+export class ChannelCreationError extends Error {
+  readonly reason: ChannelFailure
+
+  constructor(reason: ChannelFailure) {
+    super(`Channel refused: ${reason}`)
+    this.name = "ChannelCreationError"
+    this.reason = reason
+  }
+}
+
+/**
+ * Why making a channel failed, by its type. Anything but the source's own
+ * typed refusal is a fault, logged as one and taken as `unavailable`.
+ */
+export function channelFailure(error: unknown): ChannelFailure {
+  if (error instanceof ChannelCreationError) return error.reason
+  console.error("Making a channel failed unexpectedly", error)
+  return "unavailable"
+}
+
+/**
+ * The system's own pickers, for the paths a channel names: its folder, and
+ * the files and folders attached to it. Each answers absolute paths, or none
+ * when the person cancelled. Absent where the window has no native picker
+ * (a browser, or Linux until it has its own dialog), and then the flow offers
+ * only a folder made for the channel and no resources.
+ */
+export interface PathPicker {
+  /** The person's home folder, to write paths under it from `~`; null when unknown. */
+  home(): Promise<string | null>
+  folder(): Promise<string | null>
+  /** Files, or folders: one kind at a time, as not every system's picker chooses both. */
+  resources(kind: "files" | "folders"): Promise<readonly string[]>
+  /**
+   * Files and folders dragged onto the window, as the system names them:
+   * `dragging` while a drag that carries paths is over it, `began` as a drop
+   * lands, and `dropped` with what it let go of, named as `began` was and
+   * possibly seconds later. Answers how to stop watching. Absent where the
+   * window is never told of a drop.
+   */
+  drops?(watch: PathDropWatch): () => void
+}
+
+/** What a watch on dragged paths is told. */
+export interface PathDropWatch {
+  dragging(over: boolean): void
+  began(drop: string): void
+  /** `unread` counts paths past what a channel holds, which were not looked at. */
+  dropped(drop: string, paths: readonly DroppedPath[], unread: number): void
+}
+
+/** One dragged path, and whether it is a file or a folder. */
+export interface DroppedPath {
+  readonly path: string
+  readonly kind: ResourceKind
+}
+
+/**
  * What the workspace's commands are given, from composition: the source, and
  * the other outside things they need — the time, fresh ids for what the
  * person creates (a new session, a message), and the room the panes have on
@@ -373,6 +472,12 @@ export interface WorkspaceDependencies {
    * nothing new.
    */
   readonly measure: () => PaneRoom | undefined
+  /**
+   * The room last laid out, without reading the page (`paintedRoom`). A
+   * click that opens a pane uses it so the click does not force layout.
+   * Absent, or nothing painted yet, and the command measures.
+   */
+  readonly paintedRoom?: () => PaneRoom | undefined
   /**
    * Where the Agents overview's filter is remembered between launches: read
    * once, into the store's first state, and written on each change
@@ -397,6 +502,13 @@ export interface WorkspaceDependencies {
    * or a source composition was handed with no gateway.
    */
   readonly windowPublisher?: WindowPublisher
+  /**
+   * Where channels are made. Absent where the window cannot make one, and
+   * the sidebar's add button then says so.
+   */
+  readonly channels?: ChannelSource
+  /** The system's pickers for a channel's paths; absent where there are none. */
+  readonly paths?: PathPicker
 }
 
 /**

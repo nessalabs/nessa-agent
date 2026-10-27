@@ -1,31 +1,22 @@
-/*
- * Prototype: the side rail, its toggle, and an item's full view.
- *
- * Geometry is the corner-control geometry `styles.css` owns
- * (`--desktop-control-*`, `--desktop-gutter`); nothing here restates it.
- * Every control sits `--desktop-control-edge` from the window's left edge, so
- * the rail's items, its toggle and the titlebar's sidebar toggle stand in one
- * column, and the toggle's corner is concentric with the sidebar card's. In
- * the macOS window the rail is wider and its column, the toggle's included,
- * is centred under the traffic lights instead (`--rail-column`).
- */
-
-/*
- * The rail stands beside the workspace, in this frame, not inside it: every
- * column the workspace places from its own left edge stays right with the
- * rail open or closed (`verification/desktop/scripts/columns.mjs`).
- * --rail-width is set from `railWidth`.
- */
+/* The compact plugin rail sits below the shared window bar. */
 .workspace-window {
   --rail-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --rail-gap: 6px;
-  /* Where the rail's controls stand from the window's edge. */
-  --rail-column: var(--desktop-control-edge);
+  /*
+   * Where the rail's controls stand from the window's edge: on the sidebar's
+   * icon column, so the toggle in the closed rail's corner stands under
+   * Agents' icon. That column's middle is the gutter, the list's 8px, a
+   * row's 8px and half its 16px icon slot in (`source-list.css`).
+   */
+  --rail-column: calc(var(--desktop-gutter) + 24px - var(--desktop-control-size) / 2);
   position: relative;
   isolation: isolate;
   display: flex;
   height: 100svh;
-  overflow: hidden;
+  box-sizing: border-box;
+  /* Clipped, never a scroller: nothing — a focus, a scrollIntoView — can
+     move the whole window sideways under its own edges. */
+  overflow: clip;
   background: var(--background);
   color: var(--foreground);
   font-family: var(--nessa-font-sans);
@@ -35,38 +26,13 @@
 .workspace-window > .workspace {
   min-width: 0;
   flex: 1;
+  height: 100%;
   /* The window's ambient light is behind both the rail and the workspace: a
      fill here would draw a seam down the rail's edge. */
   background: transparent;
 }
 
 /* ——— The rail ——— */
-
-/*
- * The window's own controls (the traffic lights) stay where the host puts
- * them (`traffic_lights.rs`). In the macOS window the open rail is wide
- * enough to hold them in its top row (`railWidth`, `data-rail-holds`), and
- * its controls stand in one column centred under them: halfway between the
- * window's edge and the first card's, which is where the lights' middle
- * button is. The rail's
- * titlebar row holds nothing else: a drag strip, drawn by nothing, so the
- * window still moves by its top edge there.
- */
-.workspace-window[data-rail-holds="window-controls"] {
-  --rail-column: calc(
-    (var(--rail-width) + var(--desktop-gutter) - var(--desktop-control-size)) / 2
-  );
-}
-
-/*
- * In an open rail that holds the traffic lights they stand over the rail,
- * not the workspace, so nothing in the workspace keeps clear of them.
- */
-.workspace-window[data-rail-holds="window-controls"][data-rail="open"],
-.workspace-window[data-rail-holds="window-controls"][data-rail="open"]
-  > .workspace[data-surface] {
-  --desktop-window-controls-inset: var(--desktop-control-edge);
-}
 
 .side-rail {
   position: relative;
@@ -85,14 +51,6 @@
 .side-rail[data-open] {
   width: var(--rail-width);
   opacity: 1;
-}
-
-.side-rail-drag {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: var(--rail-width);
-  height: var(--desktop-titlebar-height);
 }
 
 .side-rail-items {
@@ -233,29 +191,22 @@
   }
 }
 
-/* ——— The toggle: one place in the window's bottom-left corner ——— */
-
 /*
- * The toggle sits in the bottom-left corner in the rail's column — at the
- * control edge, the titlebar's sidebar toggle mirrored, or under the traffic
- * lights where the rail holds them — and stays there open or closed, so it
- * is in whatever is there: the rail, the sidebar card's foot, or a full view's
- * corner (`columns.mjs`, rail-corner). With the rail closed and the Agents
- * sidebar closed by the person there is nothing to sit in, so it hides; ⌘B
- * brings the sidebar, and the toggle, back. A sidebar the window folded for
- * room keeps it, in the corner, so the rail can always come back.
+ * One place, open or closed: the bottom-left corner, in the rail's column —
+ * the rail's items and the titlebar's sidebar toggle stand over it — and on
+ * the footer row's line, 13px above its foot (`ui/identity.css`). Toggling
+ * the rail moves what is beside it, never the toggle under the pointer.
  */
 .side-rail-toggle {
   position: absolute;
   z-index: 42;
-  bottom: var(--desktop-control-edge);
+  bottom: calc(var(--desktop-gutter) + 13px);
   left: var(--rail-column);
 }
 
-/* With no rail and no sidebar card to stand in, it keeps to the corner. */
-.workspace-window[data-rail="closed"]:is([data-sidebar="closed"], [data-rail-view])
-  .side-rail-toggle {
-  left: var(--desktop-control-edge);
+/* The maximized right panel covers the workspace, the rail's toggle with it. */
+.workspace-window[data-panel-maximized] .side-rail-toggle {
+  visibility: hidden;
 }
 
 .side-rail-toggle:active {
@@ -266,25 +217,69 @@
   color: var(--foreground);
 }
 
-/* It leaves and arrives with the sidebar's slide, and sits in a peeked sidebar too. */
 .side-rail-toggle {
   transition:
     color var(--desktop-fast) ease,
     background-color var(--desktop-fast) ease,
-    transform 220ms var(--rail-spring),
+    transform 220ms var(--rail-spring);
+}
+
+/*
+ * Wherever the rail is offered, its toggle is nessa's mark and "nessa Studio"
+ * stands beside it in the corner (`StudioCorner`), one gap after the mark,
+ * the gap Agents' label keeps after its icon. Neither moves when the rail
+ * opens or closes. The sidebar's foot keeps its room, its mark slot on the
+ * icon column: with the rail closed the toggle stands in it; with it open
+ * the toggle stays in the rail and the slot is left empty.
+ */
+.workspace-window:is([data-rail="open"], [data-rail="closed"]) .workspace-identity {
+  padding-left: calc(var(--rail-column) - var(--desktop-gutter));
+}
+
+.workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
+  visibility: hidden;
+}
+
+.desktop-identity-room {
+  height: var(--desktop-control-size);
+}
+
+/* The pill keeps 2px of its padding by the toggle, so it starts where the
+   toggle ends and "nessa" stands 8px past the mark. */
+.side-rail-studio {
+  position: absolute;
+  z-index: 42;
+  bottom: calc(var(--desktop-gutter) + 13px);
+  left: calc(var(--rail-column) + var(--desktop-control-size));
+  display: flex;
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.01em;
+  transition:
     opacity var(--desktop-slow) var(--desktop-out),
     visibility 0s linear 0s;
 }
 
-.workspace-window[data-rail="closed"][data-sidebar-chosen="closed"]:not(
-    [data-rail-view]
-  ):not(:has(.workspace[data-peek]))
-  .side-rail-toggle {
+.side-rail-studio .desktop-identity-button {
+  padding-left: 2px;
+}
+
+/*
+ * It belongs to whatever holds the corner — the sidebar's foot, the session
+ * list's (its rows scroll clear of it), a peeked sidebar or an item's view —
+ * at every window size. Only with the panes alone at the window's left edge
+ * does the toggle's mark stand there by itself: the words never cover a chat.
+ */
+.workspace-window:not([data-rail-view]):has(.workspace[data-panes-alone]:not([data-peek]))
+  .side-rail-studio {
   visibility: hidden;
   opacity: 0;
   transition:
     opacity var(--desktop-slow) var(--desktop-out),
     visibility 0s linear var(--desktop-slow);
+}
+
+.workspace-window[data-panel-maximized] .side-rail-studio {
+  visibility: hidden;
 }
 
 /* The toggle doubles as nessa's mark: its top-right tile is lit. */
@@ -311,22 +306,11 @@
   transform: translate(0.8px, 0.8px);
 }
 
-/*
- * With the rail closed the toggle stands inside the sidebar card's foot, so
- * "nessa Studio" steps right past it by one inset, a hairline apart.
- */
-.workspace-window .workspace-identity {
-  transition: padding-left var(--desktop-slow) var(--desktop-out);
-}
-
-.workspace-window[data-rail="closed"] .workspace-identity {
-  padding-left: calc(
-    var(--rail-column) - var(--desktop-gutter) + var(--desktop-control-size) +
-      var(--desktop-control-inset)
-  );
-}
-
 /* ——— An item's full view ——— */
+
+.workspace-window[data-rail-view] > .workspace-titlebar {
+  z-index: 42;
+}
 
 /*
  * An item's view owns everything beside the rail, edge to edge, over the
@@ -350,21 +334,6 @@
 }
 
 /* "nessa Studio" in a full view: where the sidebar card's foot puts it. */
-.rail-view-foot {
-  position: absolute;
-  bottom: var(--desktop-gutter);
-  left: var(--desktop-gutter);
-}
-
-/* The window still moves by its top edge: a drag strip, drawn by nothing. */
-.rail-view-drag {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: var(--desktop-window-controls-inset);
-  height: var(--desktop-titlebar-height);
-}
-
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view),
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
   animation: none !important;

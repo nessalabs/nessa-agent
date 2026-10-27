@@ -4,6 +4,7 @@ title: "an admitted message streams through the SDK and settles"
 kind: "operation"
 status: "mixed"
 summary: "An accepted message waits for its agent and execution slot."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "crates/nessa-sdk/src/application/agent_execution/agents/agent.rs"
@@ -46,6 +47,8 @@ stateDiagram-v2
     Failed --> [*]
     Settled --> [*]
 ```
+
+A recognized usage-limit result is terminal for this work. The gateway's opt-in [scheduled continuation](usage-limit-continuation.md) is a separate durable message lifecycle, rather than ordinary SDK failure backoff.
 
 ## Further reading
 

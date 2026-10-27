@@ -5,11 +5,13 @@
 import {
   useLayoutEffect,
   useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
 } from "react"
+import { PortalContainerProvider } from "@nessa-ui/react/lib/portal-container"
 import { IdentityButton, IdentityRow } from "../../ui/identity"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../ui/history-buttons"
@@ -79,193 +81,200 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
   } = model
   const Page = settingsTabPages[tab]
   const sidebarLabel = `${sidebarAction} (${sidebarShortcut})`
+  // Where the UI kit's layers opened from a page land — a modal, a menu, a
+  // tooltip. Settings is a fixed layer above the window, so one portalled to
+  // the body would be drawn underneath it; inside, it paints over the page.
+  const [layers, setLayers] = useState<HTMLDivElement | null>(null)
   return (
-    <div
-      ref={rootRef}
-      className="settings"
-      data-host={hostKind}
-      data-surface={browserSurface ? "browser" : "window"}
-      data-desktop-theme={theme}
-      data-sidebar={sidebarOpen ? "open" : "closed"}
-      data-peek={revealed || undefined}
-      style={{ "--settings-sidebar-w": `${settingsSidebar.width}px` } as CSSProperties}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Settings"
-      tabIndex={-1}
-    >
-      <div className="desktop-ambient" aria-hidden="true">
-        <span className="desktop-grain" />
-      </div>
-
-      {/* The drag strip and its stationary controls, where the app keeps its own. */}
-      <div className="settings-titlebar" data-tauri-drag-region>
-        <button
-          ref={toggleRef}
-          type="button"
-          className="settings-titlebar-button"
-          aria-label={sidebarLabel}
-          {...tooltip(sidebarAction, { shortcut: sidebarShortcut })}
-          aria-expanded={sidebarOpen}
-          aria-controls="settings-sidebar"
-          onClick={toggleSidebar}
-        >
-          <DesktopIcon name="sidebar" />
-        </button>
-        <HistoryButtons />
-        <button
-          type="button"
-          className="settings-titlebar-button settings-titlebar-back"
-          aria-label="Back to nessa Agent"
-          {...tooltip("Back to nessa Agent")}
-          tabIndex={sidebarOpen ? -1 : 0}
-          aria-hidden={sidebarOpen || undefined}
-          onClick={onClose}
-        >
-          <DesktopIcon name="chevronLeft" />
-        </button>
-      </div>
-
-      {sidebarOpen ? null : <EdgePeekStrip peek={peek} onDragOut={revealSidebar} />}
+    <PortalContainerProvider container={layers}>
       <div
-        ref={sidebarRef}
-        id="settings-sidebar"
-        className="settings-sidebar"
-        inert={!sidebarOpen && !revealed}
-        aria-hidden={(!sidebarOpen && !revealed) || undefined}
-        {...(sidebarOpen ? {} : peek.holders)}
+        ref={rootRef}
+        className="settings"
+        data-host={hostKind}
+        data-surface={browserSurface ? "browser" : "window"}
+        data-desktop-theme={theme}
+        data-sidebar={sidebarOpen ? "open" : "closed"}
+        data-peek={revealed || undefined}
+        style={{ "--settings-sidebar-w": `${settingsSidebar.width}px` } as CSSProperties}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        tabIndex={-1}
       >
-        <nav className="settings-glass" aria-label="Settings categories">
-          <label className="settings-search">
-            <DesktopIcon name="search" />
-            <input
-              ref={searchRef}
-              type="search"
-              placeholder="Search"
-              aria-label="Search settings"
-              aria-controls="settings-results"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && results[0]) {
-                  go(results[0])
-                } else if (event.key === "ArrowDown") {
-                  event.preventDefault()
-                  resultsRef.current?.querySelector("button")?.focus()
-                } else if (event.key === "Escape" && query) {
-                  // Clears the search; Esc never closes Settings.
-                  event.stopPropagation()
-                  setQuery("")
-                }
-              }}
-            />
-            {query ? (
-              <button
-                type="button"
-                className="settings-search-clear"
-                aria-label="Clear search"
-                onClick={() => {
-                  setQuery("")
-                  searchRef.current?.focus()
-                }}
-              >
-                <DesktopIcon name="close" />
-              </button>
-            ) : null}
-          </label>
-
-          {query.trim() ? (
-            <ul
-              ref={resultsRef}
-              id="settings-results"
-              className="settings-nav"
-              aria-label="Search results"
-            >
-              {results.map((match, index) => (
-                <li key={settingsResultKey(match)}>
-                  <button
-                    type="button"
-                    className="settings-nav-item settings-result"
-                    aria-current={
-                      settingsResultKey(match) === picked ? "true" : undefined
-                    }
-                    onClick={() => go(match)}
-                    onKeyDown={(event) => moveInResults(event, index)}
-                  >
-                    <DesktopIcon
-                      name={categoryIcons[match.category]}
-                      className="settings-nav-icon"
-                    />
-                    <span className="settings-result-text">
-                      <span>{match.label}</span>
-                      {match.trail ? <small>{match.trail}</small> : null}
-                    </span>
-                  </button>
-                </li>
-              ))}
-              {results.length === 0 ? (
-                <li className="settings-nav-empty">No results for “{query.trim()}”</li>
-              ) : null}
-            </ul>
-          ) : (
-            <ul className="settings-nav">
-              {settingsCategories.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    className="settings-nav-item"
-                    aria-current={item.id === category ? "page" : undefined}
-                    onClick={() => chooseCategory(item.id)}
-                  >
-                    <DesktopIcon
-                      name={categoryIcons[item.id]}
-                      className="settings-nav-icon"
-                    />
-                    {item.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* Where "nessa Studio" opened Settings, the way back to the app. */}
-          <IdentityRow as="div">
-            <IdentityButton
-              product="Agent"
-              back
-              label="Back to nessa Agent"
-              onClick={onClose}
-            />
-          </IdentityRow>
-        </nav>
-      </div>
-
-      <main
-        ref={contentRef}
-        className="settings-content"
-        aria-labelledby="settings-heading"
-      >
-        {/* The page's drag strip; its title shows once the masthead's has scrolled away. */}
-        <div className="settings-bar" data-tauri-drag-region>
-          <span className="settings-bar-title" aria-hidden="true">
-            {settingsCategory(category).label}
-          </span>
+        <div className="desktop-ambient" aria-hidden="true">
+          <span className="desktop-grain" />
         </div>
-        <div ref={scrollRef} className="settings-scroll">
-          <SettingsPage
-            key={category}
-            category={category}
-            tab={tab}
-            tabs={tabsShown ? tabs : undefined}
-            onTab={showTab}
+
+        {/* The drag strip and its stationary controls, where the app keeps its own. */}
+        <div className="settings-titlebar" data-tauri-drag-region>
+          <button
+            ref={toggleRef}
+            type="button"
+            className="settings-titlebar-button"
+            aria-label={sidebarLabel}
+            {...tooltip(sidebarAction, { shortcut: sidebarShortcut })}
+            aria-expanded={sidebarOpen}
+            aria-controls="settings-sidebar"
+            onClick={toggleSidebar}
           >
-            <FoundSetting.Provider value={found}>
-              <Page />
-            </FoundSetting.Provider>
-          </SettingsPage>
+            <DesktopIcon name="sidebar" />
+          </button>
+          <HistoryButtons />
+          <button
+            type="button"
+            className="settings-titlebar-button settings-titlebar-back"
+            aria-label="Back to nessa Agent"
+            {...tooltip("Back to nessa Agent")}
+            tabIndex={sidebarOpen ? -1 : 0}
+            aria-hidden={sidebarOpen || undefined}
+            onClick={onClose}
+          >
+            <DesktopIcon name="chevronLeft" />
+          </button>
         </div>
-      </main>
-    </div>
+
+        {sidebarOpen ? null : <EdgePeekStrip peek={peek} onDragOut={revealSidebar} />}
+        <div
+          ref={sidebarRef}
+          id="settings-sidebar"
+          className="settings-sidebar"
+          inert={!sidebarOpen && !revealed}
+          aria-hidden={(!sidebarOpen && !revealed) || undefined}
+          {...(sidebarOpen ? {} : peek.holders)}
+        >
+          <nav className="settings-glass" aria-label="Settings categories">
+            <label className="settings-search">
+              <DesktopIcon name="search" />
+              <input
+                ref={searchRef}
+                type="search"
+                placeholder="Search"
+                aria-label="Search settings"
+                aria-controls="settings-results"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && results[0]) {
+                    go(results[0])
+                  } else if (event.key === "ArrowDown") {
+                    event.preventDefault()
+                    resultsRef.current?.querySelector("button")?.focus()
+                  } else if (event.key === "Escape" && query) {
+                    // Clears the search; Esc never closes Settings.
+                    event.stopPropagation()
+                    setQuery("")
+                  }
+                }}
+              />
+              {query ? (
+                <button
+                  type="button"
+                  className="settings-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setQuery("")
+                    searchRef.current?.focus()
+                  }}
+                >
+                  <DesktopIcon name="close" />
+                </button>
+              ) : null}
+            </label>
+
+            {query.trim() ? (
+              <ul
+                ref={resultsRef}
+                id="settings-results"
+                className="settings-nav"
+                aria-label="Search results"
+              >
+                {results.map((match, index) => (
+                  <li key={settingsResultKey(match)}>
+                    <button
+                      type="button"
+                      className="settings-nav-item settings-result"
+                      aria-current={
+                        settingsResultKey(match) === picked ? "true" : undefined
+                      }
+                      onClick={() => go(match)}
+                      onKeyDown={(event) => moveInResults(event, index)}
+                    >
+                      <DesktopIcon
+                        name={categoryIcons[match.category]}
+                        className="settings-nav-icon"
+                      />
+                      <span className="settings-result-text">
+                        <span>{match.label}</span>
+                        {match.trail ? <small>{match.trail}</small> : null}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+                {results.length === 0 ? (
+                  <li className="settings-nav-empty">No results for “{query.trim()}”</li>
+                ) : null}
+              </ul>
+            ) : (
+              <ul className="settings-nav">
+                {settingsCategories.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className="settings-nav-item"
+                      aria-current={item.id === category ? "page" : undefined}
+                      onClick={() => chooseCategory(item.id)}
+                    >
+                      <DesktopIcon
+                        name={categoryIcons[item.id]}
+                        className="settings-nav-icon"
+                      />
+                      {item.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* Where "nessa Studio" opened Settings, the way back to the app. */}
+            <IdentityRow as="div" mark="none">
+              <IdentityButton
+                product="Agent"
+                back
+                label="Back to nessa Agent"
+                onClick={onClose}
+              />
+            </IdentityRow>
+          </nav>
+        </div>
+
+        <main
+          ref={contentRef}
+          className="settings-content"
+          aria-labelledby="settings-heading"
+        >
+          {/* The page's drag strip; its title shows once the masthead's has scrolled away. */}
+          <div className="settings-bar" data-tauri-drag-region>
+            <span className="settings-bar-title" aria-hidden="true">
+              {settingsCategory(category).label}
+            </span>
+          </div>
+          <div ref={scrollRef} className="settings-scroll">
+            <SettingsPage
+              key={category}
+              category={category}
+              tab={tab}
+              tabs={tabsShown ? tabs : undefined}
+              onTab={showTab}
+            >
+              <FoundSetting.Provider value={found}>
+                <Page />
+              </FoundSetting.Provider>
+            </SettingsPage>
+          </div>
+        </main>
+        <div ref={setLayers} className="settings-layers" data-settings-layers />
+      </div>
+    </PortalContainerProvider>
   )
 }
 

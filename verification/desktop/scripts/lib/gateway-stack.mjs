@@ -23,6 +23,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 
 import {
   MODELS,
+  SERVER,
   agentCommand,
   repoRoot,
   serverScript,
@@ -73,11 +74,6 @@ export async function panelTarget(stack, fields = {}) {
 
 const recorder = join(repoRoot, "scripts/mcp-test-server/acp-recorder.mjs")
 
-/** `argv` with `acp-recorder.mjs` writing `logPath` in front of it. */
-function recorded(logPath, argv) {
-  return [process.execPath, recorder, logPath, ...argv]
-}
-
 /**
  * How the gateway starts the scripted agent as `agent`'s runtime, and how it
  * starts `mcptest`. `tool` is the recorded-frame default; `scenario` is a
@@ -88,14 +84,9 @@ function recorded(logPath, argv) {
  */
 export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
   if (!scenario && !tool) throw new Error("a scripted launch names a tool or a scenario")
-  const argv = [
-    process.execPath,
-    join(repoRoot, "scripts/mcp-test-server/scripted-agent.mjs"),
-    agent,
-  ]
-  if (scenario) argv.push("--scenario", scenario)
-  else argv.push(tool)
-  let commandArgv = argv
+  const script = join(repoRoot, "scripts/mcp-test-server/scripted-agent.mjs")
+  const semanticArgs = scenario ? [agent, "--scenario", scenario] : [agent, tool]
+  let stagedRuntime = [script]
   let mcp = { command: process.execPath, args: [serverScript] }
   if (evidence) {
     mkdirSync(evidence, { recursive: true })
@@ -103,14 +94,21 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
     const mcpLog = join(evidence, "mcp.jsonl")
     writeFileSync(acp, "")
     writeFileSync(mcpLog, "")
-    commandArgv = recorded(acp, argv)
+    stagedRuntime = [recorder, acp, process.execPath, script]
     mcp = {
       command: process.execPath,
       args: [recorder, mcpLog, process.execPath, serverScript],
     }
   }
+  const argv = [process.execPath, ...stagedRuntime, ...semanticArgs]
   return {
-    command: { argv: commandArgv, model: MODELS[agent], path: null },
+    command: {
+      argv,
+      stagedRuntime,
+      semanticArgs,
+      model: MODELS[agent],
+      path: null,
+    },
     mcp,
     signedOut: true,
   }
@@ -121,7 +119,9 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
  * `as` the gateway's owner (the default) or its panel. With `scripted`, a tool
  * name, the scripted agent is the runtime and calls that tool. With
  * `scenario`, it runs that file. With `evidence`, the run's logs are written
- * there. `limits` and `native` are the gateway config's sections (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
+ * there. With `others`, agents besides `options.agent`, each is configured
+ * as the scripted agent too, speaking its own profile, so a conversation can
+ * be switched to it. `limits` and `native` are the gateway config's sections (`startLocalGateway`); `environment` is more of the gateway's environment, and `servers` more stored MCP servers beside `mcptest`. `options.mode` `prod` previews a production build; the default is a
  * dev server. Resolves with `{ url, mode, close, client, gateway, timings,
  * token }`: `url` the desktop page, `token()` the owner token, `close()`
  * stops all three. A gateway that does not start is "could not run", with
@@ -130,7 +130,17 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
 export async function startGatewayStack(
   options,
   instance,
-  { as = "owner", scripted, scenario, evidence, limits, native } = {},
+  {
+    as = "owner",
+    scripted,
+    scenario,
+    evidence,
+    limits,
+    native,
+    environment,
+    servers = [],
+    others = [],
+  } = {},
 ) {
   const agent = options.agent
   if (!["claude", "codex"].includes(agent))
@@ -140,6 +150,23 @@ export async function startGatewayStack(
       ? scriptedLaunch(agent, { tool: scripted, scenario, evidence })
       : null
   const command = launch?.command ?? agentCommand(agent)
+  if (others.length > 0 && !launch)
+    throw new Error("other agents are configured only for a scripted launch")
+  const runtimes = Object.fromEntries(
+    others.map((other) => {
+      const { command: each } = scriptedLaunch(other, { tool: scripted, scenario })
+      return [
+        other,
+        {
+          command: each.argv[0],
+          stagedRuntime: each.stagedRuntime,
+          args: each.semanticArgs,
+          model: each.model,
+          toolsEnabled: true,
+        },
+      ]
+    }),
+  )
   const timings = {}
   let started = Date.now()
   const gateway = await startLocalGateway({
@@ -147,18 +174,33 @@ export async function startGatewayStack(
     port: await freePort(),
     instance,
     agentArgv: command.argv,
+    stagedRuntime: command.stagedRuntime,
+    semanticArgs: command.semanticArgs,
     model: command.model,
     path: command.path,
-    mcpServer: launch?.mcp ?? { command: process.execPath, args: [serverScript] },
+    mcpServers: [
+      {
+        name: SERVER,
+        ...(launch?.mcp ?? { command: process.execPath, args: [serverScript] }),
+      },
+      ...servers,
+    ],
     signedOut: launch?.signedOut ?? false,
     limits,
     native,
+    environment,
+    runtimes,
+    evidence,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
-    if (evidence && error.gatewayLog)
-      writeFileSync(join(evidence, "gateway.log"), error.gatewayLog)
-    throw new CannotRun(`the gateway did not start: ${error.message.split("\n")[0]}`)
+    // The gateway owner already attempted evidence retention before cleanup.
+    // A second write here can erase both startup and retention failures.
+    const failure = new CannotRun(
+      `the gateway did not start: ${error.message.split("\n")[0]}`,
+    )
+    failure.cause = error
+    throw failure
   })
   timings.gatewayMs = Date.now() - started
   let dev = null
@@ -174,10 +216,12 @@ export async function startGatewayStack(
       try {
         stopped = await gateway.stop()
       } finally {
-        // After the stop: its last lines are in the log, and the directory
-        // they are not stored in is gone. The evidence copy is this process's.
-        if (evidence) writeFileSync(join(evidence, "gateway.log"), gateway.log())
-        if (!stopped) log(`the gateway (pid ${gateway.server.pid}) did not exit`)
+        if (
+          !stopped &&
+          gateway.server.exitCode === null &&
+          gateway.server.signalCode === null
+        )
+          log(`the gateway (pid ${gateway.server.pid}) did not exit`)
       }
     }
   }

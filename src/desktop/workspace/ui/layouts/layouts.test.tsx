@@ -4,10 +4,12 @@
  * with a `SidebarRegion`, so the keyboard — every key of the shared map —
  * the switcher and the titlebar's controls are the same in both.
  */
+import { readFileSync } from "node:fs"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { FoldMark } from "./column-paint"
 import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../../../clock"
@@ -15,20 +17,28 @@ import {
   closePane,
   focusPane,
   loadWorkspace,
+  movePane,
   newSession,
   openBeside,
+  openSession,
   openWidget,
+  setComposerText,
   showContent,
+  toggleSidebar,
 } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import {
   controlledAnimationFrames,
+  fakeSource,
   flushAnimationFrames,
+  opus,
   settle,
   shownBy,
   testStore,
 } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
+import { workspaceActions } from "../../adapters/store/slice"
+import { selectSession } from "../../adapters/store/selectors"
 import {
   openReviewEvent,
   waitingReviewNotices,
@@ -59,6 +69,8 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia
   host = document.createElement("div")
   document.body.append(host)
+  // The right panel remembers its place between launches; each test starts closed.
+  window.localStorage.removeItem("nessa.desktop.right-panel")
 })
 
 afterEach(() => {
@@ -135,6 +147,7 @@ function outcome(store: ReturnType<typeof testStore>) {
     sidebar: state.chrome.sidebar,
     content: state.content,
     dialog: host.querySelector('[role="dialog"]')?.getAttribute("aria-label") ?? null,
+    panel: host.querySelector<HTMLElement>("[data-workspace]")?.dataset.panel,
   }
 }
 
@@ -165,10 +178,14 @@ describe("both layouts are the one shell", () => {
           </Provider>,
         ),
       )
-      const titlebar = [...host.querySelectorAll(".workspace-titlebar button")].map(
-        (button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""),
+      const titlebar = [
+        ...host.querySelectorAll(".workspace-titlebar-navigation button"),
+      ].map((button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""))
+      expect(titlebar).toEqual(
+        name === "three columns"
+          ? ["Hide Sidebar", "Hide Session List", "Go Back", "Go Forward"]
+          : ["Hide Sidebar", "New Session", "Go Back", "Go Forward"],
       )
-      expect(titlebar.slice(0, 3)).toEqual(["Hide Sidebar", "Go Back", "Go Forward"])
       await act(async () => press("switcher"))
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
         "Jump to",
@@ -181,6 +198,154 @@ describe("both layouts are the one shell", () => {
       )
       await act(async () => root.unmount())
     })
+})
+
+describe("the right panel, in both layouts", () => {
+  // Wide enough that the panel's room folds no column.
+  const width = window.innerWidth
+  beforeEach(() => {
+    window.innerWidth = 2400
+  })
+  afterEach(() => {
+    window.innerWidth = width
+  })
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`opens, expands for the chat in front, docks for what brings another and for Escape, and remembers its place, in ${name}`, async () => {
+      const { store, root } = await render(Layout)
+      const panel = () => host.querySelector<HTMLElement>("#workspace-panel") ?? host
+      const button = (label: string) =>
+        [
+          ...host.querySelectorAll<HTMLButtonElement>(
+            ".workspace-titlebar-trailing button",
+          ),
+        ].find((each) => each.getAttribute("aria-label")?.startsWith(label))
+      expect(panel().hasAttribute("inert")).toBe(true)
+      expect(button("Expand Panel")).toBeUndefined()
+      await act(async () => button("Show Panel")?.click())
+      expect(panel().hasAttribute("inert")).toBe(false)
+      expect(panel().textContent).toBe("Nothing open")
+      expect(host.querySelector('[aria-label="Resize Panel"]')).not.toBeNull()
+      // Maximized, it covers the workspace: what is under it is inert.
+      await act(async () => button("Expand Panel")?.click())
+      expect(panel().dataset.maximized).toBe("true")
+      const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar") ?? host
+      const covered = () =>
+        [".workspace-sidebar", ".split-panes-grid", ".workspace-overview-layer"].map(
+          (selector) => host.querySelector(selector)?.closest("[inert]") !== null,
+        )
+      expect(covered()).toEqual([true, true, true])
+      expect(panel().closest("[inert]")).toBeNull()
+      // It is the chat in front's, and no toggle for the columns it covers shows.
+      expect(button("Restore Panel")?.getAttribute("aria-pressed")).toBe("true")
+      expect(
+        host.querySelector('.workspace-titlebar [aria-controls="workspace-sidebar"]'),
+      ).toBeNull()
+      expect(
+        [...host.querySelectorAll(".workspace-titlebar button")].some((each) =>
+          each.getAttribute("aria-label")?.includes("Session List"),
+        ),
+      ).toBe(false)
+      // A window key brings the workspace back before it acts, so what it opens is seen.
+      await act(async () => press("switcher"))
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      expect(host.querySelector('[role="dialog"]')).not.toBeNull()
+      await act(async () => press("switcher"))
+      await act(async () => button("Expand Panel")?.click())
+      // A session brought in front by anything else — a notice, a menu — docks it too.
+      await act(async () => store.dispatch(openSession({ sessionId: "a" })))
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      // And the overview over the panes.
+      await act(async () => button("Expand Panel")?.click())
+      await act(async () => store.dispatch(showContent({ content: "agents" })))
+      expect(panel().dataset.maximized).toBeUndefined()
+      await act(async () => store.dispatch(showContent({ content: "panes" })))
+      await act(async () => button("Expand Panel")?.click())
+      expect(panel().dataset.maximized).toBe("true")
+      // An Escape a menu or dialog over it takes is theirs, not the panel's.
+      const menu = document.createElement("div")
+      menu.setAttribute("role", "menu")
+      document.body.append(menu)
+      await act(async () =>
+        menu.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      menu.remove()
+      expect(panel().dataset.maximized).toBe("true")
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      expect(sidebar.closest("[inert]")).toBeNull()
+      expect(
+        JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null"),
+      ).toMatchObject({
+        open: true,
+      })
+      // ⌥⌘B while expanded hides it: docked, closed, and remembered closed.
+      await act(async () => button("Expand Panel")?.click())
+      await act(async () => press("togglePanel"))
+      expect(panel().hasAttribute("inert")).toBe(true)
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      expect(
+        JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null"),
+      ).toMatchObject({ open: false })
+      await act(async () => root.unmount())
+    })
+
+  it("is room the side columns are fitted around: opened in a narrow window, a column folds for it", async () => {
+    // Open beside two panes at this width, nothing folds; the panel's room does.
+    const folds: Record<string, boolean>[] = []
+    for (const panel of [false, true]) {
+      window.innerWidth = 1500
+      window.localStorage.setItem(
+        "nessa.desktop.right-panel",
+        JSON.stringify({ open: panel, width: 360 }),
+      )
+      const { store, root } = await render(ThreeColumns)
+      await act(async () => settle())
+      const chrome = store.getState().workspace.chrome
+      folds.push({ sidebar: chrome.sidebar.folded, list: chrome.sessionList.folded })
+      await act(async () => root.unmount())
+    }
+    expect(folds[0]).toEqual({ sidebar: false, list: false })
+    expect(folds[1]).not.toEqual(folds[0])
+  })
+
+  it("moves its edge, and the sidebar's, from the widths they are drawn at", async () => {
+    window.localStorage.setItem(
+      "nessa.desktop.right-panel",
+      JSON.stringify({ open: true, width: 360 }),
+    )
+    const { store, root } = await render(ThreeColumns)
+    const key = (label: string, code: string) =>
+      act(async () =>
+        host
+          .querySelector(`[aria-label="${label}"]`)
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key: code, bubbles: true })),
+      )
+    const stored = () =>
+      JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null")
+    // One arrow is one step either way: the box's gutter is not counted in.
+    await key("Resize Panel", "ArrowLeft")
+    expect(stored()).toEqual({ open: true, width: 376 })
+    await key("Resize Panel", "ArrowRight")
+    expect(stored()).toEqual({ open: true, width: 360 })
+    await key("Resize Sidebar", "ArrowRight")
+    expect(store.getState().workspace.chrome.sidebarWidth).toBe(256)
+    await key("Resize Sidebar", "ArrowLeft")
+    expect(store.getState().workspace.chrome.sidebarWidth).toBe(240)
+    await act(async () => root.unmount())
+  })
 })
 
 describe("Agents in the sidebar is a place to go, like a channel", () => {
@@ -255,6 +420,7 @@ describe("every key of the shared map does the same in both layouts", () => {
     search: { columns: null, sidebar: "Jump to" },
   }
   const pressAll = async (command: string, Layout: typeof ThreeColumns) => {
+    window.localStorage.removeItem("nessa.desktop.right-panel")
     const { store, root } = await render(Layout, command)
     const list = () => store.getState().workspace.chrome.sessionList.open
     const listBefore = list()
@@ -394,7 +560,9 @@ describe("a session's row carries its session to the panes by its pane item", ()
   ] as const)
     it(`in ${name}`, async () => {
       const { root } = await render(Layout)
-      const carried = [...host.querySelectorAll("[data-drag-item]")].map((row) => ({
+      const carried = [
+        ...host.querySelectorAll("[data-session-row][data-drag-item]"),
+      ].map((row) => ({
         row: row.getAttribute("data-session-row"),
         item: paneItemOf(row.getAttribute("data-drag-item") ?? ""),
       }))
@@ -406,7 +574,7 @@ describe("a session's row carries its session to the panes by its pane item", ()
 })
 
 describe("a pane's close is offered where closing it does something", () => {
-  it("offers it on every pane of several, on a last one showing a session or a widget, and not on a last home", async () => {
+  it("offers it on every pane of several, on a last one showing a session, and not on a last home", async () => {
     const { store, root } = await render(ThreeColumns)
     const offered = () =>
       [...host.querySelectorAll('.workspace-pane-header [aria-label^="Close Pane"]')].map(
@@ -444,18 +612,493 @@ describe("a pane's close is offered where closing it does something", () => {
       return enabled
     }
     expect(offered()).toEqual([true, true])
-    await act(async () => void store.dispatch(closePane()))
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the closed box away before the assertion.
+    const frames = controlledAnimationFrames()
+    try {
+      await act(async () => void store.dispatch(closePane()))
+      // The closed pane's box stays through the frames a drop's copy and a
+      // column title take, and it keeps the session it showed. The grid
+      // paints the one pane after that.
+      expect(
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        ),
+      ).toEqual(["Session a", "Session b"])
+      expect(offered()).toEqual([true, true])
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        ),
+      ).toEqual(["Session a", "Session b"])
+      expect(offered()).toEqual([true, true])
+      await act(async () => frames.runFrame())
+    } finally {
+      frames.restore()
+    }
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
     await act(async () => void store.dispatch(newSession()))
     expect(offered()).toEqual([false])
     expect(await menuOffers()).toBe(false)
-    await act(async () =>
-      store.dispatch(openWidget({ widget: { plugin: "p", id: "i" }, place: "pane" })),
-    )
-    expect(offered()).toEqual([true])
-    expect(await menuOffers()).toBe(true)
     await act(async () => root.unmount())
+  })
+})
+
+describe("a source removing a session", () => {
+  it("keeps that session in its box until the box goes", async () => {
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the box away before the assertion.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const labels = () =>
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        )
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(selectSession(store.getState(), "b")).toBeUndefined()
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => frames.runFrame())
+      expect(labels()).toEqual(["Session a"])
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps an unsent reply in the box until the box goes", async () => {
+    // The composer fills on a frame. Stepping that frame, and the ones
+    // after the source removes the session, keeps the box from leaving
+    // before the reply is read.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      await act(async () => {
+        store.dispatch(setComposerText({ sessionId: "b", text: "unsent reply" }))
+      })
+      const reply = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (pane) => pane.getAttribute("aria-label") === "Session b",
+        )
+      const textOf = (pane: Element | undefined) =>
+        pane?.querySelector("textarea")?.value ?? ""
+      const modelOf = (pane: Element | undefined) =>
+        pane?.querySelector('[data-slot="model-picker-trigger"]')?.textContent ?? ""
+      const accessOf = (pane: Element | undefined) =>
+        pane?.querySelector("[data-access-mode]")?.getAttribute("data-access-mode") ?? ""
+      for (let step = 0; step < 8 && textOf(reply()) !== "unsent reply"; step++)
+        await act(async () => frames.runFrame())
+      const model = modelOf(reply())
+      const access = accessOf(reply())
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(model.length).toBeGreaterThan(0)
+      expect(access.length).toBeGreaterThan(0)
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(selectSession(store.getState(), "b")).toBeUndefined()
+      expect(store.getState().workspace.composerText).not.toHaveProperty("b")
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(modelOf(reply())).toBe(model)
+      expect(accessOf(reply())).toBe(access)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(modelOf(reply())).toBe(model)
+      expect(accessOf(reply())).toBe(access)
+      await act(async () => frames.runFrame())
+      expect(reply()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps a message still on its way until the box goes", async () => {
+    // The conversation fills on a frame. The message has to be on screen
+    // before the source removes the session, or the box has nothing to keep.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.messageSent({
+            sessionId: "b",
+            initiator: "person",
+            message: {
+              id: "m-out",
+              role: "user",
+              at: 1000,
+              parts: [{ kind: "text", text: "still sending" }],
+              delivery: { state: "sending" },
+            },
+          }),
+        )
+      })
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sendFailed({
+            sessionId: "b",
+            messageId: "m-out",
+            reason: "unavailable",
+          }),
+        )
+      })
+      const bubble = () => pane()?.querySelector('[data-role="user"]')
+      const failure = () => pane()?.querySelector("[data-send-failure]")
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.outbox).not.toHaveProperty("b")
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps a failed read until the box goes", async () => {
+    // The note has to be on screen before the source removes the session,
+    // or the box has nothing to keep. The read never arrived, so the note
+    // is the conversation.
+    const frames = controlledAnimationFrames()
+    try {
+      const source = fakeSource()
+      source.refuse("transcript", "unavailable")
+      const store = testStore(source)
+      await store.dispatch(loadWorkspace())
+      await settle()
+      store.dispatch(openBeside({ sessionId: "b" }))
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const note = () => pane()?.querySelector(".workspace-transcript-note")
+      for (let step = 0; step < 8 && !note(); step++)
+        await act(async () => frames.runFrame())
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.transcriptFailures).not.toHaveProperty("b")
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps Stop until the box goes while a turn was running", async () => {
+    // The turn has to be on screen before the source removes the session,
+    // or the box has nothing to keep. Stop reads that turn.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const send = () => pane()?.querySelector("button.desktop-send")
+      const live = () => pane()?.querySelector(".workspace-live")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: { label: "Running cargo test", since: 1 },
+              approvals: [],
+              revision: 2,
+            },
+          }),
+        )
+      })
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.transcripts).not.toHaveProperty("b")
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps a model change until the box goes", async () => {
+    // The notice has to be on screen before the source removes the session.
+    // The choice and the transcript's model control are already gone then.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const notice = () => pane()?.querySelector(".desktop-composer-notice")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      const chip = () => pane()?.querySelector('[data-slot="model-picker-trigger"]')
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: null,
+              approvals: [],
+              revision: 2,
+              modelControl: {
+                pending: {
+                  requestId: "ask",
+                  requestedModel: opus.modelId,
+                  status: "recovery_required",
+                },
+              },
+            },
+          }),
+        )
+        store.dispatch(
+          workspaceActions.modelChoiceAsked({
+            sessionId: "b",
+            choice: { requestId: "ask", model: opus, state: "asking" },
+          }),
+        )
+      })
+      expect(notice()?.textContent).toBe(
+        "The model change is not confirmed yet. You can send once it settles.",
+      )
+      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.modelChoices).not.toHaveProperty("b")
+      expect(store.getState().workspace.transcripts).not.toHaveProperty("b")
+      expect(notice()?.textContent).toBe(
+        "The model change is not confirmed yet. You can send once it settles.",
+      )
+      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(notice()?.textContent).toBe(
+        "The model change is not confirmed yet. You can send once it settles.",
+      )
+      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps an approval answer until the box goes", async () => {
+    // The refusal has to be on the card before the source removes the session.
+    // The answer is already gone then. A pending answer is that same value.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const failure = () => pane()?.querySelector(".workspace-approval-failure")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: null,
+              approvals: [
+                {
+                  id: "ap",
+                  command: "cargo test",
+                  reason: "Runs the tests.",
+                  origin: { kind: "agent" },
+                  options: [{ id: "deny", label: "Deny", choice: "deny" }],
+                  ask: "tool",
+                },
+              ],
+              revision: 2,
+            },
+          }),
+        )
+        store.dispatch(
+          workspaceActions.approvalAnswering({
+            sessionId: "b",
+            approvalId: "ap",
+            token: "answer",
+          }),
+        )
+        store.dispatch(
+          workspaceActions.approvalFailed({
+            sessionId: "b",
+            approvalId: "ap",
+            token: "answer",
+            reason: "unavailable",
+          }),
+        )
+      })
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.answers).not.toHaveProperty("b")
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+})
+
+describe("a draft's close", () => {
+  it("keeps the home and its unsent text until the box goes", async () => {
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the closed box away before the assertion.
+    const { store, root } = await render(ThreeColumns)
+    const frames = controlledAnimationFrames()
+    try {
+      let draftId = ""
+      await act(async () => {
+        draftId = store.dispatch(newSession({ beside: "right" })) ?? ""
+      })
+      if (!draftId) throw new Error("no draft")
+      await act(async () => {
+        store.dispatch(setComposerText({ sessionId: draftId, text: "unsent line" }))
+      })
+      const homes = () =>
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) => ({
+          label: pane.getAttribute("aria-label"),
+          home: pane.querySelector(".workspace-pane-home") !== null,
+          text: pane.querySelector("textarea")?.value ?? "",
+        }))
+      const showing = () => homes().find((pane) => pane.text === "unsent line")
+      for (let step = 0; step < 8 && !showing(); step++)
+        await act(async () => frames.runFrame())
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      const pane = store.getState().workspace.panes
+      const draftPane = pane
+        ? panesOf(pane).find((item) => shownBy(item) === draftId)
+        : undefined
+      if (!draftPane) throw new Error("draft pane missing")
+      await act(async () => void store.dispatch(closePane({ pane: draftPane.key })))
+      expect(store.getState().workspace.drafts).not.toHaveProperty(draftId)
+      expect(store.getState().workspace.composerText).not.toHaveProperty(draftId)
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      await act(async () => frames.runFrame())
+      expect(showing()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
   })
 })
 
@@ -525,4 +1168,353 @@ describe("a review notice opens its conversation", () => {
     expect(shown()).not.toContain("b")
     await act(async () => root.unmount())
   })
+})
+
+describe("a spare sidebar fold paints before the boxes, and the list keeps its measure", () => {
+  let sheet: HTMLStyleElement
+  beforeEach(() => {
+    sheet = document.createElement("style")
+    const path = "../source-list/source-list.css"
+    sheet.textContent = readFileSync(new URL(path, import.meta.url), "utf8")
+    document.head.append(sheet)
+  })
+  afterEach(() => sheet.remove())
+  const narrow = { width: 500, height: 800, spare: 240 }
+
+  it.each([false, true])(
+    "keeps the sidebar's tree through the fold and releases the list measure after the boxes (replacement=%s)",
+    async (replace) => {
+      const frames = controlledAnimationFrames()
+      const width = window.innerWidth
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+      const store = testStore(undefined, () => narrow)
+      try {
+        await store.dispatch(loadWorkspace())
+        await settle()
+        const root = createRoot(host)
+        await act(async () =>
+          root.render(
+            <Provider store={store}>
+              <ClockProvider now={() => 1000}>
+                <ThreeColumns hostKind="browser" browserSurface />
+              </ClockProvider>
+            </Provider>,
+          ),
+        )
+        const drain = async () => {
+          for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+            await act(async () => frames.runFrame())
+        }
+        await drain()
+        const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+        const list = () => host.querySelector<HTMLElement>("#workspace-sidebar")
+        const position = () => {
+          const element = list()
+          if (!element) throw new Error("missing painted sidebar")
+          return getComputedStyle(element).position
+        }
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(false)
+        expect(position()).toBe("relative")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        await act(async () => {
+          store.dispatch(openBeside({ sessionId: "c" }))
+        })
+        expect(store.getState().workspace.chrome.sidebar.folded).toBe(true)
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        expect(
+          host.querySelector(".workspace-window")?.getAttribute("data-sidebar"),
+        ).toBe("open")
+        await act(async () => frames.runFrame())
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        await act(async () => frames.runFrame())
+        expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(true)
+        expect(position()).toBe("relative")
+        expect(list()?.hasAttribute("inert")).toBe(false)
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        expect(
+          host.querySelector(".workspace-window")?.getAttribute("data-sidebar"),
+        ).toBe("closed")
+        if (replace) {
+          await act(async () => {
+            store.dispatch(openBeside({ sessionId: "d" }))
+          })
+          for (let frame = 0; frame < 2; frame++) {
+            await act(async () => frames.runFrame())
+            expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+            expect(sidebar()?.hasAttribute("data-folding")).toBe(true)
+            expect(position()).toBe("relative")
+            expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+          }
+        }
+        await act(async () => frames.runFrame())
+        // The boxes and the folded window land together. The list's measure
+        // is still the one it had.
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(false)
+        expect(position()).toBe("absolute")
+        expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        await act(async () => frames.runFrame())
+        // Scene text returns on the frame after the boxes. The list's measure
+        // is still the one it had.
+        expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+        expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+        await act(async () => frames.runFrame())
+        expect(list()?.hasAttribute("inert")).toBe(true)
+        expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+        await act(async () => root.unmount())
+      } finally {
+        frames.restore()
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+      }
+    },
+  )
+
+  it("keeps the list measure when a column change reverses after the boxes paint", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+        await act(async () => frames.runFrame())
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      await act(async () => {
+        store.dispatch(closePane())
+      })
+      // The next frame is the one that used to drop the hold, because the
+      // list's painted count was still the original one.
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
+  it("drops a list hold when the shape returns before the next frame", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const drain = async () => {
+        for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+          await act(async () => frames.runFrame())
+      }
+      await drain()
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      await drain()
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      const panes = store.getState().workspace.panes
+      if (!panes) throw new Error("no panes")
+      const keys = panesOf(panes).map((pane) => pane.key)
+      const [first, second] = keys
+      if (first === undefined || second === undefined) throw new Error("one pane")
+      const shape = layoutShape(panes)
+      // The swap queues the hold. The swap back lands before that frame.
+      await act(async () => {
+        store.dispatch(movePane({ pane: first, target: second, zone: "center" }))
+      })
+      await act(async () => {
+        store.dispatch(movePane({ pane: first, target: second, zone: "center" }))
+      })
+      const restored = store.getState().workspace.panes
+      if (!restored) throw new Error("no panes")
+      expect(layoutShape(restored)).toBe(shape)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await drain()
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
+  it("folds a sidebar the person closes before paint", async () => {
+    const frames = controlledAnimationFrames()
+    const store = testStore()
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+        await act(async () => frames.runFrame())
+      await act(async () => {
+        store.dispatch(toggleSidebar())
+      })
+      expect(host.querySelector(".workspace")?.getAttribute("data-sidebar")).toBe(
+        "closed",
+      )
+      expect(frames.pending()).toBe(0)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+})
+
+describe("a spare hold retains only the sidebar row already painted", () => {
+  let sheet: HTMLStyleElement
+  beforeEach(() => {
+    sheet = document.createElement("style")
+    const path = "../source-list/source-list.css"
+    sheet.textContent = readFileSync(new URL(path, import.meta.url), "utf8")
+    document.head.append(sheet)
+  })
+  afterEach(() => sheet.remove())
+
+  for (const [name, Layout] of [
+    ["columns", ThreeColumns],
+    ["sidebar", SessionsInSidebar],
+  ] as const)
+    for (const change of ["swap", "split"] as const)
+      for (const peek of [false, true])
+        it(`${name}: a closed sidebar stays outside the row through ${change}${peek ? " with peek" : ""}`, async () => {
+          const frames = controlledAnimationFrames()
+          let root: Root | undefined
+          try {
+            const rendered = await render(Layout)
+            root = rendered.root
+            const { store } = rendered
+            const drain = async () => {
+              for (let frame = 0; frame < 8; frame++)
+                await act(async () => frames.runFrame())
+            }
+            await drain()
+            if (store.getState().workspace.chrome.sidebar.open)
+              await act(async () => {
+                store.dispatch(toggleSidebar({ open: false }))
+              })
+            await drain()
+            const workspace = host.querySelector<HTMLElement>("[data-workspace]")
+            const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar")
+            if (!workspace || !sidebar) throw new Error("missing workspace sidebar")
+            expect(workspace.dataset.sidebar).toBe("closed")
+            expect(workspace.hasAttribute("data-folding")).toBe(false)
+            workspace.toggleAttribute("data-peek", peek)
+            const panes = store.getState().workspace.panes
+            if (!panes) throw new Error("no panes to rearrange")
+            const [first, second] = panesOf(panes)
+            if (!first || !second) throw new Error("swap needs two panes")
+            await act(async () => {
+              if (change === "swap")
+                store.dispatch(
+                  movePane({ pane: first.key, target: second.key, zone: "center" }),
+                )
+              else store.dispatch(newSession({ beside: "right" }))
+            })
+            let held = false
+            for (let frame = 0; frame < 7; frame++) {
+              await act(async () => frames.runFrame())
+              held ||= workspace.hasAttribute("data-spare-held")
+              expect(workspace.hasAttribute("data-folding")).toBe(false)
+              expect(getComputedStyle(sidebar).position, `frame ${frame}`).toBe(
+                "absolute",
+              )
+            }
+            expect(held).toBe(true)
+            expect(workspace.hasAttribute("data-spare-held")).toBe(false)
+            const keys = [...host.querySelectorAll("[data-pane-key]")].map((pane) =>
+              pane.getAttribute("data-pane-key"),
+            )
+            expect(keys).toHaveLength(change === "swap" ? 2 : 3)
+          } finally {
+            if (root) await act(async () => root?.unmount())
+            frames.restore()
+          }
+        })
+})
+
+it("does not acquire a folding row when mounted after the sidebar already closed", async () => {
+  const frames = controlledAnimationFrames()
+  const store = testStore()
+  const workspace = document.createElement("main")
+  workspace.className = "workspace"
+  workspace.toggleAttribute("data-spare-held", true)
+  document.body.append(workspace)
+  let root: Root | undefined
+  try {
+    await store.dispatch(loadWorkspace())
+    await store.dispatch(toggleSidebar({ open: false }))
+    root = createRoot(host)
+    await act(async () =>
+      root?.render(
+        <Provider store={store}>
+          <FoldMark root={{ current: workspace }} />
+        </Provider>,
+      ),
+    )
+    expect(workspace.dataset.sidebar).toBe("closed")
+    expect(workspace.hasAttribute("data-spare-held")).toBe(true)
+    expect(workspace.hasAttribute("data-folding")).toBe(false)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    workspace.remove()
+    frames.restore()
+  }
 })

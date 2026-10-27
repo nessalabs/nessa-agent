@@ -131,8 +131,11 @@ fn config() -> AcpConfig {
     AcpConfig {
         executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/true")),
         arguments: Vec::new(),
+        staged_runtime_arguments: Vec::new(),
         environment: BTreeMap::new(),
+        runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),
+        open_credentials: Default::default(),
         workspace: PathBuf::from("/tmp"),
         tools_enabled: true,
         mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),

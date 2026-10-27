@@ -60,6 +60,8 @@ export const css = {
   cornerPane: "[data-pane-key][data-split-corner]", // the top-left pane, whose header clears the window's controls when no side column is beside it
   panesAlone: "[data-workspace][data-panes-alone]", // both side columns closed: the corner pane's header steps past the controls
   focusedPane: "[data-pane-key][data-pane-focused]",
+  focusBlocked:
+    "[inert], [data-drag-reflow], [data-split-flying], [data-split-measuring], [data-message-arrival-waiting]",
   workspaceFlight: "[data-split-flipping], [data-split-flying]",
   paneGrid: "[data-split-grid]", // the grid the panes are laid out in — the box the drag measures
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
@@ -74,6 +76,13 @@ export const css = {
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
+  channelAdd: ".workspace-section-add", // class: a sidebar section's +, which opens the "New channel" flow
+  newChannel: ".new-channel", // class: the "New channel" flow over the content region
+  newChannelField: ".new-channel-field", // class: the flow's composer field, for the name and the notes; data-step
+  newChannelAsked: ".new-channel-asked", // class: the question being asked; data-step
+  newChannelAnswered: ".new-channel-answered", // class: an answered question's ✓ line; data-step
+  newChannelResource: ".new-channel-resources li", // a file or folder attached to the channel being made
+  newChannelDrop: ".new-channel-drop", // the drop target, while files are dragged over the flow
   homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
@@ -92,8 +101,11 @@ export const css = {
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
-  widgetPane: "[data-widget-pane]", // a pane showing a widget
-  widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
+  panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
+  chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
+  panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body
+  panelWidgetHead: ".workspace-panel-widget-head", // class: that tab's trail and Open in Window
+  widgetBody: "[data-widget-body]", // a widget's body in the panel or the window, where its caret lands
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
@@ -116,7 +128,6 @@ export const css = {
   subagentDetail: "[data-subagent-detail]", // the open child's conversation
   subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
-  subagentSummary: "[data-subagent-summary]", // the list's counts
   subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its pane header
   avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
   avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show
@@ -150,16 +161,28 @@ export const css = {
   codeBlock: ".workspace-code", // class: a code block in a transcript
   allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
 
+  // The menu-bar panel (index.html)
+  panelTabs: '.nessa-chrome [data-slot="chat-tabs"]', // the panel's tab strip; data-variant="dots"
+  panelCurrent: '.nessa-chrome [data-slot="chat-tabs-current"]', // the selected tab's name, leading the strip
+  panelDot: '.nessa-chrome [data-slot="chat-tab-dot"]', // one page dot per tab; its [data-active] tab is the bar
+  panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
+  panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
+  panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor
+  sentBubble: '[data-slot="chat-bubble"][data-tone="sent"]', // a message the person sent, drawn in the chat accent
+  undoCard: '[data-slot="undo-card"]', // the row card an archive leaves, with Undo
+  randomAvatar: '[data-slot="random-avatar"]', // a conversation's painted avatar
+
   // Side columns
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
   chat: ".workspace-chat", // class: the chat area, the panes' column
+  paneEdge: ".split-panes-pane-edge", // class: the edge between two panes; data-axis, its hairline is ::after
   sideRail: ".side-rail", // class: the rail beside the workspace
   workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
   titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
-  studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
+  studio: '.desktop-identity-button[aria-label="nessa Studio Settings"]', // "nessa Studio", which opens Settings, in every layout
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
@@ -170,6 +193,9 @@ export const css = {
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
   // Approval card (arranged by its own width)
+  approvalCopy: ".workspace-approval-copy",
+  approvalCommandBlock: ".workspace-approval-command-block",
+  approvalDeny: ".workspace-approval-deny",
   approvalCard: ".workspace-approval", // class
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
@@ -198,7 +224,7 @@ export const css = {
   overviewRowItem: ".agents-row-item", // class: a listed row's item
   overviewEdge: ".agents-overview-edge", // class: the resize edge between the list and the peek beside it (role=separator)
   overviewSide: ".agents-overview-side", // class: the list's side of the overview, whose right is the edge
-  overviewSurface: ".agents-overview-surface", // class: the overview's card, holding the list and the peek
+  overviewSurface: ".agents-overview-surface", // class: the overview's surface, holding the list and the peek
   overviewSaid: ".agents-overview-said", // class: the overview's live region, which says what became of an answer
   overviewRow: ".agents-row", // class
   overviewReplyPill: ".agents-reply-pill", // class
@@ -214,8 +240,9 @@ export const css = {
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
-  transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
-  transcriptWorkToggle: ".workspace-work button[aria-expanded]", // completed tool work opens its steps in place
+  transcriptStep: '[data-slot="tool-trace-step"]', // kit slot: one call the agent made, a row of a message's trace
+  transcriptWorkToggle: '.workspace-work [data-slot="tool-trace-line"]', // a run of calls opens its rows in place
+  transcriptWorkEarlier: '.workspace-work [data-slot="tool-trace-earlier"]', // an open run shows the calls folded before its last few
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
   overviewGeometryItems:
     ".agents-overview-group > h2, .agents-row-item, .agents-clear, .agents-overview-resting, .agents-overview-footnote", // classes: list headings, rows and notices whose placement is observed
@@ -236,6 +263,9 @@ export const css = {
   modelPicker: '[data-slot="model-picker-content"]', // its list, a model each role="option"
   modelOption: '.desktop-model-picker [role="option"]', // class: a model in the picker
   modelProviderTab: '.desktop-model-picker [role="tab"]', // class: a provider's tab in the picker
+  // The line where a conversation's agent ran on in a new session
+  // (src/desktop/workspace/ui/transcript/message.tsx); data-handoff is switch or fork
+  handoffLine: '[data-role="handoff"]',
   thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
   thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
   thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
@@ -274,15 +304,25 @@ export const css = {
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
+  githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
+  githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus
+  githubActions: ".settings-github-actions", // Choose repositories and Disconnect; opacity 0 at rest
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
+  linkingSwitch: "[data-linking-switch] [role='switch']", // the Native linking switch
+  tunnel: "[data-tunnel]", // the Web tunnel group: data-tunnel-enabled, data-tunnel-status
+  tunnelSwitch: "[data-tunnel] [role='switch']",
+  tunnelAddress: "[data-tunnel-address]", // the ready tunnel's public address
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',
   linkedPending: '[data-linked="pending"]',
   linkedNotice: "[data-linked-notice]",
+  pairingDialog: '[data-slot="dialog"]:has([data-linked-pairing])', // the modal Pair a device opens: the code and one orb
+  pairingRow: "[data-pairing-row]", // the tab's one Pair a device row
   pairingCode: '[data-slot="pairing-code"]',
   signalOrb: '[data-slot="signal-orb"]',
-  qrOrb: '[data-slot="qr-orb"]',
+  qrOrb: '[data-slot="qr-orb"]', // never drawn: the modal carries the signal orb alone
   fingerprint: '[data-slot="key-fingerprint"]',
 
   // The owner's share dialog (src/desktop/workspace/ui/share/share-dialog.tsx)
@@ -357,7 +397,7 @@ export const selectorFor = {
   /** A row in the open Settings tab, by its catalogue id. */
   settingRow: (id) => `#settings-panel [data-setting="${id}"]`,
   railItem: (id) => `[data-rail-item="${id}"]`, // a place on the side rail: agents, notes, …
-  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
+  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, panel, window
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
   fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode, message, context
@@ -392,6 +432,10 @@ export const selectorFor = {
  */
 export const safeAreaExempt = [
   ".workspace-titlebar",
+  // A header's picture runs up behind the window's controls, to the window's
+  // edge: the night scene or a chosen picture, not one being placed.
+  ".desktop-header-image:not([data-adjusting])",
+  ".desktop-night-scene",
   ".settings-titlebar",
   "[data-slot='app-shell-titlebar']",
   ".desktop-tooltip",
@@ -430,6 +474,17 @@ export const storage = {
   pictureInConversations: "nessa.desktop.picture-in-conversations",
   greeting: "nessa.desktop.greeting",
   sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
+  overviewFilter: "nessa.desktop.workspace.overview-filter", // the Agents overview's filter, as JSON (`remembered-filter.ts`)
+}
+
+/** The number each overview filter choice shows and answers to (`choiceKey`). */
+export const overviewFilterKeys = {
+  ongoing: "1",
+  all: "2",
+  any: "3",
+  today: "4",
+  week: "5",
+  month: "6",
 }
 
 /** The same-window event a stored preference announces a change on. */
@@ -481,6 +536,7 @@ export const keys = {
   toggleSessionList: "Meta+Alt+KeyS",
   newSession: "Meta+KeyN",
   newSessionBeside: "Meta+Shift+KeyN",
+  splitRight: "Meta+KeyD",
   closePane: "Meta+KeyW",
   openBeside: "Meta+Backslash",
   splitDown: "Meta+Shift+Backslash",
@@ -535,9 +591,35 @@ export const names = {
   connections: "Connections",
   integrations: "Integrations",
   linkedDevices: "Linked devices",
+  /** Settings › Connections' tab holding the GitHub sign-in, and its row's buttons. */
+  accounts: "Accounts",
+  githubConnect: "Connect…",
+  githubDisconnect: "Disconnect",
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",
+  /** Settings › Advanced's tab holding first-run setup, and its row's button. */
+  setupTab: "Setup",
+  setupBrowserHint: "Setup can be replayed in the Nessa app.",
+  replayOnboarding: "Replay",
+  /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
+  setup: {
+    welcome: "Welcome to Nessa",
+    getStarted: "Get started",
+    chooseAgent: "Choose an agent",
+    back: "Back",
+    close: "Close setup",
+    continue: "Continue",
+    /** The agents setup lists, by their rows' names; Local AI is coming. */
+    agents: ["Claude", "Codex"],
+    localAi: "Local AI, coming soon",
+    /** Codex not installed: its download card, and the button on it at the
+     * stress installer's 45 MB. */
+    codexCard: "Download Codex",
+    codexDownload: "Download Codex · 45 MB",
+    /** The summon step's ways on: the second until its lesson is done. */
+    finish: ["Start using Nessa", "Skip this step"],
+  },
   /** A session's menu item that opens the share dialog. */
   share: "Share…",
   /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
@@ -811,6 +893,16 @@ export const appReview = {
   title: "Nessa: an app's review",
 }
 
+/** Usage-limit card on the desktop transcript and the panel (#1075). */
+export const usageLimit = {
+  page: "verification/desktop/fixtures/usage-limit/index.html",
+  desktop: "#desktop",
+  panel: "#panel",
+  card: "[data-usage-limit]",
+  detail: "[data-usage-limit-detail]",
+  toggle: "Auto-continue this project's threads when limits reset",
+}
+
 /** Provider recovery fixture and accessible controls (#501). */
 export const providerSignIn = {
   page: "verification/desktop/fixtures/provider-sign-in/index.html",
@@ -972,4 +1064,35 @@ export const composerControls = {
   /** The shield's value for each access mode. */
   accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
   notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
+}
+
+/** Deterministic production-hook/component ordering fixture for #1087. */
+export const userFlowOrdering = {
+  page: "/verification/conversation/user-flow-ordering.html",
+  ready: "[data-user-flow-ordering]",
+  download: 'button[aria-label^="Download Claude"]',
+  permissionSection: 'section[aria-label="Permission revoke ordering fixture"]',
+  revokeRequests: 'output[aria-label="Revoke requests"]',
+  installRequests: 'output[aria-label="Installation requests"]',
+  expanded: 'output[aria-label="Expanded editor"]',
+}
+
+/** Controlled native-hook/notification permission owners, #1087 follow-up. */
+export const settingsActionOwners = {
+  page: "/verification/desktop/fixtures/settings-action-owners/index.html",
+  ready: "[data-settings-action-owners]",
+  native: 'section[aria-label="Native hook ownership"]',
+  notices: 'section[aria-label="Notification permission ownership"]',
+  claude: '[data-setting="claude-native-hooks"] [role="switch"]',
+  codex: '[data-setting="codex-native-hooks"] [role="switch"]',
+  nativeCounts: 'output[aria-label="Native request counts"]',
+  noticeCounts: 'output[aria-label="Notice request counts"]',
+  allow: 'button:has-text("Allow")',
+  acknowledgeA: "A acknowledges save",
+  rereadA: "A finishes reread",
+  replaceNative: "Replace native source",
+  refuseB: "B refuses save",
+  grantA: "A grants notification access",
+  grantB: "B grants notification access",
+  replaceNotice: "Replace notification source",
 }

@@ -25,14 +25,15 @@ sources:
   - "src-tauri/tests/gateway/infrastructure/startup.rs"
   - "src-tauri/tests/gateway/infrastructure/control.rs"
   - "src-tauri/tests/gateway/infrastructure/generation.rs"
-diagramLinks: {}
+diagramLinks:
+  Monitor: gateway-startup-observation
 ---
 
 # recover or update the managed gateway
 
 The native host starts or reconciles the configured gateway. It reports starting, ready or failed. Ready requires a matching service process and live gateway identity, rather than just an HTTP response.
 
-Panel and setup credential loads check readiness again. The desktop window only reads the ready startup snapshot; it does not reconcile the gateway. If that snapshot is starting or failed, its read is refused. Recovery observes recorded progress before repeating effects, and old processes must be safely retired. A failure can preserve the existing service for investigation. Browser and unmanaged debug paths have no native service owner. Configuration-change handling exists as a test path, not a live settings subscription.
+Panel and setup credential loads check readiness again. The desktop window only reads the ready startup snapshot; it does not reconcile the gateway. While the snapshot is starting, its read is held until it is ready, up to a bounded wait; a failed snapshot, or one still starting when the wait ends, is refused. Recovery observes recorded progress before repeating effects, and old processes must be safely retired. A failure can preserve the existing service for investigation. Browser and unmanaged debug paths have no native service owner. Configuration-change handling exists as a test path, not a live settings subscription.
 
 ```mermaid
 stateDiagram-v2
@@ -60,6 +61,15 @@ stateDiagram-v2
         Journal recovery observes effects; no blind replay.
         Unmanaged debug/browser has no native machine.
     end note
+```
+
+## Surface observation
+
+The native service and the surface watching it have separate lifetimes. Open the monitor for snapshot/event ordering, local bridge failure, explicit Retry and listener cleanup.
+
+```mermaid
+flowchart LR
+    Monitor[Observe gateway startup and retry]
 ```
 
 ## Further reading

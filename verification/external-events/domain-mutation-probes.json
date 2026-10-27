@@ -1,0 +1,20 @@
+[
+  {
+    "rule": "empty-id",
+    "mutantCompiled": true,
+    "testExit": 101,
+    "failedTest": "delivery_identity_is_bounded_and_has_an_allowed_alphabet"
+  },
+  {
+    "rule": "id-byte-bound",
+    "mutantCompiled": true,
+    "testExit": 101,
+    "failedTest": "delivery_identity_is_bounded_and_has_an_allowed_alphabet"
+  },
+  {
+    "rule": "id-alphabet",
+    "mutantCompiled": true,
+    "testExit": 101,
+    "failedTest": "delivery_identity_is_bounded_and_has_an_allowed_alphabet"
+  }
+]

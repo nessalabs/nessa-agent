@@ -86,17 +86,23 @@ export const settingsCategories = [
     ],
   },
   {
-    // The home of previews of features not settled yet. The subagents preview
-    // is on offer; with none on offer the page says so, and shows no control
-    // that would do nothing.
+    // The home of previews of features not settled yet, and of first-run
+    // setup for whoever wants to see it again. The subagents preview is on
+    // offer; with none on offer the page says so, and shows no control that
+    // would do nothing.
     id: "advanced",
     label: "Advanced",
-    dek: "Early features you can try before they are finished.",
+    dek: "Early features to try, and first-run setup to replay.",
     tabs: [
       {
         id: "experimental",
         label: "Experimental",
         keywords: "labs preview previews experiments features try",
+      },
+      {
+        id: "setup",
+        label: "Setup",
+        keywords: "onboarding first run welcome intro tour",
       },
     ],
   },
@@ -256,7 +262,7 @@ export const settingsEntries = [
     id: "workspace-layout",
     tab: "layout",
     label: "Layout",
-    keywords: "columns sidebar classic",
+    keywords: "columns sidebar",
   },
   {
     id: "show-session-list",
@@ -335,20 +341,11 @@ export const settingsEntries = [
   },
   // Connections › Accounts
   {
-    id: "nessa-account",
-    pending: true,
-    tab: "accounts",
-    label: "Nessa account",
-    detail: "Sync settings and sessions between your Macs.",
-    keywords: "sign in login",
-  },
-  {
     id: "github",
-    pending: true,
     tab: "accounts",
     label: "GitHub",
-    detail: "Lets agents open pull requests as you.",
-    keywords: "git repository",
+    detail: "Lets agents clone, push, and open pull requests as you.",
+    keywords: "git repository sign in connect app",
   },
   // Connections › Integrations
   {
@@ -443,11 +440,18 @@ export const settingsEntries = [
   {
     id: "side-rail",
     tab: "experimental",
-    // Classic has no workspace shell to stand beside.
-    layouts: ["columns", "sidebar"],
     label: "Side rail",
     detail: "A strip at the window's edge for places beside Agents.",
     keywords: "rail plugins places apps strip",
+  },
+  // Advanced › Setup
+  {
+    id: "replay-onboarding",
+    tab: "setup",
+    label: "Replay onboarding",
+    detail:
+      "Shows first-run setup again. Your agent and settings stay as they are unless you finish it.",
+    keywords: "onboarding setup welcome first run again restart intro",
   },
   { id: "version", tab: "about", label: "Version", keywords: "build release" },
 ] as const satisfies readonly SettingShape[]
@@ -488,6 +492,11 @@ export function settingsCategory(id: SettingsCategoryId): Category {
     settingsCategories.find((category) => category.id === id),
     `category ${id}`,
   )
+}
+
+/** Whether `value` names one of Settings' tabs: what an opening may ask for. */
+export function isSettingsTab(value: unknown): value is SettingsTabId {
+  return typeof value === "string" && tabs.has(value as SettingsTabId)
 }
 
 export function settingsTab(id: SettingsTabId): SettingsTab {

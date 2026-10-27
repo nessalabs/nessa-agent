@@ -68,7 +68,7 @@ pub(super) async fn run(run: Run) {
     let Some(service) = service.as_ref() else {
         refuse!("conversations_not_configured");
     };
-    let mut sources = match Sources::register(&state, Some(service), &session, &target) {
+    let mut sources = match Sources::register(&state, Some(service), &session, &target, None) {
         Ok(sources) => sources,
         Err(code) => refuse!(&code),
     };
@@ -252,7 +252,7 @@ pub(in crate::product) async fn read_event(
             .acquire_owned()
             .await
             .map_err(|_| "unavailable".to_owned())?;
-        let current = match authorize_batch(state, session, target).await {
+        let (current, _) = match authorize_batch(state, session, target).await {
             Ok(current) => current,
             Err(code) => match backoff(
                 code == ConversationErrorCode::TemporarilyUnavailable.as_str(),
@@ -272,7 +272,7 @@ pub(in crate::product) async fn read_event(
         // E22: source I/O may outlive credential or target authority. Admit the
         // returned data/checkpoint for publication while capacity is still held.
         if matches!(&result, Ok(EventRead::Page(_) | EventRead::Idle(_))) {
-            let current = authorize_batch(state, session, target)
+            let (current, _) = authorize_batch(state, session, target)
                 .await
                 .map_err(str::to_owned)?;
             authorize_event_target(service, &current, conversation, request).await?;

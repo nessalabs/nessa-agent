@@ -7,20 +7,9 @@ import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import { expect, it } from "vitest"
 import { classes, marks } from "./split-panes"
+import { paneLimits } from "./split-panes/model/pane-layout"
 
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
-
-/**
- * A pane in the window's corner — or where a drag's preview would put it
- * there (`marks.dragCorner`, `split-panes/adapters/dom/drag.ts`), and not
- * where it would leave — as the stylesheets select it.
- */
-const cornered = `.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [${marks.corner}]:not([${marks.dragCorner}="no"]),
-    [${marks.dragCorner}="yes"]
-  )
-`
 
 it("glides without overshoot: the composer lands, and never passes its place", () => {
   const curve = /--desktop-glide:\s*linear\(([^)]*)\)/.exec(styles)?.[1]
@@ -35,7 +24,7 @@ it("glides without overshoot: the composer lands, and never passes its place", (
   )
 })
 
-it("lands workspace bounds immediately while preserving independent surface and arrival motion", () => {
+it("moves panes and side columns on one drawer motion, instant with reduced motion", () => {
   const token = (sheet: string, name: string) =>
     new RegExp(`${name}:\\s*(\\d+)ms`).exec(sheet)?.[1]
   const full = styles.slice(
@@ -45,8 +34,12 @@ it("lands workspace bounds immediately while preserving independent surface and 
   const reduced = /:root\[data-motion="reduced"\] \[data-surface\] \{([^}]*)\}/.exec(
     styles,
   )?.[1]
-  expect(token(full, "--desktop-flight")).toBe("0")
+  // Panes travel as a side column does: the same duration, and none at all
+  // with reduced motion.
+  expect(token(full, "--desktop-flight")).toBe(token(full, "--desktop-drawer"))
+  expect(Number(token(full, "--desktop-drawer"))).toBe(340)
   expect(token(reduced ?? "", "--desktop-flight")).toBe("0")
+  expect(token(reduced ?? "", "--desktop-drawer")).toBe("0")
   const slow = Number(token(full, "--desktop-slow"))
   expect(slow).toBeGreaterThanOrEqual(200)
   expect(slow).toBeLessThan(300)
@@ -87,17 +80,23 @@ it("starts titlebar-row content at the one safe area, never at a length of its o
       ".settings-titlebar {",
       "var(--desktop-window-controls-inset)",
     ],
-    // A pane in the window's corner starts its header at the safe area.
-    [
-      read("./workspace/ui/panes/panes.css"),
-      `${cornered}  .workspace-pane-header {`,
-      "var(--desktop-titlebar-safe-start)",
-    ],
   ] as const
   for (const [sheet, selector, start] of rules) {
     const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
     expect(body, selector).toContain(`padding-left: ${start}`)
   }
+})
+
+it("gives a below column title the block the bar holds", () => {
+  // A title set below the bar is its sibling, so the block set only on the
+  // bar never reaches it. Both hold the length: the script reads the bar,
+  // and the below title's height is that same length.
+  const sheet = readFileSync(new URL("./ui/column-header.css", import.meta.url), "utf8")
+  const selector = `.desktop-column-bar,
+.desktop-column-title[data-placement="below"]`
+  expect(sheet).toContain(selector)
+  const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
+  expect(body).toContain("--desktop-column-title-block:")
 })
 
 it("starts an inline column title after the window's controls wherever they stand over its column", () => {
@@ -107,17 +106,8 @@ it("starts an inline column title after the window's controls wherever they stan
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
   const rules = [
     [
-      read("./workspace/ui/session-list/session-list.css"),
-      '.workspace[data-sidebar="closed"] .workspace-list .desktop-column-bar {',
-    ],
-    [
       read("./settings/ui/settings.css"),
       '.settings[data-sidebar="closed"] .settings-bar {',
-    ],
-    // The sidebar's own action, in the row the controls stand over.
-    [
-      read("./workspace/ui/source-list/source-list.css"),
-      ".workspace-sidebar > .desktop-column-bar {",
     ],
   ] as const
   for (const [sheet, selector] of rules) {
@@ -261,6 +251,10 @@ it("lifts a drag's copy without painting a shadow", () => {
     .slice(sheet.indexOf(".split-panes-ghost:not([data-drag-waiting]) {"))
     .split("}")[0]
   expect(shown).toMatch(/will-change:\s*transform/)
+  const scene = sheet
+    .slice(sheet.indexOf(".split-panes-ghost .desktop-night-scene {"))
+    .split("}")[0]
+  expect(scene).toMatch(/content-visibility:\s*hidden/)
   // The copy's box is the size `drag.ts` sets. The stylesheet only keeps
   // that box from laying anything out outside itself.
   const band = sheet.slice(sheet.indexOf(`${classes.ghost} {`)).split("}")[0]
@@ -297,7 +291,8 @@ it("holds the ambient blur still while panes travel", () => {
 })
 
 it("drops the composer's blur while a drag is carried and keeps the sidebar treatment stable", () => {
-  const selector = ":root[data-drag-pressing] .desktop-composer {"
+  const selector =
+    ":root[data-drag-pressing] .desktop-composer,\n:root[data-drag-blur] .desktop-composer {"
   expect(styles).toContain(selector)
   const body = styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(body).toMatch(/backdrop-filter:\s*none/)
@@ -311,7 +306,7 @@ it("drops the composer's blur while a drag is carried and keeps the sidebar trea
     .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
     .split("}")[0]
   expect(grain).toMatch(/visibility:\s*hidden/)
-  // The resting shadow stays rather than changing on release.
+  // The sidebar's look stays rather than changing on release.
   expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
   const rows = readFileSync(
     new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
@@ -368,7 +363,7 @@ it("does not paint a carried pane's conversation on the frame it lifts", () => {
   expect(slot).toMatch(/transition:\s*none/)
 })
 
-it("keeps conversation content and pane fill visible while a layout moves", () => {
+it("keeps conversation content and the pane's look visible while a layout moves", () => {
   const sheet = readFileSync(
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
     "utf8",
@@ -451,6 +446,44 @@ it("keeps the list and the panes under the Agents overview laid out", () => {
   expect(overview).not.toMatch(/\.workspace-(?:list|chat)\b/)
 })
 
+it("places a pane with the formula paneBox computes", () => {
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet
+    .slice(sheet.indexOf(".split-panes-grid > [data-pane-key] {"))
+    .split("}")[0]
+  expect(body).toContain(
+    "left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g))",
+  )
+  expect(body).toContain("width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw))")
+  expect(body).toContain(
+    "top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g))",
+  )
+  expect(body).toContain("height: calc((100% - (var(--rn) - 1) * var(--g)) * var(--rh))")
+})
+
+it("lays night-scene text out on the frame after its box is measured", () => {
+  const waiting = styles
+    .slice(styles.indexOf(".desktop-night-scene:not([data-scene-ready])"))
+    .split("}")[0]
+  expect(waiting).toMatch(/content-visibility:\s*hidden/)
+  const dimOnly = styles
+    .slice(
+      styles.indexOf(".desktop-night-scene[data-scene-ready]:not([data-scene-complete])"),
+    )
+    .split("}")[0]
+  expect(dimOnly).toContain(".desktop-night-scene-rain")
+  expect(dimOnly).toContain(".desktop-night-scene-steam")
+  expect(dimOnly).toMatch(/content-visibility:\s*hidden/)
+  const layers = styles
+    .slice(styles.indexOf(".desktop-night-scene-layers {"))
+    .split("}")[0]
+  expect(layers).toMatch(/width:\s*max-content/)
+  expect(layers).toMatch(/contain:\s*layout paint style/)
+})
+
 it("keeps a conversation's sliver of the header still, beneath the text, and out of short panes", () => {
   const body = (selector: string) => styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(styles).toContain(".desktop-header[data-sliver] {")
@@ -477,23 +510,38 @@ it("keeps a running step's time on one line, whatever the pane's width", () => {
   expect(body).toMatch(/flex-shrink:\s*0/)
 })
 
-it("paints nothing of a pane under the window's controls: its content below the titlebar row, its picture band after them", () => {
+it("puts nothing of a pane but its picture under the window's controls: its header is the titlebar row, stepping past them in the corner", () => {
   const panes = readFileSync(
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
     "utf8",
   )
   const body = (sheet: string, selector: string) =>
     sheet.slice(sheet.indexOf(selector)).split("}")[0]
-  // The header is the titlebar row; what follows it starts below the titlebar's height.
+  // A top-row pane's header fills the titlebar row — a gutter, the header,
+  // a gutter: `--desktop-titlebar-height` — so what follows begins below it.
+  expect(body(panes, ".workspace-pane {")).toMatch(
+    /--workspace-pane-top:\s*calc\(max\(0, 1 - var\(--ri\)\) \* var\(--desktop-gutter\)\)/,
+  )
   expect(body(panes, ".workspace-pane-header {")).toMatch(
-    /margin-bottom:\s*calc\(\s*var\(--desktop-titlebar-height\) - var\(--desktop-gutter\)/,
+    /height:\s*calc\(var\(--desktop-control-size\) \+ 2 \* var\(--desktop-control-inset\)\)/,
   )
-  // In the corner, the band begins after the controls.
-  const corner = `${cornered}  .desktop-header[data-sliver] {`
-  expect(styles).toContain(corner)
-  expect(body(styles, corner)).toMatch(
-    /left:\s*calc\(var\(--desktop-titlebar-safe-start\) - var\(--desktop-gutter\)\)/,
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /margin:\s*var\(--workspace-pane-top\) 0/,
   )
+  expect(body(panes, ".workspace-widget-window {")).toMatch(
+    /--workspace-pane-top:\s*var\(--desktop-gutter\)/,
+  )
+  // In the corner, the header's name and controls start after the window's.
+  const corner = body(panes, ".workspace[data-panes-alone]\n  .workspace-pane:is(")
+  expect(corner).toMatch(
+    /\.workspace-pane-header \{\s*padding-left: var\(--desktop-titlebar-safe-start\)/,
+  )
+  expect(
+    body(
+      panes,
+      ".workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {",
+    ),
+  ).toMatch(/padding-left: var\(--desktop-titlebar-safe-start\)/)
 })
 
 it("moves Settings' sidebar by transform, never by animating its width", () => {
@@ -611,4 +659,15 @@ it("says !important in the workspace's stylesheets only where a rule waits on it
     "ui/source-list/source-list.css": 6,
     "ui/transcript/approval-card.css": 1,
   })
+})
+
+it("quiets a short pane's composer at the height the pane limits name", () => {
+  // A container query cannot read a property: the stylesheet repeats the limit.
+  const sheet = readFileSync(
+    new URL("./workspace/ui/panes/conversation.css", import.meta.url),
+    "utf8",
+  )
+  expect(sheet).toContain(
+    `@container workspace-pane (max-height: ${paneLimits.quietComposerBelow - 1}px)`,
+  )
 })

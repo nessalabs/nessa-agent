@@ -4,6 +4,7 @@ title: "compose and send the first message"
 kind: "flow"
 status: "mixed"
 summary: "Open a new conversation, choose a model and write a message."
+sourceRevision: "7f434845423686cdd01a17300c47d10d46911f50"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/use-composer.ts"
@@ -16,6 +17,7 @@ sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/submissions.rs"
   - "src/panel/ui/use-composer.test.ts"
+  - "src/panel/ui/use-composer-ordering.test.tsx"
   - "src/panel/application/composer-expansion.test.ts"
   - "src/conversation/adapters/store/unsent.test.ts"
   - "docs/guides/gateway-chat.md"
@@ -23,13 +25,23 @@ sources:
   - "packages/nessa-client/src/presentation/conversation-api.test.ts"
   - "crates/nessa-server/tests/conversation/application.rs"
 diagramLinks: {}
+diagramDetails:
+  - diagram: 2
+    node: AwaitingDraft
+    section: Composer ownership while a send waits
+  - diagram: 2
+    edge:
+      from: AwaitingDraft
+      to: Retired
+      label: Empty draft [same conversation] / collapse editor
+    section: Composer ownership while a send waits
 ---
 
 # compose and send the first message
 
 Open a new conversation, choose a model and write a message. Enter sends it; Shift+Enter starts a Markdown block. Text can be empty when there are sendable attachments. The voice button has no working voice action yet.
 
-Send keeps the original message identity and content while it waits for acceptance. Acceptance means Nessa owns the input. The external agent may still be starting. Pending or failed uploads, unsupported attachments and oversized text prevent sending. A model choice is fixed when the remote conversation is created; choosing another afterward starts a separate conversation.
+Send keeps the original message identity and content while it waits for acceptance. Acceptance means Nessa owns the input. The external agent may still be starting. Pending or failed uploads, unsupported attachments and oversized text prevent sending. The panel binds its initial model choice when it creates the remote conversation. The desktop workspace also supports [staging a model change before the next send](../../sdk/runtime/select-a-model-approval-preset-or-reasoning-effort.md); that control does not imply a second conversation.
 
 ```mermaid
 stateDiagram-v2
@@ -84,3 +96,25 @@ sequenceDiagram
 ## Further reading
 
 [Source](../../../../../src/panel/ui/use-composer.ts) · [Related source](../../../../../src/conversation/ui/use-conversation.ts) · [Related tests](../../../../../src/panel/ui/use-composer.test.ts)
+
+## Composer ownership while a send waits
+
+The expanded editor closes when its own submitted draft leaves. The independently reproduced application counterexample submits A and switches to B in the same task, before the hook observes A's emptied draft. Ordinary, separately delivered human-click reachability remains unverified. Switching tabs gives the selected tab a fresh collapsed editor; subsequently expanding that tab is a new local choice. A pending send from another tab must not collapse it when its draft is cleared.
+
+Submission callbacks also carry operation identity. An old refusal clears only its own pending observation, so it cannot prevent a newer accepted send from closing its editor. The correction is local presentation; the conversation store remains the admission and prepared-command owner.
+
+This small chart follows one pending observation, rather than the transport or the expanded editor itself. A replacement observation has a new identity. A promise callback for an older one cannot clear that replacement.
+
+```mermaid
+stateDiagram-v2
+    [*] --> AwaitingDraft: Submit passes attachment-read check / capture tab and observation
+    AwaitingDraft --> Retired: Empty draft [same conversation] / collapse editor
+    AwaitingDraft --> Retired: Refused [same observation] / keep editor open
+    AwaitingDraft --> Retired: Another submit / replace observation
+    AwaitingDraft --> AwaitingDraft: Different tab draft changes / retain observation
+    Retired --> [*]
+```
+
+The [CO1–CO4 design table](../../../../design/user-flow-ordering.md#composer-draft-observation) owns these orderings. The [hook regressions](../../../../../src/panel/ui/use-composer-ordering.test.tsx) and [actual-store same-task case](../../../../../src/panel/ui/use-composer.test.ts) exercise the actual hook through a form with controlled submission promises; they do not establish provider completion.
+
+This is a bounded correction to the composer owner. The other linked source files have no implementation changes since the earlier checkpoint. The checkpoint advances to the committed correction after reconciling that hook and its regression tests; the other source owners retain their unchanged implementation.

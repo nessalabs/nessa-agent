@@ -8,6 +8,7 @@
 //!    them, before the hold runs)
 //! CommandHold::run(granted timeout, stop) ──▶ the command runs ──▶ CommandResult
 //!   stop said ──▶ the environment stops it ──▶ CommandResult{Stopped}
+//!   publications() ──▶ files the command publishes, collected while it runs
 //!   the hold dropped unrun ──▶ the environment ends the lease, unanswered
 //! ```
 //!
@@ -15,11 +16,12 @@
 //! session: it runs one argument vector once and its result ends it. Every
 //! wait is bounded by the adapter: a grant by its answer bound, a run by the
 //! command's own timeout and what stopping it takes.
-use super::{environment::GrantedTerms, EnvironmentFuture};
+use super::{environment::GrantedTerms, ArtifactOffer, EnvironmentFuture};
+use nessa_protocol::lease::CollectionRefusal;
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandRefusal, CommandWork, LeaseCleanup, LeaseEndCause, LeaseId,
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 /// Where commands run. Implemented in infrastructure, beside the environment
 /// it runs them in.
@@ -58,6 +60,13 @@ pub(crate) trait CommandHold: Send {
         timeout_ms: u64,
         stop: watch::Receiver<Option<LeaseEndCause>>,
     ) -> EnvironmentFuture<'static, CommandResult>;
+
+    /// Files the command publishes while it runs, until the lease is no
+    /// longer routed. `None` when the command has no publish point. Taken
+    /// once, before [`Self::run`].
+    fn publications(&mut self) -> Option<mpsc::Receiver<ArtifactOffer>> {
+        None
+    }
 }
 
 /// What running a command came to, as the environment said.
@@ -72,6 +81,32 @@ pub struct CommandResult {
     pub dropped_bytes: u64,
     /// What releasing it took; `None` when the environment could not say.
     pub cleanup: Option<LeaseCleanup>,
+    /// Each file the command published, in the order it was offered.
+    pub published: Vec<CommandPublication>,
+}
+
+/// One file a command published, as `run` lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandPublication {
+    /// Its name, as the environment published it.
+    pub name: String,
+    /// Its SHA-256, lowercase hex, as the environment published it.
+    pub digest: String,
+    /// Its length, as the environment published it.
+    pub size: u64,
+    /// Held, already held, or refused.
+    pub outcome: PublicationOutcome,
+}
+
+/// What the conversation made of one file a command published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicationOutcome {
+    /// Read, verified, and held, with the command lease as cause.
+    Held,
+    /// The conversation already held exactly this file.
+    AlreadyHeld,
+    /// Not kept.
+    Refused(CollectionRefusal),
 }
 
 impl CommandResult {
@@ -85,6 +120,7 @@ impl CommandResult {
             stderr: Vec::new(),
             dropped_bytes: 0,
             cleanup: None,
+            published: Vec::new(),
         }
     }
 }

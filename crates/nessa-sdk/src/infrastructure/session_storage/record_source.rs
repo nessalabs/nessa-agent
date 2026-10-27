@@ -1270,6 +1270,7 @@ mod tests {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
         };
         let mut changes = vec![SessionChange::Opened {
@@ -1292,6 +1293,7 @@ mod tests {
                 actor: ActionContext::new("user", "surface", "request").unwrap(),
                 initiation: Initiation::owner(),
                 notes: Vec::new(),
+                handoff: None,
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling: Vec::new(),
@@ -3633,6 +3635,7 @@ mod tests {
                 actor: ActionContext::new("user", "surface", "request").unwrap(),
                 initiation: Initiation::owner(),
                 notes: Vec::new(),
+                handoff: None,
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling: Vec::new(),

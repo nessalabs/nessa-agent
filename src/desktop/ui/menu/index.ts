@@ -1,15 +1,14 @@
 /**
- * The window's menus: nessa_ui's dropdown and context menus, drawn the way
- * macOS draws its own — compact rows on the window's glass, a soft rounded
- * highlight in the theme's light, a check column only where something can be
- * checked, quiet right-aligned shortcuts, and a chosen item that blinks once
- * as the menu fades.
+ * The window's menus: nessa_ui's dropdown and context menus, whose rows the
+ * kit's menu recipe draws — the item's icon leading, a check and any
+ * shortcut trailing — on a solid card with the theme's light for the
+ * highlight, and a chosen item that blinks once as the menu fades.
  *
  * ```text
  * callers ──▶ menu-parts ──▶ @nessa-ui/react/dropdown-menu
  *                 │      └──▶ @nessa-ui/react/context-menu
  *                 ▼
- *             menu.css ──▶ the material in styles.css (.desktop-popover)
+ *             menu.css ──▶ the popover surface in styles.css (.desktop-popover)
  * ```
  *
  * An arrow points from a module to one it depends on. A menu is a

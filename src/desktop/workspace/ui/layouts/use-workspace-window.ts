@@ -11,21 +11,30 @@ import { reducedMotion } from "../../../adapters/motion-preference"
 import { useThemePreference } from "../../../adapters/theme-preference"
 import { useEdgePeek, type EdgePeekControls } from "../../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../../adapters/window-width"
-import { useSideRailPreference } from "../../../adapters/window-preferences"
+import {
+  usePanelPreference,
+  useSideRailPreference,
+} from "../../../adapters/window-preferences"
+import {
+  clampPanel,
+  PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
+  panelWidth,
+  type PanelPlace,
+} from "../../../model/right-panel"
 import { draggedEdge } from "../../../model/side-column"
 import type { DesktopThemeId } from "../../../model/theme"
 import type { DesktopStore } from "../../../store"
 import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
 import { useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
-import { useFocusFollowsPane } from "../../adapters/dom/focus"
+import { focusInFront, useFocusFollowsPane } from "../../adapters/dom/focus"
 import { useWidgetEscape, type EscapeScopes } from "../../adapters/dom/widget-escape"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
-import { useFitOnResize } from "../../adapters/dom/window-width"
+import { drawn } from "../../../model/side-column"
 import {
   arrangementShown,
   canOpenBeside,
   closeInFront,
-  fitToWindow,
   focusPane,
   newSession,
   nudgePane,
@@ -45,26 +54,26 @@ import {
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
 import { reviewToOpen, reviewWaitsIn } from "../../adapters/gateway/review-notices"
+import { paneBoxFrame, usePaintedWithPanes } from "../../adapters/store/paint-with-panes"
 import {
   selectChrome,
   selectColumnCount,
   selectDraft,
   selectFocusedPaneKey,
+  selectInFront,
+  selectPaneShape,
+  selectPanelAsked,
   selectPanes,
   selectSession,
   selectSessionListOpen,
-  selectSidebarOpen,
   selectView,
 } from "../../adapters/store/selectors"
 import { workspaceSplitPanes } from "../../adapters/store/split-panes-source"
-import {
-  layoutShape,
-  panesOf,
-  type Direction,
-} from "../../../split-panes/model/pane-layout"
+import { panesOf, type Direction } from "../../../split-panes/model/pane-layout"
+import { sameContent } from "../../application/workspace-state"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, railFits, sessionListLimits } from "../../model/window-fit"
-import { railItems, railWidth, type RailItem } from "../chrome/side-rail"
+import { railItems, SIDE_RAIL_WIDTH, type RailItem } from "../chrome/side-rail"
 import type { SwitcherMode } from "../quick-switcher/quick-switcher"
 import { type ShortcutCommand, type WorkspaceFrame } from "../workspace-frame"
 import { workspaceShortcuts } from "./shortcuts"
@@ -119,6 +128,8 @@ function useWorkspaceKeys(
   own: Partial<Record<ShortcutCommand, () => boolean | void>>,
   /** While true, only `own` commands run: something modal has the keyboard. */
   paused: boolean,
+  /** Runs first for every command the keys bring. */
+  before?: (command: ShortcutCommand) => void,
 ) {
   const dispatch = useWorkspaceDispatch()
   const store = useWorkspaceStore()
@@ -127,7 +138,13 @@ function useWorkspaceKeys(
     const panes = selectPanes(store.getState())
     const pane = panes ? panesOf(panes)[index] : undefined
     if (!pane) return false
+    const already = pane.key === focused()
+    // Focusing goes back to the panes from the overview or a widget over them.
     dispatch(focusPane({ pane: pane.key }))
+    // Already the focused pane, its key does not move, so focus-follows has
+    // nothing to follow: the caret is brought back from wherever it is — the
+    // panel, say — here.
+    if (already) focusInFront()
   }
   const focusBeside = (step: -1 | 1) => {
     const panes = selectPanes(store.getState())
@@ -137,6 +154,7 @@ function useWorkspaceKeys(
     return focusAt(Math.min(Math.max(at + step, 0), order.length - 1))
   }
   useKeyBindings(workspaceShortcuts, (command) => {
+    before?.(command)
     const handler = own[command]
     if (handler) return handler()
     if (paused) return false
@@ -180,12 +198,10 @@ function useWorkspaceKeys(
 }
 
 /** The shape of what moves on screen: the panes' arrangement and which columns are open. */
-function useMotionShape(...columns: boolean[]): string {
-  const panes = useWorkspaceSelector((state) => {
-    const layout = selectPanes(state)
-    return layout ? layoutShape(layout) : ""
-  })
-  return `${panes}|${columns.join(",")}`
+function useMotionShape(...columns: boolean[]): { shape: string; columns: string } {
+  // Painted with the new boxes, so the click does not render the window for a shape it has not drawn.
+  const panes = usePaintedWithPanes(selectPaneShape, paneBoxFrame)
+  return { shape: panes, columns: columns.join(",") }
 }
 
 /** A column's width as laid out — never as a slide draws it — which a drag of its edge starts from. */
@@ -241,14 +257,16 @@ function useShownArrangement(region: SidebarRegion) {
   }, [dispatch, region.arrangement])
 }
 
-function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
-  const dispatch = useWorkspaceDispatch()
-  const chrome = useWorkspaceSelector(selectChrome)
-  const sidebarOpen = useWorkspaceSelector(selectSidebarOpen)
+function useWorkspaceChrome(region: SidebarRegion) {
+  // Painted with the new boxes. The fold's attribute is set a frame earlier
+  // (`FoldMark`), while the spare hold is on. A person's toggle still paints
+  // in the turn: it does not change the column count.
+  const chrome = usePaintedWithPanes(selectChrome, paneBoxFrame)
+  const columns = usePaintedWithPanes(selectColumnCount, paneBoxFrame)
+  const sidebarOpen = drawn(chrome.sidebar)
   const listDrawn = useWorkspaceSelector(selectSessionListOpen)
   const listOpen = region.sessionList && listDrawn
   const view = useWorkspaceSelector(selectView)
-  const columns = useWorkspaceSelector(selectColumnCount)
   const [railOpen, setRailOpen] = useState(true)
   const [railItem, setRailItem] = useState("agents")
   // A preview, off until turned on in Settings › Advanced › Experimental.
@@ -269,9 +287,8 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
   const listWidth = region.sessionList
     ? columnWidth(chrome.sessionListWidth, sessionListLimits, fullWidth)
     : 0
-  // The rail is wider where it holds the window's own controls. One width
-  // for the fit and for the column the layout draws.
-  const rail = railWidth(hostKind)
+  // One width for fitting and drawing the compact rail below the top bar.
+  const rail = SIDE_RAIL_WIDTH
   // The rail is the first column to give way for room (`railFits`): it is drawn
   // only where it folds nothing the person has open. A full view has no columns.
   const railRoom =
@@ -288,21 +305,48 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
       rail,
     )
   const railDrawn = railOffered && railOpen && railRoom
-  // The rail stands beside the workspace, not in it: the columns fit what is left.
-  const windowWidth = fullWidth - (railDrawn ? rail : 0)
-  useFitOnResize(windowWidth, columns, (width) =>
-    dispatch(
-      fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
-    ),
-  )
+  // The right panel, beside the panes. Maximized, it covers the
+  // workspace until Escape or its button; a full view hides it.
+  const [panelPlace, setPanelPlace] = usePanelPreference()
+  const [panelMaximized, setPanelMaximized] = useState(false)
+  const panelOpen = panelPlace.open && shownRailItem === undefined
+  if (!panelOpen && panelMaximized) setPanelMaximized(false)
+  usePanelHeldByChat(panelMaximized, setPanelMaximized)
+  usePanelAsked(panelPlace, setPanelPlace)
+  const panelDrawnWidth = panelWidth(panelPlace.width, fullWidth)
+  // The rail and the panel stand beside the workspace's columns, not among
+  // them: the columns fit what is left. The fit itself is `ColumnFit`, so
+  // this count does not render the window.
+  const windowWidth =
+    fullWidth - (railDrawn ? rail : 0) - (panelOpen ? panelDrawnWidth : 0)
   const toggleRail = useCallback(() => setRailOpen((open) => !open), [])
+  const panelRef = useRef(panelPlace)
+  panelRef.current = panelPlace
+  const togglePanel = useCallback(() => {
+    setPanelMaximized(false)
+    setPanelPlace({ ...panelRef.current, open: !panelRef.current.open })
+  }, [setPanelPlace])
+  const resizePanel = useCallback(
+    (width: number) => {
+      const next = clampPanel(width)
+      if (next !== panelRef.current.width)
+        setPanelPlace({ ...panelRef.current, width: next })
+    },
+    [setPanelPlace],
+  )
+  const closePanel = useCallback(
+    () => setPanelPlace({ ...panelRef.current, open: false }),
+    [setPanelPlace],
+  )
+  const toggleMaximized = useCallback(() => setPanelMaximized((value) => !value), [])
+  const dockPanel = useCallback(() => setPanelMaximized(false), [])
   return {
     sidebarOpen,
     listOpen,
     listedChannel: listOpen ? view.channelId : null,
-    sidebarChosenOpen: chrome.sidebar.open,
     sidebarWidth,
     listWidth,
+    windowWidth,
     railOffered,
     railDrawn,
     railRoom,
@@ -311,21 +355,75 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
     shownRailItem,
     setRailItem,
     toggleRail,
+    panelOpen,
+    panelMaximized,
+    panelWidth: panelDrawnWidth,
+    setPanelMaximized,
+    togglePanel,
+    resizePanel,
+    closePanel,
+    toggleMaximized,
+    dockPanel,
   }
+}
+
+/**
+ * The right panel belongs to the chat in front, so expanded it stands for
+ * that chat alone. It holds only while that chat stays in front: anything
+ * that brings another — a new session, a session opened, another pane
+ * focused, the overview or a widget over the panes — docks it again,
+ * so nothing ever opens out of sight under it.
+ */
+function usePanelHeldByChat(maximized: boolean, setMaximized: (value: boolean) => void) {
+  const store = useWorkspaceStore()
+  useEffect(() => {
+    if (!maximized) return
+    const held = store.getState()
+    return store.subscribe(() => {
+      const now = store.getState()
+      if (
+        selectInFront(now) !== selectInFront(held) ||
+        !sameContent(now.workspace.content, held.workspace.content)
+      )
+        setMaximized(false)
+    })
+  }, [store, maximized, setMaximized])
+}
+
+/**
+ * A widget opened into a chat's panel asks the window to show the panel
+ * (`panelAsked`); whether it is open stays the window's, remembered as the
+ * person left it. Only a change of the count asks: the count the window
+ * starts with has been answered already.
+ */
+function usePanelAsked(place: PanelPlace, setPlace: (place: PanelPlace) => void) {
+  const asked = useWorkspaceSelector(selectPanelAsked)
+  const answered = useRef(asked)
+  const latest = useRef(place)
+  latest.current = place
+  useEffect(() => {
+    if (asked === answered.current) return
+    answered.current = asked
+    if (!latest.current.open) setPlace({ ...latest.current, open: true })
+  }, [asked, setPlace])
 }
 
 function useColumnDrag(
   region: SidebarRegion,
   root: RefObject<HTMLDivElement | null>,
   listOpen: boolean,
+  /** The sidebar's drawn width; its box is wider by the gutter it stands in. */
+  sidebarWidth: number,
 ) {
   const dispatch = useWorkspaceDispatch()
   const sidebarFrom = useRef<number | null>(0)
   const listFrom = useRef<number | null>(0)
+  const sidebarNow = useRef(sidebarWidth)
+  sidebarNow.current = sidebarWidth
   const limits = region.sidebar.limits
   const onSidebarDragStart = useCallback(() => {
-    sidebarFrom.current = drawnWidth(root.current, ".workspace-sidebar")
-  }, [root])
+    sidebarFrom.current = sidebarNow.current
+  }, [])
   const onSidebarDragMove = useCallback(
     (delta: number) => {
       const { open, width } = draggedEdge(sidebarFrom.current, delta, limits)
@@ -352,12 +450,17 @@ function useWorkspaceSwitcher(
   region: SidebarRegion,
   root: RefObject<HTMLDivElement | null>,
   shownRailItem: RailItem | undefined,
+  togglePanel: () => void,
+  /** Docks the expanded right panel, which a window command brings the workspace back from. */
+  dockPanel: () => void,
 ) {
   const dispatch = useWorkspaceDispatch()
   const [switcher, setSwitcher] = useState<SwitcherMode | null>(null)
   const frame = useWindowFrame(root, workspaceShortcuts, setSwitcher)
   // While the switcher is up it has the keyboard, but for ⌘K, which closes it.
-  // Under an item's full view the workspace answers no keys at all.
+  // Under an item's full view the workspace answers no keys at all. Any window
+  // key docks the expanded panel first, one it declines included: a key is
+  // the person turning back to the workspace, and what it opens is seen.
   useWorkspaceKeys(
     shownRailItem !== undefined
       ? {}
@@ -369,6 +472,10 @@ function useWorkspaceSwitcher(
           toggleSessionList: () => {
             if (!region.sessionList) return false
             dispatch(toggleSessionList())
+          },
+          togglePanel: () => {
+            if (switcher) return false
+            togglePanel()
           },
           // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
           showOverview: () => {
@@ -388,6 +495,7 @@ function useWorkspaceSwitcher(
           },
         },
     switcher !== null || shownRailItem !== undefined,
+    shownRailItem !== undefined ? undefined : dockPanel,
   )
   // Beside where the room allows it, in the focused pane's place where not —
   // what ⌘-click does — so a pick never goes nowhere, and a typed message is
@@ -405,7 +513,12 @@ function useWorkspaceSwitcher(
       dispatch(openChannel({ channelId: row.channel.id, beside }))
     } else {
       const draftId = dispatch(
-        newSession({ channelId: row.channelId, beside: beside ? "right" : undefined }),
+        // Its own first message goes in a blank draft, never one left with typing.
+        newSession({
+          channelId: row.channelId,
+          beside: beside ? "right" : undefined,
+          fresh: Boolean(row.text),
+        }),
       )
       if (draftId && row.text)
         void dispatch(
@@ -427,6 +540,8 @@ export interface WorkspaceWindowModel {
   frame: WorkspaceFrame
   peek: EdgePeekControls
   shape: string
+  /** Which side columns are open: a change of these alone is a drawer (`FlipScope`). */
+  openColumns: string
   splitPanes: SplitPanesSource
   railOffered: boolean
   railDrawn: boolean
@@ -436,14 +551,13 @@ export interface WorkspaceWindowModel {
   railItem: string
   shownRailItem: RailItem | undefined
   sidebarOpen: boolean
-  sidebarChosenOpen: boolean
   listOpen: boolean
   listedChannel: string | null
   sidebarWidth: number
   listWidth: number
+  /** The width the side columns are fitted to: the window, less an open rail. */
+  windowWidth: number
   switcher: SwitcherMode | null
-  compose: () => void
-  composeShortcut: string | undefined
   onPickRail: (id: string) => void
   onToggleRail: () => void
   onToggleSidebar: () => void
@@ -455,6 +569,15 @@ export interface WorkspaceWindowModel {
   onSidebarDragMove: (delta: number) => void
   onListDragStart: () => void
   onListDragMove: (delta: number) => void
+  /** The right panel: open, covering the workspace, and its drawn width. */
+  panelOpen: boolean
+  panelMaximized: boolean
+  panelWidth: number
+  onTogglePanel: () => void
+  onTogglePanelMaximized: () => void
+  onNewSession: () => void
+  onPanelDragStart: () => void
+  onPanelDragMove: (delta: number) => void
 }
 
 export function useWorkspaceWindow({
@@ -471,9 +594,17 @@ export function useWorkspaceWindow({
   const root = useRef<HTMLDivElement>(null)
   const [theme] = useThemePreference()
   const store = useWorkspaceStore()
-  const chrome = useWorkspaceChrome(region, hostKind)
-  const dragging = useColumnDrag(region, root, chrome.listOpen)
-  const switching = useWorkspaceSwitcher(region, root, chrome.shownRailItem)
+  const chrome = useWorkspaceChrome(region)
+  const dragging = useColumnDrag(region, root, chrome.listOpen, chrome.sidebarWidth)
+  const switching = useWorkspaceSwitcher(
+    region,
+    root,
+    chrome.shownRailItem,
+    chrome.togglePanel,
+    chrome.dockPanel,
+  )
+  usePanelEscape(root, chrome.panelMaximized, chrome.setPanelMaximized)
+  const panelDrag = usePanelDrag(chrome.panelWidth, chrome.resizePanel, chrome.closePanel)
   useFocusFollowsPane(store, root)
   // The panes' drag spans the window: sessions are picked up from its lists.
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
@@ -483,11 +614,16 @@ export function useWorkspaceWindow({
   // Each widget host on the page, by scope, for Escape to find (`widget-escape.ts`).
   const [escapeScopes] = useState<EscapeScopes>(() => new Map())
   useWidgetEscape({ store, root, scopes: escapeScopes })
-  const shape = useMotionShape(chrome.sidebarOpen, chrome.listOpen, chrome.railDrawn)
+  const { shape, columns: openColumns } = useMotionShape(
+    chrome.sidebarOpen,
+    chrome.listOpen,
+    chrome.railDrawn,
+    chrome.panelOpen,
+  )
   const dispatch = useWorkspaceDispatch()
-  const compose = useCallback(() => dispatch(newSession()), [dispatch])
   const onToggleSidebar = useCallback(() => dispatch(toggleSidebar()), [dispatch])
   const onToggleSessionList = useCallback(() => dispatch(toggleSessionList()), [dispatch])
+  const onNewSession = useCallback(() => dispatch(newSession()), [dispatch])
   const onRevealSidebar = useCallback(
     () => dispatch(toggleSidebar({ open: true })),
     [dispatch],
@@ -514,6 +650,7 @@ export function useWorkspaceWindow({
     frame: switching.frame,
     peek,
     shape,
+    openColumns,
     splitPanes,
     railOffered: chrome.railOffered,
     railDrawn: chrome.railDrawn,
@@ -522,14 +659,12 @@ export function useWorkspaceWindow({
     railItem: chrome.railItem,
     shownRailItem: chrome.shownRailItem,
     sidebarOpen: chrome.sidebarOpen,
-    sidebarChosenOpen: chrome.sidebarChosenOpen,
     listOpen: chrome.listOpen,
     listedChannel: chrome.listedChannel,
     sidebarWidth: chrome.sidebarWidth,
     listWidth: chrome.listWidth,
+    windowWidth: chrome.windowWidth,
     switcher: switching.switcher,
-    compose,
-    composeShortcut: switching.frame.shortcut("newSession"),
     onPickRail,
     onToggleRail: chrome.toggleRail,
     onToggleSidebar,
@@ -537,6 +672,69 @@ export function useWorkspaceWindow({
     onRevealSidebar,
     onCloseSwitcher,
     onPickSwitcher: switching.onPickSwitcher,
+    panelOpen: chrome.panelOpen,
+    panelMaximized: chrome.panelMaximized,
+    panelWidth: chrome.panelWidth,
+    onTogglePanel: chrome.togglePanel,
+    onTogglePanelMaximized: chrome.toggleMaximized,
+    onNewSession,
+    ...panelDrag,
     ...dragging,
   }
+}
+
+/**
+ * Escape leaves the maximized panel — what covers the workspace, so nothing
+ * under it answers — unless a dialog, menu or list over it takes Escape
+ * first, or the window itself is under Settings, whose keys are its own.
+ */
+function usePanelEscape(
+  root: RefObject<HTMLElement | null>,
+  maximized: boolean,
+  setMaximized: (value: boolean) => void,
+) {
+  useEffect(() => {
+    if (!maximized) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      if (root.current?.closest("[inert]")) return
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[role="dialog"], [role="menu"], [role="listbox"]')
+      )
+        return
+      // Ahead of the workspace's own Escapes, which leave a prevented one alone.
+      event.preventDefault()
+      setMaximized(false)
+    }
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
+  }, [root, maximized, setMaximized])
+}
+
+/** The panel's edge, on its left: dragged left it widens, and far enough right it folds. */
+function usePanelDrag(
+  /** The panel's drawn width; its box is wider by the gutter it stands in. */
+  width: number,
+  resize: (width: number) => void,
+  close: () => void,
+) {
+  const from = useRef(0)
+  const now = useRef(width)
+  now.current = width
+  const onPanelDragStart = useCallback(() => {
+    from.current = now.current
+  }, [])
+  const onPanelDragMove = useCallback(
+    (delta: number) => {
+      const { open, width } = draggedEdge(from.current, -delta, {
+        min: PANEL_MIN_WIDTH,
+        max: PANEL_MAX_WIDTH,
+      })
+      if (!open) close()
+      else resize(width)
+    },
+    [close, resize],
+  )
+  return { onPanelDragStart, onPanelDragMove }
 }

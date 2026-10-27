@@ -1,0 +1,60 @@
+{
+  "check": "settings-action-owners",
+  "ok": false,
+  "started": "2026-10-23T08:42:02.800Z",
+  "finished": "2026-10-23T08:42:35.875Z",
+  "target": {
+    "url": "http://127.0.0.1:1440/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "name": "native-admission-through-reread",
+      "cannotRun": false,
+      "error": "Expected values to be strictly equal:",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "native-source-replacement",
+      "cannotRun": false,
+      "error": "page.waitForFunction: Timeout 30000ms exceeded.",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "notification-api-admission",
+      "cannotRun": false,
+      "error": "Expected values to be strictly equal:",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "notification-source-replacement",
+      "cannotRun": false,
+      "error": "Expected values to be strictly equal:",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "console",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1440/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

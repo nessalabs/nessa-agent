@@ -256,6 +256,7 @@ fn cleanup_fault_process(
             .current_dir(&config.workspace)
             .env_clear()
             .envs(&config.environment)
+            .envs(&config.runtime_environment)
             .envs(&config.credential_environment)
             .env("ANTHROPIC_MODEL", "exact-fixture-model")
             .env("ANTHROPIC_CUSTOM_MODEL_OPTION", "exact-fixture-model")

@@ -23,12 +23,16 @@ use crate::conversation::{
         PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
     },
 };
-use nessa_sdk::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
+use nessa_sdk::application::agent_execution::agents::{
+    AgentError, ProviderDiagnostic, UsageLimitKind, UsageLimitProvider,
+};
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionController, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
     SubmissionMode as InvocationSubmissionMode,
 };
-use nessa_sdk::application::agent_execution::permissions::{ActionContext, CancellationOrigin};
+use nessa_sdk::application::agent_execution::permissions::{
+    ActionContext, ApprovalRuleReference, CancellationOrigin, DeclinedReview,
+};
 use nessa_sdk::application::agent_execution::providers::{
     ExecutionReport, OperationCapabilities, ProviderIdentity, ProviderSessionState,
 };
@@ -43,12 +47,12 @@ use nessa_sdk::domain::agent_execution::executions::{
     MessageId, QueueMutation, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
-    PendingQuestion, PendingReview, PermissionApplicationId, PermissionCancellationReason,
-    PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
-    PermissionOptionId, PermissionOptions, PermissionReviewDeadline, PermissionScope,
-    PermissionSessionId, PermissionToolClass, ReviewContent, ReviewDecline, ReviewDeclineId,
-    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
-    STANDARD_DENY_REASON, STANDARD_STOP_REASON,
+    CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionApplicationId,
+    PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
+    PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+    PermissionReviewDeadline, PermissionScope, PermissionSessionId, PermissionToolClass,
+    RefusalOutcome, ReviewContent, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
+    ReviewDeclineStage, MAX_OPEN_REVIEWS, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -58,7 +62,8 @@ use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
 };
 use nessa_sdk::domain::agent_execution::tools::{
-    McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
+    FilePath, McpCallArguments, McpTool, ToolCallId, ToolCallInput, ToolCallUpdate, ToolContent,
+    ToolObservation, ToolStatus,
 };
 use uuid::Uuid;
 
@@ -386,6 +391,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             actor: ActionContext::new("person", "panel", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],
@@ -397,6 +403,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         }],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     }
 }
@@ -676,6 +683,194 @@ fn an_mcp_tool_carries_the_arguments_its_connection_saw_and_a_later_update_keeps
         .unwrap()
         .get("argumentsJson")
         .is_none());
+}
+
+#[test]
+fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_input() {
+    let tool = ToolCallId::new("grep").unwrap();
+    let at = |update: ToolCallUpdate, ms: u64| {
+        event(ExecutionUpdate::Tool(update)).with_observed_at_ms(ms)
+    };
+    let bare = |status| ToolCallUpdate::new(tool.clone(), None, None, status, None, None);
+    let mut events = vec![at(
+        bare(Some(ToolStatus::Pending))
+            .with_input(ToolCallInput::new(r#"{"pattern":"todo"}"#).unwrap()),
+        1_000,
+    )];
+    let running = committed_tool_view(&events);
+    assert_eq!(running.tools[0].started_at_ms, Some(1_000));
+    assert_eq!(running.tools[0].ended_at_ms, None);
+    assert_eq!(running.tools[0].input, r#"{"pattern":"todo"}"#);
+    // A report that does not repeat the input leaves it; one that settles the
+    // call ends it, and a later report of the settled call does not move that.
+    events.push(at(bare(Some(ToolStatus::Running)), 1_200));
+    events.push(at(bare(Some(ToolStatus::Completed)), 1_900));
+    events.push(at(bare(Some(ToolStatus::Completed)), 2_500));
+    let settled = committed_tool_view(&events);
+    assert_eq!(settled.tools[0].started_at_ms, Some(1_000));
+    assert_eq!(settled.tools[0].ended_at_ms, Some(1_900));
+    assert_eq!(settled.tools[0].input, r#"{"pattern":"todo"}"#);
+    let json = serde_json::to_value(&settled.tools[0]).unwrap();
+    assert_eq!(json["startedAtMs"], 1_000);
+    assert_eq!(json["endedAtMs"], 1_900);
+    // A call saved before times were kept shows none, rather than a guess.
+    let old = committed_tool_view(&[event(ExecutionUpdate::Tool(bare(Some(
+        ToolStatus::Completed,
+    ))))]);
+    assert_eq!(old.tools[0].started_at_ms, None);
+    assert_eq!(old.tools[0].ended_at_ms, None);
+    let json = serde_json::to_value(&old.tools[0]).unwrap();
+    assert!(json.get("startedAtMs").is_none() && json.get("endedAtMs").is_none());
+    // A call first reported before then, and settled after, keeps its start
+    // unknown: the settling report's time is its end, not its start.
+    let straddling = committed_tool_view(&[
+        event(ExecutionUpdate::Tool(bare(Some(ToolStatus::Running)))),
+        at(bare(Some(ToolStatus::Completed)), 3_000),
+    ]);
+    assert_eq!(straddling.tools[0].started_at_ms, None);
+    assert_eq!(straddling.tools[0].ended_at_ms, Some(3_000));
+    // A time no JSON reader can hold, read back from a damaged file, is left
+    // unknown rather than refusing the whole view.
+    let damaged = committed_tool_view(&[at(
+        bare(Some(ToolStatus::Completed)),
+        crate::conversation::domain::LATEST_TIME_MS + 1,
+    )]);
+    assert_eq!(damaged.tools[0].started_at_ms, None);
+    assert_eq!(damaged.tools[0].ended_at_ms, None);
+    // A call whose row was let go for newer calls, and is back when it
+    // settles, keeps its start unknown rather than seeming to take no time.
+    let call = |name: &str, status, ms| {
+        at(
+            ToolCallUpdate::new(
+                ToolCallId::new(name).unwrap(),
+                None,
+                None,
+                status,
+                None,
+                None,
+            ),
+            ms,
+        )
+    };
+    let mut events = vec![call("first", Some(ToolStatus::Running), 1_000)];
+    events.extend((0..16).map(|index| call(&format!("t{index}"), None, 1_100)));
+    events.push(call("first", Some(ToolStatus::Completed), 4_000));
+    let crowded = committed_tool_view(&events);
+    let first = crowded
+        .tools
+        .iter()
+        .find(|tool| tool.tool_id == "first")
+        .unwrap();
+    assert_eq!(first.started_at_ms, None);
+    assert_eq!(first.ended_at_ms, Some(4_000));
+    assert!(crowded.truncated);
+}
+
+#[test]
+fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
+    use crate::conversation::view::{
+        ConversationToolChange, MAX_TOOL_CHANGES, MAX_TOOL_CHANGE_PATH_BYTES,
+        MAX_TOOL_CHANGE_SIDE_BYTES,
+    };
+    let tool = ToolCallId::new("edit").unwrap();
+    let path = |name: &str| FilePath::new(name).unwrap();
+    let long = "x".repeat(MAX_TOOL_CHANGE_SIDE_BYTES + 10);
+    let view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool.clone(), None, None, None, None, None).with_content(vec![
+            ToolContent::text("Applied"),
+            // Created: nothing before it, which is not an empty file.
+            ToolContent::diff(path("new.ts"), None, "export {}"),
+            ToolContent::diff(path("big.ts"), Some(long.clone()), "short"),
+        ]),
+    ))]);
+    assert_eq!(
+        view.tools[0].changes,
+        vec![
+            ConversationToolChange {
+                path: "new.ts".into(),
+                before: None,
+                after: "export {}".into(),
+                cut: false,
+            },
+            ConversationToolChange {
+                path: "big.ts".into(),
+                before: Some("x".repeat(MAX_TOOL_CHANGE_SIDE_BYTES)),
+                after: "short".into(),
+                cut: true,
+            },
+        ]
+    );
+    // The details still say the same in text, for readers that print them,
+    // and mark the side that was clipped.
+    assert!(view.tools[0].details.contains("File: new.ts"));
+    assert_eq!(
+        view.tools[0].details.matches("[Output truncated]").count(),
+        1
+    );
+    let json = serde_json::to_value(&view.tools[0]).unwrap();
+    assert_eq!(json["changes"][0]["path"], "new.ts");
+    assert!(json["changes"][0].get("before").is_none());
+    // Every reported file is listed, so the list is not marked cut.
+    assert!(!view.tools[0].changes_cut);
+    assert!(json.get("changesCut").is_none());
+    // A later report replaces the changes, as it does the details; past the
+    // bound the rest are left to the details.
+    let many = (0..MAX_TOOL_CHANGES + 2)
+        .map(|index| ToolContent::diff(path(&format!("f{index}.ts")), Some("a".into()), "b"))
+        .collect();
+    let view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool, None, None, None, None, None).with_content(many),
+    ))]);
+    assert_eq!(view.tools[0].changes.len(), MAX_TOOL_CHANGES);
+    // The list says it leaves files out, so no reader totals it as the call's.
+    assert!(view.tools[0].changes_cut);
+    assert_eq!(
+        serde_json::to_value(&view.tools[0]).unwrap()["changesCut"],
+        true
+    );
+    // Text that fills the details does not hide a later file change.
+    let view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            ToolCallId::new("long").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_content(vec![
+            ToolContent::text("y".repeat(20_000)),
+            ToolContent::diff(path("after.ts"), Some("a".into()), "b"),
+        ]),
+    ))]);
+    assert!(view.tools[0].details.ends_with("[Output truncated]"));
+    assert_eq!(view.tools[0].changes.len(), 1);
+    assert_eq!(view.tools[0].changes[0].path, "after.ts");
+    // A path past its bound would name another file once cut, so its change
+    // is not listed, and the list says it leaves one out.
+    let long = "d/".repeat(MAX_TOOL_CHANGE_PATH_BYTES / 2) + "x.ts";
+    let view_long = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            ToolCallId::new("deep").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_content(vec![
+            ToolContent::diff(path(&long), Some("a".into()), "b"),
+            ToolContent::diff(path("short.ts"), Some("a".into()), "b"),
+        ]),
+    ))]);
+    assert_eq!(view_long.tools[0].changes.len(), 1);
+    assert_eq!(view_long.tools[0].changes[0].path, "short.ts");
+    assert!(view_long.tools[0].changes_cut);
+    // A view short of room gives the list up and says so.
+    let full = serde_json::to_vec(&view).unwrap().len();
+    let bounded = bound_view_within(view, full - 1, true);
+    assert!(bounded.tools[0].changes.is_empty());
+    assert!(bounded.tools[0].changes_cut);
 }
 
 #[test]
@@ -2255,6 +2450,147 @@ fn authentication_recovery_keeps_independent_required_work_failure() {
     }
 }
 
+#[test]
+fn a_usage_limit_is_published_without_the_provider_failure_sentence() {
+    let limit = nessa_sdk::application::agent_execution::agents::UsageLimit::timed_reset(
+        UsageLimitProvider::Claude,
+        UsageLimitKind::FiveHour,
+        1_800_000_000_000,
+        Some(ProviderDiagnostic::new("You've hit your limit")),
+    );
+    let report = ExecutionReport::new(
+        Some(Err(AgentError::UsageLimitReached(limit))),
+        None,
+        ProviderSessionState::Usable,
+    );
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(report.clone().into_result());
+    snapshot.invocations[0].provider_report = Some(report);
+    let message = &Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&snapshot),
+    )
+    .read()
+    .messages[0];
+    let usage = message.usage_limit.as_ref().expect("usage limit");
+    assert_eq!(
+        usage.provider,
+        crate::conversation::view::ConversationUsageLimitProvider::Claude
+    );
+    assert_eq!(
+        usage.recovery,
+        crate::conversation::view::ConversationUsageLimitRecovery::TimedReset
+    );
+    assert_eq!(usage.resets_at_ms, Some(1_800_000_000_000));
+    assert_eq!(usage.auto_resuming, None);
+    assert_eq!(message.error, None);
+    assert_eq!(message.required_work_failed, None);
+    assert_eq!(message.status, ConversationMessageStatus::Failed);
+}
+
+#[test]
+fn a_usage_limit_wrapped_as_its_own_observation_is_not_a_second_failure() {
+    let reached = AgentError::UsageLimitReached(weekly_limit());
+    let report = ExecutionReport::new(
+        Some(Err(reached.clone())),
+        None,
+        ProviderSessionState::Usable,
+    );
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(Err(AgentError::ExecutionObservation {
+        error: Box::new(reached.clone()),
+        execution_result: Some(Box::new(Err(reached))),
+    }));
+    snapshot.invocations[0].provider_report = Some(report);
+    let message = &project_snapshot(&snapshot).messages[0];
+    assert!(message.usage_limit.is_some());
+    assert_eq!(message.error, None);
+    assert_eq!(message.required_work_failed, None);
+}
+
+#[test]
+fn a_usage_limit_keeps_a_different_failure_beside_it() {
+    let reached = AgentError::UsageLimitReached(weekly_limit());
+    let report = ExecutionReport::new(
+        Some(Err(reached.clone())),
+        None,
+        ProviderSessionState::Usable,
+    );
+    for result in [
+        AgentError::ExecutionObservation {
+            error: Box::new(AgentError::Protocol(
+                "terminal observation contradicts execution settlement".into(),
+            )),
+            execution_result: Some(Box::new(Err(reached.clone()))),
+        },
+        AgentError::StorageAfterExecution {
+            error: StorageError::Busy,
+            execution_result: Box::new(Err(reached.clone())),
+        },
+    ] {
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].result = Some(Err(result));
+        snapshot.invocations[0].provider_report = Some(report.clone());
+        let message = &project_snapshot(&snapshot).messages[0];
+        assert!(message.usage_limit.is_some());
+        assert_eq!(
+            message.error.as_deref(),
+            Some("The turn could not complete all required work.")
+        );
+        assert_eq!(message.required_work_failed, Some(true));
+    }
+}
+
+#[test]
+fn a_usage_limit_in_a_later_aggregate_error_is_published_without_a_provider_report() {
+    let reached = AgentError::UsageLimitReached(weekly_limit());
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(Err(AgentError::MultipleOperationFailures {
+        first_error: Box::new(AgentError::Protocol("provider had no report".into())),
+        subsequent_error: Box::new(reached),
+    }));
+    snapshot.invocations[0].provider_report = None;
+    let message = &project_snapshot(&snapshot).messages[0];
+    let usage = message.usage_limit.as_ref().expect("usage limit");
+    assert_eq!(
+        usage.provider,
+        crate::conversation::view::ConversationUsageLimitProvider::Claude
+    );
+    assert_eq!(message.required_work_failed, Some(true));
+}
+
+fn weekly_limit() -> nessa_sdk::application::agent_execution::agents::UsageLimit {
+    nessa_sdk::application::agent_execution::agents::UsageLimit::unknown(
+        UsageLimitProvider::Claude,
+        UsageLimitKind::Unspecified,
+        Some(ProviderDiagnostic::new("You've hit your weekly limit")),
+    )
+}
+
+fn project_snapshot(snapshot: &SessionSnapshot) -> ConversationView {
+    Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(snapshot),
+    )
+    .read()
+}
+
 fn shown(events: Vec<ExecutionEvent>) -> ConversationView {
     let snapshot = review_snapshot(events);
     let mut projection = projection();
@@ -2266,34 +2602,63 @@ fn shown(events: Vec<ExecutionEvent>) -> ConversationView {
     projection.read()
 }
 
-fn refusal(tool: &str) -> ReviewDeclineObservation {
-    ReviewDeclineObservation::selected(
+fn refusal(tool: &str) -> DeclinedReview {
+    DeclinedReview::selected(
         ReviewDeclineId::new("1").unwrap(),
         ReviewDecline::new(
             Some(tool),
             ReviewDeclineReason::ToolNotReviewable,
-            nessa_sdk::domain::agent_execution::permissions::RefusalOutcome::Continue,
+            RefusalOutcome::Continue,
         ),
+        None,
     )
+    .unwrap()
 }
 
-fn declined(observation: ReviewDeclineObservation) -> ExecutionEvent {
-    event(ExecutionUpdate::ReviewDeclined(observation))
+fn declined(review: DeclinedReview) -> ExecutionEvent {
+    event(ExecutionUpdate::ReviewDeclined(review))
 }
 
-#[test]
-fn a_stopping_refusal_says_why_the_turn_stopped() {
-    use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
-    let ended = ReviewDeclineObservation::selected(
+fn stopping_rule() -> ApprovalRuleReference {
+    ApprovalRuleReference::new(
+        "refuse-shell",
+        "3",
+        ActionContext::new("host", "policy", "grant").unwrap(),
+    )
+    .unwrap()
+}
+
+fn stopped_review(outcome: RefusalOutcome) -> DeclinedReview {
+    DeclinedReview::selected(
         ReviewDeclineId::new("4").unwrap(),
         ReviewDecline::new(
             Some("Bash"),
             ReviewDeclineReason::ToolNotReviewable,
-            RefusalOutcome::EndTurn,
+            outcome,
         ),
-    );
+        Some(stopping_rule()),
+    )
+    .unwrap()
+}
+
+fn local_notice(
+    message: &crate::conversation::view::ConversationMessage,
+) -> &crate::conversation::view::ConversationPart {
+    message
+        .parts
+        .iter()
+        .find(|part| part.kind == "local_notice")
+        .expect("the turn has a notice")
+}
+
+#[test]
+fn a_stopping_refusal_says_why_the_turn_stopped() {
+    let ended = stopped_review(RefusalOutcome::EndTurn);
     let mut snapshot = review_snapshot(vec![
         declined(ended),
+        event(ExecutionUpdate::Message(MessageChunk::text(
+            "still talking",
+        ))),
         event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
     ]);
     snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Cancelled));
@@ -2306,19 +2671,347 @@ fn a_stopping_refusal_says_why_the_turn_stopped() {
     let view = projection.read();
     let message = &view.messages[0];
     assert_eq!(message.status, ConversationMessageStatus::Cancelled);
-    let notice = message
+    let notice = local_notice(message);
+    assert_eq!(
+        notice.text,
+        "Nessa stopped this turn before Bash ran because rule refuse-shell (revision 3) refused it. That tool is not reviewable here."
+    );
+    assert_eq!(notice.notice_id, "4");
+    assert_eq!(notice.notice_kind, "review");
+    let closed = shown(vec![declined(
+        DeclinedReview::selected(
+            ReviewDeclineId::new("8").unwrap(),
+            ReviewDecline::new(
+                None,
+                ReviewDeclineReason::UnusableOptions,
+                RefusalOutcome::CloseSession,
+            ),
+            Some(stopping_rule()),
+        )
+        .unwrap(),
+    )]);
+    assert_eq!(
+        local_notice(&closed.messages[0]).text,
+        "Nessa is closing the session before the requested tool ran because rule refuse-shell (revision 3) refused it. The request offered no usable choices."
+    );
+}
+
+#[test]
+fn a_hook_stop_names_the_tool_and_the_hook_reason() {
+    let session = ExecutionSessionId::new("provider-session").unwrap();
+    let execution = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("7").unwrap();
+    let reason = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &permission,
+            RefusalOutcome::EndTurn,
+            "shell is blocked",
+        )
+        .unwrap(),
+    );
+    let origin = CancellationOrigin::Client(
+        ActionContext::new("permission-review-hook", "0", permission.as_str()).unwrap(),
+    );
+    let view = shown(vec![
+        review("{}".into()),
+        cancelled_review(reason.clone(), origin.clone()),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
+    ]);
+    let unfinished = shown(vec![
+        review("{}".into()),
+        cancelled_review(reason.clone(), origin.clone()),
+    ]);
+    assert!(unfinished.messages[0]
         .parts
         .iter()
-        .find(|part| part.kind == "local_notice")
-        .expect("the stop has a notice");
-    assert!(
-        notice
-            .text
-            .contains("The turn stopped because of that refusal."),
-        "{}",
-        notice.text
+        .all(|part| part.kind != "local_notice"));
+    let completed = shown(vec![
+        review("{}".into()),
+        cancelled_review(reason, origin.clone()),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
+    ]);
+    assert!(completed.messages[0]
+        .parts
+        .iter()
+        .all(|part| part.kind != "local_notice"));
+    let notice = local_notice(&view.messages[0]);
+    assert_eq!(
+        notice.text,
+        "Nessa stopped this turn before write_file ran because a hook refused it: shell is blocked."
     );
-    assert!(!notice.text.is_empty());
+    assert_eq!(notice.notice_id, "7");
+    assert_eq!(notice.notice_kind, "hook");
+    assert!(!notice.text.contains("{"));
+
+    let continued = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &permission,
+            RefusalOutcome::Continue,
+            "not this tool",
+        )
+        .unwrap(),
+    );
+    let quiet = shown(vec![
+        review("{}".into()),
+        cancelled_review(continued, origin.clone()),
+    ]);
+    assert!(quiet.messages[0]
+        .parts
+        .iter()
+        .all(|part| part.kind != "local_notice"));
+
+    let unnamed = PermissionId::new("not-a-notice").unwrap();
+    let hidden = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &unnamed,
+            RefusalOutcome::CloseSession,
+            "close it",
+        )
+        .unwrap(),
+    );
+    let ExecutionUpdate::PermissionRequested {
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let requested = event(ExecutionUpdate::PermissionRequested {
+        id: unnamed.clone(),
+        tool_id: tool_id.clone(),
+        observation: observation.clone(),
+        input: input.clone(),
+        options: options.clone(),
+        deadline: None,
+    });
+    let mut owner = ExecutionController::new(session);
+    owner.begin_execution(execution.clone()).unwrap();
+    owner
+        .request_permission(
+            &execution,
+            unnamed.clone(),
+            ToolCallUpdate::new(tool_id, None, None, None, None, None),
+            input,
+            options,
+            None,
+        )
+        .unwrap();
+    let cancelled = owner
+        .cancel_permission(
+            &execution,
+            &unnamed,
+            hidden,
+            CancellationOrigin::Client(
+                ActionContext::new("permission-review-hook", "runtime", unnamed.as_str()).unwrap(),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+    let skipped = shown(vec![
+        requested,
+        event(ExecutionUpdate::PermissionCancelled(cancelled)),
+    ]);
+    assert!(skipped.messages[0]
+        .parts
+        .iter()
+        .all(|part| part.kind != "local_notice"));
+}
+
+fn notices(
+    message: &crate::conversation::view::ConversationMessage,
+) -> Vec<&crate::conversation::view::ConversationPart> {
+    message
+        .parts
+        .iter()
+        .filter(|part| part.kind == "local_notice")
+        .collect()
+}
+
+fn hook_cancellation(outcome: RefusalOutcome, explanation: &str) -> ExecutionEvent {
+    let session = ExecutionSessionId::new("provider-session").unwrap();
+    let execution = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("7").unwrap();
+    let reason = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &permission,
+            outcome,
+            explanation,
+        )
+        .unwrap(),
+    );
+    cancelled_review(
+        reason,
+        CancellationOrigin::Client(
+            ActionContext::new("permission-review-hook", "0", permission.as_str()).unwrap(),
+        ),
+    )
+}
+
+/// A declined review and a hook stop are different decisions. The same decimal
+/// may name both, and each sentence stays. Admission accepts that history.
+#[test]
+fn a_hook_stop_stays_beside_a_declined_review_with_the_same_id() {
+    let decline = DeclinedReview::selected(
+        ReviewDeclineId::new("7").unwrap(),
+        ReviewDecline::new(
+            Some("Bash"),
+            ReviewDeclineReason::ToolNotReviewable,
+            RefusalOutcome::Continue,
+        ),
+        None,
+    )
+    .unwrap();
+    let ended = shown(vec![
+        declined(decline.clone()),
+        review("{}".into()),
+        hook_cancellation(RefusalOutcome::EndTurn, "shell is blocked"),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
+    ]);
+    let ended = notices(&ended.messages[0]);
+    assert_eq!(ended.len(), 2);
+    assert_eq!(ended[0].notice_kind, "review");
+    assert_eq!(ended[0].notice_id, "7");
+    assert_eq!(
+        ended[0].text,
+        "Nessa declined a tool review labeled Bash because that tool is not reviewable here. Nessa has not confirmed writing the refusal to the agent."
+    );
+    assert_eq!(ended[1].notice_kind, "hook");
+    assert_eq!(ended[1].notice_id, "7");
+    assert_eq!(
+        ended[1].text,
+        "Nessa stopped this turn before write_file ran because a hook refused it: shell is blocked."
+    );
+
+    let confirmed = decline.advance(ReviewDeclineStage::WriteConfirmed).unwrap();
+    let closed = shown(vec![
+        declined(decline),
+        review("{}".into()),
+        hook_cancellation(RefusalOutcome::CloseSession, "shell is blocked"),
+        declined(confirmed),
+    ]);
+    let closed = notices(&closed.messages[0]);
+    assert_eq!(closed.len(), 2);
+    assert_eq!(closed[0].notice_kind, "review");
+    assert_eq!(
+        closed[0].text,
+        "Nessa declined a tool review labeled Bash because that tool is not reviewable here."
+    );
+    assert_eq!(closed[1].notice_kind, "hook");
+    assert_eq!(closed[1].notice_id, "7");
+    assert_eq!(
+        closed[1].text,
+        "Nessa closed the session before write_file ran because a hook refused it: shell is blocked."
+    );
+}
+
+#[test]
+fn a_repeated_permission_id_is_still_one_review() {
+    let snapshot = review_snapshot(vec![review("{}".into()), review("{}".into())]);
+    let error = CommittedSession::new(
+        SessionId::new("conversation").unwrap(),
+        "incarnation".into(),
+        1,
+        1,
+        1,
+        Some(snapshot),
+        CommittedStatus::new(CommittedCompleteness::Complete, CommittedFreshness::Current),
+    )
+    .expect_err("one permission id is one review");
+    assert!(
+        matches!(
+            error,
+            StorageError::Corrupt(ref message)
+                if message.contains("permission identity is repeated")
+        ),
+        "{error:?}"
+    );
+}
+
+/// A deadline settlement and a declined review are different decisions. The
+/// same decimal may name both once admission treats the identities as
+/// different, and each sentence stays.
+#[test]
+fn a_deadline_notice_stays_beside_a_declined_review_with_the_same_id() {
+    use crate::product::generated::{ConversationNoticeKind, ConversationPart as WirePart};
+    use nessa_sdk::domain::agent_execution::permissions::DeadlineReason;
+    let decline = DeclinedReview::selected(
+        ReviewDeclineId::new("7").unwrap(),
+        ReviewDecline::new(
+            Some("Bash"),
+            ReviewDeclineReason::ToolNotReviewable,
+            RefusalOutcome::Continue,
+        ),
+        None,
+    )
+    .unwrap();
+    let view = shown(vec![
+        review_with_deadline(PermissionEffect::Deny, STANDARD_DENY_REASON),
+        event(ExecutionUpdate::DeadlineAnswered {
+            id: PermissionId::new("7").unwrap(),
+            effect: PermissionEffect::Deny,
+            reason: DeadlineReason::new(STANDARD_DENY_REASON).unwrap(),
+        }),
+        declined(decline),
+    ]);
+    let shown_notices = notices(&view.messages[0]);
+    assert_eq!(shown_notices.len(), 2);
+    assert_eq!(shown_notices[0].notice_kind, "deadline");
+    assert_eq!(shown_notices[0].notice_id, "7");
+    assert_eq!(
+        shown_notices[0].text,
+        format!("Denied automatically: {STANDARD_DENY_REASON}")
+    );
+    assert_eq!(shown_notices[1].notice_kind, "review");
+    assert_eq!(shown_notices[1].notice_id, "7");
+    assert!(shown_notices[1].text.contains("not reviewable"));
+    let wire = |part: &crate::conversation::view::ConversationPart| -> WirePart {
+        serde_json::from_value(serde_json::to_value(part).unwrap()).unwrap()
+    };
+    assert_eq!(
+        wire(shown_notices[0]).notice_kind,
+        Some(ConversationNoticeKind::Deadline)
+    );
+    assert_eq!(
+        wire(shown_notices[1]).notice_kind,
+        Some(ConversationNoticeKind::Review)
+    );
+}
+
+#[test]
+fn a_notice_kind_survives_the_product_wire() {
+    use crate::product::generated::{ConversationNoticeKind, ConversationPart as WirePart};
+    let view = shown(vec![
+        event(ExecutionUpdate::Message(MessageChunk::text("hello"))),
+        declined(refusal("Bash")),
+        review("{}".into()),
+        hook_cancellation(RefusalOutcome::CloseSession, "shell is blocked"),
+    ]);
+    let wire = |part: &crate::conversation::view::ConversationPart| -> WirePart {
+        serde_json::from_value(serde_json::to_value(part).unwrap()).unwrap()
+    };
+    let text = &view.messages[0].parts[0];
+    assert_eq!(text.kind, "text");
+    assert_eq!(wire(text).notice_kind, None);
+    let shown_notices = notices(&view.messages[0]);
+    assert_eq!(
+        wire(shown_notices[0]).notice_kind,
+        Some(ConversationNoticeKind::Review)
+    );
+    assert_eq!(
+        wire(shown_notices[1]).notice_kind,
+        Some(ConversationNoticeKind::Hook)
+    );
 }
 
 fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {

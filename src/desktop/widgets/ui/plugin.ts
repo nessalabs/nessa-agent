@@ -6,7 +6,7 @@
  *
  * The host's callbacks are shaped after MCP Apps' `ui/*` bridge, so the `app`
  * kind is a translation rather than a second contract: `open(place)` is
- * `ui/request-display-mode` (`inline`, `fullscreen` → `pane`), the host
+ * `ui/request-display-mode` (`inline`, `fullscreen` → `panel`), the host
  * context is `hostContext` (`app/model/host-context.ts`). Sending a message
  * and updating the model's context (`ui/message`, `ui/update-model-context`)
  * are an app's through its conversation port (`app/application/ports.ts`);
@@ -27,12 +27,12 @@ import type {
 export interface WidgetHost {
   /** Shows this widget in another place (`ui/request-display-mode`); where it is already, nothing. */
   open(place: OpenPlace): void
-  /** Closes it where it is: its pane, or the window back to the panes. A card in a message has none. */
+  /** Closes it where it is: its panel tab, or the window back to the panes. A card in a message has none. */
   close(): void
   /**
-   * Opens another plugin's widget. Its pane goes beside the pane showing
-   * this widget's `origin` — the host holds it, as only the plugin's own
-   * hook knows it — or in the focused pane's place.
+   * Opens another plugin's widget: as a tab in the panel of this widget's
+   * `origin` — the host holds it, as only the plugin's own hook knows it —
+   * or of the chat in front.
    */
   openWidget(widget: WidgetRef, place: OpenPlace): void
   /**
@@ -41,6 +41,19 @@ export interface WidgetHost {
    * host runs the one registered last before the host's own.
    */
   onEscape(stepBack: () => void): () => void
+  /**
+   * Names where the view is inside itself — a detail it opened — and its way
+   * back, which the widget's chrome shows after the widget's own name, the
+   * one breadcrumb; `null` back at its top. Where there is no chrome (a card
+   * in a message), nothing.
+   */
+  crumb?(step: WidgetCrumb | null): void
+}
+
+/** A step inside a widget, as its chrome names it. */
+export interface WidgetCrumb {
+  readonly label: string
+  readonly back: () => void
 }
 
 /** What a view is given: the widget's id, where it is drawn, the host, and the place's context. */
@@ -54,7 +67,7 @@ export interface WidgetViewProps {
 /**
  * What a plugin draws in a session pane's header, for that session: given
  * its id and `openWidget` alone — it has no widget of its own to open, close
- * or step back in. What it opens goes beside that session's pane.
+ * or step back in. What it opens goes to that session's panel.
  */
 export interface SessionAccessoryProps {
   readonly sessionId: string
@@ -69,9 +82,9 @@ export interface NativeWidgetPlugin {
   readonly name: string
   /** The plugin's hook: what it says of widget `id`, reactively. */
   readonly useWidget: (id: string) => WidgetState
-  /** A view per place: every plugin has a pane; a card in a message and the window are its choice. */
+  /** A view per place: every plugin has a panel view; a card in a message and the window are its choice. */
   readonly views: {
-    readonly pane: ComponentType<WidgetViewProps>
+    readonly panel: ComponentType<WidgetViewProps>
     readonly inline?: ComponentType<WidgetViewProps>
     readonly window?: ComponentType<WidgetViewProps>
   }

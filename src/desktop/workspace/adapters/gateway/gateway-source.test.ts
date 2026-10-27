@@ -191,7 +191,130 @@ describe("the index and the list subscription", () => {
         revision: 1,
       }),
     ])
-    expect(gateway.calls.map((call) => call.method)).toEqual(["subscribeList"])
+    expect(gateway.calls.map((call) => call.method)).toEqual([
+      "subscribeList",
+      "listChannels",
+    ])
+  })
+
+  it("C1: lists the person's channels after the default one, each conversation in its own", async () => {
+    const { gateway, source } = started()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "design-review",
+      folder: "/work/site",
+      agent: "codex",
+      model: "gpt-5.6-terra",
+      approvalMode: "auto",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId })
+    gateway.rows.set(conversationB, row(conversationB))
+    const index = await source.index()
+    expect(index.channels).toEqual([
+      expect.objectContaining({ id: "gateway-conversations", folder: "/workspace" }),
+      expect.objectContaining({
+        id: channelId,
+        name: "design-review",
+        folder: "/work/site",
+        defaults: {
+          model: { provider: "openai", modelId: "gpt-5.6-terra" },
+          access: "auto",
+        },
+      }),
+    ])
+    const channelOf = (id: string) =>
+      index.sessions.find((session) => session.id === id)?.channelId
+    expect(channelOf(conversationA)).toBe(channelId)
+    expect(channelOf(conversationB)).toBe("gateway-conversations")
+  })
+
+  it("C1: a session in a channel made since the index was read resyncs, once per channel", async () => {
+    const { gateway, source, updates, follow } = started()
+    follow()
+    await source.index()
+    // Another window makes a channel and starts a conversation in it.
+    await gateway.client.channels.create({
+      requestId: "elsewhere",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId })
+    updates.length = 0
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session", "resync"])
+    const index = await source.index()
+    expect(index.channels.map((channel) => channel.id)).toContain(channelId)
+    expect(
+      index.sessions.find((session) => session.id === conversationA)?.channelId,
+    ).toBe(channelId)
+    // Said again, it is known now: no second resync.
+    updates.length = 0
+    gateway.rows.set(conversationA, {
+      ...row(conversationA),
+      channelId,
+      title: "renamed",
+    })
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session"])
+  })
+
+  it("C1: a resync whose channel list fails asks again on the session's next frame", async () => {
+    const { gateway, source, updates, follow } = started()
+    follow()
+    await source.index()
+    await gateway.client.channels.create({
+      requestId: "elsewhere",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId })
+    updates.length = 0
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session", "resync"])
+    gateway.once("listChannels", () => Promise.reject(new Error("lost")))
+    const warn = console.warn
+    console.warn = () => {}
+    try {
+      await source.index()
+    } finally {
+      console.warn = warn
+    }
+    updates.length = 0
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId, title: "again" })
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session", "resync"])
+  })
+
+  it("C1: a list of channels that fails keeps the channels last listed", async () => {
+    const { gateway, source } = started()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    await source.index()
+    gateway.once("listChannels", () => Promise.reject(new Error("lost")))
+    const warn = console.warn
+    console.warn = () => {}
+    try {
+      const again = await source.index()
+      expect(again.channels.map((channel) => channel.name)).toEqual([
+        "Conversations",
+        "design-review",
+      ])
+    } finally {
+      console.warn = warn
+    }
   })
 
   it("R1: the index again keeps every revision, from the list already followed", async () => {
@@ -946,7 +1069,7 @@ describe("conversations", () => {
     follow()
     gateway.views.set(
       conversationA,
-      view(conversationA, { runtime: runtime(listed.modelId) }),
+      view(conversationA, { model: listed.modelId, runtime: runtime(listed.modelId) }),
     )
     await source.transcript(conversationA)
     expect(updates).toContainEqual({
@@ -2290,6 +2413,28 @@ describe("writes", () => {
     ])
   })
 
+  it("W1: a first message in a channel of the person's opens its conversation there", async () => {
+    const { gateway, source } = started()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    await source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "Hello",
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+      start: { channelId, title: "Hello" },
+    })
+    expect(gateway.calls.find((call) => call.method === "create")?.args).toEqual([
+      { conversationId: conversationS, agent: "codex", model: "gpt-5", channelId },
+    ])
+  })
+
   it("W2: a message sent again goes under its turn's id, so the gateway takes it once, as a command of its own", async () => {
     const { gateway, source } = started()
     gateway.views.set(conversationS, view(conversationS))
@@ -2731,6 +2876,63 @@ describe("writes", () => {
     expect(updates).toHaveLength(1)
   })
 
+  it("a fork is the gateway's: the new session is listed as the one it was made from before it resolves, and opens on the copied turns", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA, { title: "Trip" }))
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        messages: [
+          {
+            executionId: "e1",
+            userText: "Plan a trip",
+            attachments: [],
+            files: [],
+            status: "completed" as const,
+            parts: [
+              {
+                offset: 0,
+                kind: "text" as const,
+                text: "Lisbon",
+                toolId: "",
+                noticeId: "",
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    follow()
+    await source.index()
+    updates.length = 0
+    const forked = await source.fork(conversationA, "person")
+    expect(forked).not.toBe(conversationA)
+    expect(gateway.calls).toContainEqual({
+      method: "fork",
+      args: [conversationA, { conversationId: forked }],
+    })
+    expect(updates).toEqual([
+      {
+        kind: "session",
+        session: expect.objectContaining({ id: forked, title: "Trip", revision: 1 }),
+      },
+    ])
+    const transcript = await source.transcript(forked)
+    expect(
+      transcript.messages.map((message) => [message.role, messageText(message)]),
+    ).toEqual([
+      ["user", "Plan a trip"],
+      ["agent", "Lisbon"],
+      ["handoff", ""],
+    ])
+    // The list frame that follows says it again, and the source is not taken out.
+    gateway.publishList()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id)).toContain(
+      conversationA,
+    )
+  })
+
   it("a list frame read before a rename was stored does not say the old title after it", async () => {
     const { gateway, source, updates, follow } = started()
     gateway.rows.set(conversationA, row(conversationA))
@@ -2990,7 +3192,7 @@ describe("writes", () => {
     )!
     gateway.views.set(
       conversationS,
-      view(conversationS, { runtime: runtime(runs.modelId) }),
+      view(conversationS, { model: runs.modelId, runtime: runtime(runs.modelId) }),
     )
     await source.transcript(conversationS)
     const asking = (messageId: string, chosen: { provider: string; modelId: string }) =>
@@ -3070,7 +3272,7 @@ describe("writes", () => {
     )!
     gateway.views.set(
       conversationS,
-      view(conversationS, { runtime: runtime(runs.modelId) }),
+      view(conversationS, { model: runs.modelId, runtime: runtime(runs.modelId) }),
     )
     // While the first message's create is on its way, a frame says what the conversation runs.
     gateway.once("create", async (normal) => {

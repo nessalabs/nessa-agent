@@ -4,6 +4,7 @@
  * they live here. Re-exported by `commands.ts`, the one list.
  */
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
+import type { OpenPlace } from "../../../widgets"
 import type { Drop } from "../../../split-panes"
 import {
   type Direction,
@@ -12,7 +13,7 @@ import {
   type Zone,
 } from "../../../split-panes/model/pane-layout"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
-import { draftOf } from "../../application/workspace-state"
+import { draftOf, paneIds } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
 import { paneItemOf } from "../../model/pane-item"
 import type { WorkspaceCommand } from "./commands"
@@ -156,22 +157,35 @@ export function canNudge(options: {
 /**
  * Starts a new session as a draft: in the focused pane (or `target`), or
  * beside it on `beside` where the room allows, in the channel being looked
- * at unless one is named. Returns the draft's id, or nothing when no pane
- * took it.
+ * at unless one is named — or, unless `fresh` (a caller with its own first
+ * message), shows again the one left there with something typed in it
+ * (`createDraft`'s `restore`). Returns the draft's id, or nothing when no
+ * pane took one.
  */
 export function newSession(
   options: {
     beside?: Side
     target?: PaneKey
     channelId?: string
+    fresh?: boolean
   } = {},
 ): WorkspaceCommand<string | undefined> {
   return (dispatch, getState, { newId, measure }) => {
     const draftId = newId()
+    const before = new Set(paneIds(getState().workspace.panes))
+    const { fresh = false, ...where } = options
     dispatch(
-      draftCreated({ draftId, ...options, room: options.beside ? measure() : undefined }),
+      draftCreated({
+        draftId,
+        ...where,
+        restore: !fresh,
+        room: options.beside ? measure() : undefined,
+      }),
     )
-    return draftOf(getState().workspace, draftId) ? draftId : undefined
+    const after = getState().workspace
+    if (draftOf(after, draftId)) return draftId
+    // A kept draft shown again: the one pane that did not show it before.
+    return paneIds(after.panes).find((id) => !before.has(id) && draftOf(after, id))
   }
 }
 
@@ -199,10 +213,10 @@ export function closeInFront(): WorkspaceCommand {
 }
 
 /**
- * Opens a widget (ADR 326): in a pane of its own — beside the pane showing
- * `origin`, the session the caller says it belongs to, where the room the
- * page measures allows, else in the focused pane's place — or over the
- * panes, in the window, replacing any widget there.
+ * Opens a widget (ADR 326): as a tab in its chat's right panel — `origin`,
+ * the session the caller says it belongs to, brought to the front, else the
+ * focused chat (`usecases/chat-panel.ts`) — or over the panes, in the
+ * window, replacing any widget there.
  */
 export function openWidget({
   widget,
@@ -210,14 +224,14 @@ export function openWidget({
   origin,
 }: {
   widget: WidgetRef
-  place: "pane" | "window"
+  place: OpenPlace
   origin?: string
 }): WorkspaceCommand {
-  return (dispatch, _getState, { measure }) => {
+  return (dispatch) => {
     dispatch(
       place === "window"
         ? showContent({ content: { widget } })
-        : widgetOpened({ widget, origin, room: measure() }),
+        : widgetOpened({ widget, origin }),
     )
   }
 }

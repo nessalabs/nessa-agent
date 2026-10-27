@@ -96,4 +96,8 @@ pub trait OwnerPhoneOriginalStore: Send + Sync {
     ) -> Result<Box<dyn OwnerPhoneOriginalCreation + '_>, PrivateStateError>;
     /// Restore actual original/seed without creating or replacing anything.
     fn load_original(&self) -> Result<Option<OwnerPhonePrivateOriginal>, PrivateStateError>;
+    /// Whether the client's enrollment was adopted from a signed original, so
+    /// that original must still be present. False with no enrollment, or for
+    /// one redeemed by code, which never had an original.
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError>;
 }

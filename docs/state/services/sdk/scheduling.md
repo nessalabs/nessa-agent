@@ -4,6 +4,7 @@ title: "Submission scheduling and recovery"
 kind: "statechart"
 status: "implemented"
 summary: "Nessa keeps each accepted input's original ID, content, caller and delivery mode."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/executions/value_objects/scheduling.rs"
@@ -55,6 +56,8 @@ stateDiagram-v2
 | Fresh native steering | The same operation-selected configured provider supplies capabilities and approval mode: NextTurn retains A; SubsequentResponses uses acknowledged B. A mode mismatch is `ApprovalModeChanged` before saving or native dispatch. | `native_approval_next_turn_accepts_active_pin_and_recovers_retry`, `native_approval_next_turn_refuses_selected_only_pin`, `native_approval_subsequent_responses_uses_selected_pin` |
 | Direct acknowledged preset control during native execution | Normalize only the active binding's approval component before native dispatch, preserving its model/capabilities/effort; publish on verified ACK. The model operation alone chooses NextTurn vs SubsequentResponses, while the lifecycle owns replacement under Scheduler. Initial steering-only fix regressed four direct-preset cases; old production passed all four. | `native_direct_approval_ack_accepts_new_pin`, `native_direct_approval_ack_refuses_old_pin`, `native_direct_approval_after_next_turn_preserves_active_model`, `native_direct_approval_after_next_turn_refuses_old_pin` |
 | Explicit nonconsumption / independent queued fallback | Current configured B must admit capabilities and the submitter's required mode before queue ownership, dispatch or QueueAdmitted. The attempted steering record can already be saved. Queue audit mode/model/effort and original actor describe B. | `native_approval_prompt_required_refuses_active_only_pin`, `native_approval_prompt_required_records_current_queue_binding`, `native_approval_finished_target_refuses_active_only_pin`, `native_approval_foreign_initiator_queues_at_selected_mode` |
+
+A blocking usage limit is not ordinary failure-backoff work. The gateway may create an opt-in [scheduled continuation](runtime/usage-limit-continuation.md) for a future reset; it has a separate durable row and submission lease. The latest saved blocking limit also prevents ordinary resumption of later runner-stopped work behind it.
 
 ## Further reading
 

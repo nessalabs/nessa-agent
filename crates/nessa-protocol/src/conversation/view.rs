@@ -7,11 +7,11 @@ use nessa_sdk::{
             IncomingElicitationCapability, ModelSwitchReportingCapability,
             NativeHookSuppressionCapability, OperationCapabilities, PermissionDeferralCapability,
             PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
-            PreToolPolicyCapability,
+            PreToolPolicyCapability, ProviderIdentity,
         },
         sessions::{
-            ArtifactRecord, CommittedViewState, NoteDelivery, NoteRecord, NoteRetirementReason,
-            NoteState, SessionSnapshot,
+            ArtifactRecord, CommittedViewState, HandoffKind, HandoffRecord, NoteDelivery,
+            NoteRecord, NoteRetirementReason, NoteState, SessionSnapshot,
         },
     },
     domain::agent_execution::{
@@ -85,6 +85,10 @@ pub struct ConversationView {
     /// [`MAX_VIEW_NOTES`](super::projection::MAX_VIEW_NOTES) in the order
     /// they were left. Empty before any was left.
     pub notes: Vec<ConversationNote>,
+    /// Switches and the fork the conversation began as, in the order they
+    /// were recorded, at most [`MAX_VIEW_HANDOFFS`](super::projection::MAX_VIEW_HANDOFFS),
+    /// the newest. Empty before any.
+    pub handoffs: Vec<ConversationHandoff>,
     /// Records this read could not apply, oldest first, at most 32. Empty
     /// when every record could be read. Always sent, including when empty,
     /// and a chat with no turns may still list these.
@@ -221,8 +225,9 @@ pub enum ConversationStartupFailureCode {
 pub struct ConversationMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication_required: Option<bool>,
-    /// This failed authentication refusal also failed independent required work.
-    /// The person-facing diagnostic stays in `error`. Absent for a pure refusal.
+    /// This failed turn also failed independent required work, beside an
+    /// authentication refusal or a usage limit. The person-facing diagnostic
+    /// stays in `error`. Absent for a pure refusal or a pure usage limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_work_failed: Option<bool>,
     pub parts: Vec<ConversationPart>,
@@ -247,6 +252,47 @@ pub struct ConversationMessage {
     pub status: ConversationMessageStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A provider usage limit on this failed turn: which harness, how it can
+    /// end, and the reset instant when the harness named a trustworthy one.
+    /// The projection publishes those facts from the saved error. Whether a
+    /// continuation is scheduled is added when the gateway publishes the view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_limit: Option<ConversationUsageLimit>,
+}
+
+/// Which harness reported a usage limit. OpenCode is not a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationUsageLimitProvider {
+    /// Claude ACP.
+    Claude,
+    /// Codex ACP.
+    Codex,
+}
+
+/// How a published usage limit can end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationUsageLimitRecovery {
+    /// `resets_at_ms` is an absolute Unix instant in milliseconds.
+    TimedReset,
+    /// The account needs a person. No reset is published.
+    UserAction,
+    /// A usage limit with no trustworthy reset instant.
+    Unknown,
+}
+
+/// The usage-limit facts a transcript card reads. `auto_resuming` is absent
+/// on the projection and set only when a schedule has been accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationUsageLimit {
+    pub provider: ConversationUsageLimitProvider,
+    pub recovery: ConversationUsageLimitRecovery,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resets_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_resuming: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -492,6 +538,53 @@ pub struct ConversationTool {
     /// the call's saved events. Absent when that start recorded none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_hooks: Option<NativeHooksChoice>,
+    /// When the session first heard of the call, in Unix milliseconds.
+    /// Absent for a call saved before the time was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    /// When the session heard the call finished or failed, in Unix
+    /// milliseconds. Absent while it runs, and for a call saved before the
+    /// time was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+    /// The files the call changed, as the agent reported them, in its order:
+    /// at most [`MAX_TOOL_CHANGES`]. The same changes are written into
+    /// `details` as text; these are for a reader that draws them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ConversationToolChange>,
+    /// The call changed files `changes` does not list: more than
+    /// [`MAX_TOOL_CHANGES`], one whose path is past
+    /// [`MAX_TOOL_CHANGE_PATH_BYTES`], or the list was given up for room. A reader
+    /// totalling the changes knows the total is not the call's.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub changes_cut: bool,
+}
+/// The most file changes one tool call lists. The schema states it again;
+/// `nessa-server/tests/conversation/agreement.rs` holds the two together.
+pub const MAX_TOOL_CHANGES: usize = 16;
+/// The most bytes of one side of a file change a view carries, before or
+/// after. Past it the side is cut at a character boundary and the change says
+/// so (`cut`). The schema states it again; the agreement test holds the two
+/// together.
+pub const MAX_TOOL_CHANGE_SIDE_BYTES: usize = 7000;
+/// The most bytes of a changed file's path a view carries; a change to a file
+/// with a longer path is left out of the list, and the list says it is cut.
+/// Stated again by the schema, held to it by the agreement test.
+pub const MAX_TOOL_CHANGE_PATH_BYTES: usize = 4096;
+/// One file a tool call changed: its path, and its text before and after.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConversationToolChange {
+    /// The file's path as the agent named it, unresolved, at most
+    /// [`MAX_TOOL_CHANGE_PATH_BYTES`].
+    pub path: String,
+    /// The text before the change. Absent when the agent did not say — a
+    /// file it created reads that way — which differs from an empty file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// The text after the change, which may be empty.
+    pub after: String,
+    /// A side was longer than [`MAX_TOOL_CHANGE_SIDE_BYTES`] and is cut.
+    pub cut: bool,
 }
 /// The most bytes of a tool's structured result a view carries. The schema
 /// states it again; `nessa-server/tests/conversation/agreement.rs` holds the two together.
@@ -760,6 +853,8 @@ pub struct ConversationListEntry {
     pub running: bool,
     /// Somebody archived it, and nothing has been said in it since.
     pub archived: bool,
+    /// The stored channel it was created in; `None` is the default channel.
+    pub channel_id: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1026,6 +1121,106 @@ pub enum ConversationNoteRetiredReason {
     Expired,
     PermissionLost,
 }
+/// A point after which the conversation's agent ran in a native session that
+/// had not seen the turns before it: a switch to another agent or model, or
+/// the fork the conversation began as. The first turn after it was given
+/// those turns as text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationHandoff {
+    pub handoff_id: String,
+    pub kind: ConversationHandoffKind,
+    pub at_ms: u64,
+    /// The last turn the conversation held when it was recorded, which it is
+    /// shown after; absent before any turn, as a fork always is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
+    /// A switch's agent and model before and after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<ConversationHandoffAgent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<ConversationHandoffAgent>,
+    /// A fork's copied turns, oldest first; empty for a switch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<ConversationCarriedTurn>,
+    /// Copied turns left out: by the copy's own bounds, or by this view's.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub omitted_turns: u32,
+}
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+impl ConversationHandoff {
+    /// `handoff` as a view shows it.
+    pub fn of(handoff: &HandoffRecord) -> Self {
+        let agent = |identity: &ProviderIdentity| ConversationHandoffAgent {
+            agent: AgentId::of_provider(identity.name()).map(|agent| agent.name().into()),
+            model: identity.model_id().into(),
+        };
+        let (kind, from, to, turns, omitted_turns) = match &handoff.kind {
+            HandoffKind::Switch { before, after } => (
+                ConversationHandoffKind::Switch,
+                Some(agent(before)),
+                Some(agent(after)),
+                Vec::new(),
+                0,
+            ),
+            HandoffKind::Fork { history, .. } => (
+                ConversationHandoffKind::Fork,
+                None,
+                None,
+                history
+                    .turns()
+                    .iter()
+                    .map(|turn| ConversationCarriedTurn {
+                        said: turn.said().map(Into::into),
+                        reply: turn.reply().map(Into::into),
+                    })
+                    .collect(),
+                history.omitted(),
+            ),
+        };
+        Self {
+            handoff_id: handoff.id.as_str().into(),
+            kind,
+            at_ms: handoff.at_ms,
+            after_execution_id: handoff
+                .after_execution
+                .as_ref()
+                .map(|turn| turn.as_str().into()),
+            from,
+            to,
+            turns,
+            omitted_turns,
+        }
+    }
+}
+/// Which handoff it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationHandoffKind {
+    Switch,
+    Fork,
+}
+/// An agent and model a switch left or went to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationHandoffAgent {
+    /// The agent, when the history's provider is one Nessa has.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub model: String,
+}
+/// One turn a fork copied: what was said, and the agent's final reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationCarriedTurn {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
 /// Who left a note: under which authority, from which surface.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1061,6 +1256,14 @@ pub struct ConversationPart {
     pub kind: String,
     pub text: String,
     pub tool_id: String,
-    /// Stable identity for a runtime-owned declined-review notice; empty otherwise.
+    /// Decimal identity of a local notice; empty otherwise.
+    ///
+    /// A review notice uses the declined-review id. A hook notice and a
+    /// deadline notice use the permission id. Those identities are
+    /// independent, so one decimal may name each of them.
+    /// [`notice_kind`](Self::notice_kind) says which decision it is.
     pub notice_id: String,
+    /// `review`, `hook`, or `deadline` on a local notice; empty on every other part.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub notice_kind: String,
 }

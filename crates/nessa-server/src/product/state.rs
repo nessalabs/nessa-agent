@@ -4,7 +4,7 @@ use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::{
     application::{AttachmentService, HeldReads},
-    entrypoint::http::UploadRoute,
+    entrypoint::{http::UploadRoute, socket::SocketUploads},
 };
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
@@ -152,6 +152,9 @@ pub struct ProductRouteState {
     pub(crate) attachments: Option<AttachmentService>,
     /// Where `artifact.read` reads a held file back, over the same store.
     pub(crate) held_reads: Option<HeldReads>,
+    /// Uploads `attachment.write` is receiving in pieces, gateway-wide, so a
+    /// piece is taken whichever connection it arrives on.
+    pub(crate) socket_uploads: SocketUploads,
     /// The MCP App resources held behind tickets: issued by the conversation
     /// service, redeemed at `GET /mcp-resources`, which records each
     /// redemption in the audit beside it before serving. `None` when no MCP server is
@@ -179,6 +182,12 @@ pub struct ProductRouteState {
     /// whether or not it is on now. `None` — not Unix — answers
     /// `pairing_unavailable`.
     pub(crate) native_linking: Option<Arc<dyn NativeLinking>>,
+    /// The web tunnel this run serves (`pairing.tunnel`, `server.reach`).
+    /// `None` when it runs none.
+    pub(crate) tunnel: Option<crate::tunnel::application::TunnelView>,
+    /// The GitHub sign-in (`github.*`). `None` — no agents run here —
+    /// answers `github_not_configured`.
+    pub(crate) github: Option<Arc<super::GithubRoutes>>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -314,6 +323,8 @@ impl ProductRouteState {
             mcp_authorization: None,
             pairing: None,
             native_linking: None,
+            tunnel: None,
+            github: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -331,6 +342,7 @@ impl ProductRouteState {
             installs: Arc::new(Semaphore::new(1)),
             attachments: None,
             held_reads: None,
+            socket_uploads: SocketUploads::default(),
             resource_tickets: None,
             uptime_clock: dependencies.uptime_clock,
             view_clock: Arc::new(ProcessTimeline),
@@ -403,6 +415,19 @@ impl ProductRouteState {
     /// Register what turns native linking on or off from Settings.
     pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
         self.native_linking = Some(linking);
+        self
+    }
+
+    /// Register the web tunnel this run serves (Unix only).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn with_tunnel(mut self, tunnel: crate::tunnel::application::TunnelView) -> Self {
+        self.tunnel = Some(tunnel);
+        self
+    }
+
+    /// Register the GitHub sign-in the github methods answer for.
+    pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
+        self.github = Some(github);
         self
     }
 

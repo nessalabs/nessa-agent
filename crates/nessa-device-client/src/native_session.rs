@@ -30,6 +30,7 @@ use nessa_protocol::{
     conversation::domain::ConversationId,
     pairing::wire::NativePairingStatus,
     product::{generated::ConversationViewCursor, passive_read::conforming_view_cursor},
+    tunnel::TunnelAddress,
 };
 use nessa_sync::replication::{catalogue::EntryKey, domain::Id};
 use std::{net::SocketAddr, path::Path, sync::Arc};
@@ -1082,12 +1083,22 @@ pub struct NativeDeviceSession {
 impl NativeDeviceSession {
     /// Compose numeric address and an existing private directory. No port offset,
     /// hostname-derived origin, socket connect or enrollment is performed.
+    /// `tunnel` is the origin `server.reach` last named (`https://host`), which
+    /// status and product dials fall back on when the direct one does not
+    /// connect. One this build cannot read is left out rather than refused:
+    /// the local network still works, and the next `server.reach` replaces it.
     #[uniffi::constructor]
-    pub fn open(root: String, directory: String, address: String) -> Result<Self, NativeCallError> {
+    pub fn open(
+        root: String,
+        directory: String,
+        address: String,
+        tunnel: Option<String>,
+    ) -> Result<Self, NativeCallError> {
         let address: SocketAddr = address
             .parse()
             .map_err(|_| NativeCallError::InvalidArgument)?;
-        NativeSession::open(Path::new(&root), Path::new(&directory), address)
+        let tunnel = tunnel.and_then(|origin| TunnelAddress::try_from(origin).ok());
+        NativeSession::open(Path::new(&root), Path::new(&directory), address, tunnel)
             .map(|value| Self { value })
             .map_err(Into::into)
     }

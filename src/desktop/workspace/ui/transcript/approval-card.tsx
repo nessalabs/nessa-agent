@@ -1,10 +1,12 @@
 import { deadlinePendingLine } from "@nessa/client"
 import { memo, useEffect, useId, useState } from "react"
 import { useNow } from "../../../../clock"
+import { IconButton } from "../../../ui/icon-button"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { approve, deny, retryReview } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
@@ -41,6 +43,21 @@ const foldedLines = 4
  * a message to send as the person, whole. While an answer is on its way the
  * buttons rest; a failed answer says why.
  */
+/**
+ * What an approval's command reads as, the one rule for every card that
+ * shows it: an agent's tool call, read whole, is read for its script (a
+ * shell tool's command, re-lined only where every quote and operator was
+ * followed), the tool it calls and its other input (`approval-gist.ts`);
+ * anything else is shown as sent.
+ */
+export function approvalGist(approval: Approval): CommandGist | undefined {
+  return approval.origin.kind === "agent" &&
+    approval.ask === "tool" &&
+    shownWhole(approval)
+    ? commandGist(approval.command)
+    : undefined
+}
+
 export const ApprovalCard = memo(function ApprovalCard({
   sessionId,
   approval,
@@ -51,14 +68,13 @@ export const ApprovalCard = memo(function ApprovalCard({
   model: ModelRef
 }) {
   const dispatch = useWorkspaceDispatch()
-  const answer = useWorkspaceSelector((state) =>
+  // The source drops the answer with the session. The card stays until the box goes.
+  const answerLive = useWorkspaceSelector((state) =>
     selectAnswer(state, sessionId, approval.id),
   )
+  const answer = useRememberedValue(sessionId, answerLive)
   const waiting = answering(answer, approval.id)
-  const gist =
-    approval.origin.kind === "agent" && approval.ask === "tool" && shownWhole(approval)
-      ? commandGist(approval.command)
-      : undefined
+  const gist = approvalGist(approval)
   return (
     <div
       className="workspace-approval"
@@ -256,49 +272,53 @@ function ApprovalScript({ command, gist }: { command: string; gist: CommandGist 
           ) : null}
         </div>
       ) : null}
-      <div
-        id={script}
-        className="workspace-approval-script"
-        data-folded={folded ? "" : undefined}
-      >
-        <ApprovalCommand
-          command={folded ? lines.slice(0, foldedLines).join("\n") : shown}
-        />
-      </div>
-      <div className="workspace-approval-meta-row">
-        <dl className="workspace-approval-meta">
-          {gist.tool ? (
-            <div>
-              <dt>Tool</dt>
-              <dd>
-                <bdi>{shownName(gist.tool)}</bdi>
-              </dd>
-            </div>
-          ) : null}
-          {gist.script !== undefined
-            ? gist.fields.map(([name, value]) => (
-                <div key={name}>
-                  <dt>
-                    <bdi>{shownName(name)}</bdi>
-                  </dt>
-                  <dd>{shownJson(value)}</dd>
-                </div>
-              ))
-            : null}
-        </dl>
-        {folds ? (
-          <button
-            type="button"
-            className="workspace-approval-disclose"
-            aria-expanded={unfolded}
-            aria-controls={script}
-            onClick={() => setUnfolded((open) => !open)}
-          >
-            {unfolded ? "Show Less" : `Show All ${lines.length} Lines`}
-          </button>
-        ) : null}
+      <div className="workspace-approval-command-block">
+        <div
+          id={script}
+          className="workspace-approval-script"
+          data-folded={folded ? "" : undefined}
+        >
+          <ApprovalCommand
+            command={folded ? lines.slice(0, foldedLines).join("\n") : shown}
+          />
+        </div>
         <CopyCommand command={command} />
       </div>
+      {gist.tool || (gist.script !== undefined && gist.fields.length > 0) || folds ? (
+        <div className="workspace-approval-meta-row">
+          <dl className="workspace-approval-meta">
+            {gist.tool ? (
+              <div>
+                <dt>Tool</dt>
+                <dd>
+                  <bdi>{shownName(gist.tool)}</bdi>
+                </dd>
+              </div>
+            ) : null}
+            {gist.script !== undefined
+              ? gist.fields.map(([name, value]) => (
+                  <div key={name}>
+                    <dt>
+                      <bdi>{shownName(name)}</bdi>
+                    </dt>
+                    <dd>{shownJson(value)}</dd>
+                  </div>
+                ))
+              : null}
+          </dl>
+          {folds ? (
+            <button
+              type="button"
+              className="workspace-approval-disclose"
+              aria-expanded={unfolded}
+              aria-controls={script}
+              onClick={() => setUnfolded((open) => !open)}
+            >
+              {unfolded ? "Show Less" : `Show All ${lines.length} Lines`}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </>
   )
 }
@@ -314,21 +334,30 @@ function CopyCommand({ command }: { command: string }) {
   }, [said])
   if (!write) return null
   return (
-    <button
-      type="button"
-      className="workspace-approval-copy"
-      onClick={() =>
-        void write(command).then(
-          () => setSaid("copied"),
-          () => setSaid("refused"),
-        )
-      }
-    >
-      {said === "copied"
-        ? "Copied"
-        : said === "refused"
-          ? "Couldn’t Copy"
-          : "Copy Command"}
-    </button>
+    <>
+      <IconButton
+        icon={said === "copied" ? "check" : said === "refused" ? "close" : "copy"}
+        label={
+          said === "copied"
+            ? "Copied"
+            : said === "refused"
+              ? "Couldn’t Copy"
+              : "Copy Command"
+        }
+        className="workspace-approval-copy"
+        data-said={said}
+        size="sm"
+        onClick={() =>
+          void write(command).then(
+            () => setSaid("copied"),
+            () => setSaid("refused"),
+          )
+        }
+      />
+      {/* Said aloud, and a refusal in words beside the button: the icon alone is not enough. */}
+      <span className="workspace-approval-copy-said" role="status">
+        {said === "refused" ? "Couldn’t copy" : said === "copied" ? "Copied" : ""}
+      </span>
+    </>
   )
 }

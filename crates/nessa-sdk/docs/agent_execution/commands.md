@@ -47,3 +47,9 @@ this slice. No transaction orders control and target streams together.
 
 The owning state/order table and regression fixture mapping are in
 [command creation](../../../../docs/design/command-creation.md).
+
+A submit recovery that has consent withdrawn may classify an unattempted command
+as `MutationPlan::NoEffect`. The coordinator saves `Settled(RefusedBeforeAttempt)` while
+holding the same request lease used by submission, without authorizing the
+effect. A delayed submit replays that refusal. An existing `Attempted` stays
+interrupted; recovery does not rewrite it as a refusal.

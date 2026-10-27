@@ -617,9 +617,11 @@ async fn a_provider_that_does_not_hold_the_saved_context_opens_new_context_in_it
         .unwrap();
 }
 /// A provider that does not restore the saved context goes on under its own
-/// context fingerprint, which the history records in place of the saved one;
-/// a later provider with that fingerprint that does restore the context
-/// reopens it, and one still carrying the replaced fingerprint is refused.
+/// context fingerprint, which the history records in place of the saved one.
+/// A later provider with that fingerprint that does restore the context
+/// reopens it. A provider that still carries the replaced fingerprint, and
+/// could resume the saved id, opens a new native session instead: it does
+/// not resume the other worker's session, and it records its own fingerprint.
 #[tokio::test]
 async fn a_provider_that_does_not_hold_the_saved_context_records_its_own_fingerprint() {
     let (agent, prior, storage) = prepared(None).await;
@@ -663,17 +665,8 @@ async fn a_provider_that_does_not_hold_the_saved_context_records_its_own_fingerp
         elsewhere.identity()
     );
 
-    let stale = Arc::new(Provider {
-        elsewhere: None,
-        ..(*prior).clone()
-    });
-    let writes = storage.writes();
-    match attached_agent(stale, storage.manager().await).await {
-        Ok(_) => panic!("a restore under the replaced fingerprint is refused"),
-        Err(error) => assert_eq!(error, AgentError::Storage(StorageError::IdentityMismatch)),
-    }
-    assert_eq!(storage.writes(), writes);
-
+    // Before the stale fingerprint runs: it overwrites the saved identity,
+    // so the restore of the recorded fingerprint has to be seen first.
     let holding = Arc::new(Provider {
         elsewhere: None,
         ..(*elsewhere).clone()
@@ -703,6 +696,26 @@ async fn a_provider_that_does_not_hold_the_saved_context_records_its_own_fingerp
         elsewhere.identity()
     );
     timeout(Duration::from_secs(3), reopened.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(reopened);
+
+    let stale = Arc::new(Provider {
+        elsewhere: None,
+        ..(*prior).clone()
+    });
+    let opened = attached_agent(stale.clone(), storage.manager().await)
+        .await
+        .expect("a context-only mismatch opens a new native session");
+    assert_eq!(stale.restores.lock().unwrap().last(), Some(&None));
+    let snapshot = opened.session_manager().snapshot().await.unwrap();
+    assert_eq!(snapshot.provider, stale.identity());
+    assert_eq!(
+        snapshot.provider_context.recorded().unwrap().as_str(),
+        "same-native-context"
+    );
+    timeout(Duration::from_secs(3), opened.close(close_action()))
         .await
         .expect("agent close settles")
         .unwrap();

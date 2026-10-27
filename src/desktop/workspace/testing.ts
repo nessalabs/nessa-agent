@@ -284,6 +284,18 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
           throw new WorkspaceModelError(error.reason, false, error.diagnostic)
         throw error
       }),
+    setUsageLimitAutoContinue: (enabled, initiator) =>
+      answer("setUsageLimitAutoContinue", [enabled, initiator], () => {
+        for (const [sessionId, transcript] of transcripts) {
+          const next: Transcript = {
+            ...transcript,
+            usageLimitAutoContinue: enabled,
+            revision: transcript.revision + 1,
+          }
+          transcripts.set(sessionId, next)
+          emit({ kind: "transcript", transcript: next })
+        }
+      }),
     setAccess: (sessionId, mode, initiator) =>
       answer("setAccess", [sessionId, mode, initiator], () => {
         if (archived.has(sessionId) || !summaries.has(sessionId))
@@ -325,6 +337,14 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
           kind: "session",
           session: { ...session, title, revision: session.revision + 1 },
         })
+      }),
+    fork: (sessionId, initiator) =>
+      answer("fork", [sessionId, initiator], () => {
+        const session = summaries.get(sessionId)
+        if (!session) throw new WorkspaceSourceError("unknown-session")
+        const forked = `${sessionId}-fork`
+        emit({ kind: "session", session: { ...session, id: forked, revision: 1 } })
+        return forked
       }),
     delete: (sessionId, initiator) =>
       answer("delete", [sessionId, initiator], () => {

@@ -16,7 +16,9 @@
 //! name, whatever `PATH` the serving process was started with. Nothing encloses it beyond its own account: the
 //! working directory is spelled beneath the workspace, but a link there can
 //! still lead out, and nothing stops the command from going elsewhere.
-use crate::env_serve::application::{CommandRan, CommandRunner, CommandStop};
+use crate::env_serve::application::{
+    CommandRan, CommandRunner, CommandStop, PUBLISH_POINT_VARIABLE,
+};
 use nessa_protocol::lease::{Cleanup, CommandEnd, COMMAND_STOP_WAIT, MAX_DATA_BYTES};
 use nessa_sdk::domain::agent_execution::leases::CommandWork;
 use shepherd::{
@@ -92,6 +94,7 @@ impl CommandRunner for ShepherdCommands {
         &self,
         command: CommandWork,
         mut stop: watch::Receiver<Option<CommandStop>>,
+        publish_point: Option<String>,
     ) -> Pin<Box<dyn Future<Output = CommandRan> + Send + 'static>> {
         let supervisor = self.supervisor.clone();
         let cwd = match command.cwd() {
@@ -102,10 +105,16 @@ impl CommandRunner for ShepherdCommands {
             Some(program) => program,
             None => return Box::pin(async { CommandRan::not_started() }),
         };
+        // The cleared account variables, plus the command's own publish
+        // point when one opened. Nothing else the serving process holds.
+        let mut environment = self.environment.clone();
+        if let Some(point) = publish_point {
+            environment.push((PUBLISH_POINT_VARIABLE.into(), point.into()));
+        }
         let spec = ProcessSpec::new(program)
             .args(command.argv()[1..].iter().map(|argument| &**argument))
             .cwd(cwd)
-            .env(EnvPolicy::Clear(self.environment.clone()))
+            .env(EnvPolicy::Clear(environment))
             .output(OutputMode::Capture {
                 buffer_bytes: MAX_DATA_BYTES,
                 tail_bytes: 0,

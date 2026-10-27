@@ -2,6 +2,7 @@ use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod approval;
 mod conformance;
 mod effort;
+mod handoffs;
 mod initialization;
 mod lifecycle;
 mod messages;
@@ -1115,12 +1116,14 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
             actor: actor(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             result: None,
         }],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     });
     let agent = attached_agent(provider.clone(), storage.manager().await)
@@ -1244,6 +1247,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
                 actor: actor(),
                 initiation: Initiation::owner(),
                 notes: Vec::new(),
+                handoff: None,
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling,
@@ -1251,6 +1255,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             }],
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
         });
         let agent = attached_agent(provider.clone(), storage.manager().await)

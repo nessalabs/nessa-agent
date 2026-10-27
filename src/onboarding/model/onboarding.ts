@@ -60,6 +60,9 @@ export interface AgentChoice {
    * installed. That is a different thing from an adapter that cannot run yet,
    * and it is the only one that will not change by signing in. */
   supported: boolean
+  /** Whether first-run setup offers it. An agent can run here and still not be
+   * one setup puts in front of somebody new. */
+  offeredAtSetup: boolean
 }
 
 /** The agents offered at first run, in presentation order.
@@ -71,26 +74,36 @@ export interface AgentChoice {
  * adapter exists it is the only honest thing to say about it.
  *
  * OpenCode comes last because the order is the order someone reads, and the two
- * agents ahead of it are the ones a person is most likely to already have.
- * Its saved-key and metered-model requirements are shown beside that choice.
+ * agents ahead of it are the ones a person is most likely to already have. It
+ * is not offered at setup for now: Nessa is not supporting it for new setups,
+ * and setup shows a Local AI that is coming in its place. It stays listed here
+ * so a machine already set up on it keeps its name everywhere else.
  */
 export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
     id: "claude" as const,
     name: "Claude",
     supported: true,
+    offeredAtSetup: true,
   }),
   Object.freeze({
     id: "codex" as const,
     name: "Codex",
     supported: true,
+    offeredAtSetup: true,
   }),
   Object.freeze({
     id: "opencode" as const,
     name: "OpenCode",
     supported: true,
+    offeredAtSetup: false,
   }),
 ])
+
+/** The agents first-run setup lists, in the same order. */
+export const SETUP_AGENTS: readonly AgentChoice[] = Object.freeze(
+  AGENT_CHOICES.filter((choice) => choice.offeredAtSetup),
+)
 
 /** Ordered first-run steps. `done` means the panel shows the conversation.
  *
@@ -181,6 +194,9 @@ export function agentChoice(id: AgentId): AgentChoice | undefined {
  * says cannot run is not kept: leaving it ticked, with Continue still lit, is
  * the panel promising an agent it has just been told is not there.
  *
+ * Welcome holds the choice too once somebody has gone back to it, and the
+ * picker is the next thing it shows, so the same rule applies there.
+ *
  * Past the picker the choice is not silently unmade. Setup has moved on, and
  * quietly emptying a decision behind someone on a step that says nothing about
  * agents would be a worse lie than the stale tick.
@@ -190,11 +206,15 @@ function withAnswer(
   readiness: AgentReadinessReport | undefined,
   readinessFailure: AgentReadinessFailure | undefined,
 ): OnboardingState {
-  const answered: OnboardingState = { ...state, readiness, readinessFailure }
-  if (answered.step !== "agent" || !answered.agent) return answered
-  return isChoosable(answered, answered.agent)
-    ? answered
-    : { ...answered, agent: undefined }
+  return keepChoosable({ ...state, readiness, readinessFailure })
+}
+
+/** On welcome and the picker, a held agent is one that can run, or none: the
+ * picker must never come up with an agent ticked and Continue lit that the
+ * newest answer says is not there. */
+function keepChoosable(state: OnboardingState): OnboardingState {
+  if ((state.step !== "agent" && state.step !== "welcome") || !state.agent) return state
+  return isChoosable(state, state.agent) ? state : { ...state, agent: undefined }
 }
 
 /** Record what the runtimes reported. A report also clears any earlier failure:
@@ -242,11 +262,11 @@ export function startAgentChoice(state: OnboardingState): OnboardingState {
   return state.step === "welcome" ? { ...state, step: "agent" } : state
 }
 
-/** Record a selected agent. An unavailable or unknown agent is not selectable,
- * so the state is returned unchanged rather than storing a choice the runtime
- * cannot honour. */
+/** Record a selected agent. An unavailable or unknown agent, or one setup does
+ * not offer, is not selectable, so the state is returned unchanged rather than
+ * storing a choice the runtime cannot honour. */
 export function chooseAgent(state: OnboardingState, id: AgentId): OnboardingState {
-  if (state.step !== "agent") return state
+  if (state.step !== "agent" || !agentChoice(id)?.offeredAtSetup) return state
   return isChoosable(state, id) ? { ...state, agent: id } : state
 }
 
@@ -278,6 +298,43 @@ export function pressSummon(state: OnboardingState, showing: boolean): Onboardin
   const summonTaught = state.summonTaught === true || !showing
   if (state.summon === summon && state.summonTaught === summonTaught) return state
   return { ...state, summon, summonTaught }
+}
+
+/**
+ * The step a Back press returns to, or nothing where there is no earlier step.
+ *
+ * The welcome screen has nothing before it, and `done` is not on screen.
+ */
+function previousStep(step: OnboardingStep): OnboardingStep | undefined {
+  if (step === "agent") return "welcome"
+  if (step === "summon") return "agent"
+  if (step === "linger") return "summon"
+  return undefined
+}
+
+/** Whether a Back press would move setup. */
+export function canGoBack(state: OnboardingState): boolean {
+  return previousStep(state.step) !== undefined
+}
+
+/**
+ * Go back one step, keeping what was chosen on the way.
+ *
+ * The agent and the readiness answer stay, so the picker comes back as it was
+ * left — the agent only while that answer says it can run, the same rule a new
+ * answer is held to. The shortcut lesson starts again from the picker, because coming back
+ * to it is asking to see it again. From linger the lesson was already learned
+ * — linger is only reached past it — so the way on is there at once. The host's
+ * linger report is dropped: it belongs to the step being left, and the step is
+ * asked again on the way forward.
+ */
+export function goBack(state: OnboardingState): OnboardingState {
+  const step = previousStep(state.step)
+  if (!step) return state
+  const { summon: _summon, summonTaught: _taught, linger: _linger, ...kept } = state
+  return step === "summon"
+    ? { ...kept, step, summonTaught: true }
+    : keepChoosable({ ...kept, step })
 }
 
 /** Leave setup without finishing it, from any step. Nothing is recorded: an

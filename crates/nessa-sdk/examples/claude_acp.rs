@@ -214,16 +214,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Composition chooses credential/environment sources. The adapter never reads
     // global environment or copies a credential from another namespace.
     let mut environment = BTreeMap::new();
-    for key in [
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "TMPDIR",
-        "CLAUDE_CONFIG_DIR",
-    ] {
+    let mut runtime_environment = BTreeMap::new();
+    for key in ["HOME", "CLAUDE_CONFIG_DIR"] {
         if let Some(value) = std::env::var_os(key) {
             environment.insert(key.into(), value);
+        }
+    }
+    for key in ["PATH", "USER", "LOGNAME", "TMPDIR"] {
+        if let Some(value) = std::env::var_os(key) {
+            runtime_environment.insert(key.into(), value);
         }
     }
     let mut credential_environment = BTreeMap::new();
@@ -241,8 +240,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
         AcpConfig {
             executable: ExecutableUseSnapshot::unmanaged(PathBuf::from(&args[1])),
             arguments: vec![args[2].clone()],
+            staged_runtime_arguments: Vec::new(),
             environment,
+            runtime_environment,
             credential_environment,
+            open_credentials: Default::default(),
             workspace: workspace.clone(),
             tools_enabled: mode.ends_with("write"),
             mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),

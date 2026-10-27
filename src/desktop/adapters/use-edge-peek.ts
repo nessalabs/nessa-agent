@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type RefObject,
@@ -23,9 +24,8 @@ const HANDOFF_MS = 380
 
 /**
  * Runs the edge-peek state machine (`model/edge-peek.ts`) against the clock:
- * the one Dock-style reveal of a folded sidebar, used by the classic shell,
- * both workspace layouts and Settings. `enabled` is false whenever the
- * sidebar is drawn (or, in the classic shell, the panel is maximized).
+ * the one Dock-style reveal of a folded sidebar, used by both workspace
+ * layouts and Settings. `enabled` is false whenever the sidebar is drawn.
  * Becoming docked while revealed is a handoff; anything else that disables
  * the reveal dismisses it. `surface` is the element the reveal belongs to,
  * when that is itself a dialog (Settings): a dialog or a menu over it keeps
@@ -164,20 +164,26 @@ export function useEdgePeek(
     [held],
   )
 
-  return {
-    shown: state.shown,
-    handingOff: state.pending === "handoff",
-    handedOff: state.handedOff,
-    enter,
-    leave,
-    /** For the revealed sidebar: pointer and focus both hold it open. */
-    holders: {
-      onPointerEnter: enter,
-      onPointerLeave: leave,
-      onFocus: focusIn,
-      onBlur: focusOut,
-    },
-  }
+  // A new object here would be a new context value, and the shell re-renders
+  // on a pane change. Every consumer — the sidebar — would render again in
+  // that click (`use-edge-peek.test.tsx`).
+  return useMemo(
+    () => ({
+      shown: state.shown,
+      handingOff: state.pending === "handoff",
+      handedOff: state.handedOff,
+      enter,
+      leave,
+      /** For the revealed sidebar: pointer and focus both hold it open. */
+      holders: {
+        onPointerEnter: enter,
+        onPointerLeave: leave,
+        onFocus: focusIn,
+        onBlur: focusOut,
+      },
+    }),
+    [state.shown, state.pending, state.handedOff, enter, leave, focusIn, focusOut],
+  )
 }
 
 export type EdgePeekControls = ReturnType<typeof useEdgePeek>

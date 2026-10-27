@@ -604,7 +604,7 @@ as before any other, and `run` is marked `destructiveHint`.
 | Lifetime | Bounded by its tool call. A command is stopped when its timeout passes, when its call is cancelled or its stand-in goes, when its conversation's grant is revoked, or when its parent agent lease ends (L15); its end is recorded while that agent lease is still the conversation's latest, and only logged once a later one replaced it, whose predecessor's end already accounts for it. No receipt to poll | A command outliving its call needs a receipt and a store the person can read later; that is a later slice, if any. A long build fits a long timeout |
 | Timeout | 120 s when the call names none; at most 1 h. A host stops a command past it and answers `timed_out` | |
 | Output | The host keeps the newest 64 KiB of both streams together (one frame) and counts what it dropped; the record keeps the newest 2 KiB of each, as text, with both streams' sizes and the dropped count | output is evidence, bounded like every record; the agent's answer carries the 64 KiB |
-| Artifacts | None: a command publishes nothing until [#766](https://github.com/nessalabs/nessa-agent/issues/766) gives command leases a publish point. Naming files is the artifact channel's, not `run`'s: `artifacts_publish` (slice D3a, below) publishes only under the agent's own lease, and refuses a command host the agent does not run on `environment_not_leased` | |
+| Artifacts | Its own publish point, opened with the grant and closed when the command lease ends. A file it publishes is kept with that command lease as the cause and the command's actor as who asked; `run` lists each one. `artifacts_publish` (slice D3a) still publishes only under the agent's own lease, and refuses a command host the agent does not run on `environment_not_leased` | |
 | Concurrency | At most 4 commands at once under one agent lease; a fifth is refused `budget_exceeded` | each holds a process scope on the host |
 | What runs | `argv` exactly, no shell; at most 256 arguments and 4 KiB together; in the host's workspace, or a directory beneath it (at most 1 KiB) | |
 | Its environment | The host's account, with its variables cleared to `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG` and `LC_ALL`; nothing encloses it (sandbox `none`). A host serves commands only when its own `config.json` says `envServe.commands: true` | a command does not inherit what the host's harnesses are started with; a host owner opts in |
@@ -635,13 +635,60 @@ sequenceDiagram
         H-->>A: Granted
         C->>C: CommandIssued{actor} under the agent lease
         A->>H: Run
-        H->>H: Shepherd runs argv in a process scope
+        H->>H: Shepherd runs argv, NESSA_ARTIFACTS set when the point opened
+        H-->>A: Published, while it runs
+        A-->>C: kept, the command lease as cause
         H-->>A: Ran{end, stdout, stderr, droppedBytes, cleanup}
-        C->>C: CommandEnded{exit, output, cleanup}
-        C-->>M: exit and output
+        A->>H: End, after every file already offered is answered
+        H-->>A: Ended
+        C->>C: CommandEnded, after those files are answered
+        C-->>M: exit, output, and the files
     end
     Note over M,H: a cancelled call, a revoked grant, or the parent's end: End, then Ran{stopped} and Ended
 ```
+
+**Command leases publish** ([#766](https://github.com/nessalabs/nessa-agent/issues/766)).
+
+A command lease gets the same publish point a harness lease gets. The host opens it when the command is granted and passes its address into the cleared environment as `NESSA_ARTIFACTS`, and only then. The process publishes through that point; the host stages, records, and offers the file on the command lease's route, the same frames a harness uses. The gateway keeps it with an artifact collector of the command's own, a fresh per-lease budget, and records it before `CommandEnded`. `run` lists each file it kept or refused, at most the lease's file budget: held, already held, or refused. One offered past that list is answered `budgetExceeded` and not listed.
+
+The cause is one value. The conversation's artifact record and the attachment hold both name the command lease, and the actor is the person the command runs for (the `CommandIssued` actor, the tool call as the request). A record is admitted only while that command is still in the live parent lease's commands. Once `CommandEnded` drops the command, the file is historical and kept as written, as a file under an earlier agent lease is.
+
+No new Cedar action. The command was already admitted by `command.run`. Publishing is that command's output.
+
+| Row | Situation | Outcome |
+| --- | --- | --- |
+| C12 | The command publishes through its point while it runs | Staged, offered, kept with the command lease as cause and the command's actor as initiator; `run` lists it held |
+| C13 | The command ends, or the connection is lost, with a file still unanswered | The point closes. An end the gateway asked answers `leaseEnded`. A loss leaves the file unanswered |
+| C14 | The publish point cannot be opened | The command still runs. The runner is told of no point. `run` lists nothing |
+| C15 | The file would pass the command's own file or byte budget, or the conversation's record cap | Refused, nothing read, listed on the result. The command still returns. The budget is the command's, not what the parent agent lease has already spent |
+| C16 | The file cannot be recorded, or the path is not one this build accepts | The host is told the refusal, nothing is held, `run` lists it, and the command's end is still recorded |
+| C17 | The command's `Ran` arrives and no End was asked | End is asked after every file already offered is answered. The route stays until the host's `Ended`, so a copy still being read is read through, and the host closes the publish point. The publication stream ends with `Ran`, so collecting does not wait for `Ended` |
+| C18 | A later command is granted while an earlier one's `End` is not yet processed | The earlier command stays, and its publish point stays open, until its own `End` or the connection is lost |
+| C19 | The host never closes the publication stream, or the caller is gone, while files are still being collected | Collection stops at the publish-call bound, or at once when the caller is gone. What was already kept is listed, and the command's end is still recorded |
+| C20 | A file is offered after `run` already lists the lease's file budget of publications | Answered `budgetExceeded`, nothing read, and not listed. What was already listed stays. The command still ends |
+| C21 | The host drains after a command's `Ran` and before its `End` | The command stays held and its publish point stays open. Serving ends once that `End` is asked |
+| C22 | The host says `Ran`, keeps the connection up, and never answers `Ended` | Once `End` is queued, the route is released after the command stop wait. Its organization command place is given back |
+
+Invariants:
+
+- The record and the hold name the same lease: the command's.
+- Collection finishes before `CommandEnded` is recorded, so the command is still live to admit the record.
+- `route.command` stays true for a command lease that publishes. Having a publish channel does not make it an agent lease.
+- The cleared environment gains `NESSA_ARTIFACTS` only when a point opened. It does not gain the harness's variables.
+- A command served through the relay and the same command served directly leave the same command-ledger checkpoint: granted, started, ran, ended (`docs/design/auth/relay.md` RL14).
+- A drain stays open while a command lease is still held, including one whose `Ran` was already said. Its `End` is what lets serving finish.
+- `run` lists at most the lease file budget (`artifact.environment_files`). A file offered past that is answered `budgetExceeded`, unread, and not listed.
+- A command route whose `Ran` was said and whose `End` is queued is released if `Ended` does not arrive within the command stop wait (`command.stop_wait_ms`). The organization command place goes with the route.
+
+Alternatives that lose:
+
+- The attachment hold names the command lease while the artifact record names the parent agent lease. Two causes for one file.
+- Give the command the harness environment so `NESSA_ARTIFACTS` is already set. The command would inherit the harness's credentials.
+- A second publish protocol for commands. A second authority beside the artifact channel.
+- Share the parent collector's spent budget. A command's room would depend on what the agent had already published.
+- A new Cedar action for the subprocess. Cedar already admitted the command; a second decider would split one grant.
+
+**Review brief.** Intended behavior: a command publishes through its own point and `run` lists the files with the command lease as their cause; a command reached only through the relay leaves the same command-ledger checkpoint as one reached directly. Owned scope: that checkpoint (#706) and the publish path (#766). Gates 13, 15, 16 and 18. Known limit: a file the process did not wait to hear collected can be settled `leaseEnded` on the host when `End` arrives, while the gateway may still be reading it — the same class of split as a harness lost against an end that was asked. Local discovery is out of scope, and slice I of ADR 252 stays open because of it.
 
 **Records.** Three lease records, each naming its parent agent lease:
 `command_issued` (terms and actor), `command_refused` (terms, refusal and
@@ -910,7 +957,7 @@ refusals.
 | --- | --- | --- | --- |
 | `environments.list` | The environments this conversation may use: `here`, SSH hosts, paired peers and workers, each with platform, declared sandbox profiles, reachability now, and what this caller may do there (`agent`, `command`) | `environment.list` | Caller's grants; peers filtered to what they grant this principal |
 | `thread.create` | Start a child conversation on a named environment with a prompt, a binding and a sandbox profile; returns the child's id and receipt | `conversation.create` with `environment`, under [ADR 329](../adr/todo/329-subagents.md) parent ownership | Caller's tool policy allows delegation; environment grants `agent`; budgets; parent closure fences children |
-| `run` | Run one command on a named environment with a timeout and bounded output; returns exit status and captured output. It publishes nothing until [#766](https://github.com/nessalabs/nessa-agent/issues/766): `artifacts_publish` acts only under the agent's own lease, so a file a command made on another host is refused `environment_not_leased` | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
+| `run` | Run one command on a named environment with a timeout and bounded output; returns exit status, captured output, and each file the command published (held, already held, or refused). `artifacts_publish` acts only under the agent's own lease, so a file the agent names on a command host it does not run on is refused `environment_not_leased` | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
 | `preview.open`, `preview.close` | Forward a loopback port the agent's own processes listen on to the surface's loopback for the life of the lease; returns the local URL once a request through it succeeds | The forward on the SSH session, or a bounded stream on a paired connection | The port is owned by the lease's process scope; HTTP, WebSocket and SSE only; recorded and shown; closed with the lease |
 | `artifacts_publish` | Attach a file from where the agent runs to the conversation by digest; returns `held` or `alreadyHeld` with its digest, size and name, or a typed refusal (slice D3a, served in process) | The artifact channel, asked by the gateway (`Publish`) | Only under the conversation's Live agent lease, where the agent runs; the turn's person as initiator, the lease as cause; per-lease byte budgets |
 | `artifacts_fetch` | Place a file the conversation holds, named by digest, media type and size, in the workspace where the agent runs; returns `placed` or `alreadyPlaced` with its path, digest, size and whether its end is recorded, or a typed refusal, `audit_unavailable` when it could not be recorded (slice D3b, served in process) | The artifact channel the other way, asked by the gateway (`Fetch`): sftp writes to a part on the host | Only under the conversation's Live agent lease, where the agent runs, on a host that opted in (`envServe.artifactsIn`); recorded asked for the turn's person before the host is asked, and ended once; every range read from the hold for the turn's person; per-lease byte budget; never replaces anything at the destination |
@@ -1377,8 +1424,8 @@ and only under the conversation's Live agent lease. `environment` must
 name where the agent runs now (`environments_list`'s name for it, `here`
 when it is not placed); anything else, a command host included, is refused
 `environment_not_leased`, since the agent holds no lease there to publish
-under. Command leases publish nothing until
-[#766](https://github.com/nessalabs/nessa-agent/issues/766).
+under. A file a command publishes goes through the command lease's own
+point, above, not through this tool.
 
 ```mermaid
 sequenceDiagram
@@ -1645,14 +1692,15 @@ forwarded to the surface's own loopback, for the life of the lease.
 - Backup is an export cut, not a cache: records, metadata and audit from
   their owners at one consistent boundary, plus a deletion inventory
   (#270). The cut's order is [the export cut](export-cut.md). It keeps
-  live leases and the grants, follow rules and peer table. Restore and
-  quarantine are not built. A restore has to fence a host that may still
-  be running a lease, not only mark that lease `Interrupted`, and a
-  revoked grant must not return. A restored gateway is quarantined: it
-  serves reads and issues no leases until the person accepts it as the
-  authority and every device, peer, environment and worker is told,
-  through a restore generation they see on their next connection or by
-  re-pairing if the key was not in the backup; #272 chooses which.
+  live leases and the grants, follow rules and peer table. An oversized
+  conversation is named, not copied. Restore writes a sealed quarantine
+  directory and becomes live only by renaming that directory onto an empty
+  path ([quarantined restore](quarantined-restore.md)). A revoked grant does
+  not return. An open lease is closed in the restored ledger as uncertain,
+  and acceptance waits for an operator receipt rather than contacting the
+  executor. The restored gateway does not keep the old private key; peers
+  re-pair. `nessa-backup-plan` stays inspection-only. The desktop and
+  `conversation.read` do not call the deferred fetch yet.
 
 ## Commands
 
@@ -1722,7 +1770,7 @@ locally.
 | Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
 | Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
 | Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; replay-to-live view and list subscriptions from the client's cursor, the desktop workspace and the conversation panel off polling (#702) | Read grants checked per batch where subscriptions admit one (`authorize_batch`); the phone on the same subscriptions | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702), G |
-| Phone reads | Device client with private cache and finite checkpoint passes; live conversation activity through `conversation.subscribe`, the only live read path since the product-socket watch was deleted (#257). One-use pairing (#264) and authenticated direct reads (#265) done | Grant-scoped list subscription once #724 scopes the catalogue, and the optional relay (#266) | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262, #724 |
+| Phone reads | Device client with private cache and finite checkpoint passes; live conversation activity through `conversation.subscribe`, the only live read path since the product-socket watch was deleted (#257). One-use pairing (#264) and authenticated direct reads (#265) done | Grant-scoped device list subscriptions are supported; CLI catalogue follow and the optional relay (#266) remain separate | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262, #724 |
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
 | SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), F [#703](https://github.com/nessalabs/nessa-agent/issues/703) |
@@ -1994,10 +2042,12 @@ Named so they are not mistaken for settled:
   announcement reveals.
 - **Which tools a policy can gate, per binding.** The share dialog must
   say it; the answer comes from the #142 declaration and the 0014 survey.
-- **Listener hardening for a tunnel.** What the native handshake must
-  withstand before a public tunnel is recommended rather than merely
-  possible: rate limits per source, invitation-closed behavior, and a
-  measured handshake budget.
+- **Listener hardening for a tunnel.** Answered in
+  [reaching the gateway through a tunnel](auth/tunnel.md#the-edge-before-anything-runs):
+  a tunnel connection whose key holds no credential is closed right after
+  the TLS handshake, so pairing stays on the local network, and tunnel
+  connections take a pool of their own. Rate limits per source stay open:
+  every tunnel connection arrives from `cloudflared` on loopback.
 - **Delegating to an environment.** How a parent names the child's
   environment under ADR 329, and how the child's artifacts are delivered
   as results.

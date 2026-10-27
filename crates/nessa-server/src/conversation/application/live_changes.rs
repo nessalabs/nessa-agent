@@ -45,6 +45,17 @@ impl LiveChanges {
         }
     }
 
+    /// Something live about every followed conversation changed. A gateway
+    /// preference is one of those facts: each open transcript re-reads it.
+    pub fn publish_followed(&self) {
+        let senders = self.senders.lock().unwrap_or_else(PoisonError::into_inner);
+        for sender in senders.values() {
+            if sender.receiver_count() > 0 {
+                sender.send_modify(|generation| *generation = generation.wrapping_add(1));
+            }
+        }
+    }
+
     /// Whether anybody follows `id`'s view now: a window or phone showing
     /// it. The parking sweep keeps such a conversation's agent running.
     pub fn followed(&self, id: &ConversationId) -> bool {
@@ -111,6 +122,16 @@ mod tests {
         changes.publish(&id(1));
         let _again = changes.subscribe(&id(3));
         assert_eq!(changes.entries(), 1);
+    }
+
+    #[test]
+    fn publishing_followed_conversations_wakes_each_of_them() {
+        let changes = LiveChanges::default();
+        let first = changes.subscribe(&id(1));
+        let second = changes.subscribe(&id(2));
+        changes.publish_followed();
+        assert!(first.has_changed().unwrap());
+        assert!(second.has_changed().unwrap());
     }
 
     #[test]

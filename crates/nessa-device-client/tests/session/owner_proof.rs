@@ -48,6 +48,7 @@ fn open(root: &PrivateFixture) -> NativeDeviceSession {
         root.path().to_str().unwrap().into(),
         "private".into(),
         "127.0.0.1:9".into(),
+        None,
     )
     .unwrap()
 }
@@ -337,6 +338,7 @@ fn foreign_close_observation_preserves_actual_tls_child_failure_after_release_an
         root.path().to_str().unwrap().into(),
         "private".into(),
         address.to_string(),
+        None,
     )
     .unwrap();
     let child = parent.open_product("phone-instance".into()).unwrap();

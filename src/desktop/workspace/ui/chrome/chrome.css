@@ -9,7 +9,8 @@
   display: flex;
   height: 100svh;
   min-width: 480px;
-  overflow: hidden;
+  /* Clipped, never a scroller, as the window is (`side-rail.css`). */
+  overflow: clip;
   isolation: isolate;
   background: var(--background);
   color: var(--foreground);
@@ -66,7 +67,7 @@
  * window's controls on the way.
  */
 .workspace .desktop-column-bar {
-  transition: visibility 0s linear var(--desktop-slow);
+  transition: visibility 0s linear var(--desktop-drawer);
 }
 
 /* Revealed from the edge, the sidebar slides in for 360ms (`source-list.css`); its action waits it out. */
@@ -80,20 +81,34 @@
   transition: none;
 }
 
+/* The fold is only an attribute while the spare hold lasts. The bar stays
+   painted until the sidebar leaves the row with the new boxes. */
+.workspace[data-spare-held][data-folding][data-sidebar="closed"]
+  .workspace-sidebar
+  .desktop-column-bar {
+  visibility: visible;
+}
+
 /* ——— Titlebar and icon buttons ——— */
 
-/* Above the sidebar even when it is revealed from the edge, so its toggle is always where it was. */
+/* Window controls share the columns' top row; only controls take pointer input. */
 .workspace-titlebar {
   position: absolute;
   z-index: 40;
   top: 0;
   left: 0;
+  right: 0;
   display: flex;
   height: var(--desktop-titlebar-height);
   align-items: center;
   gap: 2px;
   padding-left: var(--desktop-window-controls-inset);
   padding-right: 8px;
+  /* Unified with the window: no fill and no rule. What is under it — the
+     sidebar's material, a pane's header art — runs up behind the controls,
+     the way a macOS toolbar sits on its content rather than above it. */
+  background: transparent;
+  pointer-events: none;
   /* Chrome is read, not selected: a double-click on a label selects nothing. */
   -webkit-user-select: none;
   user-select: none;
@@ -102,8 +117,25 @@
 .workspace-titlebar-controls {
   display: flex;
   height: 100%;
+  width: 100%;
+  min-width: 0;
   align-items: center;
   gap: inherit;
+}
+
+.workspace-titlebar-navigation {
+  pointer-events: auto;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: inherit;
+}
+
+/* The titlebar's free room: it moves the window (`data-tauri-drag-region`). */
+.workspace-titlebar-space {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
 }
 
 /* ——— Agent tiles and status glyphs ——— */

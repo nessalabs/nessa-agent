@@ -25,7 +25,7 @@ import {
   toggleShowAll,
   toggleSidebar,
 } from "./navigation"
-import { closePane, openBeside, openWidget } from "./panes"
+import { closePane, openBeside } from "./panes"
 import { indexLoaded, sessionRemoved } from "./updates"
 
 const loaded = () =>
@@ -44,10 +44,26 @@ describe("choosing what the list shows", () => {
     expect(shown(state)).toEqual(["a"])
   })
 
-  it("opens the channel's most pressing session when the list is hidden", () => {
+  it("shows the list again when it is hidden, leaving the panes alone", () => {
     const hidden = toggleSessionList(loaded(), { open: false })
-    expect(shown(selectChannel(hidden, { channelId: "desktop" }))).toEqual(["b"])
-    expect(shown(selectChannel(hidden, { channelId: "empty" }))).toEqual(["a"])
+    const state = selectChannel(hidden, { channelId: "desktop" })
+    expect(state.view).toEqual({ channelId: "desktop" })
+    expect(state.chrome.sessionList).toEqual({ open: true, folded: false })
+    expect(shown(state)).toEqual(["a"])
+    // The person can still hide it afterwards.
+    expect(toggleSessionList(state, { open: false }).chrome.sessionList.open).toBe(false)
+  })
+
+  it("shows a list the window folded for room", () => {
+    const folded = loaded()
+    const state = selectChannel(
+      {
+        ...folded,
+        chrome: { ...folded.chrome, sessionList: { open: true, folded: true } },
+      },
+      { channelId: "gateway" },
+    )
+    expect(state.chrome.sessionList).toEqual({ open: true, folded: false })
   })
 
   it("ignores a channel it does not have", () => {
@@ -261,13 +277,6 @@ describe("a widget over the panes: the window place", () => {
     expect(over(over(loaded()), other).content).toEqual({ widget: other })
     const plugin = { plugin: "subagents", id: "run" }
     expect(over(over(loaded()), plugin).content).toEqual({ widget: plugin })
-  })
-
-  it("holds a widget that is in a pane too", () => {
-    const inPane = openWidget(loaded(), { widget: run, origin: "a", room: roomyGrid })
-    const both = over(inPane)
-    expect(shown(both)).toEqual(["a", "widget experiments/run"])
-    expect(both.content).toEqual({ widget: run })
   })
 
   it("is left for the panes by Escape or its close, and by going anywhere else", () => {

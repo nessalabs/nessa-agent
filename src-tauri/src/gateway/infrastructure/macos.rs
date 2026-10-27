@@ -4,7 +4,7 @@ use crate::gateway::application::{
     GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
     GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
     GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
-    ReconciliationHistoryFact, StartupStep,
+    ReconciliationHistoryFact, RuntimeCopyProgress, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -45,7 +45,10 @@ use control::{
 };
 use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
-use staging::{launch_settings, stage_runtime, stage_runtime_cached, ValidatedRuntimes};
+use staging::{
+    launch_settings, stage_runtime, stage_runtime_cached, stage_runtime_reporting,
+    ValidatedRuntimes,
+};
 
 /// launchd and the loopback health endpoint: what the bootstrap step and
 /// recovery read, and the two commands the bootstrap step runs.
@@ -1438,7 +1441,20 @@ fn publish_deferred(mut stage: DeferredStage, lock: Option<control::NamespaceLoc
         pause.mark_started();
         pause.wait_release();
     }
-    let result = stage_runtime(&stage.source, &stage.installations, &stage.fingerprint);
+    let result = if let Some(reporter) = stage.reporter.as_ref() {
+        let reported = stage_runtime_reporting(
+            &stage.source,
+            &stage.installations,
+            &stage.fingerprint,
+            &|progress| reporter.report(progress),
+        );
+        // Reporting stops here, whether the rename ran or the attempt failed
+        // before it. The bar is not a publication result.
+        reporter.report(RuntimeCopyProgress::settled());
+        reported
+    } else {
+        stage_runtime(&stage.source, &stage.installations, &stage.fingerprint)
+    };
     match &result {
         Ok(published) => {
             eprintln!("[nessa] Published gateway runtime {}", published.display());

@@ -1,28 +1,23 @@
-import {
-  memo,
-  useRef,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-} from "react"
+import { memo, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Kbd } from "@nessa-ui/react/kbd"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import {
   openBeside,
   openChannel,
+  openChannelCreation,
   toggleChannel,
   toggleSection,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectChannelIdsIn,
+  selectChannelMaking,
   selectSectionCollapsed,
   selectSections,
-  selectSidebarOpen,
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
-import { ColumnHeader } from "../../../ui/column-header"
 import { IdentityFooter } from "../chrome/identity-footer"
 import { useSidebarPeek, useWorkspaceFrame } from "../workspace-frame"
 import { ChannelBranch } from "./channel-branch"
@@ -37,17 +32,20 @@ import { useRowFocusKept } from "../row-focus"
  * window's identity at its foot. `channels` is the sidebar beside a session
  * list — the Agents overview's entry, then channels to choose from. `tree`
  * stands alone — search, the Agents overview's entry, then channels that
- * disclose their sessions inline. `top` fills the window's row inside
- * the glass.
+ * disclose their sessions inline. Window actions live in the shared top bar.
  */
 export const SourceList = memo(function SourceList({
   variant,
-  top,
+  open,
 }: {
   variant: "channels" | "tree"
-  top?: ReactNode
+  /**
+   * Whether the sidebar is painted. A pane column paints this with the new
+   * boxes (`usePaintedWithPanes`), so the list does not read the store's
+   * drawn bit and fold in the click.
+   */
+  open: boolean
 }) {
-  const open = useWorkspaceSelector(selectSidebarOpen)
   const sections = useWorkspaceSelector(selectSections)
   const treeRef = useRef<HTMLElement>(null)
   useRowFocusKept(treeRef, "[data-row]")
@@ -109,7 +107,6 @@ export const SourceList = memo(function SourceList({
       aria-hidden={(!open && !revealed) || undefined}
       {...(open ? {} : peek?.holders)}
     >
-      <ColumnHeader action={top} />
       <div className="workspace-sidebar-scroll">
         {variant === "channels" ? <ChannelsTop /> : <TreeTop />}
         <nav
@@ -175,6 +172,7 @@ const SourceSection = memo(function SourceSection({
     selectSectionCollapsed(state, sectionId),
   )
   const channelIds = useWorkspaceSelector((state) => selectChannelIdsIn(state, sectionId))
+  const { creatable } = useWorkspaceSelector(selectChannelMaking)
   return (
     <section className="workspace-section" data-collapsed={collapsed || undefined}>
       <div className="workspace-section-head">
@@ -189,14 +187,23 @@ const SourceSection = memo(function SourceSection({
           <span>{name}</span>
           <DesktopIcon name="chevronRight" />
         </button>
-        {variant === "channels" ? (
-          // Channels cannot be added yet; the control shows where it will be.
+        {creatable ? (
           <IconButton
             className="workspace-section-add"
             icon="add"
             label={`Add channel to ${name}`}
             tone="faint"
-            {...tooltip("Adding channels isn’t available yet")}
+            {...tooltip("New channel")}
+            onClick={() => dispatch(openChannelCreation())}
+          />
+        ) : variant === "channels" ? (
+          // This window cannot make channels; the control shows where it would be.
+          <IconButton
+            className="workspace-section-add"
+            icon="add"
+            label={`Add channel to ${name}`}
+            tone="faint"
+            {...tooltip("Adding channels isn’t available here")}
             disabled
           />
         ) : null}

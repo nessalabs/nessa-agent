@@ -187,6 +187,9 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     async setApprovalMode() {
       throw new Error("Scenario does not offer approval-mode changes.")
     },
+    async setUsageLimitAutoContinue() {
+      throw new Error("Scenario does not offer usage-limit continuation.")
+    },
     async create(conversationId) {
       if (scenario === "offline") throw new Error("Scenario: backend offline")
       // A deleted identity is never reopened, as the gateway's tombstone refuses it.

@@ -10,7 +10,7 @@ use crate::{
         application::{
             ConversationAccessPolicyEvaluator, ConversationFuture, ConversationListing,
             ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
-            ObservationCursor, ObservedConversations,
+            ObservationCursor, ObservedConversations, Reader,
         },
         domain::{Conversation, ConversationDeletion},
         infrastructure::LocalConversationStore,
@@ -365,6 +365,7 @@ async fn listing_shows_only_the_callers_conversations_and_opens_nothing() {
             updated_at_ms: 15,
             running: false,
             archived: false,
+            channel_id: None,
         }]
     );
     for ((organization, principal), expected) in [
@@ -1346,6 +1347,7 @@ impl ConversationListing for AskedLimit {
         _: &PrincipalId,
         _: bool,
         limit: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         self.0.lock().unwrap().push(limit);
         Box::pin(async { Ok(ListedConversations::default()) })
@@ -1356,6 +1358,7 @@ impl ConversationListing for AskedLimit {
         _: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         Box::pin(async {
             Ok(ObservedConversations {
@@ -1364,6 +1367,9 @@ impl ConversationListing for AskedLimit {
                 cursor: None,
             })
         })
+    }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }
 
@@ -1416,10 +1422,12 @@ impl ConversationListing for Answering {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         let conversations = self.0.clone();
         Box::pin(async move {
             Ok(ListedConversations {
+                head: None,
                 conversations,
                 unreadable: 0,
             })
@@ -1431,6 +1439,7 @@ impl ConversationListing for Answering {
         _: &PrincipalId,
         _: bool,
         cursor: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         let conversations = if cursor.is_some() {
             Vec::new()
@@ -1444,6 +1453,9 @@ impl ConversationListing for Answering {
                 cursor: None,
             })
         })
+    }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }
 
@@ -1488,6 +1500,7 @@ fn answering(
     let answered = rows
         .iter()
         .map(|conversation| ListedConversation {
+            held: None,
             conversation: conversation.clone(),
             summary: summary.clone(),
         })
@@ -1803,4 +1816,28 @@ async fn an_observation_cursor_from_another_catalogue_is_refused() {
     ));
     listing.service.shutdown().await.unwrap();
     empty.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_catalogue_names_every_owner() {
+    let stored = stored(ConversationLimits::default());
+    stored_put(&stored, &id(), "org-a", "person-a", 1).await;
+    stored_put(&stored, &id(), "org-b", "person-b", 2).await;
+    let mut labeled: Vec<_> = stored
+        .store
+        .owners()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(organization, owner)| (organization.as_str().to_owned(), owner.as_str().to_owned()))
+        .collect();
+    labeled.sort();
+    assert_eq!(
+        labeled,
+        vec![
+            ("org-a".into(), "person-a".into()),
+            ("org-b".into(), "person-b".into())
+        ]
+    );
+    stored.service.shutdown().await.unwrap();
 }

@@ -90,30 +90,40 @@ export function agentCommand(agent) {
     return file
   }
   switch (agent) {
-    case "claude":
+    case "claude": {
+      const claudeAdapter = entry(
+        "claude-acp",
+        "@agentclientprotocol/claude-agent-acp/dist/index.js",
+      )
       return {
-        argv: [
-          process.execPath,
-          entry("claude-acp", "@agentclientprotocol/claude-agent-acp/dist/index.js"),
-        ],
+        argv: [process.execPath, claudeAdapter],
+        stagedRuntime: [claudeAdapter],
+        semanticArgs: [],
         model: MODELS.claude,
         path: null,
       }
-    case "codex":
+    }
+    case "codex": {
+      const codexAdapter = entry(
+        "codex-acp",
+        "@agentclientprotocol/codex-acp/dist/index.js",
+      )
       return {
-        argv: [
-          process.execPath,
-          entry("codex-acp", "@agentclientprotocol/codex-acp/dist/index.js"),
-        ],
+        argv: [process.execPath, codexAdapter],
+        stagedRuntime: [codexAdapter],
+        semanticArgs: [],
         model: MODELS.codex,
         path: join(harnesses, "codex-acp", "node_modules", ".bin"),
       }
+    }
     case "opencode": {
       const binary = process.env.MCP_LIVE_OPENCODE
       if (!binary || !existsSync(binary))
         throw new Error("set MCP_LIVE_OPENCODE to an Opencode 1.18.31 binary")
       return {
         argv: [binary, "acp"],
+        stagedRuntime: [],
+        semanticArgs: ["acp"],
         model: MODELS.opencode,
         path: null,
       }
@@ -165,7 +175,10 @@ export async function exited(child, ms) {
  * @param {number} o.port the gateway's port on 127.0.0.1
  * @param {string} o.instance the gateway instance's name
  * @param {string[]} o.agentArgv how the gateway starts the agent's harness
- *   (`agentCommand(agent).argv`, possibly wrapped)
+ *   (`agentCommand(agent).argv`, possibly wrapped). `stagedRuntime` and
+ *   `semanticArgs`, when set, are that argv split: the bundled runtime
+ *   location, then the arguments that select a saved context. Absent, the
+ *   tail of `agentArgv` is the arguments.
  * @param {string} o.model the agent's model
  * @param {string|null} [o.path] a directory to put first on the gateway's `PATH`
  * @param {{ command: string, args: string[] }} [o.mcpServer] how the gateway starts `mcptest`
@@ -179,10 +192,20 @@ export async function exited(child, ms) {
  *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
  * @param {object} [o.native] the config's `native` section
  *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
+ * @param {string} [o.evidence] task-owned output directory. Before private data
+ *   cleanup, preserve gateway.log and gateway-status.json here, never credentials
+ *   or audit record contents. A failed evidence write still removes private data.
+ * @param {Record<string, string>} [o.environment] more of the gateway's
+ *   environment, such as `NESSA_GITHUB_APP`
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
  *   `token` is the owner token file's path; `log()` the gateway's output so
- *   far; `restart(signal, whileStopped)` kills it (a crash by default) and
- *   starts it again on the same directory and port; `server` the process running now; `stop()`
+ *   far; `restart(signal, second)` kills it (a crash by default) and starts
+ *   it again on the same directory and port. A function `second` runs once
+ *   the old one has exited and before the new one starts. An object is
+ *   assigned onto the environment for that launch and the ones after it,
+ *   unless it has `overlay` or `whileStopped`: then `overlay` is that
+ *   assignment and `whileStopped` is the function that runs in between;
+ *   `server` the process running now; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
  *   removes its directory, and says whether it exited. On a failed start, the
  *   error carries the gateway's output as `gatewayLog`.
@@ -213,7 +236,26 @@ export async function startLocalGateway(o) {
       // that kept the streams open does not hold the stop up for long.
       if (stopped) await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
     }
-    rmSync(directory, { recursive: true, force: true })
+    try {
+      if (o.evidence) {
+        mkdirSync(o.evidence, { recursive: true })
+        writeFileSync(join(o.evidence, "gateway.log"), output.join(""))
+        writeFileSync(
+          join(o.evidence, "gateway-status.json"),
+          `${JSON.stringify(
+            {
+              stopped,
+              exitCode: server?.exitCode ?? null,
+              signal: server?.signalCode ?? null,
+            },
+            null,
+            2,
+          )}\n`,
+        )
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
     return stopped
   }
   try {
@@ -227,6 +269,7 @@ export async function startLocalGateway(o) {
             ...process.env,
             ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
           }),
+      ...o.environment,
       NESSA_STAGE: "ci",
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,
@@ -251,10 +294,13 @@ export async function startLocalGateway(o) {
           runtimes: {
             [o.agent]: {
               command: o.agentArgv[0],
-              args: o.agentArgv.slice(1),
+              stagedRuntime: o.stagedRuntime ?? [],
+              args: o.semanticArgs ?? o.agentArgv.slice(1),
               model: o.model,
               toolsEnabled: true,
             },
+            // Other agents the gateway may carry a conversation on under.
+            ...o.runtimes,
           },
         },
         ...(o.limits ? { limits: o.limits } : {}),
@@ -283,12 +329,24 @@ export async function startLocalGateway(o) {
     }
     /**
      * Stops the gateway and starts it again on the same directory and port:
-     * `SIGKILL` is a crash, `SIGTERM` its own shutdown. Resolves once the new
-     * one is healthy. Its output joins the same log. `whileStopped` runs
-     * once the old one has exited and before the new one starts, for a check
-     * that changes what the gateway will find on disk.
+     * `SIGKILL` is a crash, `SIGTERM` its own shutdown. A function second
+     * argument runs once the old one has exited and before the new one
+     * starts, for a check that changes what the gateway will find on disk.
+     * An object is assigned onto the environment for this launch and the
+     * ones after it. An object with `overlay` or `whileStopped` does both:
+     * `overlay` is that assignment, and `whileStopped` runs in between.
+     * Resolves once the new one is healthy. Its output joins the same log.
      */
-    const restart = async (signal = "SIGKILL", whileStopped = async () => {}) => {
+    const restart = async (signal = "SIGKILL", second) => {
+      let whileStopped = async () => {}
+      if (typeof second === "function") whileStopped = second
+      else if (second && typeof second === "object") {
+        if ("overlay" in second || "whileStopped" in second) {
+          if (second.overlay) Object.assign(env, second.overlay)
+          if (typeof second.whileStopped === "function")
+            whileStopped = second.whileStopped
+        } else Object.assign(env, second)
+      }
       const previous = server
       previous.kill(signal)
       if (!(await exited(previous, 10_000))) {
@@ -314,8 +372,16 @@ export async function startLocalGateway(o) {
       restart,
     }
   } catch (error) {
-    await stop()
-    error.gatewayLog = output.join("")
-    throw error
+    let failure = error
+    try {
+      await stop()
+    } catch (cleanup) {
+      failure = new AggregateError(
+        [error, cleanup],
+        "The gateway failed and its cleanup or diagnostic retention also failed",
+      )
+    }
+    failure.gatewayLog = output.join("")
+    throw failure
   }
 }

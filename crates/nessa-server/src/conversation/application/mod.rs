@@ -45,6 +45,9 @@
 //! -> observed native configuration -> atomic model and approval selection.
 //! The SDK owns native context/history; model_requests owns publication and
 //! retries. Recovery correlates both records before admitting another message.
+//! Before a model request becomes applied, `service/scheduled_messages` records
+//! its causal usage-limit invalidation through `ScheduledMessageStore`. The
+//! request receipt prevents a retry from invalidating a later blocked turn.
 //! A retirement, or a close while a mode change is pending, whose stop runs past
 //! its budget carries on until that slot is released
 //! (`a_mode_retirement_past_its_budget_lets_the_agent_go`,
@@ -77,7 +80,7 @@
 //!                       ConversationDeletionAudit
 //!                                   │ acknowledged
 //!                                   ▼
-//!   attachments.release ─ lease.erase ─ summaries.erase ─ tombstone erased
+//!   attachments.release ─ lease.erase ─ summaries.erase ─ schedule scrub ─ tombstone erased
 //! ```
 //!
 //! Arrows are the order of calls. Uploads are released even when the record
@@ -90,7 +93,8 @@
 //! the agent asked until one answer settles it
 //! (`a_tombstone_keeps_the_first_decision_and_reads_its_history_once`,
 //! `the_agent_is_not_asked_while_the_history_is_leased_elsewhere`). The rest —
-//! the deletion record, releasing uploads, erasing history and summary — is
+//! the deletion record, releasing uploads, erasing history and summary, and
+//! blanking a scheduled continuation's prompt — is
 //! repeated on each try until the tombstone is marked erased, and each is
 //! idempotent: the record is acknowledged again, not written twice
 //! (`a_repeated_deletion_is_acknowledged_and_a_contradicting_one_fails_closed`),
@@ -172,6 +176,7 @@ mod locks;
 mod mcp_apps;
 mod metadata_target;
 pub(crate) use metadata_target::load_conversation;
+mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
@@ -206,6 +211,7 @@ mod source_permits;
 pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
+mod usage_limit_policy;
 mod workspace_windows;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use access_policy::{
@@ -229,7 +235,7 @@ pub use owner_phone_policy::{
 pub use workspace_windows::{PublishedWindow, WindowPublished, WindowSlot, WorkspaceWindows};
 // The port itself, which placement and the service use on every host.
 pub(crate) use command_environment::CommandEnvironment;
-pub use command_environment::CommandResult;
+pub use command_environment::{CommandPublication, CommandResult, PublicationOutcome};
 // Held by the SSH adapter, which is Unix only, and by tests.
 #[cfg_attr(not(any(unix, test)), allow(unused_imports))]
 pub(crate) use command_environment::CommandHold;
@@ -276,6 +282,7 @@ pub(crate) use placement::{
     ConversationBindings, ConversationPlacements, PlacementError, WorkerBinding,
 };
 // For the paired environment adapter, which lives with the Unix-only SSH one.
+pub use agent_switches::{ConversationAgentSwitch, ConversationAgentSwitchState};
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
 pub use model_changes::{
@@ -319,16 +326,21 @@ pub use service::{
     ThreadEvent,
 };
 pub use service::{
-    AwaitedTurn, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
-    ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
-    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, McpAppCall,
-    McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
-    QuestionChoiceInput, ReadOpening, ReportRegistration, RequestedAgent, RequestedConversation,
-    SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn, MAX_APP_CALLS,
-    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
+    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
+    ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
+    ConversationService, DeletionsLeft, FailureBackoff, FolderRefusal, HistoryGeneration,
+    McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
+    PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
+    PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference,
+    ReportRegistration, RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft,
+    ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage, ScheduledMessageStore,
+    SelectionChange, SelectionRequest, SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn,
+    UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
+    MAX_RESOURCE_META_BYTES,
 };
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
-pub(crate) use service::{ExportAdmission, ExportHoldFailure};
+pub(crate) use service::{ExportAdmission, ExportHoldFailure, FENCE_LEASE_MS};
 pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
     FETCH_BUSY_BACKOFF, FETCH_READS,
@@ -342,6 +354,10 @@ pub use share_grants::{
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
+pub use usage_limit_policy::{
+    UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    UsageLimitPreferencePolicyEvaluator,
+};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/application.rs"]

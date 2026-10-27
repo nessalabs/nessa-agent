@@ -224,6 +224,7 @@ fn local_enrollment_real_private_record_survives_retry_reopen_and_issued_replace
         root.path(),
         Path::new("private"),
         "127.0.0.1:9".parse().unwrap(),
+        None,
     )
     .unwrap();
     let original = session.local_enrollment().unwrap().unwrap();
@@ -249,6 +250,7 @@ fn local_enrollment_real_private_record_survives_retry_reopen_and_issued_replace
         root.path(),
         Path::new("private"),
         "127.0.0.1:9".parse().unwrap(),
+        None,
     )
     .unwrap();
     let retry = session.local_enrollment().unwrap().unwrap();
@@ -266,6 +268,7 @@ fn local_enrollment_real_private_record_survives_retry_reopen_and_issued_replace
         root.path(),
         Path::new("private"),
         "127.0.0.1:9".parse().unwrap(),
+        None,
     )
     .unwrap();
     assert!(session.local_enrollment().unwrap().is_none());
@@ -408,6 +411,9 @@ impl OwnerPhoneOriginalStore for Store {
     > {
         Ok(None)
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        Ok(false)
+    }
 }
 
 impl OwnerPhoneOriginalStore for HeldStore {
@@ -427,6 +433,9 @@ impl OwnerPhoneOriginalStore for HeldStore {
         PrivateStateError,
     > {
         self.owned.load_original()
+    }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
     }
 }
 

@@ -77,6 +77,7 @@ function publishedView(
       serverNowMs: 1_700_000_000_000,
       title: "Committed transcript",
       approvalMode: "ask",
+      model: "claude-sonnet-5",
       approvalModes: [
         { id: "ask", name: "Provider asks", description: "Provider permission review." },
       ],
@@ -101,6 +102,7 @@ function publishedView(
       notes: [],
       unreadable: [],
       unreadableTruncated: false,
+      handoffs: [],
       questions: [],
       tools: [],
       permissions: actionable

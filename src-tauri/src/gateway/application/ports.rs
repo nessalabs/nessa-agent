@@ -23,7 +23,9 @@ use std::sync::mpsc;
 use std::{
     error::Error,
     fmt,
+    future::Future,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -458,6 +460,12 @@ pub trait MonotonicClock: Send + Sync {
     fn wait(&self, duration: Duration) {
         std::thread::sleep(duration);
     }
+
+    /// Wait without holding a thread, for an async caller. Test clocks may
+    /// advance instead of sleeping.
+    fn pause(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(tokio::time::sleep(duration))
+    }
 }
 
 /// Process monotonic clock used by desktop composition.
@@ -640,26 +648,88 @@ impl GatewayStartup {
 /// reported by its adapter and never changes the authoritative startup state.
 pub trait GatewayStartupEvents: Send + Sync {
     fn publish(&self, startup: &GatewayStartup);
+
+    /// Sync progress for a deferred runtime copy.
+    ///
+    /// The default ignores it. Publishing it must not write
+    /// [`GatewayStartup`]: that projection is what setup treats as readiness.
+    /// The adapter retains the report before it emits, and
+    /// [`Self::latest_runtime_copy`] is what a later subscriber reads.
+    #[cfg(any(target_os = "macos", test))]
+    fn runtime_copy(&self, _progress: &RuntimeCopyProgress) {}
+
+    /// The latest [`Self::runtime_copy`] report, if the adapter kept one.
+    #[cfg(any(target_os = "macos", test))]
+    fn latest_runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        None
+    }
+}
+
+/// How much of the private runtime has finished `sync_all`.
+///
+/// This is a report. It is not [`GatewayStartup`] and it does not decide
+/// readiness. `Settled` means the attempt stopped reporting, whether the
+/// generation was renamed or the attempt failed before the rename.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(target_os = "macos", test))]
+pub struct RuntimeCopyProgress {
+    pub state: RuntimeCopyPhase,
+    pub files_completed: u64,
+    pub files_total: u64,
+    pub bytes_completed: u64,
+    pub bytes_total: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(target_os = "macos", test))]
+pub enum RuntimeCopyPhase {
+    Copying,
+    Settled,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl RuntimeCopyProgress {
+    pub(crate) fn settled() -> Self {
+        Self {
+            state: RuntimeCopyPhase::Settled,
+            files_completed: 0,
+            files_total: 0,
+            bytes_completed: 0,
+            bytes_total: 0,
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) enum StageMessage {
+    Progress(RuntimeCopyProgress),
+    Finished(Result<(), String>),
 }
 
 /// The staging thread's report of one deferred publication.
 ///
 /// Dropping it without [`Self::finish`] is a missing result. The attempt
 /// records that as a failed publication rather than waiting forever.
+/// [`Self::report`] is the sync progress. A missing report does not change
+/// the publication result.
 #[cfg(any(target_os = "macos", test))]
 pub struct DeferredStageReporter {
-    result: mpsc::Sender<Result<(), String>>,
+    messages: mpsc::Sender<StageMessage>,
 }
 
 #[cfg(any(target_os = "macos", test))]
 impl DeferredStageReporter {
-    pub(crate) fn pair() -> (Self, mpsc::Receiver<Result<(), String>>) {
-        let (result, receiver) = mpsc::channel();
-        (Self { result }, receiver)
+    pub(crate) fn pair() -> (Self, mpsc::Receiver<StageMessage>) {
+        let (messages, receiver) = mpsc::channel();
+        (Self { messages }, receiver)
+    }
+
+    pub fn report(&self, progress: RuntimeCopyProgress) {
+        let _ = self.messages.send(StageMessage::Progress(progress));
     }
 
     pub fn finish(self, result: Result<(), String>) {
-        let _ = self.result.send(result);
+        let _ = self.messages.send(StageMessage::Finished(result));
     }
 }
 
@@ -1632,9 +1702,22 @@ pub(crate) mod testing {
         pub(crate) initiators: Mutex<Vec<ReconciliationInitiator>>,
         /// Told when a held registration is entered, then waited on to let it finish.
         hold: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+        /// Whether classifying startup panics, so `Gateway::start` fails before
+        /// any reconciliation is admitted.
+        pub(crate) classify_panics: std::sync::atomic::AtomicBool,
     }
 
     impl GatewayHost for RecordingGatewayHost {
+        fn startup_cause(&self) -> super::ReconciliationCause {
+            if self
+                .classify_panics
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("the test's startup classification panics");
+            }
+            super::ReconciliationCause::Startup
+        }
+
         fn register(
             &self,
             _: &Path,
@@ -1709,23 +1792,54 @@ pub(crate) mod testing {
         (gateway, host, on_entered, release)
     }
 
+    /// As [`recording_gateway_held`], on `clock`.
+    pub(crate) fn recording_gateway_held_on(
+        registration: Result<ReconciledGateway, GatewayError>,
+        clock: Arc<dyn super::MonotonicClock>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>, Receiver<()>, Sender<()>) {
+        let (entered, on_entered) = channel();
+        let (release, on_release) = channel();
+        let (gateway, host) = gateway_on(registration, Some((entered, on_release)), clock);
+        (gateway, host, on_entered, release)
+    }
+
+    /// As [`recording_gateway`], on `clock`.
+    pub(crate) fn recording_gateway_on(
+        registration: Result<ReconciledGateway, GatewayError>,
+        clock: Arc<dyn super::MonotonicClock>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>) {
+        gateway_on(registration, None, clock)
+    }
+
     fn gateway_over(
         registration: Result<ReconciledGateway, GatewayError>,
         hold: Option<(Sender<()>, Receiver<()>)>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>) {
+        gateway_on(registration, hold, Arc::new(super::SystemMonotonicClock))
+    }
+
+    fn gateway_on(
+        registration: Result<ReconciledGateway, GatewayError>,
+        hold: Option<(Sender<()>, Receiver<()>)>,
+        clock: Arc<dyn super::MonotonicClock>,
     ) -> (Gateway, Arc<RecordingGatewayHost>) {
         let host = Arc::new(RecordingGatewayHost {
             registration,
             registrations: Mutex::new(0),
             initiators: Mutex::new(Vec::new()),
             hold: Mutex::new(hold),
+            classify_panics: std::sync::atomic::AtomicBool::new(false),
         });
         (
-            Gateway::bootstrap(
-                host.clone(),
-                system_login_shell(),
-                discard_startup_events(),
-                sequential_reconciliation_ids(),
-                discard_reconciliation_audit(),
+            Gateway::bootstrap_with_dependencies(
+                crate::gateway::application::GatewayRuntimeDependencies::new(
+                    host.clone(),
+                    system_login_shell(),
+                    discard_startup_events(),
+                    sequential_reconciliation_ids(),
+                    discard_reconciliation_audit(),
+                    clock,
+                ),
                 "/runtime".into(),
                 "ci".into(),
             ),

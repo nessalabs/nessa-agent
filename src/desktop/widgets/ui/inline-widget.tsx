@@ -1,7 +1,7 @@
 /**
  * A transcript's widget part (ADR 326): a card in the message, drawn by the
  * plugin's inline view, or — ready, with none — a row with the widget's title
- * and Open, which asks the host for a pane (`open("pane")`). What it cannot
+ * and Open, which asks the host for its chat's panel (`open("panel")`). What it cannot
  * draw it says in one line, from the same table every host reads
  * (`model/host-table.ts`). A card has no close and no Escape of its own.
  */
@@ -51,7 +51,7 @@ function InlineCard({
       ) : draws.kind === "row" ? (
         <div className="widget-inline-row">
           <span className="widget-inline-title">{draws.title}</span>
-          <Button size="sm" variant="ghost" onClick={() => host.open("pane")}>
+          <Button size="sm" variant="ghost" onClick={() => host.open("panel")}>
             Open
           </Button>
         </div>

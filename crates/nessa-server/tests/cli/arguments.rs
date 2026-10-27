@@ -1,6 +1,7 @@
 use crate::agent_install::domain::AgentName;
 use crate::cli::entrypoint::{parse, Command, GrantedAgents, LocalProvisioning, Ungranted};
 use nessa_protocol::relay::RelayAddress;
+use nessa_protocol::tunnel::TunnelAddress;
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
 }
@@ -214,6 +215,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             relay: None,
+            tunnel: None,
             drain_deadline_ms: None,
             enroll_code_file: None,
         }
@@ -230,6 +232,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             relay: None,
+            tunnel: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: None,
         }
@@ -248,6 +251,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "gw.example:7443".into(),
             relay: None,
+            tunnel: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: Some("/run/secrets/nessa_code".into()),
         }
@@ -266,11 +270,40 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             relay: Some(RelayAddress::try_from("relay.example:7444".to_owned()).unwrap()),
+            tunnel: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: None,
         }
     );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "dial",
+            "10.0.0.2:7443",
+            "--tunnel",
+            "https://gw.example.com",
+        ]))
+        .unwrap(),
+        Command::EnvDial {
+            address: "10.0.0.2:7443".into(),
+            relay: None,
+            tunnel: Some(TunnelAddress::try_from("https://gw.example.com".to_owned()).unwrap()),
+            drain_deadline_ms: None,
+            enroll_code_file: None,
+        }
+    );
     for refused in [
+        vec!["env", "dial", "gw:1", "--tunnel"],
+        vec!["env", "dial", "gw:1", "--tunnel", "http://gw.example.com"],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--tunnel",
+            "https://a.example",
+            "--tunnel",
+            "https://b.example",
+        ],
         vec!["env", "enroll"],
         vec!["env", "enroll", "gw:1"],
         vec!["env", "enroll", "gw:1", "CODE", "extra"],

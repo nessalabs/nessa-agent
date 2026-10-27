@@ -6,23 +6,29 @@
  *
  * ```text
  *   place    open(place)                        close()          openWidget(ref, place)       onEscape
- *   inline   a pane beside its conversation,    —                beside its conversation,      — (a card
- *            or the window                                        or the window                 has none)
- *   pane     the window; a pane: where it is    its pane closes  beside the pane showing       its pane's
- *                                                                 the widget's origin           steps back
- *   window   a pane beside its origin; the      back to the      beside its origin's pane,     the window's
+ *   inline   a tab in its conversation's        —                a tab in its conversation's   — (a card
+ *            panel, or the window                                 panel, or the window          has none)
+ *   panel    the window; the panel: where it    its tab closes   a tab in the panel of the     the panel's
+ *            is                                                   widget's origin, else this    steps back
+ *                                                                 chat's
+ *   window   a tab in its origin's panel; the   back to the      a tab in its origin's panel,  the window's
  *            window: where it is                panes            or the window, replacing it    steps back
  * ```
  */
 import { useMemo } from "react"
-import type { PaneKey } from "../../../split-panes/model/pane-layout"
-import type { EscapeStack, OpenPlace, WidgetHost, WidgetRef } from "../../../widgets"
-import { closePane, openWidget, showContent } from "./commands"
+import type {
+  EscapeStack,
+  OpenPlace,
+  WidgetCrumb,
+  WidgetHost,
+  WidgetRef,
+} from "../../../widgets"
+import { closePanelTab, openWidget, showContent } from "./commands"
 import { useWorkspaceDispatch } from "./hooks"
 
 const noStepBack = () => () => {}
 
-/** For a card in a message of session `sessionId`'s: its pane goes beside that conversation. */
+/** For a card in a message of session `sessionId`'s: it opens as a tab in that conversation's panel. */
 export function useInlineWidgetHost(widget: WidgetRef, sessionId: string): WidgetHost {
   const dispatch = useWorkspaceDispatch()
   return useMemo(
@@ -38,12 +44,16 @@ export function useInlineWidgetHost(widget: WidgetRef, sessionId: string): Widge
   )
 }
 
-/** For a widget in pane `pane`, belonging to session `origin` if any. */
-export function usePaneWidgetHost(
-  pane: PaneKey,
+/**
+ * For a widget in chat `sessionId`'s panel, belonging to session `origin` if
+ * any: what it opens goes to its origin's panel, else to this chat's.
+ */
+export function usePanelWidgetHost(
+  sessionId: string,
   widget: WidgetRef,
   origin: string | undefined,
   steps: EscapeStack,
+  crumb?: (step: WidgetCrumb | null) => void,
 ): WidgetHost {
   const dispatch = useWorkspaceDispatch()
   return useMemo(
@@ -51,12 +61,13 @@ export function usePaneWidgetHost(
       open: (place: OpenPlace) => {
         if (place === "window") dispatch(openWidget({ widget, place }))
       },
-      close: () => dispatch(closePane({ pane })),
+      close: () => dispatch(closePanelTab({ sessionId, widget })),
       openWidget: (other: WidgetRef, place: OpenPlace) =>
-        dispatch(openWidget({ widget: other, place, origin })),
+        dispatch(openWidget({ widget: other, place, origin: origin ?? sessionId })),
       onEscape: steps.push,
+      crumb,
     }),
-    [dispatch, pane, widget, origin, steps],
+    [dispatch, sessionId, widget, origin, steps, crumb],
   )
 }
 
@@ -65,23 +76,25 @@ export function useWindowWidgetHost(
   widget: WidgetRef,
   origin: string | undefined,
   steps: EscapeStack,
+  crumb?: (step: WidgetCrumb | null) => void,
 ): WidgetHost {
   const dispatch = useWorkspaceDispatch()
   return useMemo(
     () => ({
       open: (place: OpenPlace) => {
-        if (place === "pane") dispatch(openWidget({ widget, place, origin }))
+        if (place === "panel") dispatch(openWidget({ widget, place, origin }))
       },
       close: () => dispatch(showContent({ content: "panes" })),
       openWidget: (other: WidgetRef, place: OpenPlace) =>
         dispatch(openWidget({ widget: other, place, origin })),
       onEscape: steps.push,
+      crumb,
     }),
-    [dispatch, widget, origin, steps],
+    [dispatch, widget, origin, steps, crumb],
   )
 }
 
-/** What a session's header gives each plugin's accessory: widgets opened beside that session. */
+/** What a session's header gives each plugin's accessory: widgets opened in that session's panel. */
 export function useAccessoryOpen(
   sessionId: string,
 ): (widget: WidgetRef, place: OpenPlace) => void {

@@ -1,17 +1,17 @@
-import type { HTMLAttributes, ReactNode, Ref } from "react"
+import { useRef, type HTMLAttributes, type ReactNode, type Ref } from "react"
 import { closePane } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectPaneClosable } from "../../adapters/store/selectors"
+import { selectPaneClosable, selectPanePresent } from "../../adapters/store/selectors"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { IconButton } from "../../../ui/icon-button"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { headerBar } from "./header-bar"
 
 /**
- * The bar atop a session's pane, a widget's pane and the window: its name at
+ * The bar atop a session's pane and a widget over the window: its name at
  * the start, a spacer that moves the window or carries the pane
  * (`headerBar`), what a session's widgets add, and its actions at the end.
- * The three headers differ only in what they put in it.
+ * The two headers differ only in what they put in it.
  */
 export function PaneHeaderFrame({
   pane,
@@ -55,21 +55,27 @@ export function PaneHeaderFrame({
 /**
  * A pane's ×. It keeps its room when there is nothing to close — a new
  * session's home alone — so the controls beside it stay put (`data-reserved`,
- * `ui/icon-button.css`; `layouts.test.tsx` holds it).
+ * `ui/icon-button.css`; `layouts.test.tsx` holds it). A close drops the pane
+ * key at once and the box stays, so the × that was showing stays with that
+ * box. A press while the key is already gone does nothing.
  */
 export function ClosePaneButton({ pane }: { pane: PaneKey }) {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const closable = useWorkspaceSelector((state) => selectPaneClosable(state, pane))
+  const present = useWorkspaceSelector((state) => selectPanePresent(state, pane))
+  const remembered = useRef(closable)
+  if (present) remembered.current = closable
+  const offered = present ? closable : remembered.current
   return (
     <IconButton
       icon="close"
       label="Close Pane"
       shortcut={frame.shortcut("closePane")}
       draggable={false}
-      data-reserved={!closable || undefined}
+      data-reserved={!offered || undefined}
       tabIndex={closable ? 0 : -1}
-      aria-hidden={!closable || undefined}
+      aria-hidden={!offered || undefined}
       onClick={(event) => {
         event.stopPropagation()
         if (closable) dispatch(closePane({ pane }))

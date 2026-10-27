@@ -1558,7 +1558,8 @@ original stop assertions are unchanged.
 | R27 | A peer kept with a relay whose address stops answering | Its status dial and its read race the address with the relay and go through the relay; the grant is read as over a direct connection | `a_peer_whose_address_stops_answering_is_read_through_its_relay`; the race itself in `tests/peer_gateways/connector.rs` |
 | R28 | A peer kept with a relay whose address does not answer, and whose relay says it is not registered there; or says `NoAnswer` | `away`, backed off as `unreachable`, the cache kept; a relay's `NoAnswer` (a busy peer) or a timeout stays `unreachable` | `a_peer_whose_relay_says_it_is_offline_is_listed_away`; the relay's answer kept in `both_failing_is_the_relays_refusal` |
 | R17 | The wait after each cycle | The interval when settled, and when a peer is still pending after one soon retry; an eighth of it the first time a peer is seen pending, and when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `a_peer_seen_pending_is_read_again_soon_and_then_waits_the_interval`, `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` |
-| R29 | One peer's connection is accepted and never speaks, and another peer is enrolled while that connection is still held | The second peer is `synced` inside a wait shorter than the handshake deadline. The first peer's held connection is the same one | `a_slow_peer_does_not_hold_up_the_others`, `a_first_sync_completed_before_observation_is_not_lost` |
+| R29 | One peer's connection is accepted and never speaks, and another peer is enrolled while that connection is still held | The second peer is `synced` inside a wait shorter than the handshake deadline. The first peer's held connection is the same one | `a_slow_peer_does_not_hold_up_the_others` |
+| R29b | Both peers are enrolled, approved and granted records; both authenticated record sources are held; A is released only after C's live cycle is captured, and completes its first sync before final observation | A is already `synced` without waiting for another poll interval. The same captured C read remains active, with no replacement connection. Ending C before observation fails the concurrency proof even if a retained socket count is unchanged | `a_first_sync_completed_before_observation_is_not_lost`, `an_ended_peer_read_cannot_prove_concurrent_first_sync`, `an_unfinished_a_cannot_be_hidden_by_an_ended_c` |
 | R30 | `peer.forget` of the peer that just synced, while the other peer's read is held; then `peer.enroll` to a peer that accepts and never answers, and `peer.forget` of the peer being read | The first forget removes that peer and does not open a new connection for the held read. The enroll holds the record set, so the second forget is `peer_busy` and does not stop the held read. Dropping the silent socket ends the enroll | same |
 | R31 | Two peers enrolled, then one grantor's listener stopped | The stopped peer is listed `unreachable`. The other is `synced`. The poller joins | `a_failing_peer_is_reported_and_the_other_is_read` |
 | R32 | `reads_at_once` is 1, and both peers' reads would hold | One peer's read is held. The other has accepted nothing, for longer than a poll tick. Once the held read is released, the waiting peer is read | `a_read_past_the_cap_waits_for_a_slot` |
@@ -1567,6 +1568,59 @@ original stop assertions are unchanged.
 | R34 | The audit writer is still holding a cycle's records when `AUDIT_DEADLINE` passes; then the poller stops | The cycle keeps its read slot, so a replacement cycle cannot enqueue another batch, and an owner record still fits in the headroom. The change is logged as not kept and stands. A stop releases the slot while the records are still queued, so shutdown can drain the writer. An owner command is still answered at its own deadline (row R18) | `a_read_slot_stays_until_queued_records_leave`; the owner deadline in `a_stalled_audit_never_holds_an_owner_command` |
 | R35 | A poller record's audit answers an error before `AUDIT_DEADLINE`, and a later record in that cycle is still unanswered | The error is logged and the change stands. That finished future is not polled again. The read slot stays until the unanswered record leaves or the poller stops | `an_audit_error_before_the_deadline_is_not_waited_on_again` |
 | R37 | An owner command's audit record is still queued when `AUDIT_DEADLINE` passes | The command is not kept, and is answered then. Its place stays until that record is answered, so another command cannot hand a record over while it is still queued | `an_owner_place_stays_until_the_queued_record_leaves`; the deadline in `a_stalled_audit_never_holds_an_owner_command` |
+
+The R29b fixture prepares both peers through the real enrollment, approval and
+sharing commands before starting the poller. Both record sources are held at the
+existing post-authentication source gate. Once C's gate has been entered, it
+captures C's retained first `ReadStop` identity and verifies that A has not completed its
+first sync. Only then is A's source released. A must complete its first sync
+before the final observer begins; C must still own the same unstopped cycle,
+with no additional relay connection. R29 retains enrollment while another peer's
+silent handshake is held; R29b isolates first-sync completion and observation.
+
+C's authenticated source entry has the existing bounded `WAIT` bootstrap,
+including poller startup. The unchanged critical budget starts after that
+entry; A's entry and completion share this one absolute deadline. The budget
+is derived from the published server passive-read deadline minus the unchanged
+observation window and prompt margin. This arithmetic is not a promise of a
+fresh server or source-work deadline at entry: those clocks start earlier.
+The final live-cycle and A-result assertions enforce the actual overlap.
+Production clocks, deadlines, read policy and the observation window stay fixed.
+
+The fixture retains C's first registered cycle in a test-only history under
+`PeerTurns`' existing lock, independently of removable turns. At admission and
+final observation the retained first token must equal the active token and
+remain unstopped. A stored source-entry notification cannot certify a newer
+cycle after the first ended, whether it stopped explicitly or cleared normally.
+The commands controls also check failed acquisition, key isolation and normal
+turn removal. A six-second pre-poller-delay control demonstrates why startup is
+outside the critical overlap; it does not identify the historical Windows cause.
+
+Before cleanup, the fixture saves both A completion/observation results and C's
+absent/same/replaced cycle identity, captured stop flag, sync state, connection
+count and elapsed phases. A coarse sync state does not expose C's exact
+termination reason; that reason remains unknown without correlated evidence.
+It then releases both sources, stops the listeners and explicitly shuts down
+both record-source owners before asserting. Native listener join does not
+join these externally composed source workers: the omission-of-release mutation
+must block the source shutdown, even if native join already returned. A's
+completion assertions precede the live-C assertion, so the ended-C negative
+control cannot pass by masking an unrelated A failure.
+
+| R29b fixture ordering | Expected evidence |
+| --- | --- |
+| Real enrollment, approvals and grants complete | Prepare both held record sources before the timed poller phase |
+| C authenticated source entered within bounded bootstrap | Capture retained first C token; reject absent, stopped or replaced first cycle |
+| A source entry and completion within one unchanged critical budget | A has not synced before release; no new allowance after A entry |
+| A source notification observed late, with A still held | Only the remainder of the same deadline is available; a restarted completion budget fails the bounded fixture control |
+| Startup delayed before any poller exists | Critical overlap still has its own budget; production clocks are unchanged |
+| Stored source notification after first C cycle ended | Reject even if another current cycle is live; history survives turn removal |
+| Source admission times out | Keep per-gate phase evidence, release both gates and join physical work before asserting |
+| Release A while C remains held | A completes its first sync before final observation begins |
+| Final observation | A's saved Synced timestamp, same unstopped C cycle and no extra C connection |
+| C ended before A release | A must still complete; reject C's concurrency proof |
+| C ended and A source never released | Reject A completion first; a C failure cannot mask it |
+| Cleanup, including the negative control | Save both results and phase evidence, release sources, join work, then assert |
 
 ## What this part does not do
 

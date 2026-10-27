@@ -22,8 +22,9 @@ The caller supplies the trusted key. This does not answer how it survives source
 loss, where the latest inventory is retained, or whether this cut is current.
 The report names redacted, skipped and deferred entries and says that restore
 readiness and inventory freshness were not assessed. It does not fetch deferred
-history, import stores, replace keys or activate authority. #270 and #854 remain
-open for those contracts and their end-to-end drills.
+history, import stores, replace keys or activate authority. Quarantine,
+acceptance, and deferred fetch are
+[quarantined restore](quarantined-restore.md), not this verifier.
 
 ## Order and refusal boundaries
 

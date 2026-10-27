@@ -43,6 +43,7 @@ mod audit_observation;
 mod coordination;
 mod error;
 mod error_limits;
+mod usage_limit;
 pub(crate) use error_limits::DiagnosticTreeLimits;
 mod initialization;
 pub(crate) mod lifecycle;
@@ -67,5 +68,6 @@ pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,
     SteeringDelivery, SteeringEvidence,
 };
+pub use usage_limit::{UsageLimit, UsageLimitKind, UsageLimitProvider, UsageLimitRecovery};
 
 mod models;

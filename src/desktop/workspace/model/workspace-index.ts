@@ -4,6 +4,7 @@
  * workspace shows; the source that supplies them owns them.
  */
 import { agentChoice, type AgentId } from "../../../onboarding/model/onboarding"
+import type { AccessMode } from "./access"
 import {
   agentForProvider,
   composerModels,
@@ -22,6 +23,13 @@ export interface Channel {
   /** Only its members see it; drawn with a lock. */
   readonly private: boolean
   readonly topic: string
+  /** The folder its agents work in, where the source says. */
+  readonly folder?: string
+  /**
+   * What a new session in it starts with, where the channel says; absent,
+   * a new session starts on the window's default model and access.
+   */
+  readonly defaults?: { readonly model: ModelRef; readonly access: AccessMode }
 }
 
 /**
@@ -128,6 +136,11 @@ export const contradicts = (contradictions: IndexContradictions): boolean =>
   contradictions.sections.length > 0 ||
   contradictions.channels.length > 0 ||
   contradictions.sessions.length > 0
+
+/** Whether two refs name one model: the same provider's same id. */
+export function sameModel(a: ModelRef, b: ModelRef): boolean {
+  return a.provider === b.provider && a.modelId === b.modelId
+}
 
 /** The agent that runs a model, by its provider; Claude for a provider nessa runs no agent for. */
 export function agentOf(model: ModelRef): AgentId {

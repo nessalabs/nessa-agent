@@ -25,6 +25,10 @@ use crate::infrastructure::process::ProcessScope;
 use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
 use tokio::process::Command;
 
+/// The provider name every session this binding opens records in its
+/// history, as its provider identity.
+pub const PROVIDER_NAME: &str = "claude-acp";
+
 /// Immutable composition factory; opening twice creates independent process scopes.
 #[derive(Clone)]
 pub struct ClaudeAcpProvider {
@@ -122,7 +126,7 @@ impl ClaudeAcpProvider {
                 "selected model does not support tools".into(),
             ));
         }
-        ProviderIdentity::new("claude-acp", capabilities.model().model_id(), "")?;
+        ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
             capabilities,
@@ -232,10 +236,11 @@ impl ClaudeAcpProvider {
     fn launch_command(&self) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
-            .args(&self.config.arguments)
+            .args(self.config.command_arguments())
             .current_dir(&self.config.workspace)
             .env_clear()
             .envs(&self.config.environment)
+            .envs(&self.config.runtime_environment)
             .envs(&self.config.credential_environment)
             .envs(self.launch_environment());
         command
@@ -283,9 +288,12 @@ impl AgentProvider for ClaudeAcpProvider {
         normalized.traces = traces.unwrap_or_else(|| self.traces.clone());
         Ok(Arc::new(normalized))
     }
+    fn launch_fingerprint(&self) -> String {
+        identity::launch_fingerprint(&self.config)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
-            "claude-acp",
+            PROVIDER_NAME,
             self.capabilities.model().model_id(),
             identity::fingerprint(
                 &self.config,
@@ -314,10 +322,15 @@ impl AgentProvider for ClaudeAcpProvider {
         // The process start reads the switch. This open does not snapshot it.
         let profile = self.launch_profile();
         let traces = self.traces.clone();
+        // This open's credentials, read once for every start of its process.
+        let opened = Self {
+            config: self.config.with_open_credentials(),
+            ..self.clone()
+        };
         Box::pin(async move {
             acp_binding::open(
-                self.process_factory(),
-                self.config.clone(),
+                opened.process_factory(),
+                opened.config.clone(),
                 self.capabilities.clone(),
                 profile,
                 self.audit.clone(),

@@ -17,4 +17,4 @@
 mod binding;
 mod deletion;
 mod profile;
-pub use binding::OpencodeAcpProvider;
+pub use binding::{OpencodeAcpProvider, PROVIDER_NAME};

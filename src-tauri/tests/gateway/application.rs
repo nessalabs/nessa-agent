@@ -4,6 +4,7 @@ use crate::gateway::{
     application::{
         testing::{self, FixedLoginShell},
         GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, LoginShellError,
+        RuntimeCopyPhase, RuntimeCopyProgress,
     },
     domain::value_objects::{
         LifecycleRecordKind, ReconciliationCause, ReconciliationCorrelation,
@@ -5507,6 +5508,176 @@ fn a_deferred_publication_is_journaled_after_the_gateway_is_ready() {
     );
     assert_eq!(*capture.artifact_present.lock().unwrap(), Some(false));
     assert!(capture.confirmed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn deferred_copy_progress_is_forwarded_without_rewriting_startup() {
+    let ready = Arc::new(DeferredPublicationReady {
+        ready: Mutex::new(false),
+        cv: Condvar::new(),
+    });
+    let capture = Arc::new(DeferredPublicationCapture {
+        ready_before_result: AtomicBool::new(false),
+        plan_id: Mutex::new(None),
+        cleanup_steps: Mutex::new(0),
+        completion: Mutex::new(None),
+        artifact_present: Mutex::new(None),
+        confirmed: AtomicBool::new(false),
+    });
+    let copying = RuntimeCopyProgress {
+        state: RuntimeCopyPhase::Copying,
+        files_completed: 1,
+        files_total: 3,
+        bytes_completed: 10,
+        bytes_total: 30,
+    };
+    struct ProgressEvents {
+        ready: Arc<DeferredPublicationReady>,
+        log: Arc<Mutex<Vec<RecordedProgress>>>,
+    }
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    enum RecordedProgress {
+        Startup(GatewayStartupPhase),
+        Copy(RuntimeCopyProgress),
+    }
+    impl GatewayStartupEvents for ProgressEvents {
+        fn publish(&self, startup: &GatewayStartup) {
+            if matches!(startup.phase(), GatewayStartupPhase::Ready) {
+                *self.ready.ready.lock().expect("publication ready") = true;
+                self.ready.cv.notify_all();
+            }
+            self.log
+                .lock()
+                .expect("progress log")
+                .push(RecordedProgress::Startup(startup.phase().clone()));
+        }
+
+        fn runtime_copy(&self, progress: &RuntimeCopyProgress) {
+            self.log
+                .lock()
+                .expect("progress log")
+                .push(RecordedProgress::Copy(*progress));
+        }
+    }
+    let host_ready = ready.clone();
+    let host_capture = capture.clone();
+    struct Host {
+        ready: Arc<DeferredPublicationReady>,
+        capture: Arc<DeferredPublicationCapture>,
+        copying: RuntimeCopyProgress,
+    }
+    impl GatewayHost for Host {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            let service = "deferred-stage";
+            admit(attempt, progress, service);
+            let ready = self.ready.clone();
+            let capture = self.capture.clone();
+            let copying = self.copying;
+            progress.begin_deferred_stage(
+                &"a".repeat(64),
+                DeferredStageLaunch::new(move |reporter| {
+                    assert_eq!(
+                        capture.plan_id.lock().expect("plan").as_deref(),
+                        Some("stage-runtime"),
+                        "the copy starts after the stage plan is accepted"
+                    );
+                    thread::spawn(move || {
+                        let guard = ready.ready.lock().expect("publication ready");
+                        let (guard, wait) = ready
+                            .cv
+                            .wait_timeout_while(guard, Duration::from_secs(3), |ready| !*ready)
+                            .expect("publication ready");
+                        capture
+                            .ready_before_result
+                            .store(!wait.timed_out() && *guard, Ordering::SeqCst);
+                        reporter.report(copying);
+                        reporter.report(RuntimeCopyProgress::settled());
+                        reporter.finish(Ok(()));
+                    });
+                }),
+            )?;
+            Ok(reconciled(service))
+        }
+
+        fn published_runtime_is_present(&self, fingerprint: &str) -> Result<bool, GatewayError> {
+            assert_eq!(fingerprint, "a".repeat(64));
+            Ok(false)
+        }
+
+        fn stop_agents(
+            &self,
+            _: &GatewayStopSession,
+            _: &dyn GatewayReconciliationJournalSession,
+            _: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            Err(GatewayError::Stop("unused".into()))
+        }
+    }
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let gateway = Gateway::bootstrap(
+        Arc::new(Host {
+            ready: host_ready,
+            capture: host_capture,
+            copying,
+        }),
+        login_shell("/usr/bin"),
+        Arc::new(ProgressEvents {
+            ready,
+            log: log.clone(),
+        }),
+        testing::sequential_reconciliation_ids(),
+        Arc::new(DeferredPublicationAudit {
+            capture: capture.clone(),
+            fail_plan: false,
+            fail_completion: false,
+        }),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !capture.confirmed.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "the deferred copy was not journaled after the gateway was ready"
+        );
+        thread::yield_now();
+    }
+    assert!(capture.ready_before_result.load(Ordering::SeqCst));
+    assert_eq!(
+        *capture.completion.lock().unwrap(),
+        Some(LifecycleCommandResult::Accepted)
+    );
+    let log = log.lock().expect("progress log");
+    let ready_at = log
+        .iter()
+        .position(|event| event == &RecordedProgress::Startup(GatewayStartupPhase::Ready))
+        .expect("ready startup");
+    let copies: Vec<_> = log
+        .iter()
+        .filter_map(|event| match event {
+            RecordedProgress::Copy(progress) => Some(*progress),
+            RecordedProgress::Startup(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        copies,
+        vec![copying, RuntimeCopyProgress::settled()],
+        "sync progress is forwarded on its own event"
+    );
+    assert!(
+        log[ready_at + 1..]
+            .iter()
+            .all(|event| matches!(event, RecordedProgress::Copy(_))),
+        "copy progress did not publish another startup revision: {log:?}"
+    );
 }
 
 #[test]

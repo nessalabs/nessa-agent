@@ -14,6 +14,8 @@
 //! connection --> tls_stream --> EnvironmentPeers (paired environments)
 //! runtime  --> registration (one code registration at a time)
 //! linking_audit --> application's LinkingAudit (pairing.setLinking's records)
+//! announcer --> application's LinkingAnnouncer (multicast DNS-SD while listening on the network)
+//! announcer_macos --> application's LinkingAnnouncer (the system Bonjour responder, on macOS)
 //! owner_commands --> runtime (owner side only; the product socket's handle)
 //! runtime --> FenceCapture (after pairing.cancel commits; a failure leaves it)
 //! receivers --> conversation receiver authority (application's PairingReceivers)
@@ -23,6 +25,9 @@
 //! runtime holds only the volatile PAKE setup of the one open invitation.
 //! Framing offsets are IO progress, not enrollment state. `shutdown` on each
 //! owner stops admission, wakes blocked sockets, and waits for its workers.
+mod announcer;
+#[cfg(target_os = "macos")]
+mod announcer_macos;
 mod connection;
 mod environment_peers;
 mod identity;
@@ -36,10 +41,29 @@ mod receivers;
 mod registration;
 mod runtime;
 mod tls_stream;
-pub(crate) use connection::RELAY_CAPACITY;
+pub use announcer::{MulticastAnnouncer, GATEWAY_KEY, LINKING_SERVICE};
+#[cfg(target_os = "macos")]
+pub use announcer_macos::SystemAnnouncer;
+
+/// This platform's announcer. On macOS the system responder sends the
+/// announcement, since Local Network privacy drops a background gateway's
+/// own multicast; elsewhere the gateway answers itself.
+pub fn platform_announcer(
+) -> std::sync::Arc<dyn crate::device_pairing::application::LinkingAnnouncer> {
+    #[cfg(target_os = "macos")]
+    {
+        std::sync::Arc::new(SystemAnnouncer)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::sync::Arc::new(MulticastAnnouncer)
+    }
+}
 pub use connection::{
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
+    TunnelPermit,
 };
+pub(crate) use connection::{RELAY_CAPACITY, TUNNEL_CAPACITY};
 pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 #[cfg(unix)]

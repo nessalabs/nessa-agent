@@ -21,7 +21,7 @@ diagramLinks: {}
 
 Escape first closes the innermost widget detail. Further steps return toward the widget's previous view and originating conversation.
 
-A view over the window can return to its pane. A widget already in a pane is not closed by that same Escape rule. Nessa keeps the origin so stepping back does not send you to another conversation.
+A view over the window goes back to the panes. A widget in its chat's right panel is not closed by that same Escape rule: its tab stays. Nessa keeps the origin so stepping back does not send you to another conversation.
 
 ```mermaid
 stateDiagram-v2
@@ -29,7 +29,7 @@ stateDiagram-v2
     WidgetShown --> WidgetShown: Escape [earlier owner or composition] / leave event
     WidgetShown --> WidgetShown: Escape [registered step] / run last step
     WidgetShown --> PanesRestored: Escape [window widget and no step]
-    WidgetShown --> WidgetShown: Escape [pane widget and no step] / preserve pane
+    WidgetShown --> WidgetShown: Escape [panel widget and no step] / keep its tab
     WidgetShown --> ConversationFocused: Origin trail / focus or open origin beside
     WidgetShown --> PanesRestored: Close front window widget
     note right of PanesRestored

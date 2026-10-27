@@ -264,13 +264,43 @@ so typing it once at pairing is enough for the first relay.
 | RL11b | `Connect{K}` asked repeatedly, faster than the gateway takes them | Past the gateway's few in-flight `Accept`s and its relay pool, readers get `NoAnswer`; a reader dialing directly is admitted as before | R2a (the pool), R2c (end to end) |
 | RL12 | Direct fails and the relay answers `Offline` | `away`; the cache unchanged and readable | R3 |
 | RL13 | Direct fails and the relay answers `NoAnswer`, cannot be reached, or no relay is set | `unreachable`, as today | R3 |
-| RL14 | A paired environment with only a relay path | Dials through it and serves leases as over a direct connection | R4 |
+| RL14 | A paired environment with only a relay path | Dials through it and serves leases as over a direct connection. A command run each way leaves the same command-ledger checkpoint: granted, started, ran exited, ended asked | R4 |
 | RL15 | The gateway's registration ends, or hears nothing for two ping intervals | Dropped and made again after a wait that doubles from 1 s to 60 s, starting over after a registration that lasted a minute; direct readers are served throughout | R2a |
 | RL16 | The relay announces a reader while the gateway's four relay permits are held | Nothing is dialed; the relay answers that reader `NoAnswer` at its join deadline; direct readers are admitted as before | R2a |
 | RL17 | The gateway key cannot make its relay proof | The gateway stops registering and logs it; it serves directly as before | R2a |
 | RL18 | A reader with a relay whose direct dial connects within the head start | The direct connection is used; the relay is never dialed | R2b-1 |
 | RL19 | A reader whose direct dial is refused, or has not connected within the head start | The relay leg starts, and the first of the two to connect is used; both failing reports the relay's answer | R2b-1; for a peer's status dial, R2b-2 |
 | RL20 | A peer gateway kept with a relay whose address stops answering | Its status and its grant are read through the relay; the record keeps the relay across enrollment and `peer.relay` changes or clears it, audited | R2b-2 |
+
+The R2c positive retained-read controls consume successful partial reports by
+reading the **same cache** again: its durable catalogue and record checkpoints
+own continuation. They do not manufacture a cursor or start a fresh cache.
+`relay_reading/completion.rs` gives these controls six passes and thirty seconds
+in total, including faithful-proxy joins, with each read still capped at five
+seconds (or the smaller remaining fixture allowance). The two-conversation,
+301-fact corpus allows a catalogue pass, two record passes per conversation,
+and a final settled-walk confirmation. This is a fixture allowance, not a
+guarantee that every network or source will finish within it. A pass limit,
+expired total allowance, or any typed read failure fails the control; a late
+complete report cannot pass it. The real product clock and deadlines remain in
+use. Tests force a committed-catalogue partial read before continuing, and
+control stalled, refused and late continuations. The final completeness,
+transcript and checkpoint comparisons remain required. Tamper and impostor
+reads remain single-shot typed refusals with untouched-cache assertions.
+The fixture-owned proxy transport bounds accept, connect, reads and writes by
+one absolute deadline shared by every cloned stream. Thus joining a one-use
+proxy whose client never connected also finishes; native-clock and real
+loopback controls cover unused accept, a silent read and expired clone writes.
+
+| R2c fixture ordering | Expected result |
+| --- | --- |
+| Catalogue committed, records deferred by zero withdrawal allowance | Partial report; retain the same cache and resume its saved checkpoints |
+| Successful partial report before both limits | Another bounded read of that cache |
+| Complete report before both limits | Keep the final completeness and equality assertions |
+| No complete report in six passes, or total allowance expired | Fail with last report and elapsed time; never reset either limit |
+| Read refusal/failure, including after partial progress | Fail without retrying the typed failure |
+| Read expires before connecting to its faithful proxy | Proxy accept expires; joining it cannot wait for another client |
+| Tamper or impostor session | Single attempt, typed refusal, relay witness and empty cache still required |
 
 ## What the relay sees
 

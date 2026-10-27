@@ -433,7 +433,7 @@ impl ArtifactCollector {
         agent: &Agent,
         lease: &LiveLease,
         requests: &PublishRequests,
-    ) {
+    ) -> PublishedOutcome {
         let ArtifactOffer {
             file,
             bytes,
@@ -469,15 +469,17 @@ impl ArtifactCollector {
         if let Some(request) = request.filter(|_| settles) {
             requests.settle(&self.lease, &request);
         }
+        let (name, digest, size) = described;
+        let published = PublishedOutcome {
+            collection: outcome,
+            name,
+            digest,
+            size,
+        };
         if let Some(waiter) = waiter {
-            let (name, digest, size) = described;
-            let _ = waiter.send(PublishedOutcome {
-                collection: outcome,
-                name,
-                digest,
-                size,
-            });
+            let _ = waiter.send(published.clone());
         }
+        published
     }
 
     /// Keep `file` for the conversation, asked for by `asker`.

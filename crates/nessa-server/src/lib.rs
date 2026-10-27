@@ -14,6 +14,8 @@ mod desktop_runtime;
 pub mod device_pairing;
 pub mod env;
 pub mod env_serve;
+pub mod external_events;
+pub mod github;
 pub mod health;
 pub(crate) mod limits;
 pub mod mcp_authorization;
@@ -23,6 +25,7 @@ pub mod product;
 pub(crate) mod relay;
 pub mod server;
 pub(crate) mod timer;
+pub mod tunnel;
 
 pub use core::run;
 

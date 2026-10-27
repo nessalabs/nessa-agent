@@ -127,9 +127,12 @@ pub(super) fn configure(
             #[cfg(unix)]
             stand_ins: Default::default(),
             #[cfg(unix)]
+            open_credentials: Default::default(),
+            #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::new(),
+            channel_instructions: None,
         });
     }
     let agents = settings.agents.as_mut().expect("agents configured above");
@@ -156,19 +159,23 @@ pub(super) fn configure(
     agents.selected = selected;
     agents.catalog = catalog;
     for (id, command, entry) in launches {
-        let args = vec![entry.to_string_lossy().into_owned()];
+        let staged = vec![entry.to_string_lossy().into_owned()];
         agents
             .runtimes
             .entry(id.name().into())
             // Only the bundled launch is replaced. A configured model and its
-            // budgets are the user's and survive every upgrade.
+            // budgets are the user's and survive every upgrade. The adapter
+            // entry is staged-runtime provenance, not an argument, and this
+            // desktop launch's arguments are empty.
             .and_modify(|runtime| {
                 runtime.command = ExecutableUseSnapshot::unmanaged(command.clone());
-                runtime.args = args.clone();
+                runtime.staged_runtime = staged.clone();
+                runtime.args.clear();
             })
             .or_insert_with(|| AgentRuntime {
                 command: ExecutableUseSnapshot::unmanaged(command),
-                args,
+                staged_runtime: staged,
+                args: Vec::new(),
                 model: default_model(id).into(),
                 tools_enabled: true,
                 context_tokens: 100_000,

@@ -1,6 +1,7 @@
 //! The deletion-inventory policy bundle, loaded and validated once.
 use crate::backup::application::{
     InventoryCapturePolicyEvaluator, InventoryDecision, InventoryDenial, InventoryFacts,
+    RestoreFacts, RestorePolicyEvaluator,
 };
 use cedar_policy::{
     Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid,
@@ -71,26 +72,32 @@ impl CedarInventoryPolicy {
         })
     }
 
-    fn decide(&self, facts: &InventoryFacts<'_>) -> Result<InventoryDecision, Unavailable> {
+    fn decide(
+        &self,
+        kind: &str,
+        cause: &str,
+        action: &str,
+        resource_type: &str,
+        resource_id: &str,
+    ) -> Result<InventoryDecision, Unavailable> {
         let principal = Entity::new(
-            uid("NessaBackup::Principal", facts.kind)?,
+            uid("NessaBackup::Principal", kind)?,
             HashMap::from([(
                 "kind".to_owned(),
-                RestrictedExpression::new_string(facts.kind.to_owned()),
+                RestrictedExpression::new_string(kind.to_owned()),
             )]),
             HashSet::new(),
         )
         .map_err(|error| Unavailable::at("the principal", error))?;
-        let resource =
-            Entity::new_no_attrs(uid("NessaBackup::Inventory", "inventory")?, HashSet::new());
+        let resource = Entity::new_no_attrs(uid(resource_type, resource_id)?, HashSet::new());
         let context = Context::from_pairs([(
             "cause".to_owned(),
-            RestrictedExpression::new_string(facts.cause.as_str().to_owned()),
+            RestrictedExpression::new_string(cause.to_owned()),
         )])
         .map_err(|error| Unavailable::at("the context", error))?;
         let request = Request::new(
             principal.uid(),
-            uid("NessaBackup::Action", facts.action.as_str())?,
+            uid("NessaBackup::Action", action)?,
             resource.uid(),
             context,
             Some(&self.schema),
@@ -122,13 +129,42 @@ impl CedarInventoryPolicy {
 
 impl InventoryCapturePolicyEvaluator for CedarInventoryPolicy {
     fn evaluate(&self, facts: &InventoryFacts<'_>) -> InventoryDecision {
-        self.decide(facts).unwrap_or_else(|Unavailable(error)| {
+        self.decide(
+            facts.kind,
+            facts.cause.as_str(),
+            facts.action.as_str(),
+            "NessaBackup::Inventory",
+            "inventory",
+        )
+        .unwrap_or_else(|Unavailable(error)| {
             tracing::error!(
                 %error,
                 kind = facts.kind,
                 cause = facts.cause.as_str(),
                 action = facts.action.as_str(),
                 "the inventory policy could not decide; the write is refused"
+            );
+            InventoryDecision::Deny(InventoryDenial::Unavailable)
+        })
+    }
+}
+
+impl RestorePolicyEvaluator for CedarInventoryPolicy {
+    fn evaluate(&self, facts: &RestoreFacts<'_>) -> InventoryDecision {
+        self.decide(
+            facts.kind,
+            facts.cause.as_str(),
+            facts.action.as_str(),
+            "NessaBackup::Restore",
+            "restore",
+        )
+        .unwrap_or_else(|Unavailable(error)| {
+            tracing::error!(
+                %error,
+                kind = facts.kind,
+                cause = facts.cause.as_str(),
+                action = facts.action.as_str(),
+                "the restore policy could not decide; the restore is refused"
             );
             InventoryDecision::Deny(InventoryDenial::Unavailable)
         })

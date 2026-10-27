@@ -70,13 +70,30 @@ read path: the product-socket watch (`conversation.watchRecords`,
 example client's bounded `follow` keeps its private record cache fresh by
 running a checkpoint pass whenever a view's cursor moves, on the same
 connection as that pass ([read-only sync example](read-only-sync-example.md#following-a-conversation)).
-`conversation.subscribeList` stays refused to a paired device until #724
-scopes the catalogue head to the device's grants. The desktop shows the
+`conversation.list`, `.observe` and `.subscribeList` use a device's grant-scoped
+catalogue. The bounded rows and scoped head of a list come from one metadata
+snapshot; an incomplete frame compares that head, so an unrelated wake sends
+nothing (L6–L13). A peer gateway retains its existing catalogue read path.
+The desktop shows the
 view's own `truncated` and `transcriptState` (`history` on its transcript).
 It does not page records to reconstruct older text, and a turn the view left
 out does not hide the turns the view did draw.
 
 ## How it works
+
+### Stress capacity observation
+
+The follower's capacity probe counts only one unchanged set of physical follows.
+The probe retires its temporary views in every outcome; a later loop retries an
+interrupted observation without changing the connection's published limit.
+
+| Arrival during the probe | Observation | Regression |
+| --- | --- | --- |
+| Original view and event follows remain live; the extra view is refused | Count the expected capacity refusal | `a stable full connection proves its capacity` |
+| An original event ends, is removed, or is replaced while a view opens | End this observation because real room changed | `an original event ending invalidates the probe`; `replacing an original event invalidates the probe` |
+| The original main view ends while a view opens | End this observation | `the original main view ending invalidates the probe` |
+| A temporary view ends before the final response | End this observation; close each acquired handle | `an acquired view ending invalidates the probe` |
+| Every captured source remains live and the extra view is accepted | Record a capacity failure and close the acquired views | `a stable connection accepting an extra view fails` |
 
 One task per subscription, owned by the connection
 (`product/subscription/target.rs`):
@@ -89,7 +106,8 @@ One task per subscription, owned by the connection
    checks ownership again. A paired device's view subscription is admitted on
    `conversation.read`, the grant pairing mints, or on `conversation.write`
    when that credential still holds it; which conversation it may follow is
-   the share check (`admit_conversation`). Its list subscription is not.
+   the share check (`admit_conversation`). A device's list uses that same method
+   admission, then `grant.list` for the catalogue and `grant.read` for each row.
 3. Send the frame if what the client would see changed. Wait until the
    connection's writer has written it before reading again: one frame in
    flight per subscription.
@@ -283,6 +301,17 @@ guarantee (#935).
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |
 | L4 | A stream of commits under a list subscription | List frames no closer than `LIST_REREAD_FLOOR` | `list_frames_come_no_closer_than_the_reread_floor` |
 | L5 | An incomplete list; a row the frame left out changes: by the catalogue (archived, deleted), or by a commit alone (its `running`, within the service's bound), so the rows it carries are the same | A frame all the same, so the client walks the catalogue (D18); a commit that changes no row the service read sends none; notices already waiting when a list reads are taken by that read | `a_change_the_incomplete_list_leaves_out_is_still_sent`; `a_commit_to_a_row_the_frame_cut_is_still_a_change`, `a_list_takes_every_waiting_notice_before_it_reads` (unit, `product/subscription/target.rs`) |
+| L6 | A paired device lists or follows with only the pairing read grant; newer ungranted rows exceed the list bound | SQL narrows before sorting, limiting and completeness; Cedar admits the catalogue and each returned candidate; the result and its scoped catalogue head share one metadata snapshot | `paired_lists_filter_before_the_bound`; `paired_lists_start_empty_without_grants` |
+| L7 | An incomplete paired list; an ungranted catalogue change wakes the source, then a granted omitted row is archived | The unrelated change sends nothing; the granted change sends the replacement even when the visible rows stay the same. The comparison uses the snapshot's scoped head, not the owner's wake counter | `an_incomplete_paired_list_ignores_ungranted_wakes` |
+| L8 | A paired list is registered and waits for request capacity; its caller disconnects, or its credential loses read admission before capacity returns | Disconnect retires watches without taking capacity. Lost admission refuses the first batch, without sending rows, and retires its watches | `a_cancelled_paired_list_releases_its_sources_while_capacity_is_held`; `a_paired_list_rechecks_access_after_waiting_for_capacity` |
+| L9 | A paired list captures its head; another metadata connection commits a summary before the list reads its rows | Head and rows remain from the first snapshot; a later list observes the new head and row together | `a_paired_list_reads_its_head_and_rows_from_one_snapshot` |
+| L10 | Catalogue admission succeeds but the configured policy denies or cannot decide a returned candidate | Refuse the whole batch without rows, cursor, scoped head or completeness; no partial disclosure from an inconsistent index | `a_paired_list_uses_the_configured_read_policy` |
+| L11 | A paired observation spans a page boundary while ungranted rows change | Keep the existing scoped cursor, return each granted identity once, and finish without exposing ungranted rows | `a_paired_list_observation_keeps_its_scoped_cursor` |
+| L12 | A list or observation reaches a gateway with no conversation service | Ask catalogue policy before exposing service availability: a peer remains forbidden, while an admitted device receives conversations_not_configured | `a_paired_list_admits_its_scope_before_service_availability` |
+| L13 | Seeded mock-agent socket runs mix hidden summary writes, omitted-row R1→R2→R3 replacement, revoke/regrant, archive/restore, running turns and reconnects; repeat at raised counts | Each batch matches an independent granted-row ordering, ungranted activity stays quiet, former-receiver heads stop at replacement, running settles, and reconnect releases watches/capacity | `paired_catalogue_seeded_mock_agent_stress_seed_1`, `_seed_7`, `_seed_41` run fresh fixtures independently under the existing test scheduler; `paired_catalogue_seeded_mock_agent_stress_under_load` retains eight cycles in one fixture (socket coverage; L14 adds the canonical stress step through a native client) |
+| L13a | A completed turn's reply-summary publication is held while its idle list frame is delivered; then the summary is released before a hidden write | Transcript completion and the first idle frame do not finish the stress turn: validate each frame until the exact final reply preview is present with `running=false`. The later hidden write leaves the paired head unchanged and the subscription quiet | `an_idle_list_before_the_reply_summary_does_not_finish_the_stress_turn` |
+| L14 | A real native-client product child lists and subscribes through the pinned paired listener while hidden rows exceed the list bound; repeat replacement, restore, revoke and archive cycles | List/read/observe expose exactly granted active identities; hidden updates and R2→R3 stay quiet; R1→R2, restore, revoke and archive publish the expected replacement; a fresh child catches up | `native_paired_catalogue_stress` (canonical conversation stress invokes this exact test with default and raised cycle counts) |
+| L15 | After an initial paired list is delivered, its journal-head query becomes unreadable and a summary mutation commits | The owner wake triggers a fresh read; the actual WebSocket receives `subscriptionEnded` with `refused` and `conversation_storage_unavailable`, releases the source, and remains connected | `a_paired_list_ends_with_storage_failure_after_its_initial_read` |
 | AC1 | Subscribe to the agent catalog; on a gateway that pairs no environments, too | The reply, then one `agents.listed` frame, the generated shape, carrying what `agents.list` answers; with no environments paired nothing changes it, and no other frame comes | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go`; `a_gateway_pairing_no_environments_sends_its_catalog_once`; `an_agent_catalog_frame_is_the_generated_shape` |
 | AC2 | A paired environment connects, disconnects or is revoked; or the count moves with the catalog unchanged (a connection taking another's place) | A frame with the catalog as `agents.list` answers it then; none when it is the same | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go` |
 | AC3 | Many changes while a catalog frame waits for the writer | At most one more frame, with the latest catalog | `changes_while_a_catalog_frame_waits_collapse_into_one_frame` |
@@ -292,6 +321,16 @@ guarantee (#935).
 | AC7 | `conversation.unsubscribe` of the catalog's subscription, `agents.unsubscribe` of a list's; `agents.unsubscribe` by a session holding only `server.read` | `unknown_subscription` for the other's; its own is stopped, and nothing of it follows the reply | `each_unsubscribe_stops_only_its_own_kind` |
 | AC8 | The paired environments' change source closes | Ended `source_closed` | `the_environments_source_closing_ends_the_catalog_subscription` |
 | AC9 | A native hooks command | A frame with the catalog as `agents.list` answers it then, carrying the choice in effect | `the_agent_catalog_is_sent_again_when_the_hooks_choice_changes` |
+
+The L13 fixtures emit test progress directly to stderr, outside libtest's
+per-test output capture: seed, elapsed milliseconds, static phase, and a row,
+step, cycle, or page ordinal. Setup checkpoints count synthetic rows without
+printing row identities, messages, cursors, or credentials. A returned-seed
+checkpoint follows return from that seed future; neither it nor a test-body
+checkpoint proves background-worker or Tokio-runtime shutdown. These
+checkpoints distinguish an incomplete run from an assertion failure without
+changing its deadlines or assertions.
+
 
 Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`;
 the test names begin with the row id). The adapter subscribes only: it sends

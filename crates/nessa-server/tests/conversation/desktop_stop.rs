@@ -4,16 +4,22 @@
 //! stop and a submission". Multi-threaded, so a stop and a submission really
 //! do run at once, except where a paused clock measures the budget.
 use super::*;
-use crate::conversation::application::{ConversationFuture, SubmittedFile, SubmittedMessage};
+use crate::conversation::application::{
+    ConversationAgentFuture, ConversationAgentSource, ConversationFuture, RuntimeReadiness,
+    SubmittedFile, SubmittedMessage,
+};
 use crate::conversation_test_support::{
     mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryListing, MemoryRepository,
     MemorySummaries, ProviderFactory, RecordingModeExecutionAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::providers::ApprovalMode as ProviderMode;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::future::{poll_fn, Future};
+use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex as StdMutex;
 use std::task::Poll;
@@ -47,6 +53,55 @@ impl ConversationFileLinkAudit for HeldFileLinkAudit {
     }
 }
 
+/// The first attachment proceeds. A test arms the next wait only after that
+/// attachment has joined, so the same readiness port controls the replacement.
+#[derive(Default)]
+struct ReopeningReadiness {
+    entered: Notify,
+    release: StdMutex<Option<oneshot::Receiver<()>>>,
+}
+impl RuntimeReadiness for ReopeningReadiness {
+    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let gate = self.release.lock().unwrap().take();
+            if let Some(gate) = gate {
+                self.entered.notify_one();
+                let _ = gate.await;
+            }
+        })
+    }
+}
+
+struct ReadinessAgents {
+    agents: ConversationAgents,
+    readiness: Arc<ReopeningReadiness>,
+}
+impl ConversationAgentSource for ReadinessAgents {
+    fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_> {
+        Box::pin(async move {
+            let mut configured = self.agents.source.resolve(agent).await?;
+            if let Some(configured) = configured.as_mut() {
+                configured.readiness = Some(self.readiness.clone());
+            }
+            Ok(configured)
+        })
+    }
+    fn resolve_for<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+    ) -> ConversationAgentFuture<'a> {
+        Box::pin(async move {
+            let mut configured = self.agents.source.resolve_for(agent, model, mode).await?;
+            if let Some(configured) = configured.as_mut() {
+                configured.readiness = Some(self.readiness.clone());
+            }
+            Ok(configured)
+        })
+    }
+}
+
 struct Fixture {
     service: ConversationService,
     provider: Arc<ProviderFactory>,
@@ -57,20 +112,31 @@ struct Fixture {
 
 impl Fixture {
     async fn new(stop: Duration) -> Self {
+        Self::with_readiness(stop, None).await
+    }
+
+    async fn with_readiness(stop: Duration, readiness: Option<Arc<ReopeningReadiness>>) -> Self {
         let provider = Arc::new(ProviderFactory::default());
         let repository = Arc::new(MemoryRepository::default());
         let summaries = Arc::new(MemorySummaries::default());
         let audit = Arc::new(HeldFileLinkAudit::default());
         let storage = Arc::new(InMemoryStorage::new());
+        let mut agents = mode_agents(
+            provider.clone(),
+            Arc::new(RecordingModeExecutionAudit::default()),
+        );
+        if let Some(readiness) = readiness {
+            agents.source = Arc::new(ReadinessAgents {
+                agents: agents.clone(),
+                readiness,
+            });
+        }
         let service = ConversationService::new(
             ConversationDependencies {
                 access_policy: crate::conversation_test_support::access_policy(),
                 // Each approval mode resolves, so a conversation can be in
                 // one other than Ask.
-                agents: mode_agents(
-                    provider.clone(),
-                    Arc::new(RecordingModeExecutionAudit::default()),
-                ),
+                agents,
                 storage: storage.clone(),
                 metadata: repository.clone(),
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
@@ -659,8 +725,26 @@ async fn a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on()
 /// turn comes — the new one — not the one it first saw.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
-    let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
+    desktop_stop_after_reopening(false).await;
+}
+
+/// A new logical owner can accept a queued message before its runtime is ready.
+/// Stopping that owner cancels readiness without opening a provider to close it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_desktop_stop_can_cancel_the_replacement_before_provider_attachment() {
+    desktop_stop_after_reopening(true).await;
+}
+
+async fn desktop_stop_after_reopening(attachment_waits: bool) {
+    let readiness = Arc::new(ReopeningReadiness::default());
+    let fixture = Fixture::with_readiness(DELETION_BUDGETS.stop, Some(readiness.clone())).await;
     fixture.live().await;
+    let (_release_attachment, attachment_gate) = oneshot::channel();
+    if attachment_waits {
+        *readiness.release.lock().unwrap() = Some(attachment_gate);
+    }
+    let (release_submission, submission_gate) = oneshot::channel();
+    *fixture.audit.release.lock().unwrap() = Some(submission_gate);
     let (release_close, close_gate) = oneshot::channel();
     *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
     let closing = tokio::spawn({
@@ -682,7 +766,9 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
         SubmittedMessage {
             text: "Reopens".into(),
             images: Vec::new(),
-            files: Vec::new(),
+            files: vec![SubmittedFile {
+                path: "/tmp/reopens.md".into(),
+            }],
         },
         SubmissionMode::Queue,
         Writer::Person(
@@ -743,19 +829,38 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
     .expect("the stop retains the lock after the submission was queued");
     release_close.send(()).unwrap();
     closing.await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, fixture.audit.entered.notified())
+        .await
+        .expect("the replacement submission holds the lock in its audit");
+    if attachment_waits {
+        tokio::time::timeout(BOUND, readiness.entered.notified())
+            .await
+            .expect("the replacement attachment waits for runtime readiness");
+    } else {
+        tokio::time::timeout(BOUND, fixture.live())
+            .await
+            .expect("the replacement provider attaches while the submission holds the lock");
+        assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 2);
+    }
+    release_submission.send(()).unwrap();
     let receipt = sending.await.unwrap().unwrap();
     assert_eq!(receipt.execution_id, "reopens");
     stopping.await.unwrap().unwrap();
-    assert_eq!(
-        fixture.provider.open_calls.load(Ordering::SeqCst),
-        2,
-        "the message opened the conversation again"
-    );
-    assert_eq!(
-        fixture.provider.close_calls.load(Ordering::SeqCst),
-        2,
-        "the stop stopped the agent the message opened"
-    );
+    if attachment_waits {
+        assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
+    } else {
+        assert_eq!(
+            fixture.provider.open_calls.load(Ordering::SeqCst),
+            2,
+            "the message opened the conversation again"
+        );
+        assert_eq!(
+            fixture.provider.close_calls.load(Ordering::SeqCst),
+            2,
+            "the stop stopped the agent the message opened"
+        );
+    }
     assert!(!fixture
         .service
         .inner

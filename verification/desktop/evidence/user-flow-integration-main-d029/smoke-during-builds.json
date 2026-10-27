@@ -1,0 +1,178 @@
+{
+  "check": "smoke",
+  "ok": false,
+  "started": "2026-10-23T14:37:00.115Z",
+  "finished": "2026-10-23T14:38:00.948Z",
+  "target": {
+    "url": "http://127.0.0.1:1443/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "loads",
+      "panes": 1,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "ambient-grain",
+      "type": "image/png",
+      "width": 160,
+      "height": 160,
+      "opacity": "0.06",
+      "blend": "normal",
+      "repeat": "repeat",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "draft-unlisted",
+      "rows": {
+        "before": 9,
+        "after": 9
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "send",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "split",
+      "panes": {
+        "before": 1,
+        "after": 2
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "settings",
+      "advanced": {
+        "tabs": [],
+        "dek": "Early features you can try before they are finished.",
+        "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+        "controls": 2,
+        "offered": ["true", "false"]
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "overview",
+      "failures": ["the keyboard did not land on an overview row after ⌘0"],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1443/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "loads",
+      "panes": 1,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "ambient-grain",
+      "type": "image/png",
+      "width": 160,
+      "height": 160,
+      "opacity": "0.06",
+      "blend": "normal",
+      "repeat": "repeat",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "draft-unlisted",
+      "rows": {
+        "before": 12,
+        "after": 12
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "send",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "split",
+      "panes": {
+        "before": 1,
+        "after": 2
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "settings",
+      "advanced": {
+        "tabs": [],
+        "dek": "Early features you can try before they are finished.",
+        "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+        "controls": 2,
+        "offered": ["true", "false"]
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "overview",
+      "failures": ["the keyboard did not land on an overview row after ⌘0"],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console",
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

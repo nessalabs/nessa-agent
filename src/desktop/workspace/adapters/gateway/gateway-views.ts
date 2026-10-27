@@ -13,8 +13,9 @@
  * the view lists, and a notice that a review or question was left out, are
  * kept; a question or notice that names nothing is left out.
  *
- * The gateway has no sections or channels, so the index has one of each and
- * every conversation is in it. It keeps no pin and no unread mark, so every
+ * The gateway has no sections, so the index has one, and every channel the
+ * gateway lists is in it: its default channel as `gatewayChannel`, then the
+ * person's own (`channelFrom`). It keeps no pin and no unread mark, so every
  * summary is unpinned and read. Its summaries name no model: the one passed
  * in is the adapter's best word for it (`modelFor`).
  */
@@ -30,6 +31,7 @@ import {
   type ConversationSummary,
   type ConversationTool,
   type ConversationView,
+  type Channel as WireChannel,
 } from "@nessa/client"
 import {
   referencedContent,
@@ -37,8 +39,9 @@ import {
   placeNotes,
   placePublished,
   shownNote,
+  usageLimitOnClientClock,
 } from "../../../../conversation"
-import { composerModels } from "../../../model/composer-options"
+import { agentForProvider, composerModels } from "../../../model/composer-options"
 import { encodeId } from "../../../model/id-encoding"
 import type {
   Approval,
@@ -48,7 +51,6 @@ import type {
   Message,
   MessageApp,
   Part,
-  StepKind,
   Transcript,
   TranscriptQuestion,
   TurnMessage,
@@ -61,18 +63,64 @@ import {
   type Section,
   type SessionSummary,
 } from "../../model/workspace-index"
+import { toolStep } from "./gateway-steps"
 import { gatewayToolWidget } from "./tool-widget"
 
 /** The one section the gateway's conversations are listed under. */
 export const gatewaySection: Section = { id: "gateway", name: "Nessa" }
 
-/** The one channel every gateway conversation is in. */
+/** The gateway's default channel: every conversation made in no other. */
 export const gatewayChannel: Channel = {
   id: "gateway-conversations",
   name: "Conversations",
   sectionId: gatewaySection.id,
   private: false,
   topic: "",
+}
+
+/** The gateway's id for its default channel, which the index names `gatewayChannel`. */
+const defaultChannelId = "default"
+
+/** A channel's id in the index, from the gateway's: its default one is `gatewayChannel`. */
+export function channelIdFrom(gatewayId: string | undefined): string {
+  return gatewayId === undefined || gatewayId === defaultChannelId
+    ? gatewayChannel.id
+    : gatewayId
+}
+
+/** The gateway's id for a channel the index names, for `conversation.create`; none for its default. */
+export function gatewayChannelId(channelId: string): string | undefined {
+  return channelId === gatewayChannel.id ? undefined : channelId
+}
+
+/** The catalogue's entry for a gateway agent's model, if the catalogue lists it. */
+function catalogueModel(agent: string, modelId: string): ModelRef | undefined {
+  const listed = composerModels.find(
+    (model) => model.modelId === modelId && agentForProvider(model.provider) === agent,
+  )
+  return listed && { provider: listed.provider, modelId: listed.modelId }
+}
+
+/**
+ * A channel the gateway lists, as the index holds it. The default channel is
+ * `gatewayChannel`, with the folder the gateway says it works in. A channel
+ * whose model the catalogue does not list has no defaults: its new sessions
+ * start as any other.
+ */
+export function channelFrom(wire: WireChannel): Channel {
+  if (wire.channelId === defaultChannelId)
+    return { ...gatewayChannel, folder: wire.folder }
+  const model =
+    wire.agent && wire.model ? catalogueModel(wire.agent, wire.model) : undefined
+  return {
+    id: wire.channelId,
+    name: wire.name,
+    sectionId: gatewaySection.id,
+    private: false,
+    topic: "",
+    folder: wire.folder,
+    ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),
+  }
 }
 
 /** What the adapter knows of a session besides its list row. */
@@ -89,7 +137,7 @@ export function summaryFrom(
 ): Omit<SessionSummary, "revision"> {
   return {
     id: row.conversationId,
-    channelId: gatewayChannel.id,
+    channelId: channelIdFrom(row.channelId),
     title: row.title ?? "",
     model: context.model,
     status: context.waitingOnPerson ? "needs-you" : row.running ? "running" : "idle",
@@ -130,9 +178,15 @@ export function sameSummary(a: Said, b: Said): boolean {
   )
 }
 
-/** The catalogue's entry for the model a view says its conversation runs on, if it lists one. */
+/**
+ * The catalogue's entry for the model a view says its conversation selected,
+ * if the catalogue lists it. The selected model is on the view whether or
+ * not an agent is open. The runtime's model is not a substitute: a missing
+ * selection is not the catalogue default and not whatever the process last
+ * reported.
+ */
 export function runningModel(view: ConversationView | undefined): ModelRef | undefined {
-  const running = view?.runtime?.model
+  const running = view?.model
   const listed = composerModels.find((model) => model.modelId === running)
   return listed && { provider: listed.provider, modelId: listed.modelId }
 }
@@ -240,6 +294,16 @@ export const noteId = (messageId: string) => `/note:${encodeId(messageId)}`
  */
 export const unreadableId = (id: string) => `/unreadable:${encodeId(id)}`
 
+/**
+ * The line where the agent ran on in a new session, under the handoff's own
+ * name: `/handoff:` and no other `/`. A fork's copied turns are under its
+ * name and their place in the copy, `/handoff:<name>/<n>` for what was said
+ * and `/handoff:<name>/<n>/reply` for the reply, which no other id can be.
+ */
+export const handoffId = (id: string) => `/handoff:${encodeId(id)}`
+const carriedId = (id: string, index: number, reply: boolean) =>
+  `${handoffId(id)}/${index}${reply ? "/reply" : ""}`
+
 /** The final line when the gap list was cut. Not a record position. */
 export const unreadableOverflowId = "/unreadable-more"
 
@@ -251,23 +315,6 @@ function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
     digest: artifact.digest,
     mimeType: artifact.mimeType,
     size: artifact.size,
-  }
-}
-
-/** What a tool call did, in the window's four kinds; the provider's other kinds read as run. */
-function stepKind(kind: ConversationTool["kind"]): StepKind {
-  switch (kind) {
-    case "read":
-      return "read"
-    case "edit":
-    case "delete":
-    case "move":
-      return "edit"
-    case "search":
-    case "fetch":
-      return "search"
-    default:
-      return "run"
   }
 }
 
@@ -320,7 +367,9 @@ function inputParts(
  * the turn it followed, or the input still waiting it followed; one left
  * before any turn, or after a turn the bounded view left out, is first
  * (`placeNotes`). A record this read could not apply is a line of its own
- * in the same places.
+ * in the same places, and so is a switch to another agent. A fork's copied
+ * turns come first of all, as the turns they were, then the line saying
+ * they were copied.
  *
  * The view's `truncated` and `transcriptState` are carried as `history`.
  * This surface does not fold committed records to fill in what the view
@@ -352,7 +401,53 @@ export function transcriptFrom(
   const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const notes = placeNotes(view.notes, listed, waitingIds)
   const unreadable = placeNotes(view.unreadable, listed, waitingIds)
+  // A switch goes where a note would; a fork is how the conversation began.
+  const switches = placeNotes(
+    view.handoffs.filter((handoff) => handoff.kind === "switch"),
+    listed,
+    waitingIds,
+  )
   const messages: Message[] = []
+  const pushHandoffs = (left: readonly ConversationView["handoffs"][number][]) => {
+    for (const handoff of left) {
+      const id = handoffId(handoff.handoffId)
+      messages.push({
+        id,
+        role: "handoff",
+        at: seen(id),
+        parts: [],
+        handoff:
+          handoff.kind === "switch" && handoff.from && handoff.to
+            ? { kind: "switch", from: handoff.from, to: handoff.to }
+            : { kind: "fork", omittedTurns: handoff.omittedTurns ?? 0 },
+      })
+    }
+  }
+  // A fork's copied turns are drawn as the turns they were, before the line
+  // that says they were copied, and before anything the fork said itself.
+  for (const fork of view.handoffs.filter((handoff) => handoff.kind === "fork")) {
+    ;(fork.turns ?? []).forEach((turn, index) => {
+      if (turn.said !== undefined) {
+        const id = carriedId(fork.handoffId, index, false)
+        messages.push({
+          id,
+          role: "user",
+          at: seen(id),
+          parts: [{ kind: "text", text: turn.said }],
+        })
+      }
+      if (turn.reply !== undefined) {
+        const id = carriedId(fork.handoffId, index, true)
+        messages.push({
+          id,
+          role: "agent",
+          at: seen(id),
+          parts: [{ kind: "text", text: turn.reply }],
+        })
+      }
+    })
+    pushHandoffs([fork])
+  }
   const pushNotes = (left: readonly ConversationView["notes"][number][]) => {
     for (const note of left) {
       const id = noteId(note.messageId)
@@ -378,6 +473,7 @@ export function transcriptFrom(
   }
   pushUnreadable(unreadable.before)
   pushNotes(notes.before)
+  pushHandoffs(switches.before)
   if (published.before.length > 0)
     messages.push({
       id: publishedBeforeId,
@@ -388,6 +484,7 @@ export function transcriptFrom(
   let activity: Transcript["activity"] = null
   for (const turn of view.messages) {
     const input = inputId(turn.executionId)
+    const working = turn.status === "running" || turn.status === "queued"
     const user: TurnMessage = {
       id: input,
       role: "user",
@@ -418,23 +515,34 @@ export function transcriptFrom(
         // A tool the bounded view left out is not guessed at.
         if (!tool) continue
         lastTool = tool
-        parts.push({ kind: "step", step: stepKind(tool.kind), label: tool.title })
+        parts.push(
+          toolStep(tool, {
+            turnEnded: !working,
+            serverNowMs: view.serverNowMs,
+            receivedAtMs,
+          }),
+        )
         const widget = gatewayToolWidget(view.conversationId, tool)
         if (widget) parts.push(widget)
       }
     }
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
     const terminal = turnTerminal(turn)
-    const working = turn.status === "running" || turn.status === "queued"
-    const marked = terminal
-      ? {
-          terminal,
-          executionId: turn.executionId,
-          ...(turn.requiredWorkFailed === true
-            ? { requiredWorkFailed: true as const }
-            : {}),
-        }
-      : undefined
+    const usageLimit =
+      turn.usageLimit === undefined
+        ? undefined
+        : usageLimitOnClientClock(turn.usageLimit, view.serverNowMs, receivedAtMs)
+    const marked =
+      terminal || usageLimit
+        ? {
+            ...(terminal ? { terminal } : {}),
+            executionId: turn.executionId,
+            ...(turn.requiredWorkFailed === true
+              ? { requiredWorkFailed: true as const }
+              : {}),
+            ...(usageLimit ? { usageLimit } : {}),
+          }
+        : undefined
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
       const agent: TurnMessage = {
@@ -450,6 +558,7 @@ export function transcriptFrom(
     } else messages.push(marked ? { ...user, ...marked } : user)
     pushUnreadable(unreadable.byExecution.get(turn.executionId) ?? [])
     pushNotes(notes.byExecution.get(turn.executionId) ?? [])
+    pushHandoffs(switches.byExecution.get(turn.executionId) ?? [])
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
     if (working && parts[parts.length - 1]?.kind !== "text")
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
@@ -473,6 +582,7 @@ export function transcriptFrom(
     })
     pushUnreadable(unreadable.byWaiting.get(waiting.executionId) ?? [])
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
+    pushHandoffs(switches.byWaiting.get(waiting.executionId) ?? [])
   }
   if (view.unreadableTruncated)
     messages.push({
@@ -554,6 +664,9 @@ export function transcriptFrom(
     authenticationRefusal: latestTurn?.authenticationRequired
       ? latestTurn.executionId
       : undefined,
+    ...(view.usageLimitAutoContinue === undefined
+      ? {}
+      : { usageLimitAutoContinue: view.usageLimitAutoContinue }),
     questions: questionsFrom(view, questionDetails),
     interactionNotice: reportedText(view.interactionViewError),
     latestInputId,

@@ -11,7 +11,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { EdgeMove, SplitPanesSource } from "../application/ports"
 import { focusPane, singlePane, splitPane, type PaneLayout } from "../model/pane-layout"
-import type { PaneRoom } from "../model/pane-sizing"
+import { resizeEdge, type PaneRoom } from "../model/pane-sizing"
 import { gridOf, marks } from "../adapters/dom/marks"
 import { SplitPanes, type ShownPane } from "./split-panes"
 
@@ -20,7 +20,47 @@ let root: Root
 /** Each grid the page observes, and how to tell it its size changed. */
 const observed: { target: Element; resized: () => void }[] = []
 
+/**
+ * jsdom fires animation frames on an interval. A busy loop can run one
+ * before a test asks, so the frames here run only when `run` says so.
+ */
+function steppedFrames() {
+  const queued = new Map<number, FrameRequestCallback>()
+  let next = 1
+  const request = window.requestAnimationFrame
+  const cancel = window.cancelAnimationFrame
+  window.requestAnimationFrame = (callback) => {
+    const id = next++
+    queued.set(id, callback)
+    return id
+  }
+  window.cancelAnimationFrame = (id) => {
+    queued.delete(id)
+  }
+  return {
+    async run() {
+      const pending = [...queued.keys()]
+      await act(async () => {
+        for (const id of pending) {
+          const callback = queued.get(id)
+          if (callback === undefined) continue
+          queued.delete(id)
+          callback(0)
+        }
+      })
+    },
+    restore() {
+      queued.clear()
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+    },
+  }
+}
+
+let frames: ReturnType<typeof steppedFrames>
+
 beforeEach(() => {
+  frames = steppedFrames()
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   observed.length = 0
   globalThis.ResizeObserver = class {
@@ -40,6 +80,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  frames.restore()
   host.remove()
 })
 
@@ -81,6 +122,12 @@ function fakeSource(
       layout = next
       await act(async () => listeners.forEach((listener) => listener()))
     },
+    // Notifies without wrapping `act`, so a frame callback can run it while
+    // a draw is still queued.
+    replace: (next: PaneLayout | null) => {
+      layout = next
+      for (const listener of listeners) listener()
+    },
   }
 }
 
@@ -117,6 +164,13 @@ const grid = () => {
   return found
 }
 
+/** The frame a column change paints on: three frames after it commits. */
+const nextPaint = async () => {
+  await frames.run()
+  await frames.run()
+  await frames.run()
+}
+
 it("puts the frame on the host's own pane root, with nothing around it", async () => {
   await mounted(fakeSource(two()))
   const panes = [...grid().children].filter((child) => child.matches(".host-pane"))
@@ -140,6 +194,101 @@ it("shows the host's empty state while there are no panes", async () => {
   expect(grid().hasAttribute(marks.multi)).toBe(false)
 })
 
+it("paints a new arrangement on the frame after it commits", async () => {
+  host.setAttribute("data-workspace", "")
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  await fake.change(splitPane(layout, 2, "bottom", "c"))
+  // The commit's own turn keeps the boxes already painted and writes
+  // nothing. The next frame holds a folded sidebar in the row, and so does
+  // the frame after that: a drop's copy lets go, then a column title glides.
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  await frames.run()
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  // That paint skips scene text. The frame after shows it again.
+  expect(grid().hasAttribute(marks.painting)).toBe(true)
+  await nextPaint()
+  expect(grid().hasAttribute(marks.painting)).toBe(false)
+})
+
+it("replaces a draw the source left before that draw commits", async () => {
+  host.setAttribute("data-workspace", "")
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  const stacked = splitPane(layout, 2, "bottom", "c")
+  await fake.change(stacked)
+  await frames.run()
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
+  // Queued behind the callback that hands React the new boxes, so both run
+  // before that update commits. The source is back on the painted arrangement.
+  requestAnimationFrame(() => fake.replace(layout))
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  // The grid is still following the source. A later split waits, then paints.
+  await fake.change(stacked)
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await nextPaint()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+})
+
+it("does not paint a draw a later callback in that frame replaced", async () => {
+  host.setAttribute("data-workspace", "")
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  await fake.change(splitPane(layout, 2, "bottom", "c"))
+  await frames.run()
+  await frames.run()
+  const beside = splitPane(layout, 1, "left", "d")
+  requestAnimationFrame(() => fake.replace(beside))
+  await frames.run()
+  // The boxes that were about to commit stay off the screen. The replacement
+  // arrangement waits its own three frames, and the spare hold stays up.
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
+  await frames.run()
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+})
+
+it("paints a replaced source's layout though that source never notifies", async () => {
+  await mounted(fakeSource(two()))
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  const next = fakeSource(splitPane(two(), 2, "bottom", "c"))
+  await act(async () => {
+    root.render(
+      <StrictMode>
+        <SplitPanes
+          source={next.source}
+          renderPane={renderPane}
+          empty={<p className="host-empty">Nothing open</p>}
+        />
+      </StrictMode>,
+    )
+  })
+  // The commit keeps the boxes already painted. The new source's columns
+  // were never announced; the grid reads them when it subscribes.
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await nextPaint()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+})
+
 it("renders again when the arrangement changes, and not when only focus moves", async () => {
   const layout = two()
   const fake = fakeSource(layout)
@@ -148,8 +297,31 @@ it("renders again when the arrangement changes, and not when only focus moves", 
   await fake.change(focusPane(layout, 2))
   expect(renders).toEqual([])
   await fake.change(splitPane(layout, 2, "bottom", "c"))
-  expect(renders.length).toBeGreaterThan(0)
+  // The commit re-renders the boxes already painted. The new pane waits three frames.
+  expect(renders.every((key) => key < 3)).toBe(true)
+  expect(host.querySelectorAll(".host-pane")).toHaveLength(2)
+  await nextPaint()
+  expect(renders.some((key) => key !== 1 && key !== 2)).toBe(true)
   expect(host.querySelectorAll(".host-pane")).toHaveLength(3)
+})
+
+it("paints a resize of the same panes on the frame it happens", async () => {
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  await frames.run()
+  const first = () => grid().querySelector<HTMLElement>(".host-pane")
+  expect(first()?.style.getPropertyValue("--cw")).toBe("0.5")
+  expect(grid().hasAttribute(marks.painting)).toBe(false)
+  const wider = resizeEdge(layout, { axis: "x", column: 0 }, 0.7, 1000)
+  await fake.change(wider)
+  expect(first()?.style.getPropertyValue("--cw")).toBe("0.7")
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  const narrower = resizeEdge(wider, { axis: "x", column: 0 }, 0.35, 1000)
+  await fake.change(narrower)
+  expect(first()?.style.getPropertyValue("--cw")).toBe("0.35")
+  expect(grid().hasAttribute(marks.painting)).toBe(false)
 })
 
 it("resizes, evens and fits through the source", async () => {
@@ -171,7 +343,44 @@ it("resizes, evens and fits through the source", async () => {
   expect(fake.asked.equalized).toBe(1)
   const fitted = fake.asked.fitted
   await act(async () => observed.find((each) => each.target === grid())?.resized())
+  await frames.run()
   expect(fake.asked.fitted).toBe(fitted + 1)
+})
+
+it("fits outside resize delivery and coalesces notifications before that frame", async () => {
+  const fake = fakeSource(two())
+  await mounted(fake)
+  const resize = observed.find((each) => each.target === grid())?.resized
+  if (!resize) throw new Error("grid is not observed")
+  await act(async () => {
+    resize()
+    resize()
+  })
+  // The workspace's first fit starts its own geometry observer on this grid.
+  // Starting it inside this broadcast produces a skipped same-depth observation.
+  expect(fake.asked.fitted).toBe(0)
+  await frames.run()
+  expect(fake.asked.fitted).toBe(1)
+})
+
+it("retires queued and late fits when the source changes or the grid unmounts", async () => {
+  const first = fakeSource(two())
+  await mounted(first)
+  const retired = observed.find((each) => each.target === grid())?.resized
+  if (!retired) throw new Error("grid is not observed")
+  const current = fakeSource(two())
+  await mounted(current)
+  await act(async () => retired())
+  await frames.run()
+  expect(first.asked.fitted).toBe(0)
+  const resize = observed.find((each) => each.target === grid())?.resized
+  if (!resize) throw new Error("replacement grid is not observed")
+  await act(async () => resize())
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  await act(async () => resize())
+  await frames.run()
+  expect(current.asked.fitted).toBe(0)
 })
 
 it("asks nothing of an edge moved with no room measured, or with the layout gone", async () => {
@@ -196,8 +405,10 @@ it("asks nothing of an edge moved with no room measured, or with the layout gone
   gone.withhold()
   await nudge()
   expect(gone.asked.resized).toEqual([])
-  // Said: the grid shows the host's empty state, and no edge.
+  // Said: the grid shows the host's empty state on the next frame, and no edge.
   await gone.change(null)
+  expect(grid().querySelector('[role="separator"]')).not.toBeNull()
+  await nextPaint()
   expect(grid().querySelector('[role="separator"]')).toBeNull()
   expect(grid().querySelector(".host-empty")).not.toBeNull()
 })

@@ -1238,7 +1238,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1495,7 +1495,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1627,6 +1627,15 @@ dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
  "zlib-rs",
+]
+
+[[package]]
+name = "flume"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
+dependencies = [
+ "spin",
 ]
 
 [[package]]
@@ -2515,6 +2524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3068,6 +3087,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "mdns-sd"
+version = "0.21.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8562654710f72a9cbce4b0d5b7c366a2f94330ba1ce3740f15e932ea2d37b161"
+dependencies = [
+ "fastrand",
+ "flume",
+ "if-addrs",
+ "mio",
+ "socket-pktinfo",
+ "socket2",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3150,6 +3183,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -3182,7 +3216,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.20",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3285,6 +3319,7 @@ name = "nessa-client-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "futures-util",
  "nessa-auth",
  "nessa-local-database",
  "nessa-local-storage",
@@ -3292,11 +3327,15 @@ dependencies = [
  "nessa-sdk",
  "nessa-sync",
  "regex",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "tungstenite",
@@ -3440,12 +3479,15 @@ dependencies = [
  "cedar-policy",
  "core-foundation 0.10.1",
  "core-foundation-sys",
+ "dunce",
  "flate2",
  "futures-util",
  "getrandom 0.3.4",
  "hmac",
+ "http-body-util",
  "image",
  "libc",
+ "mdns-sd",
  "nessa-agent-credentials",
  "nessa-auth",
  "nessa-client-core",
@@ -3472,9 +3514,11 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "tungstenite",
+ "unicode-normalization",
  "url",
  "uuid",
  "zeroize",
@@ -3504,6 +3548,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -3549,7 +3594,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3909,7 +3954,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -4601,7 +4646,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4657,7 +4702,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5076,18 +5121,19 @@ dependencies = [
 [[package]]
 name = "shepherd"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=601653929349959a4b73b59391ca8814c786abb2#601653929349959a4b73b59391ca8814c786abb2"
 dependencies = [
  "shepherd-app",
  "shepherd-domain",
  "shepherd-infra",
+ "thiserror 2.0.20",
  "tokio",
 ]
 
 [[package]]
 name = "shepherd-app"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=601653929349959a4b73b59391ca8814c786abb2#601653929349959a4b73b59391ca8814c786abb2"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -5100,7 +5146,7 @@ dependencies = [
 [[package]]
 name = "shepherd-domain"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=601653929349959a4b73b59391ca8814c786abb2#601653929349959a4b73b59391ca8814c786abb2"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -5108,13 +5154,15 @@ dependencies = [
 [[package]]
 name = "shepherd-infra"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8843c1bc6c3eccfbbae8be926f8c49103"
+source = "git+https://github.com/nessalabs/shepherd?rev=601653929349959a4b73b59391ca8814c786abb2#601653929349959a4b73b59391ca8814c786abb2"
 dependencies = [
  "async-trait",
  "libc",
  "libproc",
  "mach2",
  "nix",
+ "serde",
+ "serde_json",
  "shepherd-app",
  "shepherd-domain",
  "sysinfo",
@@ -5203,13 +5251,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket-pktinfo"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "612942246d0cc239cfd83af1dfd39be47f649208a3524e5e9da651910128e0ac"
+dependencies = [
+ "libc",
+ "socket2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5261,6 +5320,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+dependencies = [
+ "lock_api",
+]
+
+[[package]]
 name = "sqlite-wasm-rs"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5288,7 +5356,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5874,7 +5942,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5892,7 +5960,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6346,7 +6414,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.20",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6408,7 +6476,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7063,7 +7131,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

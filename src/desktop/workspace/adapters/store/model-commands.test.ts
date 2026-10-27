@@ -1,5 +1,9 @@
 import { WorkspaceModelError } from "../../application/ports"
-/** Public model command ordering, with independent source frames and receipts. */
+/**
+ * Public model command ordering: a pick in an established chat is staged,
+ * and the next send asks the source for it before the message goes, with
+ * independent source frames and receipts.
+ */
 import { describe, expect, it, vi } from "vitest"
 import { fakeSource, settle, summary, testStore, opus, astra } from "../../testing"
 import { emptyTranscript } from "../../model/transcript"
@@ -16,9 +20,10 @@ import {
   setComposerText,
 } from "./commands"
 import { workspaceActions } from "./slice"
-import { modelChanging, modelRequesting } from "./model-commands"
+import { modelChanging, modelRequesting, modelUnsettled } from "./model-commands"
 import { selectNextModel } from "./selectors"
 import type { ModelReceipt } from "../../model/model-choice"
+import type { ModelRef } from "../../model/workspace-index"
 
 const next = { provider: opus.provider, modelId: "claude-sonnet-5" }
 const receipt = (requestId: string): ModelReceipt => ({
@@ -36,79 +41,297 @@ async function ready() {
   await settle()
   return { source, store }
 }
+/** A control the source makes, saying the chat runs it before it answers. */
+let revision = 1000
+const reconciles =
+  (source: ReturnType<typeof fakeSource>) =>
+  async (sessionId: string, model: ModelRef, id: string): Promise<ModelReceipt> => {
+    source.emit({
+      kind: "session",
+      session: summary(sessionId, "desktop", 1000, "idle", {
+        model,
+        revision: ++revision,
+      }),
+    })
+    return { ...receipt(id), model: model.modelId, sourceReconciled: true }
+  }
+const asked = (source: ReturnType<typeof fakeSource>, method: string) =>
+  source.calls.filter((call) => call[0] === method)
+const send = (
+  store: Awaited<ReturnType<typeof ready>>["store"],
+  text: string,
+  sessionId = "a",
+) => store.dispatch(sendMessage({ sessionId, text, initiator: "person" }))
 
-describe("same-provider model choices", () => {
-  it("keeps draft choices local and refuses established cross-provider targets", async () => {
+describe("model choices", () => {
+  it("keeps draft choices local and only stages a pick in an established chat", async () => {
     const { source, store } = await ready()
     const draft = store.dispatch(newSession())!
-    await store.dispatch(changeModel({ sessionId: draft, model: astra }))
+    store.dispatch(changeModel({ sessionId: draft, model: astra }))
     expect(selectNextModel(store.getState(), draft)).toEqual(astra)
-    await store.dispatch(changeModel({ sessionId: "a", model: astra }))
-    expect(source.calls.some((call) => call[0] === "setModel")).toBe(false)
-    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
+    // Another provider's model: shown in the picker, asked of nobody.
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    expect(selectNextModel(store.getState(), "a")).toEqual(astra)
+    expect(store.getState().workspace.sessions.a?.model).toEqual(opus)
+    expect(asked(source, "setModel")).toHaveLength(0)
+    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
   })
 
-  it("keeps the confirmed model until an ACK then independent matching frame", async () => {
+  it("takes a staged pick back when the chat's own model is picked again", async () => {
     const { source, store } = await ready()
-    let requestId = ""
-    source.setModel = vi.fn(async (_id, _model, id) => {
-      requestId = id
-      return receipt(id)
-    })
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    store.dispatch(changeModel({ sessionId: "a", model: { ...opus } }))
+    expect(store.getState().workspace.stagedModels.a).toEqual(opus)
     expect(selectNextModel(store.getState(), "a")).toEqual(opus)
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    source.emit({
-      kind: "session",
-      session: summary("a", "desktop", 1000, "idle", { model: next, revision: 2 }),
-    })
-    await settle()
-    expect(selectNextModel(store.getState(), "a")).toEqual(next)
-    expect(store.getState().workspace.modelChoices.a).toBeUndefined()
-    expect(requestId).not.toBe("")
+    expect(await send(store, "on the same agent")).toBe("sent")
+    expect(asked(source, "setModel")).toHaveLength(0)
+    expect(asked(source, "send")[0]?.[1]).toMatchObject({ model: opus })
+    // The send that found nothing to change settles the pick.
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
   })
 
-  it("waits for the receipt when the frame arrives first, capturing immutable input", async () => {
+  it("applies the staged pick when the next message is sent, then sends on it", async () => {
     const { source, store } = await ready()
-    let done!: (value: ModelReceipt) => void
-    let requestId = ""
-    source.setModel = vi.fn((_id, model, id) => {
-      requestId = id
-      expect(model).toEqual(next)
-      return new Promise<ModelReceipt>((resolve) => {
-        done = resolve
-      })
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    expect(await send(store, "switch now")).toBe("sent")
+    expect(source.calls.map((call) => call[0]).filter((m) => m !== "subscribe")).toEqual(
+      expect.arrayContaining(["setModel", "send"]),
+    )
+    const order = source.calls.map((call) => call[0])
+    expect(order.indexOf("setModel")).toBeLessThan(order.indexOf("send"))
+    expect(asked(source, "setModel")[0]).toEqual([
+      "setModel",
+      "a",
+      astra,
+      expect.any(String),
+      "person",
+    ])
+    expect(asked(source, "send")[0]?.[1]).toMatchObject({
+      model: astra,
+      text: "switch now",
     })
-    const mutable = { ...next }
-    const command = changeModel({ sessionId: "a", model: mutable })
-    mutable.modelId = "mutated"
-    const pending = store.dispatch(command)
-    source.emit({
-      kind: "session",
-      session: summary("a", "desktop", 1000, "idle", { model: next, revision: 2 }),
-    })
+    // The send that made it settles the pick.
     await settle()
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    done(receipt(requestId))
-    await pending
-    await settle()
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
+    expect(selectNextModel(store.getState(), "a")).toEqual(astra)
     expect(store.getState().workspace.modelChoices.a).toBeUndefined()
   })
 
-  it("retains draft and sends nothing while a model command or source recovery is pending", async () => {
+  it("no longer stages a pick once made, so a later change elsewhere is not undone", async () => {
     const { source, store } = await ready()
-    source.hold("setModel")
-    store.dispatch(setComposerText({ sessionId: "a", text: "unsent draft" }))
-    const change = store.dispatch(changeModel({ sessionId: "a", model: next }))
+    source.setModel = vi.fn(reconciles(source))
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "first on next")).toBe("sent")
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
+    // Another client moves the chat on; the next send asks nothing back.
+    source.emit({
+      kind: "session",
+      session: summary("a", "desktop", 1000, "idle", { model: astra, revision: 5000 }),
+    })
+    await settle()
+    expect(selectNextModel(store.getState(), "a")).toEqual(astra)
+    expect(await send(store, "second")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledTimes(1)
+    expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: astra })
+  })
+
+  it("marks the message not sent when the source refuses the change, and drops the pick", async () => {
+    const { source, store } = await ready()
+    source.refuse("setModel", "not-supported")
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    expect(await send(store, "held back")).toBe("refused")
+    expect(asked(source, "send")).toHaveLength(0)
+    const failed = store.getState().workspace.outbox.a![0]!
+    expect(failed.delivery).toMatchObject({ state: "failed", reason: "not-supported" })
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("refused")
+    // The picker shows the model the chat still runs; sent again, it goes on it.
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
+    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
     expect(
       await store.dispatch(
-        sendMessage({ sessionId: "a", text: "unsent draft", initiator: "person" }),
+        resendMessage({ sessionId: "a", messageId: failed.id, initiator: "person" }),
       ),
-    ).toBe("not-asked")
+    ).toBe("sent")
+    expect(asked(source, "setModel")).toHaveLength(1)
+    expect(asked(source, "send")[0]?.[1]).toMatchObject({
+      model: opus,
+      text: "held back",
+    })
+  })
+
+  it("keeps a pick not known to be made, and checks it on the next send", async () => {
+    const { source, store } = await ready()
+    source.setModel = async () => {
+      throw new WorkspaceModelError("unavailable", true)
+    }
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    expect(await send(store, "unknown")).toBe("unknown")
+    expect(store.getState().workspace.stagedModels.a).toEqual(astra)
+    source.setModel = vi.fn(reconciles(source))
+    expect(await send(store, "checked")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", astra, expect.any(String), "person")
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
+    expect(asked(source, "send").at(-1)?.[1]).toMatchObject({
+      model: astra,
+      text: "checked",
+    })
+  })
+
+  it("clears what an earlier pick came to once another is made", async () => {
+    const { source, store } = await ready()
+    source.refuse("setModel", "not-supported")
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    await send(store, "refused switch")
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("refused")
+    store.dispatch(changeModel({ sessionId: "a", model: opus }))
+    expect(store.getState().workspace.modelChoices.a).toBeUndefined()
+    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
+  })
+
+  it("keeps a send behind a change on its way, and the text with it", async () => {
+    const { source, store } = await ready()
+    source.hold("setModel")
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    const first = send(store, "goes first")
+    await settle()
+    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+    expect(modelRequesting(store.getState().workspace, "a")).toBe(true)
+    store.dispatch(setComposerText({ sessionId: "a", text: "unsent draft" }))
+    expect(await send(store, "unsent draft")).toBe("not-asked")
     expect(store.getState().workspace.composerText.a).toBe("unsent draft")
-    expect(source.calls.some((call) => call[0] === "send")).toBe(false)
+    expect(asked(source, "send")).toHaveLength(0)
     await source.release("setModel")
-    await change
+    expect(await first).toBe("sent")
+    expect(asked(source, "setModel")).toHaveLength(1)
+  })
+
+  it("does not send on an acknowledged change no frame confirmed, and asks again on the next send", async () => {
+    const { source, store } = await ready()
+    let calls = 0
+    source.setModel = async (_id, model, id) => {
+      calls++
+      if (calls === 2)
+        source.emit({
+          kind: "session",
+          session: summary("a", "desktop", 1000, "idle", { model, revision: 2 }),
+        })
+      return { ...receipt(id), model: model.modelId, sourceReconciled: calls === 2 }
+    }
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "first try")).toBe("unknown")
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("acknowledged")
+    expect(modelUnsettled(store.getState().workspace, "a")).toBe(true)
+    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
+    expect(asked(source, "send")).toHaveLength(0)
+    expect(await send(store, "second try")).toBe("sent")
+    expect(calls).toBe(2)
+    expect(asked(source, "send")[0]?.[1]).toMatchObject({
+      model: next,
+      text: "second try",
+    })
+  })
+
+  it("rejects a mismatched receipt without sending", async () => {
+    const { source, store } = await ready()
+    source.setModel = async () => receipt("wrong")
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "mismatch")).toBe("unknown")
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("recovery_required")
+    expect(asked(source, "send")).toHaveLength(0)
+  })
+
+  it("asks for the shown model before a send while an uncertain change is unresolved", async () => {
+    const { source, store } = await ready()
+    source.setModel = async () => {
+      throw new WorkspaceModelError("unavailable", true)
+    }
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "uncertain")).toBe("unknown")
+    // Taken back to the chat's own model: still checked before anything goes.
+    store.dispatch(changeModel({ sessionId: "a", model: opus }))
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("recovery_required")
+    source.setModel = vi.fn(reconciles(source))
+    expect(modelUnsettled(store.getState().workspace, "a")).toBe(true)
+    expect(await send(store, "checked first")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
+    expect(asked(source, "send").at(-1)?.[1]).toMatchObject({
+      model: opus,
+      text: "checked first",
+    })
+  })
+
+  it("does not send when the source reconciles to another client's model", async () => {
+    const { source, store } = await ready()
+    source.setModel = async (_id, _model, id) => {
+      source.emit({
+        kind: "session",
+        session: summary("a", "desktop", 1000, "idle", { model: astra, revision: 3 }),
+      })
+      return { ...receipt(id), sourceReconciled: true }
+    }
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "raced")).toBe("unknown")
+    expect(asked(source, "send")).toHaveLength(0)
+    expect(store.getState().workspace.stagedModels.a).toEqual(next)
+    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
+  })
+
+  it("keeps a pick when another client passes through it, and applies it on send", async () => {
+    const { source, store } = await ready()
+    source.setModel = vi.fn(reconciles(source))
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    for (const [model, revision] of [
+      [next, 200],
+      [astra, 201],
+    ] as const) {
+      source.emit({
+        kind: "session",
+        session: summary("a", "desktop", 1000, "idle", { model, revision }),
+      })
+      await settle()
+    }
+    expect(store.getState().workspace.stagedModels.a).toEqual(next)
+    expect(await send(store, "on my pick")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", next, expect.any(String), "person")
+    expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: next })
+  })
+
+  it("holds a send with a staged pick while this window's access change is on its way", async () => {
+    const { source, store } = await ready()
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    store.dispatch(workspaceActions.accessChanging({ sessionId: "a", mode: "auto" }))
+    store.dispatch(setComposerText({ sessionId: "a", text: "waits" }))
+    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+    expect(await send(store, "waits")).toBe("not-asked")
+    expect(store.getState().workspace.composerText.a).toBe("waits")
+    expect(store.getState().workspace.outbox.a ?? []).toEqual([])
+    expect(asked(source, "setModel")).toHaveLength(0)
+  })
+
+  it("keeps a take-back staged while an earlier change can still land", async () => {
+    const { source, store } = await ready()
+    source.setModel = async (_id, _model, id) => receipt(id)
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    await send(store, "acknowledged only")
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("acknowledged")
+    store.dispatch(changeModel({ sessionId: "a", model: opus }))
+    expect(store.getState().workspace.stagedModels.a).toEqual(opus)
+    // The earlier change lands late: the take-back still decides the next send.
+    source.emit({
+      kind: "session",
+      session: summary("a", "desktop", 1000, "idle", { model: next, revision: 300 }),
+    })
+    await settle()
+    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
+    source.setModel = vi.fn(reconciles(source))
+    expect(await send(store, "back on opus")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
+    expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: opus })
+  })
+
+  it("keeps a take-back staged while the source holds another change", async () => {
+    const { source, store } = await ready()
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
     source.emit({
       kind: "transcript",
       transcript: {
@@ -118,36 +341,47 @@ describe("same-provider model choices", () => {
           pending: {
             requestId: "other",
             requestedModel: next.modelId,
-            status: "recovery_required",
+            status: "changing",
           },
         },
       },
     })
     await settle()
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    expect(
-      await store.dispatch(
-        sendMessage({ sessionId: "a", text: "unsent draft", initiator: "person" }),
-      ),
-    ).toBe("not-asked")
-  })
-
-  it("does not resend on text revisions or reinterpret a refusal as Busy", async () => {
-    const { source, store } = await ready()
-    source.refuse("setModel", "unavailable")
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(store.getState().workspace.modelChoices.a).toMatchObject({
-      state: "refused",
-      reason: "unavailable",
-    })
+    store.dispatch(changeModel({ sessionId: "a", model: opus }))
+    // Another client's change lands; the take-back still decides the next send.
     source.emit({
       kind: "transcript",
-      transcript: { ...emptyTranscript("a"), revision: 2 },
+      transcript: { ...emptyTranscript("a"), revision: 3 },
+    })
+    source.emit({
+      kind: "session",
+      session: summary("a", "desktop", 1000, "idle", { model: next, revision: 400 }),
     })
     await settle()
-    expect(source.calls.filter((call) => call[0] === "setModel")).toHaveLength(1)
     expect(selectNextModel(store.getState(), "a")).toEqual(opus)
-    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
+    source.setModel = vi.fn(reconciles(source))
+    expect(await send(store, "back on opus")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
+  })
+
+  it("holds a send while the source says a model change is pending", async () => {
+    const { source, store } = await ready()
+    source.emit({
+      kind: "transcript",
+      transcript: {
+        ...emptyTranscript("a"),
+        revision: 2,
+        modelControl: {
+          pending: { requestId: "x", requestedModel: next.modelId, status: "changing" },
+        },
+      },
+    })
+    await settle()
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+    expect(await send(store, "waits")).toBe("not-asked")
+    expect(asked(source, "setModel")).toHaveLength(0)
+    expect(asked(source, "send")).toHaveLength(0)
   })
 
   it("ignores a stale token or wrong target completion", async () => {
@@ -173,41 +407,22 @@ describe("same-provider model choices", () => {
     expect(store.getState().workspace.modelChoices.b).toBeUndefined()
   })
 
-  it("rejects a mismatched receipt without an applied model", async () => {
-    const { source, store } = await ready()
-    source.setModel = async () => receipt("wrong")
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(store.getState().workspace.modelChoices.a?.state).toBe("recovery_required")
-    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
-  })
-
-  it("asks once while held, then allows an explicit new choice after refusal", async () => {
+  it("forgets a removed target's pick and ignores its late receipt", async () => {
     const { source, store } = await ready()
     source.hold("setModel")
-    source.refuse("setModel", "not-supported")
-    const first = store.dispatch(changeModel({ sessionId: "a", model: next }))
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(source.calls.filter((call) => call[0] === "setModel")).toHaveLength(1)
-    await source.release("setModel")
-    await first
-    source.refuse("setModel", undefined)
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(source.calls.filter((call) => call[0] === "setModel")).toHaveLength(2)
-    expect(selectNextModel(store.getState(), "a")).toEqual(next)
-  })
-  it("forgets a removed target and ignores its late receipt", async () => {
-    const { source, store } = await ready()
-    source.hold("setModel")
-    const pending = store.dispatch(changeModel({ sessionId: "a", model: next }))
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    const pending = send(store, "before archive")
+    await settle()
     await store.dispatch(archiveSession({ sessionId: "a", initiator: "person" }))
     await settle()
     expect(store.getState().workspace.modelChoices.a).toBeUndefined()
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
     await source.release("setModel")
     await pending
     expect(store.getState().workspace.modelChoices.a).toBeUndefined()
   })
 
-  it("keeps original review answers and Stop independent of held model work", async () => {
+  it("keeps original review answers and Stop independent of a staged pick", async () => {
     const { source, store } = await ready()
     const approval = {
       id: "original",
@@ -227,8 +442,7 @@ describe("same-provider model choices", () => {
       },
     })
     await settle()
-    source.hold("setModel")
-    const pending = store.dispatch(changeModel({ sessionId: "a", model: next }))
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
     expect(store.getState().workspace.transcripts.a?.approvals).toEqual([approval])
     await store.dispatch(
       approve({
@@ -240,280 +454,28 @@ describe("same-provider model choices", () => {
       }),
     )
     await store.dispatch(stopTurn({ sessionId: "a", initiator: "person" }))
-    expect(source.calls.some((call) => call[0] === "approve")).toBe(true)
-    expect(source.calls.some((call) => call[0] === "stop")).toBe(true)
-    await source.release("setModel")
-    await pending
+    expect(asked(source, "approve")).toHaveLength(1)
+    expect(asked(source, "stop")).toHaveLength(1)
+    expect(asked(source, "setModel")).toHaveLength(0)
   })
-  it("keeps a matching receipt held while the source says recovery is pending", async () => {
+
+  it("clears an acknowledged choice once the source's frame confirms it", async () => {
     const { source, store } = await ready()
-    source.setModel = async () => {
-      throw new WorkspaceModelError("unavailable", true)
-    }
-    source.emit({
-      kind: "transcript",
-      transcript: {
-        ...emptyTranscript("a"),
-        revision: 2,
-        modelControl: {
-          pending: {
-            requestId: "source",
-            requestedModel: next.modelId,
-            status: "recovery_required",
-          },
-        },
-      },
-    })
-    // A deliberate pick may reconcile recovery, but cannot clear the send fence.
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(store.getState().workspace.modelChoices.a?.state).toBe("recovery_required")
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
     source.setModel = async (_id, _model, id) => receipt(id)
-    source.emit({
-      kind: "transcript",
-      transcript: { ...emptyTranscript("a"), revision: 3 },
-    })
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    source.emit({
-      kind: "transcript",
-      transcript: {
-        ...emptyTranscript("a"),
-        revision: 4,
-        modelControl: {
-          pending: {
-            requestId: "source",
-            requestedModel: next.modelId,
-            status: "recovery_required",
-          },
-        },
-      },
-    })
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    await send(store, "acknowledged only")
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("acknowledged")
     source.emit({
       kind: "session",
       session: summary("a", "desktop", 1000, "idle", { model: next, revision: 2 }),
     })
     await settle()
-    expect(store.getState().workspace.modelChoices.a?.state).toBe("acknowledged")
-    source.emit({
-      kind: "transcript",
-      transcript: { ...emptyTranscript("a"), revision: 5 },
-    })
-    await settle()
     expect(store.getState().workspace.modelChoices.a).toBeUndefined()
+    expect(modelUnsettled(store.getState().workspace, "a")).toBe(false)
+    // The chat runs the pick now: the next send makes it without asking again.
+    const asks = asked(source, "setModel").length
+    expect(await send(store, "confirmed")).toBe("sent")
+    expect(asked(source, "setModel")).toHaveLength(asks)
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
   })
-  it("fences Send after an uncertain model result with no recovered source frame", async () => {
-    const { source, store } = await ready()
-    source.setModel = async () => {
-      throw new WorkspaceModelError("unavailable", true)
-    }
-    store.dispatch(setComposerText({ sessionId: "a", text: "keep this" }))
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    expect(
-      await store.dispatch(
-        sendMessage({ sessionId: "a", text: "keep this", initiator: "person" }),
-      ),
-    ).toBe("not-asked")
-    expect(store.getState().workspace.composerText.a).toBe("keep this")
-    expect(source.calls.some((call) => call[0] === "send")).toBe(false)
-  })
-  it("does not retry a failed outbox message while model recovery is unresolved", async () => {
-    const { source, store } = await ready()
-    source.refuse("send", "unavailable")
-    await store.dispatch(
-      sendMessage({ sessionId: "a", text: "retained", initiator: "person" }),
-    )
-    const failed = store.getState().workspace.outbox.a![0]!
-    source.refuse("send", undefined)
-    source.setModel = async () => {
-      throw new WorkspaceModelError("unavailable", true)
-    }
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    const sends = source.calls.filter((call) => call[0] === "send").length
-    expect(
-      await store.dispatch(
-        resendMessage({ sessionId: "a", messageId: failed.id, initiator: "person" }),
-      ),
-    ).toBe("not-asked")
-    expect(source.calls.filter((call) => call[0] === "send")).toHaveLength(sends)
-    expect(store.getState().workspace.outbox.a).toEqual([failed])
-    source.emit({
-      kind: "session",
-      session: summary("a", "desktop", 1000, "idle", { model: opus, revision: 2 }),
-    })
-    await settle()
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    source.emit({
-      kind: "session",
-      session: summary("a", "desktop", 1000, "idle", { model: next, revision: 3 }),
-    })
-    await settle()
-    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
-    expect(
-      await store.dispatch(
-        resendMessage({ sessionId: "a", messageId: failed.id, initiator: "person" }),
-      ),
-    ).toBe("sent")
-  })
-  it.each([false, true])(
-    "settles a reconciled receipt after newer source B (intermediate A observed: %s)",
-    async (includeA) => {
-      const { source, store } = await ready()
-      const other = { provider: opus.provider, modelId: "claude-fable-5-1" }
-      source.setModel = async (_id, _model, id) => {
-        if (includeA)
-          source.emit({
-            kind: "session",
-            session: summary("a", "desktop", 1000, "idle", { model: next, revision: 2 }),
-          })
-        source.emit({
-          kind: "session",
-          session: summary("a", "desktop", 1000, "idle", { model: other, revision: 3 }),
-        })
-        return { ...receipt(id), sourceReconciled: true }
-      }
-      await store.dispatch(changeModel({ sessionId: "a", model: next }))
-      await settle()
-      expect(selectNextModel(store.getState(), "a")).toEqual(other)
-      expect(modelChanging(store.getState().workspace, "a")).toBe(false)
-      expect(store.getState().workspace.modelChoices.a).toBeUndefined()
-      await store.dispatch(
-        sendMessage({ sessionId: "a", text: "after source B", initiator: "person" }),
-      )
-      expect(source.calls.find((call) => call[0] === "send")?.[1]).toMatchObject({
-        model: other,
-        text: "after source B",
-      })
-    },
-  )
-  it("keeps a completed ACK without reconciliation fenced but permits deliberate recovery", async () => {
-    const { source, store } = await ready()
-    let calls = 0
-    source.setModel = async (_id, model, id) => {
-      calls++
-      if (calls === 2)
-        source.emit({
-          kind: "session",
-          session: summary("a", "desktop", 1000, "idle", { model, revision: 2 }),
-        })
-      return { ...receipt(id), model: model.modelId, sourceReconciled: calls === 2 }
-    }
-    store.dispatch(setComposerText({ sessionId: "a", text: "still mine" }))
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    expect(modelRequesting(store.getState().workspace, "a")).toBe(false)
-    expect(
-      await store.dispatch(
-        sendMessage({ sessionId: "a", text: "still mine", initiator: "person" }),
-      ),
-    ).toBe("not-asked")
-    await store.dispatch(changeModel({ sessionId: "a", model: opus }))
-    expect(calls).toBe(2)
-    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
-    expect(store.getState().workspace.composerText.a).toBe("still mine")
-  })
-
-  it("permits deliberate recovery after uncertainty with a retained Changing journal", async () => {
-    const { source, store } = await ready()
-    let calls = 0
-    source.setModel = async (_id, model, id) => {
-      calls++
-      if (calls === 1) {
-        source.emit({
-          kind: "transcript",
-          transcript: {
-            ...emptyTranscript("a"),
-            revision: 2,
-            modelControl: {
-              pending: {
-                requestId: id,
-                requestedModel: model.modelId,
-                status: "changing",
-              },
-            },
-          },
-        })
-        throw new WorkspaceModelError("unavailable", true)
-      }
-      return { ...receipt(id), sourceReconciled: false }
-    }
-    store.dispatch(setComposerText({ sessionId: "a", text: "keep draft" }))
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    await settle()
-    expect(store.getState().workspace.modelChoices.a?.state).toBe("recovery_required")
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    expect(
-      await store.dispatch(
-        sendMessage({ sessionId: "a", text: "keep draft", initiator: "person" }),
-      ),
-    ).toBe("not-asked")
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(calls).toBe(2)
-    expect(store.getState().workspace.composerText.a).toBe("keep draft")
-    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-  })
-
-  it("keeps an outstanding local call disabled under a Changing frame", async () => {
-    const { source, store } = await ready()
-    let done!: (value: ModelReceipt) => void
-    let id = ""
-    let calls = 0
-    source.setModel = async (_session, model, requestId) => {
-      calls++
-      id = requestId
-      source.emit({
-        kind: "transcript",
-        transcript: {
-          ...emptyTranscript("a"),
-          revision: 2,
-          modelControl: {
-            pending: { requestId, requestedModel: model.modelId, status: "changing" },
-          },
-        },
-      })
-      return new Promise<ModelReceipt>((resolve) => {
-        done = resolve
-      })
-    }
-    const first = store.dispatch(changeModel({ sessionId: "a", model: next }))
-    await settle()
-    expect(modelRequesting(store.getState().workspace, "a")).toBe(true)
-    await store.dispatch(changeModel({ sessionId: "a", model: next }))
-    expect(calls).toBe(1)
-    done(receipt(id))
-    await first
-  })
-
-  it.each([next, opus])(
-    "permits a deliberate %j check in a fresh window with retained Changing",
-    async (target) => {
-      const { source, store } = await ready()
-      let calls = 0
-      source.setModel = async (_id, _model, id) => {
-        calls++
-        return receipt(id)
-      }
-      source.emit({
-        kind: "transcript",
-        transcript: {
-          ...emptyTranscript("a"),
-          revision: 2,
-          modelControl: {
-            pending: {
-              requestId: "retained-request",
-              requestedModel: next.modelId,
-              status: "changing",
-            },
-          },
-        },
-      })
-      await settle()
-      expect(store.getState().workspace.modelChoices.a).toBeUndefined()
-      expect(modelRequesting(store.getState().workspace, "a")).toBe(false)
-      expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-      await store.dispatch(changeModel({ sessionId: "a", model: target }))
-      expect(calls).toBe(1)
-      expect(modelChanging(store.getState().workspace, "a")).toBe(true)
-    },
-  )
 })

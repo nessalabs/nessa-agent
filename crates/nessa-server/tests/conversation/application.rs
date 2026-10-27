@@ -2858,6 +2858,35 @@ struct GatedCreateRepository {
     started: Notify,
 }
 impl ConversationRepository for GatedCreateRepository {
+    fn begin_agent_switch(
+        &self,
+        request: crate::conversation::application::ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.inner.begin_agent_switch(request)
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.inner.pending_agent_switch(id)
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.inner.agent_switch(id, request_id)
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.inner.finish_agent_switch(id, request_id, state)
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -4452,7 +4481,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
 }
 
 #[tokio::test]
-async fn changed_configuration_retains_history_and_reports_exact_opening_failure() {
+async fn a_context_only_fingerprint_change_opens_fresh_and_keeps_the_conversation() {
     let (service, provider, repository, storage) = fixture(ConversationLimits::default());
     let id = id();
     repository.records.lock().unwrap().insert(
@@ -4484,6 +4513,7 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         invocations: vec![],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     lease
@@ -4499,28 +4529,41 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         .await
         .unwrap();
     drop(lease);
-    for _ in 0..2 {
-        assert!(matches!(
-            service.read(id.clone(), caller("panel", "read")).await,
-            Err(ConversationError::Agent(AgentError::Storage(
-                StorageError::IdentityMismatch
-            )))
-        ));
-    }
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
-    let lease = storage.open(session_id.clone()).await.unwrap();
-    let saved = SessionSnapshot::load_saved(lease.as_ref(), &session_id)
+    // Same provider and model, a different context fingerprint. The saved
+    // native session is not resumed; a new one is opened and recorded with
+    // the fingerprint that opened it. The conversation itself stays.
+    service
+        .read(id.clone(), caller("panel", "read"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    let opened = provider.provider_opens.lock().unwrap().clone();
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].1, None);
+    // The attached agent holds the storage lease, so the saved identity is
+    // read without taking it.
+    let saved = storage
+        .read_committed(session_id.clone())
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .clone();
+    assert_eq!(saved.provider_context.recorded(), Some(&opened[0].0));
+    assert_ne!(
         saved.provider_context.recorded().unwrap().as_str(),
         "retained-context"
     );
     assert_eq!(
         saved.provider,
-        ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap()
+        ProviderIdentity::new("gateway-test", "test", "test").unwrap()
     );
+    service
+        .read(id.clone(), caller("panel", "read-again"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     service.shutdown().await.unwrap();
 }
 
@@ -4633,6 +4676,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             id.clone(),
             caller("panel", "create"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,
@@ -4754,6 +4798,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             id.clone(),
             caller("panel", "create"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,
@@ -4886,6 +4931,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
                 stranded.clone(),
                 caller("panel", "create"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Known(AgentId::Codex)),
                     model: None,
                     approval_mode: None,
@@ -5020,6 +5066,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
                 id.clone(),
                 caller("panel", "create"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Known(AgentId::Codex)),
                     model: None,
                     approval_mode: None,
@@ -5092,6 +5139,7 @@ async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written
                 id.clone(),
                 caller("panel", "create"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Known(AgentId::Codex)),
                     model: None,
                     approval_mode: None,
@@ -5126,6 +5174,7 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
             id.clone(),
             caller("panel", "reopen"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,
@@ -5163,6 +5212,7 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
             existing,
             caller("panel", "reopen"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Unknown),
                 model: None,
                 approval_mode: None,
@@ -5182,6 +5232,7 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
                 fresh,
                 caller("panel", "create-unknown"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Unknown),
                     model: None,
                     approval_mode: None,
@@ -5488,6 +5539,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
             id(),
             caller("panel", "first"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,

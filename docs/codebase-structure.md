@@ -73,6 +73,9 @@ src-tauri/src/
     contracts/            what other contexts and the frontend may see
 src-tauri/examples/
   page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
+    server/              bounded HTTP control fixture's portable real-socket, fragmented-request and deadline regressions
+src-tauri/tests/
+  page_load_server.rs     runs the fixture regressions in the desktop host suite
 verification/             scripts that drive real browsers against the running app
   desktop/                the desktop window: CHECKLIST.md, scripts/, scripts/lib/
 ```
@@ -264,12 +267,14 @@ against a private scripted gateway.
   session groups, the new-session lifecycle, and what a pane shows —
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the
-  `WorkspaceSource` port and pure use cases over the workspace's state),
+  `WorkspaceSource` port and pure use cases over the workspace's state, including
+  each chat's right-panel tabs in `usecases/chat-panel.ts`),
   `adapters/` (the Redux slice, commands — one list in `store/commands.ts`,
   implemented for the index, the panes, and the session in
   `store/index-commands.ts`, `store/pane-commands.ts`, and
   `store/session-commands.ts`, [the split](design/workspace-shell-split.md) —
-  effects, typed hooks, selectors and
+  effects, typed hooks, selectors, the session a pane still shows after
+  the source removes it (`store/remembered-session.ts`), and
   the split panes' source in `store/`; the gateway's source and its mapping
   of conversation views in `gateway/` (its `fake-gateway.ts` keeps SDK-typed
   answer records and captured callbacks for tests and the
@@ -280,9 +285,10 @@ against a private scripted gateway.
   keys and focus in `dom/`; the
   host callbacks each place gives a widget's view in
   `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
-  that only arrange them; `ui/panes/` a session's pane, a widget's
-  (`widget-pane.tsx`) and the window over them (`widget-window.tsx`), which
-  share one header bar (`pane-header-frame.tsx`);
+  that only arrange them; `ui/panes/` a session's pane and the window over
+  them (`widget-window.tsx`), which share one header bar
+  (`pane-header-frame.tsx`); `ui/chrome/panel-content.tsx` a chat's right
+  panel, its widgets as tabs;
   `ui/overview/` the Agents overview, with its rules in `model/overview/`;
   the list uses immediate final placement, while `settling.ts` holds an
   answered request until the source catches up, following ADR 238),
@@ -632,8 +638,9 @@ path the caller trusts, and a `_beneath` one that walks a relative path down
 from an already-verified root, refusing anything that is not a private
 directory of this user's and never following a symbolic link. A caller whose
 tree can be written to by anything else uses the second.
-`create_private_directory_tree_beneath` establishes a nested private tree one
-name at a time. Unix syncs each parent before descent and the final leaf before
+`create_directory_exclusive` creates one new private directory and leaves an
+existing path in place. `create_private_directory_tree_beneath` establishes a
+nested private tree one name at a time. Unix syncs each parent before descent and the final leaf before
 success. Windows revalidates the anchored tree because it has no directory-fsync
 equivalent; sinks flush record files before atomic publication. The
 [storage owner](../crates/nessa-local-storage/README.md) documents native
@@ -740,7 +747,9 @@ receiver holding and linkage before the shared conversation-access policy may
 see a first-party Person. Its Cedar adapter under
 `conversation/infrastructure/owner_phone_policy/cedar/` owns only purpose linkage,
 method and input restrictions; `access_policy/cedar/` remains the single actual
-conversation target and catalogue entry policy owner. The source's admitted
+conversation target and catalogue entry policy owner.
+`conversation/infrastructure/usage_limit_policy/cedar/` owns who may change the
+gateway usage-limit preference. The source's admitted
 reader and caller travel together through bounded catalogue workers. The receiver
 profile hash consumes each enforcing bundle's owning sources, so an actual
 policy change fences saved read epochs. Server fixtures split mounted discovery,
@@ -929,6 +938,14 @@ serializable state. Client regressions live in
 `adapters/store/prepared-operations.test.ts`. See
 [prepared submissions](design/prepared-submissions.md) for ordering and ownership.
 
+`crates/nessa-server/src/external_events/` owns optional inbound event admission.
+Its `domain/value_objects` bounds delivery identities, `application` rechecks the
+binding's current Auth/Cedar authority and asks the existing durable submit owner,
+and `entrypoint` verifies bounded signed HTTP envelopes. It creates no listener;
+production composition does not mount it. Tests under
+`crates/nessa-server/tests/external_events/` drive loopback HTTP through the SQLite
+command store and deterministic SDK execution. See [external events](design/external-events.md).
+
 `crates/nessa-server/src/conversation/` groups durable conversation ownership and
 access (domain), shared Agent orchestration (application), and private
 metadata/audit adapters (infrastructure). The conversation's identity and summary,
@@ -973,14 +990,36 @@ source permission or socket capacity. Its lifecycle tests live under
 `tests/core/read_workers.rs`; record-specific admission tests stay with their
 source adapter. Attachment adapters consume this owner when activated.
 
+`conversation/application/service/scheduled_messages.rs` owns continuation planning and delivery; `infrastructure/scheduled_messages.rs` and its SQL dataset own preference receipts, history fences, and per-selection-request causal invalidation. The submitting fence also retains bounded command identity and the canonical digest shared with ordinary submit. Deletion scrubs payload and grant identifiers while retaining these non-content facts for exact command-receipt recovery. `service/model_changes.rs` and `service/handoffs.rs` commit invalidation before marking a model or agent selection applied. The invalidation kind keeps model and agent requests in distinct namespaces; an old request retries its recorded invalidation rather than targeting a later limit. The dataset is new in #1075 and stays at version 1; earlier development copies are recreated, without a migration.
+
+The scheduled-continuation application and durable-adapter recovery regressions
+live in `crates/nessa-server/tests/conversation/scheduled_messages.rs`, loaded by
+the service module so they can force its lease and retry boundaries.
+
+Conversation handoffs use `conversation/application/service/handoffs.rs` for
+switch and fork orchestration, `application/agent_switches.rs` for the durable
+switch contract, and `infrastructure/store/agent_switches.rs` for its metadata
+journal. SDK `application/agent_execution/sessions/handoffs.rs` owns handoff
+identity, folding, and carried-history assembly; domain
+`agent_execution/prompts/value_objects/carried_history.rs` owns bounded carried
+values. The [handoff design](design/conversation-handoffs.md)
+maps these owners to their regressions; usage-limit invalidation belongs to
+the existing scheduler owner before an applied switch is committed.
+
 `conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`, with unchanged-preset publication/recovery in `tests/conversation/approval_mode/unchanged.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
-`product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
+`product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`, with scoped-list privacy and cancellation tests under `subscriptions/paired_lists.rs`; `paired_lists/stress.rs` owns seeded catalogue histories and `paired_lists/settlement.rs` gates final reply-summary publication to test their completion boundary. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
+
+Usage-limit preference commands in the workspace source and classic panel's
+`src/conversation/adapters/gateway/effects.ts` complete after their existing
+follow owners apply fresh snapshots, with old subscription closes acknowledged
+before reopening. Workspace ordering regressions live in
+`gateway-source-usage-limit.test.ts`; panel regressions stay in `effects.test.ts`.
 
 `product/subscription/events.rs` follows committed semantic events through the same connection and delivery owners. `conversation/application/service/event_read.rs` owns target admission, shared `EventProgress` correlation of reader outputs with their start/prior checkpoint, and the metadata-only projection from the SDK reader; it never opens an Agent. Event consumers share that continuity validator before publishing data or retaining checkpoints. Event subscriptions retain a replay cursor rather than replacing a conversation view. Their socket regressions are `tests/product/socket/subscriptions/events.rs`, with delivery deadline tests in `tests/product/subscription_event_delivery.rs`; shared continuity and projection regressions are `tests/conversation/event_read.rs`.
 
-Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
+Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, admits a device's grant-scoped list and observation while preserving peer refusals, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -1314,7 +1353,12 @@ Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives one
 turn-level activity row from the shared Transcript; `ui/turn-activity.tsx` opens
 its ordered thought and tool detail. Neither parses provider wire formats.
 Runtime-owned declined-review notices use their own ordered `local_notice` part
-and stable execution-scoped identity. The gateway upserts selection with its later
+and stable execution-scoped identity. A stopping refusal names the rule and the
+tool in that sentence. A hook that ends the turn or closes the session names the
+tool and the hook's reason, as a hook notice. A deadline that settled its review
+is a deadline notice. A review notice, a hook notice, and a deadline notice
+may share one decimal; `noticeKind` says which decision the part is. Admission
+checks each identity inside its own type. The gateway upserts selection with its later
 local write evidence before the agent-stream adapter renders it; it is not a
 permission decision, provider message, tool failure, or execution status.
 `ui/transcript.tsx` renders a turn's terminal status once at row level,
@@ -1381,7 +1425,7 @@ and reuses a generation only for the complete desired command ([ADR 689](adr/689
 - An update never runs two gateways at once. A stale managed service is asked to retire over `SIGUSR2`, must durably acknowledge with matching identity before anything else happens, and is only then booted out; the replacement is bootstrapped after that. A retirement that is not acknowledged returns an error with the old service still running, rather than booting out on a hope.
 - `startup.rs` reads `launchctl print`'s exit fields in the shapes launchd actually prints, checked against it rather than assumed: `last exit code = 0`, `(never exited)`, a bare number, a sysexits number annotated as `78: EX_CONFIG`, `last terminating signal = Segmentation fault: 11` (which replaces the exit code line rather than joining it), and `last exit reason = JETSAM_…`. A missing program is launchd's own `78: EX_CONFIG`, not the 126 or 127 a shell would report, so that is what names an unlaunchable runtime. A signal outranks an exit code, and a signal line that cannot be read resolves to unknown rather than falling back to a code it contradicts.
 - Readiness stops waiting once three consecutive half-second checks agree the process exited and was not replaced, well inside launchd's five-second restart throttle, so a crash loop reports in about a second and a half instead of at the seventy-five-second deadline. A live process may take sixty seconds to answer and still succeeds. The port, launchd and the clock reach it through `ServiceWatch`, so the timing is tested rather than asserted: a fake advances a virtual clock when the loop sleeps and records the instant of every `launchctl print`. That covers a slow-but-healthy start keeping its whole deadline, a crash loop giving up inside two seconds, a process returning between deaths restarting the count, and the subprocess staying spaced at the liveness interval rather than running every poll. Changing any of the three constants fails those tests. The panel gets one sentence, naming the cause when the server named one, and the exit status, log tail and readiness message go to the app's log. An exit line the host cannot read resolves to unknown, which never shortens the wait; the deadline is unchanged for a process that is alive.
-- `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, and verifies full-tree parity with the packaging digest before the exclusive rename. A published generation is validated before any service change. An unpublished generation is launched from the bundle first; the server advertises that launch's fingerprint only when the tree digest matches it. Its copy is published after that service is up, once the empty-cleanup `stage-runtime` plan is accepted, and surface readiness does not wait for the copy to finish. The injected launchd adapter remembers a successful validation only for the exact path, fingerprint and private root directory filesystem identity, so later reconciliation does not hash the full tree again; a different or replaced generation is validated normally. Existing versions are retained. A published generation's launchd arguments name that directory; an unpublished generation launches from the bundle, and its copy starts only after the data directory is prepared and the empty-cleanup `stage-runtime` plan is accepted. No search path derives from it — the gateway addresses `nessa`, `node`, the ACP entry and `nessa-mcp` absolutely, so the staged directory is on neither the service's `PATH` nor the agent's. Tests cover cache identity, cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file metadata, corrupt/existing versions and interrupted attempts.
+- `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, and verifies full-tree parity with the packaging digest before the exclusive rename. A published generation is validated before any service change. An unpublished generation is launched from the bundle first; the server advertises that launch's fingerprint only when the tree digest matches it. Its copy is published after that service is up, once the empty-cleanup `stage-runtime` plan is accepted, and surface readiness does not wait for the copy to finish. The copy is one `clonefile` of the source tree, then one thread sealing each directory (mode `0700` and the same extended-attribute normalization as a file) and each file, then `sync_all`; a volume that cannot clone copies one file at a time. Progress counts files whose `sync_all` has returned and is a host event separate from gateway startup. The host retains the latest report, and a bundled window that subscribes afterwards reads that snapshot. The injected launchd adapter remembers a successful validation only for the exact path, fingerprint and private root directory filesystem identity, so later reconciliation does not hash the full tree again; a different or replaced generation is validated normally. Existing versions are retained. A published generation's launchd arguments name that directory; an unpublished generation launches from the bundle, and its copy starts only after the data directory is prepared and the empty-cleanup `stage-runtime` plan is accepted. No search path derives from it — the gateway addresses `nessa`, `node`, the ACP entry and `nessa-mcp` absolutely, so the staged directory is on neither the service's `PATH` nor the agent's. Tests cover cache identity, cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file and directory metadata, corrupt/existing versions and interrupted attempts.
 - `src-tauri/src/gateway/infrastructure/macos/pruning.rs` collects the staged versions nothing can be running, under the same per-label lock, once the service has advertised its identity. `removable` is the whole rule and is pure: a published fingerprint directory goes only when it is neither the registered nor the running version and neither an unanswered retirement request nor an unacknowledged fence names it. `RetirementEvidence` carries `retired` for exactly that distinction: admission fencing needs only a recorded cause, while collection needs to know whether the old gateway finished and was booted out. An interrupted `.staging-` attempt goes because holding the lock means nobody is staging; every other name is left alone. `RuntimeVersions` is the directory seam, so the rule is tested without a filesystem and the real `LabelDirectory` revalidates each entry as a directory this user owns before removing it. No single entry can stop the pass: a refused removal, an entry the directory will not yield, and an entry with no valid text name are each reported and stepped over while the recognised versions beside them are still collected. Only a directory that cannot be listed at all ends the pass. What is reported is typed rather than a message string, so each line says what actually happened: a path appears only for an entry a removal was really attempted on, and a lossy rendering of an unusable name is never presented as somewhere to look. Failures are reported with their path and never reach registration's result. Reconciliations that return an error collect nothing, because the version they were replacing may still be running.
 - `crates/nessa-server/src/desktop_runtime/` owns validated upgrade correlation, the admission-and-cleanup retirement use case, and private request/result/audit files. A managed old gateway stays alive until it has durably acknowledged retirement; launchd performs replacement only after that acknowledgement.
 - `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths. Before desktop health is published, the configured fingerprint must be both the manifest field and the packaging digest of the tree being served. Managed OpenCode launch resolution remains live in `composition/current_agent.rs`.
@@ -1681,7 +1725,18 @@ committed, then releases it and reads, macs, and publishes from those
 snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
 `environment/outbox/` under each directory's `outbox.lock`, within the files and bytes one lease may keep, and writes the bundle. After a deletion, unshare, credential revocation, or pairing cancellation commits, the gateway records that fence through `infrastructure/cedar` without taking admission and without publishing a bundle. The Cedar decision is appended to `backup/inventory-decisions.jsonl` before the log is written. The
 mac key stays beside the deletion inventory and is not part of the bundle.
-Restore and quarantine are not in this module.
+`domain/restore.rs` decides quarantine paths, the seal, fence omission, and
+which deferred line an open must match. `application/restore.rs` runs stage,
+accept, and open. `infrastructure/quarantine.rs` writes the partial directory,
+reads record JSON, and streams one deferred conversation. It keeps the
+ancestor directory open and runs the lock, the partial tree, the session
+publish, and source retirement through that handle. A checked session or
+sealed file stays on the handle that was written until publication links
+its name.
+`infrastructure/cedar` permits a person or the gateway surface to stage, accept,
+or fetch when the cause is operator, and forbids a device, peer, environment
+peer, or worker. The ordering table is
+[quarantined restore](design/quarantined-restore.md).
 
 The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
 and `composition/backup_verification.rs`, without gateway bootstrap.
@@ -1704,7 +1759,9 @@ quarantine/import ordering; it acquires no activation or destination capability.
 `composition/backup_output.rs` owns JSON output for both offline commands.
 `tests/backup/restore_planning.rs` and `tests/backup_restore_plan.rs` cover the
 application decoder refusals and actual process. [Offline restore planning](design/offline-restore-planning.md)
-defines the boundary; #324 storage changes remain separately owned.
+defines that command's boundary; #324 storage changes remain separately owned.
+`tests/backup/restore.rs` covers quarantine, acceptance, audit failure, and the
+oversized-session drill. The plan command does not call those use cases.
 
 ## Attachments
 
@@ -2414,6 +2471,15 @@ for states and the Claude internal-error limitation.
 The panel's causal recovery integration test is
 `src/conversation/adapters/store/authentication-recovery.test.tsx`: local send,
 retry and replacement use cases followed by the real transcript renderer.
+
+## Isolated Rust test completion
+
+[`scripts/rust-test-support/`](../scripts/rust-test-support/README.md) owns the
+shared test-only direct-child watchdog used by SDK ownership-fault tests and
+native-device owner-original preparation tests. Startup and test execution have
+separate bounded deadlines; channel completion inside the child follows actual
+work. Captured diagnostics, exact test execution and kill/wait remain parent
+checks. This infrastructure changes no product lifecycle or statechart.
 
 ## Container process cleanup acceptance
 

@@ -17,6 +17,8 @@ import {
   createSubscriptionGate,
   subscriptionLimits,
   viewEntryBounds,
+  type Channel as WireChannel,
+  type ChannelCreateParams,
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
@@ -51,6 +53,18 @@ export type FakeGatewayClient = GatewayClient &
       Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
   }
 
+/** The default channel, as the gateway lists it first. */
+const defaultChannel: WireChannel = {
+  channelId: "default",
+  name: "Conversations",
+  folder: "/workspace",
+  folderMade: false,
+  agent: null,
+  model: null,
+  approvalMode: "ask",
+  createdAtMs: 0,
+}
+
 const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
 
 /** Canonical identities for named test conversations; display names stay separate. */
@@ -76,13 +90,26 @@ type Method =
   | "stop"
   | "withdraw"
   | "setApprovalMode"
+  | "setUsageLimitAutoContinue"
   | "setModel"
+  | "switchAgent"
+  | "fork"
   | "read"
   | "archive"
   | "rename"
   | "delete"
   | "permissionRules"
   | "revokePermissionRule"
+  | "listChannels"
+  | "createChannel"
+
+/** A turn's reply as a fork copies it: its text, joined. */
+function turnReply(turn: ConversationView["messages"][number]): string | undefined {
+  const text = turn.parts
+    .flatMap((part) => (part.kind === "text" ? [part.text] : []))
+    .join("")
+  return text || undefined
+}
 
 type AnswerArgs = Parameters<ConversationApi["answer"]>
 type AnswerResult = Awaited<ReturnType<ConversationApi["answer"]>>
@@ -296,6 +323,7 @@ export function view(
     notes: [],
     unreadable: [],
     unreadableTruncated: false,
+    handoffs: [],
     capabilities: {
       queue: true,
       steer: true,
@@ -323,6 +351,7 @@ export function view(
     title: null,
     approvalMode: "ask",
     approvalModes: [{ id: "ask", name: "Ask", description: "Ask before tools." }],
+    model: "unselected",
     ...change,
   }
 }
@@ -346,6 +375,16 @@ export interface FakeGateway {
    * `permissionReview` answers with, as the review's live owner holds it.
    */
   readonly reviews: Map<string, Unkeyed<ConversationPermission>>
+  /**
+   * The person's channels past the default one, oldest first, each with what
+   * made it, as `channel.list` answers them; `channel.create` adds to it, once
+   * per request id as the gateway does.
+   */
+  readonly channels: {
+    readonly requestId: string
+    readonly params: ChannelCreateParams
+    readonly channel: WireChannel
+  }[]
   /** Whether a list names every conversation. */
   complete: boolean
   /**
@@ -419,6 +458,7 @@ export function fakeGateway(
   const views = new Map<string, ConversationView>()
   const active = new Map<string, string>()
   const reviews = new Map<string, ConversationPermission>()
+  const channels: FakeGateway["channels"] = []
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
@@ -671,12 +711,80 @@ export function fakeGateway(
             effect: "nextTurn",
           }
         }) as never,
+      // As the gateway: the conversation carries on under the agent and
+      // model asked for, and its view lists the switch after its last turn.
+      switchAgent: (...args) =>
+        answer("switchAgent", args, () => {
+          const [id, agent, model, options] = args
+          const requestId = options?.requestId ?? "switch-agent"
+          const current = views.get(id)
+          if (!current) return { requestId, applied: false }
+          const last = current.messages.at(-1)?.executionId
+          views.set(id, {
+            ...current,
+            model,
+            handoffs: [
+              ...current.handoffs,
+              {
+                handoffId: `switch-${requestId}`,
+                kind: "switch",
+                atMs: current.serverNowMs,
+                ...(last === undefined ? {} : { afterExecutionId: last }),
+                from: {
+                  ...(current.runtime?.agent ? { agent: current.runtime.agent } : {}),
+                  model: current.model ?? "",
+                },
+                to: { agent, model },
+              },
+            ],
+            runtime: current.runtime && { ...current.runtime, agent, model },
+          })
+          return { requestId, applied: true }
+        }) as never,
+      // As the gateway: a new conversation on the source's model, whose view
+      // lists the source's turns as the fork it began as, and says nothing
+      // of its own yet.
+      fork: (...args) =>
+        answer("fork", args, () => {
+          const [sourceId, options] = args
+          const conversationId = options?.conversationId ?? ""
+          const source = views.get(sourceId) ?? view(sourceId)
+          if (!views.has(conversationId))
+            views.set(conversationId, {
+              ...view(conversationId, { revision: "forked" }),
+              model: source.model,
+              approvalMode: source.approvalMode,
+              title: source.title,
+              handoffs: [
+                {
+                  handoffId: `fork-${options?.requestId ?? conversationId}`,
+                  kind: "fork",
+                  atMs: source.serverNowMs,
+                  turns: source.messages.map((turn) => ({
+                    ...(turn.userText ? { said: turn.userText } : {}),
+                    ...(turnReply(turn) ? { reply: turnReply(turn) } : {}),
+                  })),
+                },
+              ],
+            })
+          const row = rows.get(sourceId)
+          if (row && !rows.has(conversationId))
+            rows.set(conversationId, { ...row, conversationId })
+          return { conversationId }
+        }) as never,
       setApprovalMode: (...args) =>
         answer("setApprovalMode", args, () => {
           const [conversationId, mode] = args
           const current = views.get(conversationId)
           if (current) views.set(conversationId, { ...current, approvalMode: mode })
           return { requestId: "set-approval-mode", mode }
+        }) as never,
+      setUsageLimitAutoContinue: (...args) =>
+        answer("setUsageLimitAutoContinue", args, () => {
+          const enabled = args[0] === true
+          for (const [id, current] of views)
+            views.set(id, { ...current, usageLimitAutoContinue: enabled })
+          return { requestId: "usage-limit", enabled }
         }) as never,
       archive: (...args) =>
         answer("archive", args, () => {
@@ -707,6 +815,31 @@ export function fakeGateway(
           requestId: "revoke",
           applied: false,
         })) as never,
+    },
+    channels: {
+      list: () =>
+        answer("listChannels", [], () => ({
+          channels: [defaultChannel, ...channels.map((held) => held.channel)],
+          complete: true,
+        })) as never,
+      create: (params) =>
+        answer("createChannel", [params], () => {
+          const held = channels.find((entry) => entry.requestId === params.requestId)
+          if (held) return held.channel
+          const channelId = `ch_${"a".repeat(9)}${"abcdefghijklmnopqrstuvwxyz234567"[channels.length % 32]}`
+          const channel: WireChannel = {
+            channelId,
+            name: params.name,
+            folder: params.folder ?? `/data/channels/${channelId}`,
+            folderMade: params.folder === undefined,
+            agent: params.agent,
+            model: params.model,
+            approvalMode: params.approvalMode ?? "ask",
+            createdAtMs: channels.length + 1,
+          }
+          channels.push({ requestId: params.requestId, params, channel })
+          return channel
+        }) as never,
     },
     workspace: {
       publish: (_windowId, revision, window) => {
@@ -814,6 +947,7 @@ export function fakeGateway(
     views,
     active,
     reviews,
+    channels,
     once(method: Exclude<Method, "answer">, behaviour: Behaviour) {
       overrides.set(method, [...(overrides.get(method) ?? []), behaviour])
     },

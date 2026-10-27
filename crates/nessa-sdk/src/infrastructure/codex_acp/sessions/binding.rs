@@ -33,6 +33,10 @@ use std::{
 };
 use tokio::process::Command;
 
+/// The provider name every session this binding opens records in its
+/// history, as its provider identity.
+pub const PROVIDER_NAME: &str = "codex-acp";
+
 /// Immutable composition factory; opening twice creates independent process scopes.
 #[derive(Clone)]
 pub struct CodexAcpProvider {
@@ -147,7 +151,7 @@ impl CodexAcpProvider {
                 "selected model does not support tools".into(),
             ));
         }
-        ProviderIdentity::new("codex-acp", capabilities.model().model_id(), "")?;
+        ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
             capabilities,
@@ -283,10 +287,11 @@ impl CodexAcpProvider {
     fn launch_command(&self, allowed: bool) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
-            .args(&self.config.arguments)
+            .args(self.config.command_arguments())
             .current_dir(&self.config.workspace)
             .env_clear()
             .envs(&self.config.environment)
+            .envs(&self.config.runtime_environment)
             .envs(&self.config.credential_environment)
             .envs(self.launch_environment(allowed));
         command
@@ -330,9 +335,12 @@ impl AgentProvider for CodexAcpProvider {
         normalized.traces = traces.unwrap_or_else(|| self.traces.clone());
         Ok(Arc::new(normalized))
     }
+    fn launch_fingerprint(&self) -> String {
+        identity::launch_fingerprint(&self.config)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
-            "codex-acp",
+            PROVIDER_NAME,
             self.capabilities.model().model_id(),
             identity::fingerprint(
                 &self.config,
@@ -359,12 +367,17 @@ impl AgentProvider for CodexAcpProvider {
         // and the process factory share that cell, so they cannot diverge.
         let launch = Arc::new(AtomicBool::new(false));
         let profile = self.launch_profile(launch.clone());
-        let process = self.process_factory_following(launch);
+        // This open's credentials, read once for every start of its process.
+        let opened = Self {
+            config: self.config.with_open_credentials(),
+            ..self.clone()
+        };
+        let process = opened.process_factory_following(launch);
         let traces = self.traces.clone();
         Box::pin(async move {
             acp_binding::open(
                 process,
-                self.config.clone(),
+                opened.config.clone(),
                 self.capabilities.clone(),
                 profile,
                 self.audit.clone(),

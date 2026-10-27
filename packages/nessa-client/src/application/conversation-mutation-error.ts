@@ -122,6 +122,7 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.InvalidRequest:
     case ConversationErrorCode.AgentStartupDeadline:
     case ConversationErrorCode.ConversationNotFound:
+    case ConversationErrorCode.ChannelNotFound:
     case ConversationErrorCode.ConversationCapacity:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.AttachmentNotFound:
@@ -217,6 +218,10 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AttachmentCapacity:
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
+    case ConversationErrorCode.UploadTicketInvalid:
+    case ConversationErrorCode.UploadFailed:
+    case ConversationErrorCode.UnsupportedImage:
+    case ConversationErrorCode.ImageTooLarge:
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:

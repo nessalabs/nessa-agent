@@ -45,6 +45,8 @@ mod env_dial_command;
 mod env_grant_command;
 #[cfg(unix)]
 mod env_serve_command;
+#[cfg(unix)]
+mod github;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;
@@ -57,6 +59,8 @@ mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
 mod relay_command;
+#[cfg(unix)]
+mod tunnel;
 
 mod runtime_config;
 

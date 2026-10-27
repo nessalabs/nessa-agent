@@ -267,13 +267,18 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-heading h2")?.textContent).toBe("Session b")
     expect(host.querySelector(".workspace-bubble code")?.textContent).toBe("cargo")
     // The turn has ended, so its steps are one line until opened.
-    const work = host.querySelector<HTMLButtonElement>(".workspace-work button")
-    expect(work?.textContent).toBe("Ran 2 tools · 1 read, 1 edited")
-    expect(host.querySelector(".workspace-steps")).toBeNull()
+    const work = host.querySelector<HTMLButtonElement>(
+      ".workspace-work [data-slot=tool-trace-line]",
+    )
+    expect(work?.textContent).toContain("Ran 2 tools")
+    expect(work?.getAttribute("aria-expanded")).toBe("false")
     await act(async () => work?.click())
+    expect(work?.getAttribute("aria-expanded")).toBe("true")
     expect(
-      [...host.querySelectorAll(".workspace-steps li")].map((step) => step.textContent),
-    ).toEqual(["ReadCargo.toml", "Editedlib.rs+3−1"])
+      [...host.querySelectorAll("[data-slot=tool-trace-step]")].map(
+        (step) => step.textContent,
+      ),
+    ).toEqual(["ReadCargo.toml", "Editedlib.rs3 additions, 1 deletion+3-1"])
     expect(host.querySelector(".workspace-message-body strong")?.textContent).toBe(
       "the lockfile",
     )
@@ -1135,11 +1140,22 @@ describe("a transcript", () => {
     expect(block?.contains(host.querySelector(".workspace-approval-command"))).toBe(true)
     // Folded or not, Copy Command copies the command as the agent sent it,
     // through the host's clipboard.
+    const copy = host.querySelector<HTMLButtonElement>(".workspace-approval-copy")
+    expect(copy?.closest(".workspace-approval-command-block")?.contains(block)).toBe(true)
+    expect(copy?.getAttribute("aria-label")).toBe("Copy Command")
+    expect(copy?.textContent).toBe("")
+    expect(copy?.querySelector("svg")).not.toBeNull()
     clipboardWrite.mockClear()
-    await act(async () =>
-      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
-    )
+    const said = () => host.querySelector('.workspace-approval-copy-said[role="status"]')
+    expect(said()?.textContent).toBe("")
+    await act(async () => copy?.click())
     expect(clipboardWrite).toHaveBeenCalledWith(steps.join("; "))
+    expect(said()?.textContent).toBe("Copied")
+    // A refusal is said in words and shown by another icon, not only named.
+    clipboardWrite.mockRejectedValueOnce(new Error("denied"))
+    await act(async () => copy?.click())
+    expect(said()?.textContent).toBe("Couldn’t copy")
+    expect(copy?.getAttribute("aria-label")).toBe("Couldn’t Copy")
     await act(async () => unfold?.click())
     expect(unfold?.getAttribute("aria-expanded")).toBe("true")
     expect(command()).toBe(`$ ${steps.join(";\n")}`)
@@ -1459,6 +1475,59 @@ describe("a transcript", () => {
       )
     })
     expect(host.querySelector(".workspace-live")).toBeNull()
+  })
+
+  it("shows a running tool once, in its run's trace", async () => {
+    const { store } = await shown()
+    const update = (revision: number, open: boolean) =>
+      act(async () => {
+        store.dispatch(
+          workspaceActions.updateReceived({
+            update: {
+              kind: "transcript",
+              transcript: {
+                ...conversation,
+                revision,
+                messages: [
+                  ...conversation.messages,
+                  {
+                    id: "live-reply",
+                    role: "agent",
+                    at: 0,
+                    working: true,
+                    parts: open
+                      ? [
+                          {
+                            kind: "step",
+                            step: "run",
+                            label: "sleep 5",
+                            status: "running",
+                          },
+                        ]
+                      : [],
+                  },
+                ],
+                activity: { label: open ? "sleep 5" : "Thinking", since: 0 },
+              },
+            },
+          }),
+        )
+      })
+    await update(2, false)
+    // Before any call, the row is all that says the agent is at work.
+    expect(host.querySelector(".workspace-live")?.textContent).toContain("Thinking")
+    const status = host.querySelector(".workspace-live")
+    await update(3, true)
+    expect(host.querySelector(".workspace-live")).toBeNull()
+    const trace = [...host.querySelectorAll(".workspace-work")].at(-1)
+    expect(trace?.getAttribute("data-status")).toBe("running")
+    expect(trace?.textContent?.split("sleep 5").length).toBe(2)
+    // A screen reader still hears what the agent is on: the trace has no status.
+    expect(host.querySelector('.workspace-live-spoken[role="status"]')?.textContent).toBe(
+      "sleep 5",
+    )
+    // The same status, so the new label is announced as it changes.
+    expect(host.querySelector(".workspace-live-spoken")).toBe(status)
   })
 })
 
@@ -1960,4 +2029,46 @@ it("offers the way back to the latest only half a screen from the end, and retur
     clock.mockRestore()
     Object.assign(globalThis, { ResizeObserver: previous })
   }
+})
+
+describe("usage limit card", () => {
+  it("shows the reset and the project preference, and hides a pure failure mark", async () => {
+    const transcript = transcriptFrom(
+      view("b", {
+        usageLimitAutoContinue: true,
+        messages: [
+          {
+            executionId: "m1",
+            userText: "Hello",
+            attachments: [],
+            files: [],
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: Date.UTC(2026, 9, 21, 16, 0, 0),
+              autoResuming: true,
+            },
+            parts: [],
+          },
+        ],
+      }),
+      1,
+      () => 1,
+      GATEWAY_NOW_MS,
+    )
+    await shown(fakeSource(), transcript)
+    const card = host.querySelector("[data-usage-limit]")
+    expect(card?.textContent).toContain("Usage limit reached")
+    expect(card?.textContent).toContain(
+      "Auto-continue this project's threads when limits reset",
+    )
+    expect(host.querySelector("[data-usage-limit-detail]")?.textContent).toMatch(
+      /^Auto-resuming /,
+    )
+    expect(host.querySelector("[data-turn-terminal]")).toBeNull()
+    expect(
+      host.querySelector<HTMLInputElement>("[data-usage-limit] input")?.checked,
+    ).toBe(true)
+  })
 })

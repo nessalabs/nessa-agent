@@ -1,4 +1,5 @@
 mod acquisition;
+mod agent_switches;
 mod cached;
 mod export;
 mod model_changes;
@@ -12,7 +13,8 @@ use super::catalogue_changes::CatalogueChanges;
 
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
-    CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator, ConversationCatalogue,
+    CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator,
+    ConversationAgentSwitch, ConversationAgentSwitchState, ConversationCatalogue,
     ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
     ConversationListing, ConversationModeApplication, ConversationModeRequest,
     ConversationModeRequestState, ConversationModelApplication, ConversationModelRequest,
@@ -105,9 +107,10 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 2] = [
+static UPGRADES: [Upgrade; 3] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
+    Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -125,15 +128,18 @@ fn schema() -> Result<Schema, OpenError> {
 pub(crate) fn list_query() -> String {
     format!(
         "
-    SELECT {}, {}
+    SELECT {}, {}, {}
     FROM conversations AS c
     JOIN summaries AS s ON s.conversation_id = c.id
     WHERE c.organization = ?1 AND c.owner = ?2 AND s.archived = ?3
       AND NOT EXISTS (SELECT 1 FROM deletions AS d WHERE d.conversation_id = c.id)
+      AND (?5 IS NULL OR {})
     ORDER BY s.updated_at_ms DESC, c.id ASC
     LIMIT ?4",
         acquisition::conversation("c."),
-        acquisition::summary("s.")
+        acquisition::summary("s."),
+        share_grants::held_capabilities("c.id", "?5"),
+        share_grants::granted("c.id", "?5"),
     )
 }
 
@@ -176,7 +182,11 @@ pub struct LocalConversationStore {
     /// still holding the permit, until [`GrantWritePause::release`].
     #[cfg(test)]
     grant_write_pause: Mutex<Option<Arc<GrantWritePause>>>,
+    #[cfg(test)]
+    list_snapshot_pause: Mutex<Option<ListSnapshotPause>>,
 }
+#[cfg(test)]
+type ListSnapshotPause = (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
 impl LocalConversationStore {
     /// Open the database at `path`, in a composition-selected directory that
     /// must be private and owned by this OS user, creating it when absent.
@@ -186,6 +196,7 @@ impl LocalConversationStore {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let connection = nessa_local_database::open(path, &schema()?)?;
         model_changes::validate_shape(&connection)?;
+        agent_switches::validate_shape(&connection)?;
         connection.set_prepared_statement_cache_capacity(cached::STATEMENTS);
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -194,6 +205,8 @@ impl LocalConversationStore {
             grant_gates: share_grants::GrantGates::new(),
             #[cfg(test)]
             grant_write_pause: Mutex::new(None),
+            #[cfg(test)]
+            list_snapshot_pause: Mutex::new(None),
         })
     }
     /// The access policy a share grant change is admitted by, in its
@@ -226,6 +239,18 @@ impl LocalConversationStore {
         self.connection
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pause_list_snapshot(
+        &self,
+        entered: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        *self
+            .list_snapshot_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((entered, resume));
     }
 
     fn run<T: Send + 'static>(
@@ -335,7 +360,10 @@ fn admit_catalogue_target(
 
 /// A paired reader's head: the latest revision among the owner's rows granted
 /// to `receiver`, among `receiver`'s grants and revokes, and among later
-/// journal rows that replaced this receiver or its credential. A change of
+/// journal rows immediately replacing a grant this receiver held, or its
+/// credential. Later replacements after it lost the grant do not move its head
+/// (`a_replaced_receivers_head_stops_at_its_own_replacement`,
+/// `a_revoked_receivers_head_does_not_follow_a_later_grant`). A change of
 /// capabilities or constraints, with the same receiver and credential, is
 /// none of those: it leaves what the receiver reads as it was, and takes no
 /// revision of its own (`docs/design/read-grants.md`, row J4). A revoke, and
@@ -366,8 +394,15 @@ fn granted_head(
                                  ON j.resource_kind = later.resource_kind
                                 AND j.resource_id = later.resource_id
                                 AND j.principal_id = later.principal_id
-                                AND j.sequence < later.sequence
+                                AND j.sequence = (
+                                    SELECT MAX(previous.sequence)
+                                    FROM share_grant_changes AS previous
+                                    WHERE previous.resource_kind = later.resource_kind
+                                      AND previous.resource_id = later.resource_id
+                                      AND previous.principal_id = later.principal_id
+                                      AND previous.sequence < later.sequence)
                                 AND j.receiver_id = ?3
+                                AND j.after <> 'none'
                                 AND (later.receiver_id IS NOT j.receiver_id
                                      OR later.credential_id <> j.credential_id)
                                JOIN conversations AS c ON c.id = later.resource_id
@@ -380,6 +415,35 @@ fn granted_head(
             |row| row.get(0),
         )
         .map_err(failed)
+}
+
+/// Read inside the caller's metadata transaction, so a list's rows and head
+/// observe the same committed grants and summaries.
+fn catalogue_head(
+    connection: &Connection,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+    reader: &Reader,
+) -> Result<CatalogueHead, ConversationError> {
+    let incarnation: String = connection
+        .cached_row(
+            &format!(
+                "SELECT {} FROM catalogue_identity WHERE id = 1",
+                acquisition::text("incarnation", MAX_ID_BYTES, false)
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    let revision = owner_head(connection, organization, owner)?;
+    let revision = match granted_to(reader) {
+        None => revision,
+        Some(receiver) => granted_head(connection, organization, owner, &receiver)?,
+    };
+    Ok(CatalogueHead {
+        incarnation,
+        revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?,
+    })
 }
 
 /// The head and the latest retained row are one fact. No row for a new owner
@@ -944,6 +1008,36 @@ fn write_deletion(
 }
 
 impl ConversationRepository for LocalConversationStore {
+    fn begin_agent_switch(
+        &self,
+        request: ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch> {
+        agent_switches::begin(self, request)
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>> {
+        let id = id.clone();
+        self.run(move |connection| agent_switches::read_switch(connection, &id, None))
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>> {
+        let id = id.clone();
+        let request_id = request_id.to_owned();
+        self.run(move |connection| agent_switches::read_switch(connection, &id, Some(&request_id)))
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch> {
+        agent_switches::finish(self, id, request_id, state)
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -1068,6 +1162,10 @@ impl ConversationRepository for LocalConversationStore {
             }
             if read_mode_request(&transaction, &request.conversation_id, None)?.is_some() {
                 return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if agent_switches::read_switch(&transaction, &request.conversation_id, None)?.is_some()
+            {
+                return Err(ConversationError::RequestConflict);
             }
             if current.approval_mode() != request.prior
                 || current.organization() != &request.organization_id
@@ -1492,29 +1590,84 @@ impl ConversationSummaries for LocalConversationStore {
 }
 
 impl ConversationListing for LocalConversationStore {
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        self.run(|connection| {
+            let mut statement = connection
+                .prepare(
+                    "SELECT organization, owner FROM catalogue_owners \
+                     ORDER BY organization, owner",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(failed)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(failed)?;
+            let mut owners = Vec::with_capacity(rows.len());
+            for (organization, owner) in rows {
+                let organization =
+                    OrganizationId::new(organization).map_err(|_| ConversationError::Metadata)?;
+                let owner = PrincipalId::new(owner).map_err(|_| ConversationError::Metadata)?;
+                owners.push((organization, owner));
+            }
+            Ok(owners)
+        })
+    }
+
     fn list(
         &self,
         organization: &OrganizationId,
         owner: &PrincipalId,
         archived: bool,
         limit: usize,
+        reader: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         let (organization, owner) = (organization.clone(), owner.clone());
+        let reader = reader.clone();
+        #[cfg(test)]
+        let pause = self
+            .list_snapshot_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         // `=` on text is byte for byte, which is `Conversation::allows`'s
         // comparison; the two are held to one answer by
         // `the_list_asks_whose_a_conversation_is_as_the_domain_answers_it`.
         self.run(move |connection| {
             let limit = i64::try_from(limit).map_err(|_| ConversationError::InvalidInput)?;
-            let mut statement = connection.prepare(&list_query()).map_err(failed)?;
+            let transaction = connection.transaction().map_err(failed)?;
+            admit_catalogue_target(&reader, &organization, &owner)?;
+            let head = if granted_to(&reader).is_some() {
+                Some(catalogue_head(
+                    &transaction,
+                    &organization,
+                    &owner,
+                    &reader,
+                )?)
+            } else {
+                None
+            };
+            #[cfg(test)]
+            if let Some((entered, resume)) = pause {
+                entered.wait();
+                resume.wait();
+            }
+            let mut statement = transaction.prepare(&list_query()).map_err(failed)?;
             let mut rows = statement
                 .query(params![
                     organization.as_str(),
                     owner.as_str(),
                     archived,
-                    limit
+                    limit,
+                    granted_to(&reader),
                 ])
                 .map_err(failed)?;
-            let mut listed = ListedConversations::default();
+            let mut listed = ListedConversations {
+                head,
+                ..ListedConversations::default()
+            };
             while let Some(row) = rows.next().map_err(failed)? {
                 let conversation = StoredConversation::from_row(row);
                 let summary = (|| {
@@ -1536,6 +1689,10 @@ impl ConversationListing for LocalConversationStore {
                 match (conversation, summary) {
                     (Some(conversation), Some(summary)) => {
                         listed.conversations.push(ListedConversation {
+                            held: share_grants::stored_capabilities(
+                                row.get(13).map_err(failed)?,
+                                &conversation.id().to_string(),
+                            )?,
                             conversation,
                             summary,
                         });
@@ -1563,12 +1720,13 @@ impl ConversationListing for LocalConversationStore {
         owner: &PrincipalId,
         archived: bool,
         cursor: Option<ObservationCursor>,
+        reader: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         let organization = organization.clone();
         let owner = owner.clone();
+        let reader = reader.clone();
         Box::pin(async move {
-            let head =
-                ConversationCatalogue::head(self, &organization, &owner, &Reader::Owner).await?;
+            let head = ConversationCatalogue::head(self, &organization, &owner, &reader).await?;
             // A head of zero has no descriptor to start a pass from. The
             // catalogue pass refuses a boundary that is not past the
             // completed revision, and both would be zero here.
@@ -1619,7 +1777,7 @@ impl ConversationListing for LocalConversationStore {
                 CataloguePageRequest {
                     organization: organization.clone(),
                     owner: owner.clone(),
-                    reader: Reader::Owner,
+                    reader: reader.clone(),
                     manifest: ManifestRequest {
                         pass: CataloguePass {
                             scope,
@@ -1654,7 +1812,7 @@ impl ConversationListing for LocalConversationStore {
                     self,
                     &organization,
                     &owner,
-                    &Reader::Owner,
+                    &reader,
                     head.incarnation.as_str(),
                     &entry.key.id,
                 )
@@ -1686,6 +1844,7 @@ impl ConversationListing for LocalConversationStore {
                     continue;
                 }
                 conversations.push(ListedConversation {
+                    held: value.descriptor.held,
                     conversation: value.conversation,
                     summary,
                 });
@@ -1720,30 +1879,11 @@ impl ConversationCatalogue for LocalConversationStore {
         reader: &Reader,
     ) -> ConversationFuture<'_, CatalogueHead> {
         let (organization, owner) = (organization.clone(), owner.clone());
-        let receiver = granted_to(reader);
         let reader = reader.clone();
         self.run(move |connection| {
             admit_catalogue_target(&reader, &organization, &owner)?;
             let transaction = connection.transaction().map_err(failed)?;
-            let incarnation: String = transaction
-                .cached_row(
-                    &format!(
-                        "SELECT {} FROM catalogue_identity WHERE id = 1",
-                        acquisition::text("incarnation", MAX_ID_BYTES, false)
-                    ),
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(failed)?;
-            let revision = owner_head(&transaction, &organization, &owner)?;
-            let revision = match receiver {
-                None => revision,
-                Some(receiver) => granted_head(&transaction, &organization, &owner, &receiver)?,
-            };
-            Ok(CatalogueHead {
-                incarnation,
-                revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?,
-            })
+            catalogue_head(&transaction, &organization, &owner, &reader)
         })
     }
 

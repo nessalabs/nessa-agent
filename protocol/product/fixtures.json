@@ -153,6 +153,16 @@
         }
       }
     ],
+    "handoffs": [
+      {
+        "handoffId": "0c1e2d3f4a5b2f1d1c1e3b7a4c7e9a51",
+        "kind": "switch",
+        "atMs": 1700000000500,
+        "afterExecutionId": "run-1",
+        "from": { "agent": "claude", "model": "claude-sonnet-5" },
+        "to": { "agent": "codex", "model": "gpt-5" }
+      }
+    ],
     "title": "Flights to Lisbon",
     "questions": [
       {
@@ -168,6 +178,7 @@
         "description": "The provider requests approval where its native policy requires it."
       }
     ],
+    "model": "claude-sonnet-5",
     "runtime": {
       "agent": "claude",
       "model": "claude-sonnet-5",

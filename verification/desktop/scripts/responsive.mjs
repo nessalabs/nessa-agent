@@ -42,9 +42,9 @@
  *                   that were shown are not drawn
  *   header-picture  from a conversation pane's "…" menu, a picture chosen in the
  *                   file dialog shows in the panes' header bands; a new
- *                   session's home draws it from the pane's top edge, and in
- *                   the window's corner with nothing beside it keeps it clear
- *                   of the window's controls; Use Night Scene takes it back,
+ *                   session's home draws it from the pane's top edge, in the
+ *                   window's corner with nothing beside it too, behind the
+ *                   window's controls; Use Night Scene takes it back,
  *                   and a file that is not an image is refused with why, in
  *                   that pane's header (issue #320)
  *   home-shape      a new session's home in a pane smaller than 640px either
@@ -137,6 +137,9 @@ const longTail =
 // The card's selectors, as page.evaluate can carry them: `css` holds functions (#441).
 const cardSelectors = {
   approvalCard: css.approvalCard,
+  approvalCopy: css.approvalCopy,
+  approvalCommandBlock: css.approvalCommandBlock,
+  approvalDeny: css.approvalDeny,
   approvalActions: css.approvalActions,
   approvalWord: css.approvalWord,
 }
@@ -156,6 +159,11 @@ const checks = {
       throw new CannotRun(`no session row "${names.approvalSession}" in the list`)
     await row.click()
     await need(page, css.approvalCard, "the approval card")
+    await page.locator(css.approvalCommandBlock).first().hover()
+    await page.waitForFunction(
+      (s) => getComputedStyle(document.querySelector(s)).opacity === "1",
+      css.approvalCopy,
+    )
     // A long script shows its first lines until Show All: unfold it, so every word is measured.
     const disclose = page.locator(css.approvalDisclose).first()
     if (await disclose.count()) await disclose.click()
@@ -207,6 +215,23 @@ const checks = {
               .filter((b) => b.getBoundingClientRect().height > lineHeight(b) * 1.9)
               .map((b) => b.textContent.trim()),
             overflow: card.scrollWidth > card.clientWidth + 1,
+            denyLeft: card.querySelector(sel.approvalDeny)?.getBoundingClientRect().left,
+            answersLeft: card
+              .querySelector(sel.approvalDeny)
+              ?.parentElement.getBoundingClientRect().left,
+            copy: (() => {
+              const button = card.querySelector(sel.approvalCopy)
+              const block = card.querySelector(sel.approvalCommandBlock)
+              if (!button || !block) return null
+              const b = button.getBoundingClientRect(),
+                c = block.getBoundingClientRect()
+              return {
+                right: c.right - b.right,
+                top: b.top - c.top,
+                text: button.textContent,
+                icon: !!button.querySelector("svg"),
+              }
+            })(),
           }
         }, cardSelectors)
         const tag = `${width}px${long ? " long" : ""}`
@@ -218,6 +243,18 @@ const checks = {
         if (r.wrapped.length)
           failures.push(`${tag}: button label(s) wrapped: ${r.wrapped.join(", ")}`)
         if (r.overflow) failures.push(`${tag}: the card overflows`)
+        if (Math.abs(r.denyLeft - r.answersLeft) > 1)
+          failures.push(`${tag}: Deny is not left aligned`)
+        if (
+          !r.copy ||
+          r.copy.right !== 2 ||
+          r.copy.top !== 2 ||
+          r.copy.text ||
+          !r.copy.icon
+        )
+          failures.push(
+            `${tag}: Copy Command is not an icon inside the command's upper-right corner`,
+          )
         await shot(
           options,
           page,
@@ -2676,22 +2713,18 @@ checks["header-picture"] = async ({ page, engine, layout, options }) => {
         const image = document.querySelector(`${home} .desktop-header-image`)
         const box = image?.getBoundingClientRect()
         const paneBox = image?.closest(pane)?.getBoundingClientRect()
-        const tokens = getComputedStyle(document.querySelector(surface))
-        const px = (name) => {
-          const probe = document.createElement("div")
-          probe.style.width = tokens.getPropertyValue(name)
-          document.querySelector(surface).append(probe)
-          const width = probe.getBoundingClientRect().width
-          probe.remove()
-          return width
-        }
+        // Where the window's controls end: the titlebar's safe start, in px.
+        const probe = document.createElement("div")
+        probe.style.width = "var(--desktop-titlebar-safe-start)"
+        document.querySelector(surface).append(probe)
+        const safeStart = probe.getBoundingClientRect().width
+        probe.remove()
         return box && paneBox
           ? {
               top: box.top - paneBox.top,
               left: box.left,
               y: box.top,
-              safeStart: px("--desktop-titlebar-safe-start"),
-              titlebar: px("--desktop-titlebar-height"),
+              safeStart,
             }
           : null
       },
@@ -2706,13 +2739,15 @@ checks["header-picture"] = async ({ page, engine, layout, options }) => {
     failures.push(
       `the home's picture starts ${Math.round(beside.top)}px below its pane's top`,
     )
-  // …but, alone in the window's corner, not beneath the window's controls.
+  // …and alone in the window's corner too, behind the window's controls:
+  // from the window's top, and starting under the controls, not after them.
   await hideColumns(page, layout)
   await settled(page)
   const corner = await homePicture()
-  if (corner && corner.left < corner.safeStart && corner.y < corner.titlebar)
+  if (!corner) failures.push("in the window's corner the home draws no picture")
+  else if (corner.y > 0.5 || corner.left >= corner.safeStart)
     failures.push(
-      `in the window's corner the home's picture is drawn beneath the window's controls (${Math.round(corner.left)}, ${Math.round(corner.y)})`,
+      `in the window's corner the home's picture does not run behind the window's controls: it starts at (${Math.round(corner.left)}, ${Math.round(corner.y)}), the controls end at ${Math.round(corner.safeStart)}`,
     )
   await shot(options, page, `header-picture-${engine}-corner`)
 

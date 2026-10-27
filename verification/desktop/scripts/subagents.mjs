@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * Subagents (ADR 329, #330, #331), through the sample source the sample
- * workspace joins: the retry-budget conversation's card opens a pane beside
- * it; the list is in activity order and a closed child is called closed;
+ * workspace joins: the retry-budget conversation's card opens a tab in its
+ * right panel; the list is in activity order and a closed child is called closed;
  * opening a child shows its transcript, which follows a new line at the end
  * and stays put when scrolled up; focus stays in the panel; Escape returns
- * to the list, and from there a pane's Escape changes nothing more while
- * the window's returns to the panes; the list fits a narrow, short pane,
- * and that conversation's header shows its subagents — the busiest first —
- * without overflowing. A click on the stack opens the panel.
+ * to the list, and from there the panel's Escape changes nothing more while
+ * the window's returns to the panes; the list fits the panel of a narrow,
+ * short window, and that conversation's header shows its subagents — the
+ * busiest first — without overflowing. A click on the stack opens the panel.
  *
  * The sample adds three lines to Mara's conversation, at 15s, 25s and 35s
  * after the card is first read (`sample-source.ts`). The follow check waits
@@ -31,14 +31,7 @@ import {
 } from "./lib/perf.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys, names } from "./lib/selectors.mjs"
-import {
-  contentIs,
-  frames,
-  paneCount,
-  paneCountIs,
-  settled,
-  until,
-} from "./lib/workspace.mjs"
+import { contentIs, frames, paneCount, settled, until } from "./lib/workspace.mjs"
 
 /** The panel, cropped, when `--shots` is set. Columns only, so the evidence stays small. */
 async function shot(page, label, file, selector) {
@@ -51,22 +44,25 @@ async function shot(page, label, file, selector) {
 
 const meta = {
   name: "subagents",
-  summary: "subagents panel: list, conversation, follow, Escape, narrow pane",
+  summary: "subagents panel: list, conversation, follow, Escape, a narrow window",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
 Usage: node verification/desktop/scripts/subagents.mjs [options]
 
 Checks, per engine and layout (--only <names> to pick):
-  panel    the card opens a pane beside the conversation; the list order and
-           the closed child; a child opens, focus stays in the panel, the
-           transcript follows then stays put when scrolled up; Escape returns
-           to the list (a pane's next Escape changes nothing; the window's
-           returns to the panes)
-  narrow   the list fits a narrow pane in a short window; the conversation's
-           header shows its subagents, the busiest first, and a click there
-           opens the panel; the title, the stack and the menu stay inside
-           the header, and the title keeps a positive width. A production
+  panel    the card opens a tab in the conversation's right panel, no pane
+           added; the list order, in Ongoing and Ended sections with no
+           avatars or summary, and the closed child; one breadcrumb, the
+           panel tab's, naming the open child; expanded, the chat surface
+           from the window's top with Back to Panel; a child opens, focus
+           stays in the panel, the transcript follows then stays put when
+           scrolled up; Escape returns to the list (the panel's next Escape
+           changes nothing; the window's returns to the panes)
+  narrow   the list fits the panel of a narrow, short window; the
+           conversation's header shows its subagents, the busiest first, and
+           a click there opens the panel; the title, the stack and the menu
+           stay inside the header, and the title keeps a positive width. A production
            Chromium run fails when the click's longest frame exceeds the
            frame budget (budgetMs).
   card-open the card's Open, at the same size, measured the same way. A
@@ -89,18 +85,32 @@ async function onSample(browser, { url, layout, width = 1440, height = 900 }) {
   return opened
 }
 
-async function openPanel(page, failures) {
+/** Whether `open` left the panes as they were: a widget opens in the panel, never a pane. */
+async function opensNoPane(page, open, what, failures) {
   const before = await paneCount(page)
-  await page
-    .locator(css.widgetCard)
-    .getByRole("button", { name: names.openWidget })
-    .click()
-  if (!(await paneCountIs(page, before + 1)))
-    failures.push(
-      `expected ${before + 1} panes after Open, found ${await paneCount(page)}`,
-    )
-  await need(page, css.subagentList, "the subagent list")
+  const result = await open()
+  await need(
+    page,
+    `${css.panelWidget} ${css.subagentList}`,
+    "the subagent list in the panel",
+  )
   await settled(page)
+  const after = await paneCount(page)
+  if (after !== before) failures.push(`${what} changed the panes: ${before} → ${after}`)
+  return result
+}
+
+async function openPanel(page, failures) {
+  await opensNoPane(
+    page,
+    () =>
+      page
+        .locator(css.widgetCard)
+        .getByRole("button", { name: names.openWidget })
+        .click(),
+    "the card's Open",
+    failures,
+  )
 }
 
 function messageCount(page) {
@@ -288,9 +298,23 @@ const checks = {
       .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-subagent-name")))
     if (namesInOrder.join(",") !== "Mara,Idris,Nia,Sol")
       failures.push(`the list is ${namesInOrder.join(", ")}, not Mara, Idris, Nia, Sol`)
-    const summary = await page.locator(css.subagentSummary).innerText()
-    if (summary !== "1 working · 1 planning · 1 stuck · 1 closed")
-      failures.push(`the summary says "${summary}"`)
+    // Sections, as the session list groups its rows; no avatars, no summary.
+    const summary = await page
+      .locator("[data-subagent-group]")
+      .evaluateAll((groups) =>
+        groups.map(
+          (group) =>
+            `${group.getAttribute("data-subagent-group")}:${[
+              ...group.querySelectorAll("[data-subagent-row]"),
+            ]
+              .map((row) => row.getAttribute("data-subagent-name"))
+              .join(",")}`,
+        ),
+      )
+    if (summary.join(" ") !== "ongoing:Mara,Idris,Nia ended:Sol")
+      failures.push(`the sections are ${summary.join(" ")}`)
+    if (await page.locator(`${css.subagentPanel} [data-slot="avatar-stack"]`).count())
+      failures.push("the list still leads with its avatars")
     const sol = await page
       .locator(`${css.subagentRow}[data-subagent-name="Sol"]`)
       .innerText()
@@ -307,6 +331,14 @@ const checks = {
       return Boolean(node && node.contains(document.activeElement))
     }, css.subagentDetail)
     if (!focused) failures.push("focus left the open subagent")
+    // One breadcrumb, the panel tab's own: it names the child and steps back.
+    const crumbs = await page
+      .locator(`${css.panelWidget} [data-slot="breadcrumb"]`)
+      .evaluateAll((trails) => trails.map((trail) => trail.textContent?.trim() ?? ""))
+    if (crumbs.length !== 1 || !crumbs[0].endsWith("Mara"))
+      failures.push(
+        `the panel's breadcrumbs read ${JSON.stringify(crumbs)}, not one ending in Mara`,
+      )
     await shot(page, label, `detail-${label.engine}.png`, css.subagentPanel)
     const before = await scrollGap(page)
     if (!before || before.height <= before.client + 40)
@@ -338,17 +370,45 @@ const checks = {
       failures.push("Escape did not return to the list")
     await page.keyboard.press(keys.escape)
     await settled(page)
-    if ((await paneCount(page)) !== panes) failures.push("Escape in the pane closed it")
-    if (!(await page.locator(css.widgetPane).count()))
-      failures.push("the widget pane is gone")
+    if ((await paneCount(page)) !== panes)
+      failures.push("Escape in the panel changed the panes")
+    if (!(await page.locator(css.panelWidget).count()))
+      failures.push("Escape in the panel closed its tab")
 
     await page
-      .locator(css.widgetPane)
+      .locator(css.panelWidgetHead)
       .getByRole("button", { name: names.openInWindow })
       .click()
     if (!(await contentIs(page, content.widget)))
       failures.push("Open in Window did not show the window")
     await need(page, css.widgetWindow, "the window")
+    // Expanded, it is the chat surface's own ground, from the window's top,
+    // with its way back to the panel where the expand control was.
+    const ground = await page.evaluate((sel) => {
+      const window_ = document.querySelector(sel)
+      const surface = window_.closest("[data-surface]")
+      return {
+        top: window_.getBoundingClientRect().top,
+        fill: getComputedStyle(window_).backgroundColor,
+        surface: getComputedStyle(surface).backgroundColor,
+      }
+    }, css.widgetWindow)
+    if (ground.top !== 0)
+      failures.push(`the window starts ${ground.top}px down, not at the top`)
+    // Its fill is the surface's: clear, on the window's ambient ground.
+    if (ground.fill !== ground.surface)
+      failures.push(`the window is ${ground.fill}, the surface ${ground.surface}`)
+    const hidden = await page.evaluate(
+      () => getComputedStyle(document.querySelector(".split-panes-grid")).visibility,
+    )
+    if (hidden !== "hidden") failures.push("the panes beneath the window still show")
+    if (
+      !(await page
+        .locator(css.widgetWindow)
+        .getByRole("button", { name: "Back to Panel" })
+        .count())
+    )
+      failures.push("the expanded view offers no way back to its panel")
     await page
       .locator(`${css.widgetWindow} ${css.subagentRow}[data-subagent-name="Mara"]`)
       .click()
@@ -361,6 +421,20 @@ const checks = {
     await settled(page)
     if (!(await contentIs(page, content.panes)))
       failures.push("Escape did not leave the window for the panes")
+    // Back to Panel: the expanded view goes back to its chat's panel.
+    await page
+      .locator(css.panelWidgetHead)
+      .getByRole("button", { name: names.openInWindow })
+      .click()
+    await need(page, css.widgetWindow, "the window again")
+    await page
+      .locator(css.widgetWindow)
+      .getByRole("button", { name: "Back to Panel" })
+      .click()
+    if (!(await contentIs(page, content.panes)))
+      failures.push("Back to Panel did not return to the panes")
+    if (!(await page.locator(css.panelWidget).count()))
+      failures.push("Back to Panel left the widget in no tab of the panel")
     return { namesInOrder, summary, failures }
   },
 
@@ -370,26 +444,22 @@ const checks = {
     await page.evaluate(observers)
     if (!(await revealHeaderTitle(page))) failures.push("the header title did not appear")
     const before = await headerFit(page)
-    assertHeader(before, failures, "before the split")
+    assertHeader(before, failures, "before the panel opens")
     await shot(page, label, `header-${label.engine}.png`, css.paneHeader)
     if (!before.present) return { before, failures }
 
-    const panesBefore = await paneCount(page)
-    const measured = await measureOpening(page, label, () =>
-      page.locator(css.subagentStack).click(),
+    const measured = await opensNoPane(
+      page,
+      () => measureOpening(page, label, () => page.locator(css.subagentStack).click()),
+      "the stack's click",
+      failures,
     )
     failures.push(...measured.failures)
-    if (!(await paneCountIs(page, panesBefore + 1)))
-      failures.push(
-        `expected ${panesBefore + 1} panes after the stack, found ${await paneCount(page)}`,
-      )
-    await need(page, css.subagentList, "the subagent list")
-    await settled(page)
     if (!(await revealHeaderTitle(page)))
-      failures.push("the header title did not stay shown after the split")
+      failures.push("the header title did not stay shown beside the panel")
     const after = await headerFit(page)
-    assertHeader(after, failures, "in the narrow pane")
-    await shot(page, label, `narrow-${label.engine}.png`, css.widgetPane)
+    assertHeader(after, failures, "beside the panel")
+    await shot(page, label, `narrow-${label.engine}.png`, css.panel)
     const fit = await page.evaluate(
       ([pane, panel]) => {
         const box = document.querySelector(pane)?.getBoundingClientRect()
@@ -399,13 +469,13 @@ const checks = {
           panel: body && { width: body.width, height: body.height },
         }
       },
-      [css.widgetPane, css.subagentPanel],
+      [css.panelWidget, css.subagentPanel],
     )
     if (!fit.pane || !fit.panel)
-      failures.push(`no pane to measure: ${JSON.stringify(fit)}`)
+      failures.push(`no panel tab to measure: ${JSON.stringify(fit)}`)
     else {
       if (fit.panel.width > fit.pane.width + 1)
-        failures.push(`the panel is wider than its pane: ${JSON.stringify(fit)}`)
+        failures.push(`the list is wider than the panel's tab: ${JSON.stringify(fit)}`)
       if (fit.panel.height <= 0 || fit.panel.width <= 0)
         failures.push(`the panel has no room: ${JSON.stringify(fit)}`)
     }
@@ -430,15 +500,13 @@ const checks = {
     // In view before the sample, so the measured click is the open.
     await open.scrollIntoViewIfNeeded()
     await settled(page)
-    const panesBefore = await paneCount(page)
-    const measured = await measureOpening(page, label, () => open.click())
+    const measured = await opensNoPane(
+      page,
+      () => measureOpening(page, label, () => open.click()),
+      "the card's Open",
+      failures,
+    )
     failures.push(...measured.failures)
-    if (!(await paneCountIs(page, panesBefore + 1)))
-      failures.push(
-        `expected ${panesBefore + 1} panes after Open, found ${await paneCount(page)}`,
-      )
-    await need(page, css.subagentList, "the subagent list")
-    await settled(page)
     return {
       opening: measured.opening,
       calibration: measured.calibration,

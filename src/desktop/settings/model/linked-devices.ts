@@ -126,6 +126,8 @@ export type FailureKind =
   | "slotOccupied"
   | "addressInUse"
   | "auditUnavailable"
+  | "linkingOff"
+  | "tunnelIncomplete"
   | "capacity"
   | "conflict"
   | "ineligible"
@@ -248,6 +250,8 @@ export function initialLinkedDevicesState(): LinkedDevicesState {
 /* ——— What the window says. None of these sentences names a wire code. ——— */
 
 export const sentences = {
+  /** A paired phone that reads and writes every chat as the owner. */
+  fullAccessDevice: "Your phone · full access",
   checking: "Checking whether linking is on.",
   notConfigured: "Linking is off on this gateway.",
   restartNote:
@@ -260,6 +264,8 @@ export const sentences = {
   auditUnavailable:
     "The gateway could not record this change. The switch shows where linking stands now.",
   linkingBusy: "The gateway is applying another change. Try again in a moment.",
+  linkingOff: "Turn on native linking first. Nothing was changed.",
+  tunnelIncomplete: "A named tunnel needs a hostname and its token. Nothing was changed.",
   unconfirmed:
     "The gateway has not answered yet. The switch shows where linking stood when it last did.",
   on: "Devices can pair with this gateway.",
@@ -289,6 +295,13 @@ export const sentences = {
   unreachable: "Cannot reach the gateway.",
   empty: "No linked devices.",
   pair: "Pair a device",
+  pairDetail: "Shows a one-use code for the device to enter or scan.",
+  pairingTitle: "Pair a device",
+  pairingDetail: "Enter the code on the device, or scan the orb.",
+  codeOpen: "A code is open. Show it again, or cancel it.",
+  codeUsed: "A device used this code. Show it to approve the device.",
+  codeCancelled: "This code was cancelled. Show it to open a new one.",
+  showCode: "Show code",
   cancel: "Cancel",
   refresh: "New code",
   approve: "Approve",
@@ -311,6 +324,8 @@ export const noticeText: Record<NoticeKind, string> = {
   slotOccupied: sentences.slotOccupied,
   addressInUse: sentences.addressInUse,
   auditUnavailable: sentences.auditUnavailable,
+  linkingOff: sentences.linkingOff,
+  tunnelIncomplete: sentences.tunnelIncomplete,
   capacity: sentences.capacity,
   conflict: sentences.conflict,
   ineligible: sentences.ineligible,

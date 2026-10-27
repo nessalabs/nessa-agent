@@ -47,6 +47,7 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::UnavailableAfterSave => ConversationErrorCode::UnavailableAfterSave,
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
+        ConversationError::ChannelNotFound => ConversationErrorCode::ChannelNotFound,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
             ConversationErrorCode::SandboxUnavailable
@@ -210,6 +211,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         audit,
         attachments,
         summary,
+        schedule,
         tombstone,
         interrupted,
         another_attempt,
@@ -220,6 +222,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         && provider.is_none()
         && !no_agent_slot
         && summary.is_none()
+        && schedule.is_none()
         && tombstone.is_none()
         && !interrupted
         && !another_attempt

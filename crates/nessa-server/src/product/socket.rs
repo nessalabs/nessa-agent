@@ -1952,9 +1952,11 @@ async fn dispatch_authorized(
         "conversation.share" | "conversation.unshare" | "conversation.shares" => {
             super::read_access::dispatch_share(state, session, frame).await
         }
+        "channel.create" | "channel.list" => super::channel::dispatch(state, session, frame).await,
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
+        "attachment.write" => super::attachment::dispatch_write(state, frame).await,
         method if method.starts_with("attachment.") => {
             super::attachment::dispatch(state, session, frame).await
         }
@@ -1965,7 +1967,12 @@ async fn dispatch_authorized(
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
+        method if method.starts_with("github.") => {
+            super::github::dispatch(state, session, frame).await
+        }
         "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
+        "pairing.setTunnel" => super::pairing::set_tunnel(state, session, frame).await,
+        "pairing.tunnel" => super::pairing::tunnel(state, frame).await,
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }
@@ -1973,6 +1980,18 @@ async fn dispatch_authorized(
         "phone.authorize" | "phone.status" => super::phone::dispatch(state, session, frame).await,
         method if method.starts_with("peer.") => {
             super::peers::dispatch(state, session, frame).await
+        }
+        "server.reach" => {
+            if frame.params != json!({}) {
+                return failure(&frame.id, "invalid_request");
+            }
+            let tunnel = state.tunnel.as_ref().and_then(|tunnel| tunnel.address());
+            success(
+                &frame.id,
+                &nessa_protocol::product::generated::ServerReachResult {
+                    tunnel: tunnel.map(String::from),
+                },
+            )
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -4519,6 +4538,44 @@ mod tests {
         source.shutdown().await.unwrap();
         drop(writer);
         storage.shutdown().await.unwrap();
+    }
+
+    /// Tunnel row T9: `server.reach` names the tunnel's address only while
+    /// it is ready, under `server.read`.
+    #[tokio::test]
+    async fn reach_names_the_tunnel_only_while_it_is_ready() {
+        use crate::tunnel::application::TunnelView;
+        use crate::tunnel::application::{TunnelFailure, TunnelStatus};
+        let (state, _authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let reach = |state: &ProductRouteState| {
+            let state = state.clone();
+            let session = session.clone();
+            async move {
+                let OutgoingMessage::Response(answer) =
+                    dispatch(&state, &session, request("1", "server.reach")).await
+                else {
+                    panic!("response expected")
+                };
+                assert!(answer.ok);
+                answer.payload.unwrap()
+            }
+        };
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+        let (status, watching) = watch::channel(TunnelStatus::Starting);
+        let state = state.with_tunnel(TunnelView { status: watching });
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+        let address = nessa_protocol::tunnel::TunnelAddress::try_from(
+            "https://a-b.trycloudflare.com".to_owned(),
+        )
+        .unwrap();
+        status.send_replace(TunnelStatus::Ready(address));
+        assert_eq!(
+            reach(&state).await,
+            json!({ "tunnel": "https://a-b.trycloudflare.com" })
+        );
+        status.send_replace(TunnelStatus::Failed(TunnelFailure::NotReady));
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
     }
 
     #[tokio::test]

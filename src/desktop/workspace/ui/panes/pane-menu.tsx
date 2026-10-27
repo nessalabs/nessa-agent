@@ -17,14 +17,15 @@ import {
 } from "../../adapters/store/selectors"
 import type { Direction, PaneKey } from "../../../split-panes/model/pane-layout"
 import { useHeaderImage } from "../../../adapters/header-image"
+import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
 import { MenuItem, MenuSeparator, MenuShortcut } from "../../../ui/menu"
 import { useWorkspaceFrame, type ShortcutCommand } from "../workspace-frame"
 
-const moves: readonly [Direction, string, ShortcutCommand][] = [
-  ["left", "Move Left", "moveLeft"],
-  ["right", "Move Right", "moveRight"],
-  ["up", "Move Up", "moveUp"],
-  ["down", "Move Down", "moveDown"],
+const moves: readonly [Direction, string, ShortcutCommand, DesktopIconRole][] = [
+  ["left", "Move Left", "moveLeft", "moveLeft"],
+  ["right", "Move Right", "moveRight", "moveRight"],
+  ["up", "Move Up", "moveUp", "moveUp"],
+  ["down", "Move Down", "moveDown", "moveDown"],
 ]
 
 /**
@@ -72,10 +73,12 @@ export function PaneMenuItems({
   return (
     <>
       <MenuItem disabled={!fits("right")} onSelect={() => split("right")}>
+        <DesktopIcon name="splitRight" />
         Split Right
         {shortcut("splitRight")}
       </MenuItem>
       <MenuItem disabled={!fits("bottom")} onSelect={() => split("bottom")}>
+        <DesktopIcon name="splitDown" />
         Split Down
         {shortcut("splitDown")}
       </MenuItem>
@@ -85,6 +88,7 @@ export function PaneMenuItems({
           frame.openSwitcher(besideFits ? "split" : "open")
         }}
       >
+        <DesktopIcon name={besideFits ? "openBeside" : "open"} />
         {/* With no room beside, what is picked opens here, and the item says so. */}
         {besideFits ? "Open Beside…" : "Open Here…"}
         {besideFits ? shortcut("openBeside") : null}
@@ -92,12 +96,13 @@ export function PaneMenuItems({
       {multi && offerMoves ? (
         <>
           <MenuSeparator />
-          {moves.map(([direction, label, command]) => (
+          {moves.map(([direction, label, command, icon]) => (
             <MenuItem
               key={direction}
               disabled={!dispatch(canNudge({ pane, direction }))}
               onSelect={() => dispatch(nudgePane({ pane, direction }))}
             >
+              <DesktopIcon name={icon} />
               {label}
               {shortcut(command)}
             </MenuItem>
@@ -106,7 +111,10 @@ export function PaneMenuItems({
       ) : null}
       {multi || listed ? <MenuSeparator /> : null}
       {multi ? (
-        <MenuItem onSelect={() => dispatch(equalizePanes())}>Even Out Panes</MenuItem>
+        <MenuItem onSelect={() => dispatch(equalizePanes())}>
+          <DesktopIcon name="evenOut" />
+          Even Out Panes
+        </MenuItem>
       ) : null}
       {listed ? (
         <MenuItem
@@ -115,15 +123,25 @@ export function PaneMenuItems({
             frame.showRow(sessionId)
           }}
         >
+          <DesktopIcon name="sidebar" />
           Show in Sidebar
         </MenuItem>
       ) : null}
       <MenuSeparator />
       {/* The header's own choices, from any pane, however small. */}
-      <MenuItem onSelect={onChooseHeaderPicture}>Choose Header Picture…</MenuItem>
-      {picture ? <MenuItem onSelect={clearPicture}>Use Night Scene</MenuItem> : null}
+      <MenuItem onSelect={onChooseHeaderPicture}>
+        <DesktopIcon name="picture" />
+        Choose Header Picture…
+      </MenuItem>
+      {picture ? (
+        <MenuItem onSelect={clearPicture}>
+          <DesktopIcon name="nightScene" />
+          Use Night Scene
+        </MenuItem>
+      ) : null}
       <MenuSeparator />
       <MenuItem disabled={!closable} onSelect={() => dispatch(closePane({ pane }))}>
+        <DesktopIcon name="closePane" />
         Close Pane
         {shortcut("closePane")}
       </MenuItem>

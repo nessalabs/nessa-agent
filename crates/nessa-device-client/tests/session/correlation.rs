@@ -148,6 +148,7 @@ fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
         root.path().to_str().unwrap().to_owned(),
         "private".to_owned(),
         address.to_string(),
+        None,
     )
     .unwrap();
     let conversation = "00000000-0000-4000-8000-000000000001".to_owned();
@@ -208,6 +209,7 @@ fn a_catalogue_presence_id_that_is_not_a_conversation_dials_nothing() {
         root.path().to_str().unwrap().to_owned(),
         "private".to_owned(),
         address.to_string(),
+        None,
     )
     .unwrap();
     let stamp = Arc::new(NativePhoneStamp {
@@ -310,6 +312,7 @@ fn a_malformed_artifact_name_is_an_invalid_argument_and_dials_nothing() {
         root.path().to_str().unwrap().to_owned(),
         "private".to_owned(),
         address.to_string(),
+        None,
     )
     .unwrap();
     let stamp = Arc::new(NativePhoneStamp {

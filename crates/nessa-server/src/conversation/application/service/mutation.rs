@@ -15,6 +15,7 @@ use nessa_sdk::application::agent_execution::providers::ProviderSessionState;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
+use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
 
 impl ConversationService {
     /// Bind the shared principal command store. A second bind is ignored.
@@ -35,7 +36,8 @@ impl ConversationService {
     /// `delivery` is the submission receipt from the call that actually
     /// enqueued. A settled retry leaves it empty; the socket then reads the
     /// saved turn without enqueueing again. A submit settled
-    /// [`MutationOutcome::NoEffect`] is returned as [`ConversationError::Revoked`]:
+    /// [`MutationOutcome::NoEffect`] or [`MutationOutcome::RefusedBeforeAttempt`]
+    /// is returned as [`ConversationError::Revoked`]:
     /// the effect refused before anything was enqueued, and the same request
     /// answers that refusal again. A submit settled
     /// [`MutationOutcome::RefusedAfterSave`] is returned as
@@ -67,6 +69,34 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
+        self.submit_command_permitted(
+            storage,
+            id,
+            caller,
+            initiation,
+            offers_remember,
+            execution_id,
+            message,
+            mode,
+            None,
+        )
+        .await
+    }
+
+    /// Scheduled delivery transfers its selection lock into the supervised effect.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn submit_command_permitted(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        caller: ConversationCaller,
+        initiation: Initiation,
+        offers_remember: bool,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        selection: Option<Arc<SubmissionPermit>>,
+    ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         let binding = submit_binding(&id, &caller, &execution_id, &message, mode)
             .map_err(MutationFailure::Target)?;
         // Shape is refused before any stage. A deleted target is named before a
@@ -87,11 +117,17 @@ impl ConversationService {
         let delivery = Arc::new(Mutex::new(None));
         let captured = delivery.clone();
         let progress = tokio::spawn(async move {
-            let _admission = service
-                .admit()
-                .await
-                .map_err(ConversationError::from)
-                .map_err(MutationFailure::Target)?;
+            let _admission = if selection.is_some() {
+                None
+            } else {
+                Some(
+                    service
+                        .admit()
+                        .await
+                        .map_err(ConversationError::from)
+                        .map_err(MutationFailure::Target)?,
+                )
+            };
             let target = Arc::new(SubmitTarget {
                 service: service.clone(),
                 id,
@@ -102,6 +138,7 @@ impl ConversationService {
                 message: Mutex::new(Some(message)),
                 mode,
                 delivery: captured,
+                selection,
             });
             MutationCoordinator::new(storage)
                 .execute(binding, target)
@@ -110,7 +147,12 @@ impl ConversationService {
         .await
         .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))??;
         match progress.outcome() {
-            Some(MutationOutcome::NoEffect) => {
+            Some(
+                MutationOutcome::NoEffect
+                | MutationOutcome::RefusedBeforeAttempt
+                | MutationOutcome::ModelChangedBeforeAttempt
+                | MutationOutcome::AgentChangedBeforeAttempt,
+            ) => {
                 return Err(MutationFailure::Target(ConversationError::Revoked));
             }
             Some(MutationOutcome::RefusedAfterSave) => {
@@ -253,6 +295,12 @@ pub struct SubmittedCommand {
     pub delivery: Option<SubmissionReceipt>,
 }
 
+/// Owns admission and selection ordering through detached scheduled submission.
+pub(super) struct SubmissionPermit {
+    pub(super) _admission: OwnedRwLockReadGuard<()>,
+    pub(super) _selection: OwnedMutexGuard<()>,
+}
+
 struct SubmitTarget {
     service: ConversationService,
     id: ConversationId,
@@ -263,6 +311,7 @@ struct SubmitTarget {
     message: Mutex<Option<SubmittedMessage>>,
     mode: SubmissionMode,
     delivery: Arc<Mutex<Option<SubmissionReceipt>>>,
+    selection: Option<Arc<SubmissionPermit>>,
 }
 impl MutationTarget for SubmitTarget {
     type Error = ConversationError;
@@ -296,10 +345,11 @@ impl MutationTarget for SubmitTarget {
         let execution_id = self.execution_id.clone();
         let mode = self.mode;
         let delivery = self.delivery.clone();
+        let selection = self.selection.clone();
         Box::pin(async move {
             // `submit_command` holds admission through this effect.
             let submitted = service
-                .submit_admitted_as(
+                .submit_admitted_as_permitted(
                     id,
                     caller,
                     execution_id,
@@ -307,6 +357,7 @@ impl MutationTarget for SubmitTarget {
                     mode,
                     Writer::Person(initiation, offers_remember),
                     true,
+                    selection,
                 )
                 .await
                 .map_err(SubmitFailure::into_error);
@@ -595,6 +646,23 @@ fn submit_binding(
     message: &SubmittedMessage,
     mode: SubmissionMode,
 ) -> Result<MutationBinding, ConversationError> {
+    MutationBinding::new(
+        caller.actor()?,
+        MutationOperation::Submit,
+        conversation_session(id),
+        execution_id,
+        submission_fingerprint(execution_id, message, mode)?,
+    )
+    .map_err(|_| ConversationError::InvalidInput)
+}
+
+/// Canonical submit bytes have one owner for command admission and retained
+/// scheduled-command evidence. No content is retained by the returned digest.
+pub(super) fn submission_fingerprint(
+    execution_id: &str,
+    message: &SubmittedMessage,
+    mode: SubmissionMode,
+) -> Result<[u8; 32], ConversationError> {
     let canonical = serde_json::to_vec(&(
         execution_id,
         match mode {
@@ -617,14 +685,7 @@ fn submit_binding(
     let mut digest = Sha256::new();
     digest.update(b"nessa.conversation.submit\0");
     digest.update(canonical);
-    MutationBinding::new(
-        caller.actor()?,
-        MutationOperation::Submit,
-        conversation_session(id),
-        execution_id,
-        digest.finalize().into(),
-    )
-    .map_err(|_| ConversationError::InvalidInput)
+    Ok(digest.finalize().into())
 }
 
 fn stop_binding(

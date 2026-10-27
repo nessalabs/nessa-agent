@@ -1,18 +1,21 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
+    read_access::CatalogueReader,
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
-    ListedPermissionRule, PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent,
-    RequestedConversation, RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode,
-    SubmittedFile, SubmittedImage, SubmittedMessage,
+    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
+    QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
+    RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
+    UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
+use nessa_auth::application::ports::{AccessError, AccessSnapshot};
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
-use nessa_auth::domain::MembershipRole;
+use nessa_auth::domain::{MembershipRole, Resource};
 use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationModelChangeEffect, ConversationObservation,
@@ -23,9 +26,9 @@ use nessa_protocol::product::generated::{
     ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
     ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
     ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
-    ConversationDeleteParams, ConversationListParams, ConversationListResult,
-    ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
-    ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationDeleteParams, ConversationForkParams, ConversationListParams,
+    ConversationListResult, ConversationMutationResult, ConversationObserveCursor,
+    ConversationObserveParams, ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
@@ -34,9 +37,11 @@ use nessa_protocol::product::generated::{
     ConversationReorderParams, ConversationRevokePermissionRuleParams,
     ConversationRevokePermissionRuleResult, ConversationSendParams,
     ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
-    ConversationSetModelParams, ConversationSetModelResult, ConversationStopParams,
-    ConversationSummary, ConversationView as WireConversationView, ModelChangeEffect,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationSetModelParams, ConversationSetModelResult,
+    ConversationSetUsageLimitAutoContinueParams, ConversationSetUsageLimitAutoContinueResult,
+    ConversationStopParams, ConversationSummary, ConversationSwitchAgentParams,
+    ConversationView as WireConversationView, ModelChangeEffect, PermissionRule,
+    PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -102,6 +107,19 @@ async fn answer(
     ) {
         return Ok(dispatch_permission_rules(state, session, frame).await);
     }
+    // Catalogue refusal precedes service availability (row L12). Retain the
+    // admitted scope for the read rather than resolving the binding again.
+    let list_scope = if matches!(
+        frame.method.as_str(),
+        "conversation.list" | "conversation.observe"
+    ) {
+        match super::read_access::admit_list(state, session).await {
+            Ok(scope) => Some(scope),
+            Err(code) => return Ok(failure(&frame.id, code)),
+        }
+    } else {
+        None
+    };
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
@@ -143,12 +161,25 @@ async fn answer(
         match frame.method.as_str() {
             "conversation.create" => {
                 let params = target_params!(ConversationCreateParams);
+                // The phone check judges the preset the conversation starts
+                // in, which a channel's defaults can set.
+                let default_mode = service
+                    .creation_default_mode(
+                        &caller(params.request_id.clone()),
+                        requested_channel(params.channel_id.as_deref())?.as_ref(),
+                    )
+                    .await?;
                 if let Err(code) = super::owner_phone::admit_creation(
                     state,
                     session,
-                    params.approval_mode.map(approval_mode).map(|mode| mode.as_str()),
-                    crate::conversation::application::ConversationService::default_creation_approval_mode().as_str(),
-                ).await {
+                    params
+                        .approval_mode
+                        .map(approval_mode)
+                        .map(|mode| mode.as_str()),
+                    default_mode.as_str(),
+                )
+                .await
+                {
                     return Ok(failure(&frame.id, code));
                 }
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
@@ -157,7 +188,7 @@ async fn answer(
                         store,
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
-                        requested_conversation(&params),
+                        requested_conversation(&params)?,
                     )
                     .await
                     .map_err(creation_failure)?;
@@ -226,6 +257,88 @@ async fn answer(
                     },
                 ))
             }
+            "conversation.setUsageLimitAutoContinue" => {
+                let params = params!(ConversationSetUsageLimitAutoContinueParams);
+                let snapshot = match (ReadCurrentSession {
+                    access: state.access.as_ref(),
+                    clock: state.clock.as_ref(),
+                })
+                .execute(session)
+                .await
+                {
+                    Ok(snapshot) => snapshot,
+                    Err(AccessError::Unavailable | AccessError::Unsupported) => {
+                        return Err(ConversationError::Unavailable);
+                    }
+                    Err(_) => return Ok(failure(&frame.id, "forbidden")),
+                };
+                let facts = usage_limit_preference_facts(&snapshot, &state.gateway);
+                match service
+                    .set_usage_limit_auto_continue(
+                        params.enabled,
+                        caller(params.request_id.clone()),
+                        facts,
+                    )
+                    .await?
+                {
+                    PreferenceUpdate::Stored(enabled) => Ok(success(
+                        &frame.id,
+                        &ConversationSetUsageLimitAutoContinueResult {
+                            request_id: params.request_id,
+                            enabled,
+                        },
+                    )),
+                    PreferenceUpdate::Refused { .. } => Ok(failure(&frame.id, "forbidden")),
+                    PreferenceUpdate::Pending => Ok(failure(&frame.id, "unavailable")),
+                }
+            }
+            "conversation.switchAgent" => {
+                let params = target_params!(ConversationSwitchAgentParams);
+                let agent = AgentId::parse(&params.agent).ok_or(ConversationError::InvalidInput)?;
+                let applied = service
+                    .switch_agent(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        agent,
+                        ConversationModelId::new(params.model)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ))
+            }
+            "conversation.fork" => {
+                let params = target_params!(ConversationForkParams);
+                // The copy reads the source, so its read admission comes
+                // first; the service then admits only the source's owner.
+                let source = conversation_id(&params.source_conversation_id)?;
+                if let Err(code) =
+                    super::read_access::admit_conversation(state, session, &source).await
+                {
+                    return Ok(failure(&frame.id, code));
+                }
+                let store = service.commands().ok_or(ConversationError::Unavailable)?;
+                service
+                    .fork(
+                        store,
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        source,
+                    )
+                    .await
+                    .map_err(creation_failure)?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationCreateResult {
+                        conversation_id: params.conversation_id,
+                    },
+                ))
+            }
             "conversation.setApprovalMode" => {
                 let params = target_params!(ConversationSetApprovalModeParams);
                 let selected = service
@@ -253,37 +366,47 @@ async fn answer(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
-                let listed =
-                    read_list(state, service, session, archived.unwrap_or(false), &frame.id).await?;
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
+                let (listed, _) = read_list(
+                    state,
+                    service,
+                    session,
+                    archived.unwrap_or(false),
+                    &frame.id,
+                    scope,
+                )
+                .await?;
                 Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,
                 };
                 let observed = service
-                    .observe(
+                    .observe_for(
                         caller(frame.id.clone()),
                         params.archived.unwrap_or(false),
                         cursor,
+                        &scope.reader,
+                        &scope.owner,
+                        scope.policy.as_deref(),
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
                 let observed = observe_result(observed?);
-                super::read_access::admit_index_rows(state, session, &observed.conversations).await?;
+                super::read_access::admit_index_rows(state, session, &observed.conversations)
+                    .await?;
                 Ok(success(&frame.id, &observed))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = target_params!(ConversationSendParams);
-                if let Err(code) = super::owner_phone::admit_submission_input(state, session, params.files.len()).await {
+                if let Err(code) =
+                    super::owner_phone::admit_submission_input(state, session, params.files.len())
+                        .await
+                {
                     return Ok(failure(&frame.id, code));
                 }
                 let mode = if frame.method == "conversation.steer" {
@@ -944,7 +1067,7 @@ pub(super) async fn read_view(
     // caller is sent.
     trace_conversation_read(id, read.as_ref().err());
     let (view, cursor) = read?;
-    Ok((wire_view(state, view)?, cursor))
+    Ok((wire_view(state, view).await?, cursor))
 }
 
 /// The list `conversation.list` answers; a list subscription's frame is this
@@ -955,16 +1078,52 @@ pub(super) async fn read_list(
     session: &AuthenticatedSession,
     archived: bool,
     request_id: &str,
-) -> Result<ConversationListResult, ConversationError> {
+    scope: &CatalogueReader,
+) -> Result<(ConversationListResult, Option<CatalogueHead>), ConversationError> {
     let listed = service
-        .list(caller(session, request_id.to_owned()), archived)
+        .list_for(
+            caller(session, request_id.to_owned()),
+            archived,
+            &scope.reader,
+            &scope.owner,
+            scope.policy.as_deref(),
+        )
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    let listed = list_result(listed?);
+    let (listed, head) = listed?;
+    let listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
-    Ok(listed)
+    Ok((listed, head))
+}
+
+fn usage_limit_preference_facts(
+    snapshot: &AccessSnapshot,
+    gateway: &Resource,
+) -> UsageLimitPreferenceFacts {
+    UsageLimitPreferenceFacts {
+        principal_id: snapshot.credential.principal_id().as_str().to_owned(),
+        organization_id: snapshot.membership.organization_id().as_str().to_owned(),
+        role: match snapshot.membership.role() {
+            MembershipRole::Admin => "admin",
+            MembershipRole::Member => "member",
+        }
+        .to_owned(),
+        active: snapshot.membership.is_active(),
+        grants: snapshot
+            .credential
+            .grants()
+            .iter()
+            .map(|grant| UsageLimitPreferenceGrant {
+                action: grant.action().as_str().to_owned(),
+                resource_id: grant.resource().id().as_str().to_owned(),
+                organization_id: grant.resource().organization_id().as_str().to_owned(),
+            })
+            .collect(),
+        gateway_id: gateway.id().as_str().to_owned(),
+        gateway_organization: gateway.organization_id().as_str().to_owned(),
+    }
 }
 
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {
@@ -995,13 +1154,25 @@ fn permission_answer_failure(
     )
 }
 
-fn requested_conversation(params: &ConversationCreateParams) -> RequestedConversation {
-    RequestedConversation {
+fn requested_conversation(
+    params: &ConversationCreateParams,
+) -> Result<RequestedConversation, ConversationError> {
+    Ok(RequestedConversation {
         agent: requested_agent(params.agent.as_deref()),
         model: params.model.clone(),
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
-    }
+        channel: requested_channel(params.channel_id.as_deref())?,
+    })
+}
+/// A channel id as asked: one that is not an id is an invalid request.
+fn requested_channel(
+    channel: Option<&str>,
+) -> Result<Option<crate::conversation::domain::ChannelId>, ConversationError> {
+    channel
+        .map(crate::conversation::domain::ChannelId::new)
+        .transpose()
+        .map_err(|_| ConversationError::InvalidInput)
 }
 fn requested_conversation_from_receipt(
     params: &ConversationReceiptParams,
@@ -1018,6 +1189,7 @@ fn requested_conversation_from_receipt(
         model: params.model.clone(),
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
+        channel: requested_channel(params.channel_id.as_deref())?,
     })
 }
 fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
@@ -1128,7 +1300,10 @@ fn command_receipt(request_id: &str, receipt: &MutationReceipt) -> ConversationC
             MutationOutcome::Withdrawn => ConversationCommandOutcome::Withdrawn,
             MutationOutcome::Cancelled => ConversationCommandOutcome::Cancelled,
             MutationOutcome::AlreadyFinal => ConversationCommandOutcome::AlreadyFinal,
-            MutationOutcome::NoEffect => ConversationCommandOutcome::NoEffect,
+            MutationOutcome::NoEffect
+            | MutationOutcome::RefusedBeforeAttempt
+            | MutationOutcome::ModelChangedBeforeAttempt
+            | MutationOutcome::AgentChangedBeforeAttempt => ConversationCommandOutcome::NoEffect,
             MutationOutcome::RefusedAfterSave => ConversationCommandOutcome::RefusedAfterSave,
             MutationOutcome::UnavailableAfterSave => {
                 ConversationCommandOutcome::UnavailableAfterSave
@@ -1192,7 +1367,7 @@ pub(super) fn conversation_id(value: &str) -> Result<ConversationId, Conversatio
 /// view clock as the view is made: the timeline each deadline's `dueAtMs` was
 /// promised on, so a client measures the deadline against that rather than
 /// its own clock (`a_view_carries_the_gateways_time_from_its_clock`).
-fn wire_view(
+async fn wire_view(
     state: &ProductRouteState,
     view: ApplicationConversationView,
 ) -> Result<WireConversationView, ConversationError> {
@@ -1223,6 +1398,7 @@ fn wire_view(
     {
         return Err(ConversationError::ApprovalModeUnavailable);
     }
+    let conversation_id = view.conversation_id.clone();
     let mut value = serde_json::to_value(view).map_err(|_| ConversationError::Unavailable)?;
     let fields = value
         .as_object_mut()
@@ -1235,6 +1411,7 @@ fn wire_view(
         "approvalMode".into(),
         json!(selection.approval_mode.as_str()),
     );
+    fields.insert("model".into(), json!(selection.model));
     fields.insert(
         "approvalModes".into(),
         serde_json::to_value(&model.approval_modes).map_err(|_| ConversationError::Unavailable)?,
@@ -1251,6 +1428,34 @@ fn wire_view(
             json!(model.max_context_window_tokens),
         );
         runtime.insert("reasoning".into(), Value::Bool(model.reasoning));
+    }
+    if let Some(service) = state.conversations.as_ref() {
+        // One snapshot. Unbound storage is off and has no row. A read that
+        // fails is not that: the view would otherwise show the preference off
+        // and drop auto-resuming while the durable row is still open, or
+        // show them from two moments.
+        let id =
+            ConversationId::new(&conversation_id).map_err(|_| ConversationError::InvalidInput)?;
+        let snapshot = service.usage_limit_snapshot(&id).await?;
+        fields.insert("usageLimitAutoContinue".into(), json!(snapshot.enabled));
+        if let Some(open) = snapshot.open {
+            if let Some(messages) = fields.get_mut("messages").and_then(Value::as_array_mut) {
+                for message in messages {
+                    let Some(object) = message.as_object_mut() else {
+                        continue;
+                    };
+                    if object.get("executionId").and_then(Value::as_str)
+                        != Some(open.causal_execution.as_str())
+                    {
+                        continue;
+                    }
+                    if let Some(limit) = object.get_mut("usageLimit").and_then(Value::as_object_mut)
+                    {
+                        limit.insert("autoResuming".into(), json!(true));
+                    }
+                }
+            }
+        }
     }
     serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
 }
@@ -1321,6 +1526,7 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
                 updated_at_ms: entry.updated_at_ms,
                 running: entry.running,
                 archived: entry.archived,
+                channel_id: entry.channel_id,
             })
             .collect(),
         complete: listed.complete,
@@ -1351,6 +1557,7 @@ fn observe_result(observed: ConversationObservation) -> ConversationObserveResul
                 updated_at_ms: entry.updated_at_ms,
                 running: entry.running,
                 archived: entry.archived,
+                channel_id: entry.channel_id,
             })
             .collect(),
         complete: observed.complete,

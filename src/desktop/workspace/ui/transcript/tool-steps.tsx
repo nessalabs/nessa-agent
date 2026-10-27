@@ -1,7 +1,8 @@
-import { useId, useState } from "react"
-import { AgentActivity, AgentActivityTrigger } from "@nessa-ui/react/agent-activity"
+import { useState } from "react"
+import { ToolTrace, type ToolTraceStep } from "@nessa-ui/react/tool-trace"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
-import { workSummary, type StepKind, type StepPart } from "../../model/transcript"
+import type { StepKind, StepPart } from "../../model/transcript"
+import { WithChats } from "./chat-pill"
 import { useSiteIcon } from "./site-icon"
 
 const stepIcons: Record<StepKind, DesktopIconRole> = {
@@ -12,10 +13,10 @@ const stepIcons: Record<StepKind, DesktopIconRole> = {
 }
 
 /**
- * What the agent did. While its turn runs, one quiet line each, on a
- * hairline, so the reader follows the work as it happens. Once the turn has
- * ended (`settled`), the run is one line that says what it came to
- * (`workSummary`) and opens to the same steps in place.
+ * What the agent did, as the kit's waterfall (`ToolTrace`): one line with a
+ * bar of the whole run that opens to each call on a time axis, and a call's
+ * card to its diff, input and output. While the turn runs the trace is open
+ * and keeps time; once the turn has ended (`settled`) it folds to its line.
  */
 export function ToolSteps({
   steps,
@@ -25,45 +26,56 @@ export function ToolSteps({
   /** The turn this run belongs to has ended (`TurnMessage.working` is absent). */
   settled?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const listId = useId()
-  if (!settled) return <StepList steps={steps} />
+  const [open, setOpen] = useState(!settled)
+  // The run folds once, when its turn ends; after that the person decides.
+  const [wasSettled, setWasSettled] = useState(settled)
+  if (settled !== wasSettled) {
+    setWasSettled(settled)
+    if (settled) setOpen(false)
+  }
   return (
-    <AgentActivity className="workspace-work" status="complete">
-      <AgentActivityTrigger
-        // It opens the steps below it, not a sheet.
-        opens="inline"
-        aria-expanded={open}
-        aria-controls={open ? listId : undefined}
-        onClick={() => setOpen((shown) => !shown)}
-      >
-        {workSummary(steps)}
-      </AgentActivityTrigger>
-      {open ? <StepList id={listId} steps={steps} /> : null}
-    </AgentActivity>
+    <ToolTrace
+      className="workspace-work"
+      status={settled ? "complete" : "running"}
+      open={open}
+      onOpenChange={setOpen}
+      steps={steps.map((step, index) => traceStep(step, index, steps.length, settled))}
+      // A chat a tool named is its pill, drawn still: the row is the button.
+      renderText={chatsIn}
+    />
   )
 }
 
-function StepList({ id, steps }: { id?: string; steps: readonly StepPart[] }) {
-  return (
-    <ul id={id} className="workspace-steps">
-      {steps.map((step, index) => (
-        <li key={index}>
-          <StepIcon step={step} />
-          <span className="workspace-step-label">{step.label}</span>
-          {step.detail ? (
-            <span className="workspace-step-detail">{step.detail}</span>
-          ) : null}
-          {step.added !== undefined ? (
-            <span className="workspace-diff">
-              <ins>+{step.added}</ins>
-              {step.removed ? <del>−{step.removed}</del> : null}
-            </span>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  )
+const chatsIn = (text: string) => <WithChats text={text} still />
+
+/**
+ * A step as the trace draws it. A step that says nothing of its status is
+ * finished once its turn is; while the turn runs, the last such step is the
+ * one at work.
+ */
+function traceStep(
+  step: StepPart,
+  index: number,
+  count: number,
+  settled: boolean,
+): ToolTraceStep {
+  const status =
+    step.status ?? (!settled && index === count - 1 ? "running" : "completed")
+  return {
+    id: step.id ?? `step-${index}`,
+    label: step.label,
+    ...(step.detail ? { detail: step.detail } : {}),
+    icon: <StepIcon step={step} />,
+    status,
+    strong: step.step === "run" || step.step === "edit",
+    ...(step.startedAtMs !== undefined ? { startedAtMs: step.startedAtMs } : {}),
+    ...(step.endedAtMs !== undefined ? { endedAtMs: step.endedAtMs } : {}),
+    ...(step.added !== undefined ? { added: step.added } : {}),
+    ...(step.removed !== undefined ? { removed: step.removed } : {}),
+    ...(step.diff ? { diff: step.diff } : {}),
+    ...(step.input !== undefined ? { input: step.input } : {}),
+    ...(step.output !== undefined ? { output: step.output } : {}),
+  }
 }
 
 /**

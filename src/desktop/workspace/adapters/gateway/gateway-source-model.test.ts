@@ -21,7 +21,7 @@ const clock: GatewayClock = { now: () => 1_000_000, after: () => () => {} }
 async function ready() {
   const gateway = fakeGateway()
   gateway.rows.set("a", row("a"))
-  gateway.views.set("a", view("a", { runtime }))
+  gateway.views.set("a", view("a", { model: old, runtime }))
   const source = gatewaySource({
     connect: async () => gateway.client,
     clock,
@@ -68,16 +68,67 @@ describe("same-provider gateway control", () => {
     source.dispose()
   })
 
-  it("refuses cross-provider before a native setting", async () => {
+  it("carries the conversation on under another provider's agent, never a native setting", async () => {
     const { gateway, source } = await ready()
+    const astra = { provider: "openai", modelId: "gpt-6-astra" }
+    const result = await source.setModel("a", astra, "switch", "person")
+    expect(result).toMatchObject({ requestId: "switch", model: astra.modelId })
+    expect(gateway.count("setModel")).toBe(0)
+    expect(gateway.calls.filter((call) => call.method === "switchAgent")).toEqual([
+      {
+        method: "switchAgent",
+        args: ["a", "codex", astra.modelId, { requestId: "switch" }],
+      },
+    ])
+    // The view read after it lists the switch, and the transcript draws it.
+    const transcript = await source.transcript("a")
+    expect(transcript.messages.at(-1)).toMatchObject({
+      role: "handoff",
+      handoff: { kind: "switch", to: { agent: "codex", model: astra.modelId } },
+    })
+    source.dispose()
+  })
+
+  it("asks nothing for the model the settled conversation already runs", async () => {
+    const { gateway, source } = await ready()
+    const result = await source.setModel(
+      "a",
+      { provider: "anthropic", modelId: old },
+      "again",
+      "person",
+    )
+    expect(result).toMatchObject({
+      requestId: "again",
+      model: old,
+      approvalMode: "ask",
+      sourceReconciled: true,
+    })
+    expect(gateway.count("setModel")).toBe(0)
+    expect(gateway.count("switchAgent")).toBe(0)
+    source.dispose()
+  })
+
+  it("refuses a switch the gateway did not make, and a provider no agent runs", async () => {
+    const { gateway, source } = await ready()
+    gateway.once("switchAgent", () =>
+      Promise.resolve({ requestId: "switch", applied: false }),
+    )
     await expect(
       source.setModel(
         "a",
         { provider: "openai", modelId: "gpt-6-astra" },
-        "id",
+        "switch",
         "person",
       ),
+    ).rejects.toMatchObject({
+      reason: "not-supported",
+      uncertain: false,
+      diagnostic: { code: "model_change_not_applied" },
+    })
+    await expect(
+      source.setModel("a", { provider: "nobody", modelId: "m" }, "other", "person"),
     ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(gateway.count("switchAgent")).toBe(1)
     expect(gateway.count("setModel")).toBe(0)
     source.dispose()
   })
@@ -170,7 +221,10 @@ describe("same-provider gateway control", () => {
     const { gateway, source } = await ready()
     const other = "claude-fable-5-1"
     gateway.once("setModel", () => {
-      gateway.views.set("a", view("a", { runtime: { ...runtime, model: other } }))
+      gateway.views.set(
+        "a",
+        view("a", { model: other, runtime: { ...runtime, model: other } }),
+      )
       return Promise.resolve({
         requestId: "request",
         model: next.modelId,
@@ -225,7 +279,13 @@ describe("same-provider gateway control", () => {
   })
   it("keeps recovery required when the current source model is unknown, before any native control", async () => {
     const { gateway, source } = await ready()
-    gateway.views.set("a", view("a", { runtime: undefined }))
+    gateway.views.set(
+      "a",
+      view("a", {
+        model: "not-in-the-catalogue",
+        runtime: { ...runtime, model: "not-in-the-catalogue" },
+      }),
+    )
     gateway.publish("a")
     for (let i = 0; i < 20; i++) await Promise.resolve()
     await expect(source.setModel("a", next, "request", "person")).rejects.toMatchObject({
@@ -233,6 +293,38 @@ describe("same-provider gateway control", () => {
       uncertain: true,
     })
     expect(gateway.count("setModel")).toBe(0)
+    source.dispose()
+  })
+  it("does not send a model change when the view names no model and no agent is open", async () => {
+    const { gateway, source } = await ready()
+    gateway.views.set("a", view("a", { runtime: undefined, model: "" }))
+    gateway.publish("a")
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    await expect(source.setModel("a", next, "request", "person")).rejects.toMatchObject({
+      reason: "not-supported",
+      uncertain: false,
+      diagnostic: { code: "conversation_configuration_changed" },
+    })
+    expect(gateway.count("setModel")).toBe(0)
+    source.dispose()
+  })
+  it("sends a model change for the conversation's model when no agent is open", async () => {
+    const { gateway, source } = await ready()
+    gateway.views.set("a", view("a", { runtime: undefined, model: old }))
+    gateway.publish("a")
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    gateway.once("setModel", () =>
+      Promise.resolve({
+        requestId: "request",
+        model: next.modelId,
+        approvalMode: "ask",
+        effect: "nextTurn",
+      }),
+    )
+    await expect(source.setModel("a", next, "request", "person")).resolves.toMatchObject({
+      model: next.modelId,
+    })
+    expect(gateway.count("setModel")).toBe(1)
     source.dispose()
   })
 })

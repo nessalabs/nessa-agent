@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import type { HostKind } from "../../../host/features"
-import type { SettingsTabId } from "../model/settings-catalogue"
+import { isSettingsTab, type SettingsTabId } from "../model/settings-catalogue"
 import { SettingsLayout } from "./settings-layout"
 import { useSettingsSurface } from "./use-settings-surface"
 
@@ -54,11 +54,11 @@ export function useSettingsOpening(): {
   const [tab, setTab] = useState<SettingsTabId | undefined>(undefined)
   useEffect(() => {
     const show = (event: Event) => {
-      setTab(
-        event instanceof CustomEvent
-          ? (event.detail as SettingsTabId | undefined)
-          : undefined,
-      )
+      // Only a tab Settings has: anything else — a click's event handed on
+      // as the tab, say — opens it where it opens by default, rather than
+      // throwing as it renders and taking the window with it.
+      const asked = event instanceof CustomEvent ? event.detail : undefined
+      setTab(isSettingsTab(asked) ? asked : undefined)
       setOpen(true)
     }
     const onKeyDown = (event: KeyboardEvent) => {

@@ -53,6 +53,7 @@ verification/
     evidence/
       conversation-unread/  screenshots the pull request shows for that check
     fixtures/
+      settings-action-owners/ production native-hook/notice rows with controlled pending sources
       sandbox-probes/      labelled host for visible isolation and navigation probes
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
@@ -61,6 +62,7 @@ verification/
       app-review/           real window over a typed fake gateway whose app's call asks for a review
       clock-snapshots/      public ClockProvider/useNow with injected time crossing a bucket between React reads
     scripts/
+      settings-action-owners.mjs pending settings admission, rereads and source retirement
       page-load-regression/ synthetic host diagnostic reproduction; see its README (#916)
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
@@ -82,7 +84,8 @@ verification/
       gateway-window.mjs    the desktop app's window over a real gateway (#419, #574): its handshake, a conversation, a live turn, and the test server's MCP App inline (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for the text-reply scenario and none; the app step needs the dev server)
       command-order.mjs     an agent's command drawn in order, bidi controls visible (#553): the card, the overview row, and the peek
       scripted-scenarios.mjs  a scenario through the gateway and the window (#510): permission, a mid-turn failure, cancel (signed out; `--mode prod` previews a production build)
-      scripted-e2e.mjs      one signed-out command: the gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
+      resize-observers.mjs  native ErrorEvent and pageerror checks on initial pane fitting and viewport changes, Chromium and WebKit
+      scripted-e2e.mjs      one signed-out command: native resize and gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
       lib/overview-keyboard.mjs atomic observation/action for incrementally mounted overview rows
@@ -213,6 +216,26 @@ time (`--jobs`), each worker reusing one page per engine, layout and size, and
 ends each step once its motion has, not after a fixed wait.
 
 ## Scenario results and preview ownership
+
+### Focus and drag observation order
+
+The focus and sideways-drag probes keep readiness and timing evidence separate
+(`lib/workspace.test.mjs`). No production deadline is changed by these probes.
+
+| Observed ordering | Result |
+| --- | --- |
+| Selected overview row focused, later rows pending | Focus is ready; Down waits for a mounted successor within 2,000 ms. |
+| List complete but focus missing, outside the list, or no successor for Down | Focus/navigation is not ready. |
+| Complete-list marker absent after 2,000 ms | Independent `focus-overview-complete-list` result fails, even if focus held. |
+| Pointer delivered and zone observed before the event's 150 ms rest boundary | The moving-sweep assertion checks the announced zone. |
+| Pointer delivery or DOM observation reaches the rest boundary first | No proof of moving intent; missing timely evidence fails and records both gaps. |
+| No announcement, or announcement before any recorded changed-position move | No proof of moving intent; the sweep fails. |
+
+`recordZones` retains event time, event delivery time and DOM observation time.
+The last is after a scheduled preview, not the model's decision time. A later
+legitimate rest announcement stays in the receipt without replacing a timely
+moving observation. Historical late announcements alone cannot identify whether
+input delivery, rendering, host scheduling or another cause was responsible.
 
 A scenario owns its result; a missing optional assertion list cannot replace the
 scenario's original error. `report.add` normalizes `failures` after accepting the

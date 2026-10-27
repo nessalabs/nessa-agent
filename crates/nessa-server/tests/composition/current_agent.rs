@@ -356,6 +356,7 @@ fn explicit_opencode(
         AgentId::Opencode.name().into(),
         AgentRuntime {
             command: nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot::unmanaged(command),
+            staged_runtime: Vec::new(),
             args,
             model: model.into(),
             tools_enabled,
@@ -1266,8 +1267,7 @@ fn configured_warm_up_runtime(resolver: &CurrentAgentResolver) -> RuntimeFingerp
     // Observe the actual configured provider without starting preparation.
     // The completion port owns equality and the successful-preparation fact.
     let agent = resolver.observe_opencode().provider.unwrap().unwrap();
-    let identity = agent.provider.identity();
-    RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context()).unwrap()
+    super::super::warm_up::runtime_fingerprint_for(agent.provider.as_ref()).unwrap()
 }
 
 #[tokio::test]
