@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: "e213c1ccb370ced51a9f4ea794cd58441a0717c1"
+sourceRevision: "afbeb468ba54528835fbf152046472042ac612ff"
 summary: Channels place main agents and threads on Local or Boat and override the default cloud VM lifetime.
 parent: gateway
 sources:
@@ -42,9 +42,11 @@ diagramLinks: {}
 
 # Channel workspaces
 
-The phone-input parent is being integrated. This page retains its earlier source
-checkpoint until the combined lifetime, input-delivery and worker-image contract
-has completed its new source review and verification.
+The combined lifetime, input-delivery and matching-worker contract was reviewed
+at the source checkpoint above. Actual Boat verification passed uploaded-file
+delivery and preserved workspace files after archived resume; native phone
+consumer compatibility and broad browser/performance results are reported
+separately in the verification evidence.
 
 This page reviews the alpha placement, allocation and main-chat lifecycle. It
 does not claim deployment, provider availability or completion of cloud wake,

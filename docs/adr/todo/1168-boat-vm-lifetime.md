@@ -143,3 +143,23 @@ audit pattern instead. Channel settings gets an explicit Cedar action. Extend ex
 config capture to include these preferences; #1161 remains the separate channel
 catalogue backup gap. The verification record distinguishes completed checks from
 the remaining final repeat, broad-suite baselines and CI.
+
+### Combined phone-input parent verification
+
+Source `afbeb468ba54528835fbf152046472042ac612ff` integrates parent
+`079798f614e59f28848a27af8121befef5ee0349`. Fresh combined review round1
+closed clean. Exact CI-package tests (server4010 passed,16 existing ignores),
+strict all-target Clippy, gateway build and production scripted E2E passed.
+Actual Boat worker `b6e4f48aa694ce08` passed the lifetime workflow plus
+uploaded-text placement and its retained workspace copy after archived resume;
+all four owned VMs are confirmed absent. The separate unconfirmed close after
+the missing-VM case remains in cleanup evidence.
+
+Selected sanitized receipts and the scoped review are in
+`verification/desktop/evidence/boat-runtime-settings/phone-parent`. Full desktop,
+performance, native-phone consumer compatibility and final-head CI remain
+separate verification outcomes. The frozen companion grammar issue is tracked
+in nessalabs/nessa-ios#24; no stale-consumer refusal is relabeled a pass.
+The two owning state pages were reviewed at this exact source checkpoint.
+The existing allocation, settings-save and pane diagrams still describe their
+owners; the integration changes no additional state or module ownership.
