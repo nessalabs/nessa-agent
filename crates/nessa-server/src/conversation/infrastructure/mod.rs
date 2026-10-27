@@ -204,4 +204,4 @@ pub use agent_tool_audit::DurableAgentToolAudit;
 #[cfg(unix)]
 mod workspaces;
 #[cfg(unix)]
-pub(crate) use workspaces::{ThreadWorkspaces, MAX_RETAINED_ENVIRONMENTS};
+pub(crate) use workspaces::ThreadWorkspaces;

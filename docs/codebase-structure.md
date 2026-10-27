@@ -2633,6 +2633,8 @@ existing durable EnvironmentAudit store; failed receipt publication retains its
 VM target independently of the assignment writer and initiating observer.
 
 Conversation placement and main-agent identity remain in `conversation`.
+Its platform-neutral placement contract owns the workspace retention bound;
+the operational catalogue and Unix cache consume that same definition.
 `conversation/infrastructure/workspaces.rs` adapts a workspace stream into the
 existing remote lease environment. `application/artifact_channels.rs` is the port
 for artifact streams. `channels.sql` owns the current schema; its two forward

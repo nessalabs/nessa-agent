@@ -314,6 +314,8 @@ pub(crate) trait ThreadEnvironments: Send + Sync {
     ) -> Result<Arc<dyn Environment>, ConversationError>;
 }
 pub(crate) const BOAT: &str = "boat:thread";
+/// Bound retained workspace environments independently of saved thread history.
+pub(crate) const MAX_RETAINED_ENVIRONMENTS: usize = 256;
 
 pub(crate) struct Environments {
     workspaces: Option<Arc<dyn ThreadEnvironments>>,

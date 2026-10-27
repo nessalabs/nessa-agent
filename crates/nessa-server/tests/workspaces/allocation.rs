@@ -423,10 +423,8 @@ async fn lost_waiter_retains_failed_receipt_target_and_rollback_evidence() {
 #[test]
 fn connection_cache_refuses_capacity_without_evicting_borrowed_environments() {
     use crate::conversation::{
-        application::{ConversationError, ThreadEnvironments},
-        infrastructure::{
-            ssh_environment::DurableEnvironmentAudit, ThreadWorkspaces, MAX_RETAINED_ENVIRONMENTS,
-        },
+        application::{ConversationError, ThreadEnvironments, MAX_RETAINED_ENVIRONMENTS},
+        infrastructure::{ssh_environment::DurableEnvironmentAudit, ThreadWorkspaces},
     };
     struct Clock;
     impl nessa_auth::application::ports::Clock for Clock {

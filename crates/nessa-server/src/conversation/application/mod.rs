@@ -393,7 +393,7 @@ pub(crate) mod lease_tests;
 
 #[cfg(unix)]
 pub(crate) use placement::ThreadEnvironments;
-pub(crate) use placement::BOAT;
+pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
 
 #[cfg(unix)]
 mod artifact_channels;

@@ -5,6 +5,7 @@ use super::ssh_environment::{
 use crate::{
     conversation::application::{
         ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
+        MAX_RETAINED_ENVIRONMENTS,
     },
     workspaces::application::Workspaces,
 };
@@ -55,8 +56,6 @@ impl WorkspaceConnector for Connector {
         })
     }
 }
-/// Bound connection retention independently of the number of saved threads.
-pub(crate) const MAX_RETAINED_ENVIRONMENTS: usize = 256;
 impl ThreadEnvironments for ThreadWorkspaces {
     fn environment(
         &self,
