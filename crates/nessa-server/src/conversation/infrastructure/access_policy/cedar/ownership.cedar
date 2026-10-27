@@ -178,3 +178,15 @@ when {
     principal.organization == resource.organization &&
     principal.id == resource.owner
 };
+
+// The owner manages ordinary runtime settings for this channel.
+@id("owner.channel_settings")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"channel.settings",
+    resource is NessaConversation::Channel
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};

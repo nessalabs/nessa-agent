@@ -19,6 +19,9 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  boatRuntimeSettings: "[data-boat-runtime-settings]",
+  channelSettingsOpen: "[data-channel-settings-open]",
+  channelSettingsDialog: "[data-channel-settings]",
   localLifetimes: "[data-local-lifetimes]",
   // Committed conversation production-component fixture
   historyTabConsumer: "[data-history-tab-consumer]",

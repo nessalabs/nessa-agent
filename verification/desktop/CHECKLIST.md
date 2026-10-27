@@ -2305,3 +2305,17 @@ continuing ordinary clicks. Review-notice identity, delivery and at-rest automat
 denial checks still apply. The minimized sequence is seed 2 with one pool step
 and one notice step; pool precedes notice, whose page reload used to leave the
 vault dialog blocking the main conversation click.
+
+## Boat VM lifetime settings
+
+- [ ] The global default saves from Settings → Connections → Accounts without a
+  Boat token. A saved channel's gear opens its settings in both layouts. A new
+  channel inherits the global lifetime; an explicit No automatic stop overrides
+  it, and Use Nessa default removes only that override. Invalid, null-scope and
+  contradictory commands leave the default unchanged. _Check:_
+  `boat-runtime-settings.mjs` in Chromium/WebKit, columns/sidebar, against a real
+  gateway; the same shared check runs in the conversation stress `channel` step.
+- [ ] The dialog's controls remain usable by keyboard, Escape closes it, and
+  the text explains that finite durations include active work and changes apply
+  at create/resume rather than changing an active deadline. _Check:_ manual
+  screenshot/focus review and the settings control's rendered tests.

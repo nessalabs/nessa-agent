@@ -65,6 +65,21 @@ async function boat(path, method = "GET") {
   assert(response.ok, `Boat ${method} failed (${response.status})`)
   return response.json()
 }
+async function lifetime(vm, expected, name) {
+  const receipt = (await boat(`/sandboxes/${vm}`))?.sandbox
+  assert(
+    receipt && Object.hasOwn(receipt, "ttlSeconds"),
+    "Provider omitted lifetime receipt",
+  )
+  assert.equal(
+    receipt.ttlSeconds,
+    expected,
+    "Provider lifetime differs from selected settings",
+  )
+  if (expected === null)
+    assert.equal(receipt.archiveAfter, null, "Unlimited VM has an automatic deadline")
+  record(name, { vm, ttlSeconds: receipt.ttlSeconds, archiveAfter: receipt.archiveAfter })
+}
 async function until(check, label, ms = 180_000) {
   const end = Date.now() + ms
   while (Date.now() < end) {
@@ -190,6 +205,7 @@ try {
   await client.boat.save({ token })
   assert.equal((await client.boat.status()).state, "connected")
   record("token validated and encrypted")
+  await client.boat.setRuntimeSettings({ mode: "after", seconds: 14_400 })
   const localChannel = await client.channels.create({
     requestId: randomUUID(),
     name: "Local fixture",
@@ -208,11 +224,18 @@ try {
     threadPlacement: "boat",
   })
   assert(channel.coordinatorConversationId)
+  await client.boat.setRuntimeSettings({
+    channelId: channel.channelId,
+    mode: "after",
+    seconds: 7200,
+  })
   const main = await open(channel, channel.coordinatorConversationId)
   const worker = await open(channel, undefined, "full")
   assert.equal(owned.size, 2, "Distinct threads did not receive distinct VMs")
   const workerVm = [...owned].find(([, thread]) => thread === worker)?.[0]
   assert(workerVm, "Worker allocation receipt missing")
+  for (const [vm] of owned)
+    await lifetime(vm, 7200, "channel override reaches VM creation")
   record("two threads use distinct saved VMs", { main, worker, workerVm })
   const fileMarker = `NESSA_WORKSPACE_TEST_${randomUUID()}`
   const wrote = await turn(
@@ -228,6 +251,7 @@ try {
     async () => (await boat(`/sandboxes/${workerVm}`))?.sandbox.state === "archived",
     "VM archived",
   )
+  await client.boat.setRuntimeSettings({ channelId: channel.channelId, mode: "never" })
   // Restart the gateway to exercise durable receipts and a fresh connection,
   // rather than expecting a disconnected socket to detect loss synchronously.
   client.close()
@@ -236,6 +260,7 @@ try {
   // Vaults deliberately seal on session loss. Reuse only this test's passphrase.
   await client.vault.unlock(passphrase)
   await open(channel, worker, "full")
+  await lifetime(workerVm, null, "explicit unlimited reaches archived VM resume")
   assert.equal(owned.size, before, "Reopen allocated a replacement VM")
   const resumed = await turn(
     worker,
@@ -248,6 +273,9 @@ try {
   )
   record("restart and VM resume retain identity and workspace files")
   await open(channel, main)
+  const mainVm = [...owned].find(([, thread]) => thread === main)?.[0]
+  assert(mainVm)
+  await lifetime(mainVm, 7200, "settings edit leaves an active VM deadline unchanged")
   const warmed = await turn(
     main,
     "Reply NESSA_MAIN_READY. Do not use tools or create threads.",
@@ -266,7 +294,11 @@ try {
       enabled: true,
     },
   })
+  await client.boat.setRuntimeSettings({ channelId: channel.channelId, mode: "default" })
   const reader = await open(channel)
+  const readerVm = [...owned].find(([, thread]) => thread === reader)?.[0]
+  assert(readerVm)
+  await lifetime(readerVm, 14_400, "reset channel inherits global lifetime on creation")
   const read = await turn(
     reader,
     'Call read_local_log from the boat-local-files MCP server exactly once with {"name":"error.log"}. Return its actual text and host. Read no other files and use no other MCP tools.',

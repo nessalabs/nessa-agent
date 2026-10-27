@@ -22,3 +22,7 @@ mod settings_tests;
 #[cfg(test)]
 #[path = "../../tests/workspaces/provider_contract.rs"]
 mod provider_contract_tests;
+
+#[cfg(test)]
+#[path = "../../tests/workspaces/runtime_settings.rs"]
+mod runtime_settings_tests;

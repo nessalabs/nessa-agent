@@ -38,7 +38,7 @@ use crate::backup::domain::{
     Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind,
 };
 use crate::conversation::infrastructure::{
-    ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, ReceiverSnapshot,
+    BoatRuntimeConfig, ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, ReceiverSnapshot,
     ReceiverSnapshotError,
 };
 
@@ -105,6 +105,7 @@ pub async fn capture_namespace(
             kind: StoreKind::EnvironmentAudit,
             roots: vec![
                 labeled_root(namespace.join("boat-workspaces"), "boat-workspaces"),
+                labeled_root(namespace.join("boat-runtime-audit"), "boat-runtime"),
                 labeled_root(
                     namespace.join("boat-environment-audit"),
                     "boat-environments",
@@ -1194,6 +1195,18 @@ fn read_relay(pinned: PinnedRelay) -> Result<SourceCut, ()> {
             ),
             FrozenRead::Bytes(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                 Ok(value) => {
+                    if value.get("boat").is_some() {
+                        match BoatRuntimeConfig::from_document(&bytes) {
+                            Ok(runtime) => records.push(public(
+                                StoreKind::RelayConfiguration,
+                                "boat-runtime",
+                                serde_json::to_vec(&runtime.section()).map_err(|_| ())?,
+                            )?),
+                            Err(_) => {
+                                skipped.push(skip(StoreKind::RelayConfiguration, "boat-runtime")?)
+                            }
+                        }
+                    }
                     if let Some(relay) = value.get("native").and_then(|native| native.get("relay"))
                     {
                         if !relay.is_null() {

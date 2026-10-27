@@ -27,6 +27,7 @@ pub(crate) struct BoatConnection {
     pub(crate) token: Secret,
     pub(crate) environment: String,
     pub(crate) image: String,
+    pub(crate) auto_stop: crate::conversation::domain::VmLifetime,
 }
 impl BoatConnection {
     pub(crate) fn new(token: String, environment: String, image: String) -> Result<Self, Failure> {
@@ -49,6 +50,7 @@ impl BoatConnection {
             token: Secret::new(token.into_bytes()),
             environment,
             image,
+            auto_stop: Default::default(),
         })
     }
 }

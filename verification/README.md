@@ -86,6 +86,7 @@ verification/
       scripted-scenarios.mjs  a scenario through the gateway and the window (#510): permission, a mid-turn failure, cancel (signed out; `--mode prod` previews a production build)
       resize-observers.mjs  native ErrorEvent and pageerror checks on initial pane fitting and viewport changes, Chromium and WebKit
       scripted-e2e.mjs      one signed-out command: native resize and gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
+      boat-runtime-settings.mjs global lifetime default and saved-channel override/reset, ordinary config persistence and invalid request refusals through a real gateway, both engines/layouts; no Boat token or cloud VM
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
       lib/overview-keyboard.mjs atomic observation/action for incrementally mounted overview rows

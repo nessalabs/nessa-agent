@@ -3,6 +3,11 @@ import type { RpcRequester } from "../application/session-port.js"
 import {
   ProductMethod,
   BoatErrorCode,
+  vmLifetimeSeconds,
+  type BoatRuntimeReadParams,
+  type BoatRuntimeSetParams,
+  type BoatRuntimeSettings,
+  type BoatVmLifetime,
   type BoatSaveParams,
   type BoatStatus,
 } from "../generated/product.js"
@@ -18,6 +23,13 @@ export type BoatApi = {
   /** Forget this connection. Existing remote credentials/VMs are not revoked or
    * deleted by this command. Read status after an uncertain response. */
   disconnect(): Promise<BoatStatus>
+  /** Read ordinary configuration, without reading or unlocking the token vault.
+   * Omitted channel selects the global default; override absence means inheritance. */
+  runtimeSettings(params?: BoatRuntimeReadParams): Promise<BoatRuntimeSettings>
+  /** Save the default or an authorized channel override in gateway config.
+   * Applies on VM create/resume; it does not change active deadlines. No automatic
+   * replay: read settings after an uncertain outcome. */
+  setRuntimeSettings(params: BoatRuntimeSetParams): Promise<BoatRuntimeSettings>
 }
 export function boatStatus(value: unknown): BoatStatus {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -52,17 +64,92 @@ export class NessaBoatError extends Error {
     this.refusal = refusal
   }
 }
+function lifetime(value: unknown): BoatVmLifetime {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new TypeError("Invalid VM lifetime")
+  const item = value as Record<string, unknown>
+  const mode = Object.hasOwn(item, "mode") ? item.mode : undefined
+  const seconds = Object.hasOwn(item, "seconds") ? item.seconds : undefined
+  if (mode === "never" && Object.keys(item).length === 1) return { mode }
+  if (
+    mode === "after" &&
+    Object.keys(item).length === 2 &&
+    typeof seconds === "number" &&
+    Number.isSafeInteger(seconds) &&
+    seconds >= vmLifetimeSeconds.minimum &&
+    seconds <= vmLifetimeSeconds.maximum
+  )
+    return { mode, seconds }
+  throw new TypeError("Invalid VM lifetime")
+}
+export function boatRuntimeSettings(value: unknown): BoatRuntimeSettings {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new TypeError("Invalid Boat runtime settings")
+  const item = value as Record<string, unknown>
+  if (
+    !Object.hasOwn(item, "defaultLifetime") ||
+    Object.keys(item).some(
+      (key) =>
+        key !== "defaultLifetime" && key !== "channelOverride" && key !== "channelId",
+    )
+  )
+    throw new TypeError("Invalid Boat runtime settings")
+  const defaultLifetime = lifetime(item.defaultLifetime)
+  let channelId: string | undefined
+  if (Object.hasOwn(item, "channelId")) {
+    const id = item.channelId
+    if (typeof id !== "string" || id.length === 0)
+      throw new TypeError("Invalid runtime settings scope")
+    channelId = id
+  }
+  if (Object.hasOwn(item, "channelOverride") && channelId === undefined)
+    throw new TypeError("Unscoped channel override")
+  return {
+    defaultLifetime,
+    ...(channelId === undefined ? {} : { channelId }),
+    ...(Object.hasOwn(item, "channelOverride")
+      ? { channelOverride: lifetime(item.channelOverride) }
+      : {}),
+  }
+}
 export function createBoatApi(session: RpcRequester): BoatApi {
-  const call = async (method: string, params: Record<string, unknown> = {}) => {
+  const call = async <T>(
+    method: string,
+    params: Record<string, unknown>,
+    decode: (value: unknown) => T,
+  ): Promise<T> => {
     try {
-      return boatStatus(await session.request(method, params))
+      return decode(await session.request(method, params))
     } catch (cause) {
       throw new NessaBoatError(cause)
     }
   }
+  const runtimeCall = async (
+    method: string,
+    params: BoatRuntimeReadParams | BoatRuntimeSetParams,
+  ) => {
+    let channelId: string | undefined
+    try {
+      if (!Object.hasOwn(params, "channelId") && "channelId" in params)
+        throw new TypeError("Inherited runtime scope")
+      channelId = Object.hasOwn(params, "channelId") ? params.channelId : undefined
+    } catch (cause) {
+      throw new NessaBoatError(cause)
+    }
+    return call(method, { ...params }, (value) => {
+      const settings = boatRuntimeSettings(value)
+      if (settings.channelId !== channelId)
+        throw new TypeError("Runtime settings scope mismatch")
+      return settings
+    })
+  }
   return {
-    status: () => call(ProductMethod.BoatStatus),
-    save: (params) => call(ProductMethod.BoatSave, { ...params }),
-    disconnect: () => call(ProductMethod.BoatDisconnect),
+    status: () => call(ProductMethod.BoatStatus, {}, boatStatus),
+    save: (params) => call(ProductMethod.BoatSave, { ...params }, boatStatus),
+    disconnect: () => call(ProductMethod.BoatDisconnect, {}, boatStatus),
+    runtimeSettings: (params = {}) =>
+      runtimeCall(ProductMethod.BoatRuntimeSettings, params),
+    setRuntimeSettings: (params) =>
+      runtimeCall(ProductMethod.BoatSetRuntimeSettings, params),
   }
 }

@@ -1,8 +1,20 @@
 //! Allocation is tested through the application ports with controllable provider
 //! admission. No real account or secret is used in these ordering fixtures.
-use crate::workspaces::{application::*, domain::*};
+use crate::conversation::domain::{ChannelId, VmLifetime, VmLifetimeScope, VmLifetimeSettings};
+use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
+use crate::workspaces::{
+    application::*,
+    domain::*,
+    infrastructure::{ConfigRuntimeSettings, RuntimeSettingsAudit},
+};
 use async_trait::async_trait;
+use nessa_auth::{
+    application::ports::Clock,
+    domain::{OrganizationId, PrincipalId},
+};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::infrastructure::clock::RuntimeClock;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
@@ -119,6 +131,8 @@ fn recovery_events(thread: &ConversationId, confirmed: bool) -> Vec<RecoveryEven
 }
 struct FakeProvider {
     creates: AtomicUsize,
+    created_lifetimes: Mutex<Vec<VmLifetime>>,
+    connected_lifetimes: Mutex<Vec<VmLifetime>>,
     connects: Mutex<Vec<String>>,
     deletes: AtomicUsize,
     entered: Semaphore,
@@ -134,6 +148,8 @@ impl FakeProvider {
             panic_remove: AtomicBool::new(false),
             recovery_steps,
             creates: AtomicUsize::new(0),
+            created_lifetimes: Mutex::new(vec![]),
+            connected_lifetimes: Mutex::new(vec![]),
             connects: Mutex::new(vec![]),
             deletes: AtomicUsize::new(0),
             entered: Semaphore::new(0),
@@ -146,7 +162,11 @@ impl Provider for FakeProvider {
     async fn validate(&self, _: &BoatConnection) -> Result<(), Failure> {
         Ok(())
     }
-    async fn create(&self, _: &BoatConnection, thread: &str) -> Result<String, Failure> {
+    async fn create(&self, connection: &BoatConnection, thread: &str) -> Result<String, Failure> {
+        self.created_lifetimes
+            .lock()
+            .unwrap()
+            .push(connection.auto_stop);
         self.creates.fetch_add(1, Ordering::SeqCst);
         self.entered.add_permits(1);
         self.proceed.acquire().await.unwrap().forget();
@@ -154,10 +174,14 @@ impl Provider for FakeProvider {
     }
     async fn connect(
         &self,
-        _: &BoatConnection,
+        connection: &BoatConnection,
         _: &str,
         vm: &str,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        self.connected_lifetimes
+            .lock()
+            .unwrap()
+            .push(connection.auto_stop);
         self.connects.lock().unwrap().push(vm.into());
         Ok(Arc::new(Runtime))
     }
@@ -195,29 +219,118 @@ fn fixture_with_audit() -> (Arc<Workspaces>, Arc<Store>, Arc<FakeProvider>, Arc<
             provider.clone(),
             store.clone(),
             audit.clone(),
+            Arc::new(Config),
         )),
         store,
         provider,
         audit,
     )
 }
+struct Time;
+impl Clock for Time {
+    fn unix_milliseconds(&self) -> u64 {
+        42
+    }
+}
+#[tokio::test]
+async fn config_default_and_channel_override_reach_creation_and_existing_vm_connections() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let settings = Arc::new(ConfigRuntimeSettings {
+        config: Arc::new(ConfigJson::new(
+            Arc::new(OsConfigFiles::new(directory.path().join("config.json"))),
+            ConfigCheck {
+                limit: 4096,
+                parses: Box::new(|bytes| {
+                    serde_json::from_slice::<serde_json::Value>(bytes).is_ok()
+                }),
+            },
+            Arc::new(RuntimeClock::new()),
+        )),
+        audit: Arc::new(
+            RuntimeSettingsAudit::new(directory.path().join("audit"), Arc::new(Time)).unwrap(),
+        ),
+        next_id: Arc::new(uuid::Uuid::new_v4),
+    });
+    let caller = || RuntimeCaller {
+        organization: OrganizationId::new("fixture-org").unwrap(),
+        principal: PrincipalId::new("fixture-owner").unwrap(),
+        credential: "fixture-credential".into(),
+        operation: "fixture-request".into(),
+    };
+    let finite = VmLifetime::from_seconds(Some(14_400)).unwrap();
+    let channel = ChannelId::from_random([1; 10]);
+    settings
+        .save(VmLifetimeScope::Global, Some(finite), caller())
+        .await
+        .unwrap();
+    settings
+        .save(
+            VmLifetimeScope::Channel(channel.clone()),
+            Some(VmLifetime::Unlimited),
+            caller(),
+        )
+        .await
+        .unwrap();
+    let (_, store, provider, audit) = fixture_with_audit();
+    let service = Workspaces::new(
+        Arc::new(Config),
+        provider.clone(),
+        store,
+        audit,
+        settings.clone(),
+    );
+    provider.proceed.add_permits(2);
+    service.open(id(1), true, None).await.unwrap();
+    service
+        .open(id(2), true, Some(channel.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        *provider.created_lifetimes.lock().unwrap(),
+        vec![finite, VmLifetime::Unlimited]
+    );
+    settings
+        .save(
+            VmLifetimeScope::Global,
+            Some(VmLifetime::Unlimited),
+            caller(),
+        )
+        .await
+        .unwrap();
+    settings
+        .save(
+            VmLifetimeScope::Channel(channel.clone()),
+            Some(finite),
+            caller(),
+        )
+        .await
+        .unwrap();
+    service.open(id(1), true, None).await.unwrap();
+    service.open(id(2), true, Some(channel)).await.unwrap();
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        *provider.connected_lifetimes.lock().unwrap(),
+        vec![finite, VmLifetime::Unlimited, VmLifetime::Unlimited, finite]
+    );
+}
 #[tokio::test]
 async fn simultaneous_open_and_reopen_create_one_vm_for_the_thread() {
     let (service, _, provider) = fixture();
     let one = {
         let service = service.clone();
-        tokio::spawn(async move { service.open(id(1), true).await })
+        tokio::spawn(async move { service.open(id(1), true, None).await })
     };
     provider.entered.acquire().await.unwrap().forget();
     let two = {
         let service = service.clone();
-        tokio::spawn(async move { service.open(id(1), true).await })
+        tokio::spawn(async move { service.open(id(1), true, None).await })
     };
     provider.proceed.add_permits(1);
     assert!(one.await.unwrap().is_ok());
     assert!(two.await.unwrap().is_ok());
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
-    assert!(service.open(id(1), true).await.is_ok());
+    assert!(service.open(id(1), true, None).await.is_ok());
     assert!(provider
         .connects
         .lock()
@@ -229,8 +342,8 @@ async fn simultaneous_open_and_reopen_create_one_vm_for_the_thread() {
 async fn two_threads_receive_distinct_vm_identities() {
     let (service, _, provider) = fixture();
     provider.proceed.add_permits(2);
-    assert!(service.open(id(1), true).await.is_ok());
-    assert!(service.open(id(2), true).await.is_ok());
+    assert!(service.open(id(1), true, None).await.is_ok());
+    assert!(service.open(id(2), true, None).await.is_ok());
     let vms = provider.connects.lock().unwrap();
     assert_ne!(vms[0], vms[1]);
     assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
@@ -245,11 +358,11 @@ async fn an_uncertain_intent_and_accounting_never_create_a_replacement() {
         },
     );
     assert!(matches!(
-        service.open(id(1), true).await,
+        service.open(id(1), true, None).await,
         Err(Failure::ProvisioningUncertain)
     ));
     assert!(matches!(
-        service.open(id(2), false).await,
+        service.open(id(2), false, None).await,
         Err(Failure::Missing)
     ));
     assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
@@ -259,7 +372,7 @@ async fn lost_waiter_does_not_abandon_the_creation_receipt() {
     let (service, store, provider) = fixture();
     let task = {
         let service = service.clone();
-        tokio::spawn(async move { service.open(id(1), true).await })
+        tokio::spawn(async move { service.open(id(1), true, None).await })
     };
     provider.entered.acquire().await.unwrap().forget();
     task.abort();
@@ -277,7 +390,7 @@ async fn lost_waiter_does_not_abandon_the_creation_receipt() {
     })
     .await
     .unwrap();
-    assert!(service.open(id(1), true).await.is_ok());
+    assert!(service.open(id(1), true, None).await.is_ok());
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
@@ -286,7 +399,7 @@ async fn failed_receipt_storage_attempts_cleanup_and_preserves_uncertainty() {
     store.fail_receipt.store(true, Ordering::SeqCst);
     provider.proceed.add_permits(1);
     assert_eq!(
-        service.open(id(1), true).await.err(),
+        service.open(id(1), true, None).await.err(),
         Some(Failure::ReceiptRecovery {
             vm: format!("vm-{}", id(1)),
             receipt_audit_failed: false,
@@ -306,7 +419,7 @@ async fn failed_receipt_storage_attempts_cleanup_and_preserves_uncertainty() {
     );
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        service.open(id(1), true).await,
+        service.open(id(1), true, None).await,
         Err(Failure::ProvisioningUncertain)
     ));
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
@@ -330,7 +443,7 @@ async fn receipt_recovery_keeps_target_and_attempts_cleanup_across_all_audit_fai
                     .store(cleanup_confirmed, Ordering::SeqCst);
                 provider.proceed.add_permits(1);
                 assert_eq!(
-                    service.open(id(2), true).await.err(),
+                    service.open(id(2), true, None).await.err(),
                     Some(Failure::ReceiptRecovery {
                         vm: format!("vm-{}", id(2)),
                         receipt_audit_failed,
@@ -370,7 +483,7 @@ async fn receipt_recovery_keeps_target_and_attempts_cleanup_across_all_audit_fai
                     })
                 );
                 assert_eq!(
-                    service.open(id(2), true).await.err(),
+                    service.open(id(2), true, None).await.err(),
                     Some(Failure::ProvisioningUncertain)
                 );
                 assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
@@ -385,7 +498,7 @@ async fn lost_waiter_retains_failed_receipt_target_and_rollback_evidence() {
     store.fail_receipt.store(true, Ordering::SeqCst);
     let task = {
         let service = service.clone();
-        tokio::spawn(async move { service.open(id(3), true).await })
+        tokio::spawn(async move { service.open(id(3), true, None).await })
     };
     provider.entered.acquire().await.unwrap().forget();
     task.abort();
@@ -414,7 +527,7 @@ async fn lost_waiter_retains_failed_receipt_target_and_rollback_evidence() {
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
     assert!(provider.connects.lock().unwrap().is_empty());
     assert_eq!(
-        service.open(id(3), true).await.err(),
+        service.open(id(3), true, None).await.err(),
         Some(Failure::ProvisioningUncertain)
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
@@ -434,8 +547,15 @@ fn connection_cache_refuses_capacity_without_evicting_borrowed_environments() {
     }
     let directory = tempfile::tempdir().unwrap();
     let (service, _, provider) = fixture();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let factory = ThreadWorkspaces {
         service,
+        channels: Arc::new(
+            crate::conversation::infrastructure::LocalChannelStore::open(
+                &directory.path().join("channels.sqlite3"),
+            )
+            .unwrap(),
+        ),
         audit: DurableEnvironmentAudit::new(directory.path().join("audit"), Arc::new(Clock))
             .unwrap(),
         environments: Default::default(),
@@ -477,7 +597,7 @@ async fn recovery_port_panics_keep_cleanup_and_target_evidence_owned() {
     provider.panic_remove.store(true, Ordering::SeqCst);
     provider.proceed.add_permits(1);
     assert_eq!(
-        service.open(id(3), true).await.err(),
+        service.open(id(3), true, None).await.err(),
         Some(Failure::ReceiptRecovery {
             vm: format!("vm-{}", id(3)),
             receipt_audit_failed: true,
@@ -491,7 +611,7 @@ async fn recovery_port_panics_keep_cleanup_and_target_evidence_owned() {
         vec![recovery_events(&id(3), false)[1].clone()]
     );
     assert_eq!(
-        service.open(id(3), true).await.err(),
+        service.open(id(3), true, None).await.err(),
         Some(Failure::ProvisioningUncertain)
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
@@ -503,7 +623,7 @@ async fn receipt_publication_panic_keeps_external_target_in_the_recovery_owner()
     store.panic_receipt.store(true, Ordering::SeqCst);
     provider.proceed.add_permits(1);
     assert_eq!(
-        service.open(id(4), true).await.err(),
+        service.open(id(4), true, None).await.err(),
         Some(Failure::ReceiptRecovery {
             vm: format!("vm-{}", id(4)),
             receipt_audit_failed: false,
@@ -517,8 +637,66 @@ async fn receipt_publication_panic_keeps_external_target_in_the_recovery_owner()
     );
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
     assert_eq!(
-        service.open(id(4), true).await.err(),
+        service.open(id(4), true, None).await.err(),
         Some(Failure::ProvisioningUncertain)
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+}
+
+#[async_trait]
+impl RuntimeSettings for Config {
+    async fn read(&self, scope: &VmLifetimeScope) -> Result<VmLifetimeSettings, Failure> {
+        Ok(match scope {
+            VmLifetimeScope::Global => VmLifetimeSettings::global(Default::default()),
+            VmLifetimeScope::Channel(channel) => {
+                VmLifetimeSettings::for_channel(channel.clone(), Default::default(), None)
+            }
+        })
+    }
+    async fn save(
+        &self,
+        _: VmLifetimeScope,
+        _: Option<VmLifetime>,
+        _: RuntimeCaller,
+    ) -> Result<VmLifetimeSettings, Failure> {
+        Err(Failure::Storage)
+    }
+}
+
+struct WrongRuntimeScope;
+#[async_trait]
+impl RuntimeSettings for WrongRuntimeScope {
+    async fn read(&self, _: &VmLifetimeScope) -> Result<VmLifetimeSettings, Failure> {
+        Ok(VmLifetimeSettings::for_channel(
+            ChannelId::from_random([2; 10]),
+            VmLifetime::from_seconds(Some(14_400)).unwrap(),
+            None,
+        ))
+    }
+    async fn save(
+        &self,
+        _: VmLifetimeScope,
+        _: Option<VmLifetime>,
+        _: RuntimeCaller,
+    ) -> Result<VmLifetimeSettings, Failure> {
+        Err(Failure::Storage)
+    }
+}
+#[tokio::test]
+async fn another_scopes_valid_lifetime_snapshot_cannot_authorize_vm_allocation() {
+    let (_, store, provider, audit) = fixture_with_audit();
+    provider.proceed.add_permits(1);
+    let service = Workspaces::new(
+        Arc::new(Config),
+        provider.clone(),
+        store.clone(),
+        audit,
+        Arc::new(WrongRuntimeScope),
+    );
+    assert_eq!(
+        service.open(id(1), true, None).await.err(),
+        Some(Failure::Storage)
+    );
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
+    assert!(store.records.lock().unwrap().is_empty());
 }

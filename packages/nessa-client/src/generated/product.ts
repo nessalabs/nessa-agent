@@ -3229,6 +3229,50 @@ export interface BoatStatus {
   /** The release-owned shared worker image saved with this connection; present only while connected. */
   image?: string
 }
+/** Disable automatic stop or stop after a positive duration, including active work. */
+export const VmLifetimeMode = { Never: "never", After: "after" } as const
+export type VmLifetimeMode = (typeof VmLifetimeMode)[keyof typeof VmLifetimeMode]
+/** Positive whole seconds representable by the Boat provider. */
+export type VmLifetimeSeconds = number
+/** The never mode omits seconds; after requires seconds. Validated together before any configuration write. */
+export interface BoatVmLifetime {
+  /** Disable automatic stop or use the finite seconds value. */
+  mode: VmLifetimeMode
+  /** Present only in after mode. Includes time spent on active work. */
+  seconds?: VmLifetimeSeconds
+}
+/** Use the default (or reset the global initial choice), disable auto-stop, or choose a finite lifetime. */
+export const BoatRuntimeSelection = {
+  Default: "default",
+  Never: "never",
+  After: "after",
+} as const
+export type BoatRuntimeSelection =
+  (typeof BoatRuntimeSelection)[keyof typeof BoatRuntimeSelection]
+/** Read default and optional channel override from one ordinary configuration snapshot. Does not read a Boat token. */
+export interface BoatRuntimeReadParams {
+  /** Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings. */
+  channelId?: string
+}
+/** Change ordinary lifetime settings without a token. Default/never forbid seconds; after requires it. New allocations and archived-VM resumes use the saved choice; active VM deadlines are unchanged. Read settings after an uncertain response; calls are not replayed. */
+export interface BoatRuntimeSetParams {
+  /** Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings. */
+  channelId?: string
+  /** Default removes the channel override or resets the global initial choice. Never disables automatic stop; after requires seconds. */
+  mode: BoatRuntimeSelection
+  /** Positive provider-compatible duration, required only in after mode. */
+  seconds?: VmLifetimeSeconds
+}
+/** Non-secret settings. An omitted override inherits the default; explicit never remains unlimited when the default changes. Initial default is no automatic stop; provider/account limits still apply. */
+export interface BoatRuntimeSettings {
+  /** The Nessa default used by inheriting channels; initially no automatic stop. */
+  defaultLifetime: BoatVmLifetime
+  /** The requested channel's explicit choice. Omission inherits the default; never remains unlimited when the default changes. */
+  channelOverride?: BoatVmLifetime
+  /** The stored channel whose settings were read or saved. Omitted only for the global default; an override requires this identity. */
+  channelId?: string
+}
+export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -3289,7 +3333,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 95,
+  maxReadyMethods: 97,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3602,6 +3646,8 @@ export const ProductMethod = {
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
   BoatDisconnect: "boat.disconnect",
+  BoatRuntimeSettings: "boat.runtimeSettings",
+  BoatSetRuntimeSettings: "boat.setRuntimeSettings",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3710,6 +3756,8 @@ export const productReadyMethods = [
   "boat.status",
   "boat.save",
   "boat.disconnect",
+  "boat.runtimeSettings",
+  "boat.setRuntimeSettings",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3809,6 +3857,8 @@ export const productMethodGrants = {
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",
   "boat.disconnect": "credential.manage",
+  "boat.runtimeSettings": "credential.manage",
+  "boat.setRuntimeSettings": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

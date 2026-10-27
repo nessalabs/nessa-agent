@@ -1974,7 +1974,7 @@ async fn dispatch_authorized(
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
-        method if method.starts_with("boat.") => super::boat::dispatch(state, frame).await,
+        method if method.starts_with("boat.") => super::boat::dispatch(state, session, frame).await,
         method if method.starts_with("vault.") => super::vault::dispatch(state, frame).await,
         method if method.starts_with("github.") => {
             super::github::dispatch(state, session, frame).await

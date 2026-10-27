@@ -394,6 +394,33 @@ impl ConversationService {
         let Some(id) = channel.filter(|id| !id.is_default()) else {
             return Ok(None);
         };
+        self.channel_for_action(caller, id, AccessAction::ChannelUse)
+            .await
+            .map(Some)
+    }
+
+    /// Authorize a saved channel's runtime settings using current stored
+    /// owner facts. The synthetic default channel uses global settings.
+    #[cfg(unix)]
+    pub(crate) async fn authorize_channel_settings(
+        &self,
+        caller: &ConversationCaller,
+        id: &ChannelId,
+    ) -> Result<(), ConversationError> {
+        if id.is_default() {
+            return Err(ConversationError::ChannelNotFound);
+        }
+        self.channel_for_action(caller, id, AccessAction::ChannelSettings)
+            .await
+            .map(|_| ())
+    }
+
+    async fn channel_for_action(
+        &self,
+        caller: &ConversationCaller,
+        id: &ChannelId,
+        action: AccessAction,
+    ) -> Result<Channel, ConversationError> {
         let store = self
             .channel_store()
             .ok_or(ConversationError::ChannelNotFound)?;
@@ -403,13 +430,13 @@ impl ConversationService {
             .ok_or(ConversationError::ChannelNotFound)?;
         match self.admit_channel(
             caller,
-            AccessAction::ChannelUse,
+            action,
             AccessResource::Channel {
                 organization: found.organization(),
                 owner: found.owner(),
             },
         ) {
-            Ok(()) => Ok(Some(found)),
+            Ok(()) => Ok(found),
             Err(ChannelError::Unavailable) => Err(ConversationError::Unavailable),
             Err(_) => Err(ConversationError::ChannelNotFound),
         }

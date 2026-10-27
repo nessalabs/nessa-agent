@@ -205,3 +205,6 @@ pub use agent_tool_audit::DurableAgentToolAudit;
 mod workspaces;
 #[cfg(unix)]
 pub(crate) use workspaces::ThreadWorkspaces;
+
+mod workspace_runtime_config;
+pub(crate) use workspace_runtime_config::BoatRuntimeConfig;

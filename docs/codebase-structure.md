@@ -2635,14 +2635,28 @@ under `scripts/mcp-test-server`. Composition maps recovery evidence into the
 existing durable EnvironmentAudit store; failed receipt publication retains its
 VM target independently of the assignment writer and initiating observer.
 
+Ordinary VM lifetime preferences use the existing gateway `config.json`, through
+the `RuntimeSettings` port and `ConfigRuntimeSettings` adapter. The adapter shares
+`ConfigJson` publication and locking with other settings editors; only Boat
+credentials use the vault. Requested/outcome records in `boat-runtime-audit`
+retain the scoped choice and publication result. Runtime settings and their
+audits participate in the existing configuration and environment-audit backup cuts.
+
 Conversation placement and main-agent identity remain in `conversation`.
 Its platform-neutral placement contract owns the workspace retention bound;
 the operational catalogue and Unix cache consume that same definition.
+Its lifetime values identify the global or channel target and resolve an explicit
+override against the default. `workspace_runtime_config.rs` reads that pair from
+one document. The shared channel store resolves membership before allocation;
+the Boat adapter applies the selected lifetime on VM creation and archived resume.
 `conversation/infrastructure/workspaces.rs` adapts a workspace stream into the
 existing remote lease environment. `application/artifact_channels.rs` is the port
 for artifact streams. `channels.sql` owns the current schema; its two forward
 migrations preserve Local defaults and add the main replacement journal.
 
-The desktop composes a narrow Boat settings gateway into `BoatRow`. Channel draft
+The desktop composes a narrow Boat settings gateway into `BoatRow`; the shared
+`boat-runtime-control` edits the global default there and per-channel overrides
+from `workspace/ui/channel-settings`. Channel draft
 placement is a projection sent to the gateway, and navigation uses the gateway's
-current main conversation ID. See [ADR 1160](adr/todo/1160-boat-workspaces.md).
+current main conversation ID. See [ADR 1160](adr/todo/1160-boat-workspaces.md) and
+[lifetime settings](adr/todo/1168-boat-vm-lifetime.md).

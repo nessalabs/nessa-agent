@@ -13,8 +13,6 @@ use workspace_sdk::{
     OpenRequest, ProviderId, WorkspaceId, WorkspaceSdk,
 };
 
-const VM_TTL_SECONDS: u32 = 3600;
-
 pub(crate) struct BoatProvider {
     pub(crate) relay_socket: std::path::PathBuf,
     pub(crate) relay_program: std::path::PathBuf,
@@ -86,7 +84,7 @@ impl Provider for BoatProvider {
             .create(
                 Some(CreateSandboxRequest {
                     type_: Some("small".into()),
-                    ttl_seconds: Some(Some(VM_TTL_SECONDS)),
+                    ttl_seconds: Some(connection.auto_stop.seconds()),
                     environment: Some(connection.environment.clone()),
                     env: Some(std::collections::HashMap::from([(
                         "NESSA_THREAD_ID".into(),
@@ -126,7 +124,7 @@ impl Provider for BoatProvider {
             api.resume(
                 vm,
                 Some(boat_client::ResumeRequest {
-                    ttl_seconds: Some(Some(VM_TTL_SECONDS)),
+                    ttl_seconds: Some(connection.auto_stop.seconds()),
                     ..Default::default()
                 }),
             )

@@ -25,6 +25,7 @@ export function SidebarRow({
   badgeLabel,
   running,
   submenu,
+  actions,
   onClick,
 }: {
   icon: Parameters<typeof DesktopIcon>[0]["name"]
@@ -46,6 +47,7 @@ export function SidebarRow({
   running?: boolean
   /** What hangs beneath the row: a channel's pinned sessions. */
   submenu?: ReactNode
+  actions?: ReactNode
   onClick: () => void
 }) {
   return (
@@ -63,7 +65,9 @@ export function SidebarRow({
       ]
         .filter(Boolean)
         .join(" ")}
-      {...trailingRoom(badge ? { count: badge } : running ? "glyph" : null)}
+      {...trailingRoom(
+        actions ? "actions" : badge ? { count: badge } : running ? "glyph" : null,
+      )}
       {...tooltip(title ?? "", { shortcut })}
       onClick={onClick}
       icon={<SidebarRowIcon name={icon} />}
@@ -80,7 +84,10 @@ export function SidebarRow({
         ) : undefined
       }
       trailing={
-        !badge && running ? <StatusGlyph status="running" decorative /> : undefined
+        <>
+          {actions}
+          {!badge && running ? <StatusGlyph status="running" decorative /> : undefined}
+        </>
       }
       submenu={submenu}
     >
@@ -108,10 +115,10 @@ export function SidebarRowIcon({
  * Rows reads it).
  */
 function trailingRoom(
-  trailing: "glyph" | { count: number } | null,
+  trailing: "glyph" | "actions" | { count: number } | null,
 ): Record<string, string | undefined> {
   if (trailing === null) return {}
-  if (trailing === "glyph") return { "data-trailing": "glyph" }
+  if (typeof trailing === "string") return { "data-trailing": trailing }
   return {
     "data-trailing": "count",
     "data-digits": String(Math.min(String(trailing.count).length, 3)),

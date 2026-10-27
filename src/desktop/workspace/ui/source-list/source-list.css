@@ -217,7 +217,9 @@
  * its tooltip. (`data-trailing` is written by `sidebar-row.tsx` only; the tree's
  * + is a control of its own.)
  */
-.workspace-sidebar [data-trailing] + [data-slot="sidebar-menu-item-trailing"] {
+.workspace-sidebar
+  :is([data-trailing="glyph"], [data-trailing="count"])
+  + [data-slot="sidebar-menu-item-trailing"] {
   pointer-events: none;
 }
 
@@ -246,6 +248,12 @@
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-digits="3"] {
   padding-right: calc(16px + 31px);
+}
+
+/* A settings control plus a count of up to three digits share this band. */
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="actions"] {
+  padding-right: 64px;
 }
 
 .workspace-row-icon {

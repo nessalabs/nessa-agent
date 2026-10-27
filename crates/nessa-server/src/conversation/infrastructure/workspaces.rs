@@ -4,7 +4,7 @@ use super::ssh_environment::{
 };
 use crate::{
     conversation::application::{
-        ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
+        ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
         MAX_RETAINED_ENVIRONMENTS,
     },
     workspaces::application::Workspaces,
@@ -18,11 +18,13 @@ use std::{
 
 pub(crate) struct ThreadWorkspaces {
     pub(crate) service: Arc<Workspaces>,
+    pub(crate) channels: Arc<dyn ChannelStore>,
     pub(crate) audit: Arc<dyn EnvironmentAudit>,
     pub(crate) environments: Mutex<BTreeMap<String, Arc<SshEnvironment>>>,
 }
 struct Connector {
     service: Arc<Workspaces>,
+    channels: Arc<dyn ChannelStore>,
     conversation: ConversationId,
 }
 impl WorkspaceConnector for Connector {
@@ -31,9 +33,25 @@ impl WorkspaceConnector for Connector {
         provision: bool,
     ) -> EnvironmentFuture<'_, Result<LeaseConnection, LeaseRefusal>> {
         Box::pin(async move {
+            let channel = self
+                .channels
+                .channel_of(&self.conversation)
+                .await
+                .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+            if let Some(id) = &channel {
+                if self
+                    .channels
+                    .get(id)
+                    .await
+                    .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?
+                    .is_none()
+                {
+                    return Err(LeaseRefusal::EnvironmentUnreachable);
+                }
+            }
             let runtime = self
                 .service
-                .open(self.conversation.clone(), provision)
+                .open(self.conversation.clone(), provision, channel)
                 .await
                 .map_err(|error| {
                     tracing::warn!(?error, "Boat workspace could not be prepared");
@@ -79,6 +97,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
         let environment = Arc::new(SshEnvironment::workspace(
             Arc::new(Connector {
                 service: self.service.clone(),
+                channels: self.channels.clone(),
                 conversation: conversation.clone(),
             }),
             self.audit.clone(),

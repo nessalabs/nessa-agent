@@ -185,7 +185,7 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                 organization: &org,
                 owner: &owner,
             },
-            AccessAction::ChannelUse => AccessResource::Channel {
+            AccessAction::ChannelUse | AccessAction::ChannelSettings => AccessResource::Channel {
                 organization: &org,
                 owner: &owner,
             },
@@ -457,6 +457,14 @@ fn owner_channels_are_the_owners_own_and_nobody_elses() {
                 owner: &owner,
             },
             "owner.channel_use",
+        ),
+        (
+            AccessAction::ChannelSettings,
+            AccessResource::Channel {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_settings",
         ),
     ];
     for (action, resource, id) in cases {

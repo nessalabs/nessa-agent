@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { channelRuntimeSettings, openAccounts } from "./lib/boat-runtime-settings.mjs"
 import { unlockVault } from "./lib/vault.mjs"
 /**
  * The conversation stress check: a person using one conversation for many
@@ -2991,6 +2992,7 @@ const steps = {
           )
         if (!existsSync(made.folder))
           failures.push(`the made folder ${made.folder} is not there`)
+        await channelRuntimeSettings(run, made, failures)
         await talkInChannel(run, step, made, failures, notes)
       }
       // Made in a folder chosen in the host's picker.
@@ -4670,13 +4672,6 @@ function shellServer(directory) {
     command,
     args: ["--workspace", workspace, "--audit-directory", join(directory, "shell-audit")],
   }
-}
-
-/** Opens Settings › Connections › Accounts, where the GitHub row is. */
-async function openAccounts(page) {
-  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
-  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
-  await page.locator(css.settingsTab, { hasText: names.accounts }).click()
 }
 
 /**
