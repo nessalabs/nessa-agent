@@ -1,5 +1,7 @@
 # Local vault verification
 
+See the [CI follow-up](ci-followup.md) for repairs and newer verification after the first hosted run.
+
 Implementation source: `7307eb9d6a9d54f37026323ad7e35bae7c33039f`, stacked on
 `834040bc12b0a3df08a56bbdd4c24626558842f5` (#1137). The final two source commits add CI/local package coverage and lint-only
 corrections; runtime behavior is unchanged from `f5d055777`.
