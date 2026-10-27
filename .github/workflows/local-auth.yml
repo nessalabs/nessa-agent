@@ -198,6 +198,7 @@ jobs:
               'crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs',
               'crates/nessa-sdk/src/infrastructure/mcp/servers.rs',
               'crates/nessa-server/src/conversation/domain/value_objects/channel.rs',
+              'crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs',
               'crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs',
               'crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs',
               'crates/nessa-protocol/src/product_contract/generated.rs',

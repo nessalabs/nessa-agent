@@ -27,6 +27,33 @@ test("local-auth integration harness is locked to its declared tools", () => {
   }
 })
 
+test("gateway staging covers canonical source paths consumed by protocol generation fixtures", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const start = workflow.indexOf("      - name: Prepare gateway contract harness")
+  const end = workflow.indexOf("      - run: npm install --ignore-scripts", start)
+  assert.ok(start >= 0 && end > start, "gateway staging boundary is present")
+  const stage = workflow.slice(start, end)
+  const trees = [...stage.matchAll(/shutil\.copytree\('([^']+)'/g)].map(
+    (match) => match[1],
+  )
+  const files = new Set([...stage.matchAll(/'([^'\r\n]+)'/g)].map((match) => match[1]))
+  const inputs = new Set()
+  for (const name of [
+    "scripts/generate-product-protocol.mjs",
+    "scripts/product-protocol/protocol-generation.test.mjs",
+  ])
+    for (const match of readFileSync(name, "utf8").matchAll(
+      /["'](crates\/[^"'\r\n]+\.(?:rs|json))["']/g,
+    ))
+      inputs.add(match[1])
+  assert.ok(inputs.size > 0, "generation declares canonical source inputs")
+  for (const input of inputs)
+    assert.ok(
+      files.has(input) || trees.some((tree) => input.startsWith(`${tree}/`)),
+      `gateway cut is missing ${input}`,
+    )
+})
+
 test("local and CI aggregate the same named frontend and native checks", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
