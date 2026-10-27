@@ -3,6 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
+sourceRevision: ec87466224be10085fc1183af8668727d581d3c9
 summary: A channel independently places its main agent and new threads on Local or Boat.
 parent: gateway
 sources:
