@@ -4,6 +4,7 @@ title: "Reopen a message and understand its reference-only attachments"
 kind: "flow"
 status: "mixed"
 summary: "A message sent from this window can still display its original local attachments."
+sourceRevision: "ecd37cbac43367272d244dc75484a07e5eec053c"
 parent: "gateway-attachments"
 sources:
   - "src/conversation/model/content.ts"

@@ -4,12 +4,15 @@ title: "Send an uploaded file from the phone"
 kind: "flow"
 status: "implemented"
 summary: "Original file references survive sending and recovery; verified paths belong to one execution environment."
+sourceRevision: "ecd37cbac43367272d244dc75484a07e5eec053c"
 parent: "gateway-attachments"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/uploaded_file.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/session.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/input_files.rs"
+  - "crates/nessa-server/src/composition/agent.rs"
+  - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-server/src/conversation/application/input_files.rs"
   - "crates/nessa-server/src/conversation/infrastructure/input_files.rs"
   - "crates/nessa-server/tests/conversation/input_files.rs"
@@ -25,8 +28,13 @@ upload completes. Admission requires that exact conversation hold and sender
 evidence. SDK storage keeps the original references through queuing, receipt
 lookup and restoration. The phone's two journals retain the same facts.
 
+The phone captures one scope owner for its transport, outbox and Stop journal;
+request admission verifies that scope before any upload, send or lookup.
+
 At dispatch, a resolver bound to the current conversation and lease prepares
-an ephemeral input copy. Local retained-handle placement or SSH fetch verifies
+an ephemeral input copy. Its local workspace is the canonical path selected by
+the same provider generation; selecting a path alias does not change placement.
+Local retained-handle placement or SSH fetch verifies
 the bytes and refuses an unrelated existing destination. Required outcome
 evidence precedes dispatch. All ACP profiles receive resource links to confirmed
 paths. Display names never select directories, and the transcript keeps the
