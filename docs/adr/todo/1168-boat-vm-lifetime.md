@@ -89,6 +89,7 @@ edit.
 | Settings change during a running VM | Existing deadline unchanged | UI sentence and allocation assertions |
 | Default-channel membership (None) | Use global preference; synthetic default channel has no override | Default membership test |
 | Close saved-channel settings | Return keyboard focus to the channel's settings control; preserve label and click space beside row status | Both-engine/layout browser geometry and focus check |
+| Row has settings actions and decorative status | Keep action hit testing separate: settings receives its click, status/count passes the pointer to the row. Presence of actions does not replace the decoration's identity. | Shared-controls real-browser row hit tests and settings matrix |
 | Membership read fails or names missing channel | Refuse opening rather than use global policy | Adapter failure test |
 | Channel lookup returns another valid identity | Refuse before using its owner facts or provisioning the requested target | Substituted-channel authority and membership tests |
 | Several owners have over 1000 combined overrides | Parse the gateway-wide map under the existing configuration byte bound, without applying one owner's channel quota | Global-map parser regression |

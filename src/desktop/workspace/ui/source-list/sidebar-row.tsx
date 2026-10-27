@@ -65,9 +65,8 @@ export function SidebarRow({
       ]
         .filter(Boolean)
         .join(" ")}
-      {...trailingRoom(
-        actions ? "actions" : badge ? { count: badge } : running ? "glyph" : null,
-      )}
+      {...trailingRoom(badge ? { count: badge } : running ? "glyph" : null)}
+      data-row-actions={actions ? "" : undefined}
       {...tooltip(title ?? "", { shortcut })}
       onClick={onClick}
       icon={<SidebarRowIcon name={icon} />}
@@ -84,10 +83,12 @@ export function SidebarRow({
         ) : undefined
       }
       trailing={
-        <>
-          {actions}
-          {!badge && running ? <StatusGlyph status="running" decorative /> : undefined}
-        </>
+        actions || (!badge && running) ? (
+          <>
+            {actions && <span className="workspace-row-actions">{actions}</span>}
+            {!badge && running ? <StatusGlyph status="running" decorative /> : undefined}
+          </>
+        ) : undefined
       }
       submenu={submenu}
     >
@@ -115,7 +116,7 @@ export function SidebarRowIcon({
  * Rows reads it).
  */
 function trailingRoom(
-  trailing: "glyph" | "actions" | { count: number } | null,
+  trailing: "glyph" | { count: number } | null,
 ): Record<string, string | undefined> {
   if (trailing === null) return {}
   if (typeof trailing === "string") return { "data-trailing": trailing }
