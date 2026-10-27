@@ -11,6 +11,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -41,6 +42,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const temporary = realpathSync(mkdtempSync(join(tmpdir(), "nessa-conversation-smoke-")))
 const dataRoot = join(temporary, "data")
 const workspace = join(temporary, "workspace")
+const selectedWorkspace = join(temporary, "selected-workspace")
 const ownerPath = join(temporary, "owner.token")
 const evidencePath = join(workspace, "provider-evidence.jsonl")
 const providerStatePath = join(workspace, "provider-state.json")
@@ -112,6 +114,11 @@ const viewWith = (client, accept, description) => {
 
 try {
   mkdirSync(workspace)
+  symlinkSync(
+    workspace,
+    selectedWorkspace,
+    process.platform === "win32" ? "junction" : "dir",
+  )
   fixtureSupervisor = await createFixtureSupervisor()
   const initialized = spawnSync(
     binary,
@@ -127,7 +134,7 @@ try {
     JSON.stringify({
       agents: {
         catalog: catalogPath,
-        workspace,
+        workspace: selectedWorkspace,
         mcpServers: [],
         selected: "claude",
         runtimes: {

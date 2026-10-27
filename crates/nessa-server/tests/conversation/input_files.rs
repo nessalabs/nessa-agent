@@ -169,6 +169,10 @@ async fn files_only_are_placed_before_dispatch_and_views_keep_original_reference
         let file = fixture.keep(bytes, media, name);
         fixture.send(&execution, &file).await.unwrap();
         let view = fixture.ended(&execution).await;
+        if index == 0 {
+            let listed = fixture.service.list(caller("list"), false).await.unwrap();
+            assert_eq!(listed.conversations[0].title.as_deref(), Some(name));
+        }
         let turn = view
             .messages
             .iter()

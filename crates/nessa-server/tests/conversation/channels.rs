@@ -43,6 +43,7 @@ impl RecordingSource {
             ConversationApprovalMode::Full => ApprovalMode::Full,
         };
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(
                 Provider::new(self.factory.clone())
                     .with_model(model)

@@ -442,6 +442,7 @@ fn harness_working_in(
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: binding,
                 execution_audit: Arc::new(
                     DurableExecutionAudit::new(root.join("audit"), clock.clone()).unwrap(),

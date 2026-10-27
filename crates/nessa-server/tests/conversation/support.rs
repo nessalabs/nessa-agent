@@ -1672,6 +1672,7 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider,
                 execution_audit: Arc::new(AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -1731,6 +1732,7 @@ impl ConversationAgentSource for ModeAgentSource {
 impl ModeAgentSource {
     fn for_mode(&self, mode: ApprovalMode) -> ConversationAgent {
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(Provider::new(self.provider.clone()).with_mode(mode)),
             execution_audit: self.audit.clone(),
             reserved_output_tokens: 4096,

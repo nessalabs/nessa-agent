@@ -501,10 +501,14 @@ impl Agent {
     pub fn supports_turn_cancel(&self) -> bool {
         self.inner.lifecycle.supports_turn_cancel()
     }
-    /// Cancel `id` only when it is the active execution. A different or finished
-    /// turn, or a provider that cannot cancel one turn, returns
-    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`] and
-    /// sends nothing. This does not close the attachment.
+    /// Cancel `id` only while it is active, without closing the attachment.
+    /// Before native handoff the operation-owned work permit records a local
+    /// `TurnStopped` decision and prevents dispatch; this needs no native cancel
+    /// capability. After handoff the backend must support targeted cancellation.
+    /// A different or finished turn, or unsupported native cancellation, returns
+    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`].
+    /// `a_targeted_stop_during_file_preparation_is_undispatched_cancelled_and_does_not_close_the_session`
+    /// covers immediate and queued preparation and subsequent session reuse.
     pub async fn cancel_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
         let waiter = CallerWaiter::TurnCancel(id.clone());
         contain_caller_wake(waiter, self.cancel_active_turn(id)).await

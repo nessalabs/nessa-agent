@@ -503,6 +503,7 @@ impl Fixture {
                     HashMap::from([(
                         AgentId::Claude,
                         ConversationAgent {
+                workspace: None,
                             provider: Arc::new(Provider::new(provider.clone())),
                             execution_audit: execution_audit.clone(),
                             reserved_output_tokens: 4096,

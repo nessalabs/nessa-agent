@@ -691,7 +691,7 @@ mod tests {
             sessions::{InvocationRecord, SubmissionAcknowledgement},
         },
         domain::agent_execution::{
-            executions::{GrantInitiator, Initiation, MessageChunk, MessageId},
+            executions::{ExecutionOutcome, GrantInitiator, Initiation, MessageChunk, MessageId},
             permissions::{
                 RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
                 ReviewDeclineStage,

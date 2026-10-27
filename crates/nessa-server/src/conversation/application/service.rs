@@ -346,6 +346,9 @@ pub(super) fn blank_text(text: &str) -> bool {
 /// agent nobody has selected is still the agent yesterday's conversations need.
 #[derive(Clone)]
 pub struct ConversationAgent {
+    /// Canonical local workspace selected with this exact provider generation.
+    /// The execution environment's reported workspace takes precedence remotely.
+    pub workspace: Option<String>,
     /// What opens an execution session for it.
     pub provider: Arc<dyn AgentProvider>,
     /// The same durable audit sink injected into the provider and prepared Agent.
@@ -2106,7 +2109,7 @@ impl ConversationService {
                             }
                             let tool_source = checked_source(agent);
                             if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
-                                let workspace = opening.workspace.clone().or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                                let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
                                 if let Some(workspace) = workspace {
                                     let local = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| delivery.local.clone());
                                     opening.fence.set_input_files(Arc::new(super::ConversationInputFiles::new(
@@ -2310,6 +2313,7 @@ impl ConversationService {
                             let workspace = opening
                                 .workspace
                                 .as_ref()
+                                .or(configured.workspace.as_ref())
                                 .or(channel_folder.as_ref())
                                 .or(service.inner.workspace.as_ref());
                             if let Some(workspace) = workspace {
@@ -4716,7 +4720,11 @@ impl ConversationService {
     /// Record in the conversation's summary that `message` was accepted.
     async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
         let at_ms = self.inner.clock.unix_milliseconds();
-        let first_file = message.files().first().map(LinkedFile::name);
+        let first_file = message
+            .files()
+            .first()
+            .map(LinkedFile::name)
+            .or_else(|| message.uploads().first().map(|file| file.name()));
         self.change_summary(id, |previous| {
             Some(ConversationSummary::after_message(
                 previous,

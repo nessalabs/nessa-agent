@@ -63,6 +63,10 @@ deadline, including local turn cancellation that leaves the lease live. Provider
 admission must account for the maximum encoded path overhead before it saves
 input, and repeat validation against the resolved input before dispatch.
 
+The provider composition publishes the exact canonical local workspace it resolved.
+That same value feeds the resolver and runtime view; configured aliases are not
+resolved a second time for delivery. Remote environment workspaces take precedence.
+
 The resolver belongs to one lease. Session clones share it, and model/effort
 changes and native-process restoration retain it while that lease remains live.
 A replacement lease gets a new resolver. Retrying a saved execution first goes

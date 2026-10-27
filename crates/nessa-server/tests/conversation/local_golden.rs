@@ -130,6 +130,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(provider.clone())),
                 execution_audit: Arc::new(
                     DurableExecutionAudit::new(root.join("audit"), clock.clone()).unwrap(),

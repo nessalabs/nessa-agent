@@ -72,6 +72,7 @@ impl Fixture {
         let agent = |provider: Arc<
             dyn nessa_sdk::application::agent_execution::providers::AgentProvider,
         >| ConversationAgent {
+            workspace: None,
             provider,
             execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
             reserved_output_tokens: 4096,

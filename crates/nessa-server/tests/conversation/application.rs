@@ -3224,6 +3224,7 @@ fn prepared(
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -4668,6 +4669,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                 (
                     AgentId::Claude,
                     ConversationAgent {
+                workspace: None,
                         provider: Arc::new(Provider::new(claude.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
@@ -4678,6 +4680,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                 (
                     AgentId::Codex,
                     ConversationAgent {
+                workspace: None,
                         provider: Arc::new(Provider::new(codex.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
@@ -4798,6 +4801,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
         (
             id,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -4927,6 +4931,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
         (
             id,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -5069,6 +5074,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
         (
             id,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -5480,6 +5486,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -5500,6 +5507,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
     let nothing_reserved = HashMap::from([(
         AgentId::Claude,
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
             execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
             reserved_output_tokens: 0,
@@ -5541,6 +5549,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                     (
                         AgentId::Claude,
                         ConversationAgent {
+                workspace: None,
                             provider: Arc::new(Provider::new(claude.clone())),
                             execution_audit: Arc::new(
                                 crate::conversation_test_support::AcceptingAudit,
@@ -5553,6 +5562,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                     (
                         AgentId::Codex,
                         ConversationAgent {
+                workspace: None,
                             provider: Arc::new(Provider::new(codex.clone())),
                             execution_audit: Arc::new(
                                 crate::conversation_test_support::AcceptingAudit,

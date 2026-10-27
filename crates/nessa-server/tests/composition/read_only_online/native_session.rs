@@ -23,7 +23,7 @@ fn generated_swift_runs_paired_native_lifecycle() {
         std::env::var_os("NESSA_NATIVE_SWIFT_CHECK").expect("explicit native Swift checker");
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
-    let gateway = Gateway::start(&root);
+    let gateway = Gateway::start_mode(&root, "phone-files");
     let setup: Setup =
         serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
     let profile: Value =

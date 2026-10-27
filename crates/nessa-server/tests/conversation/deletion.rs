@@ -2387,6 +2387,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(provider.clone())),
                 execution_audit: Arc::new(
                     DurableExecutionAudit::new(root.join("audit"), clock.clone()).unwrap(),

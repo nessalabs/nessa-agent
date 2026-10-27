@@ -231,6 +231,7 @@ impl UserImageSource for NoImages {
 
 fn fixed_agent() -> ConversationAgent {
     ConversationAgent {
+        workspace: None,
         provider: Arc::new(Provider::new(Arc::new(ProviderFactory::default()))),
         execution_audit: Arc::new(AcceptingAudit),
         reserved_output_tokens: 4096,
