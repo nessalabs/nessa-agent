@@ -4,7 +4,7 @@ title: "Send an uploaded file from the phone"
 kind: "flow"
 status: "implemented"
 summary: "Original file references survive sending and recovery; verified paths belong to one execution environment."
-sourceRevision: "ecd37cbac43367272d244dc75484a07e5eec053c"
+sourceRevision: "e1873d42aaf09c01302454ce7b04516f6efe3327"
 parent: "gateway-attachments"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/uploaded_file.rs"
@@ -34,6 +34,8 @@ request admission verifies that scope before any upload, send or lookup.
 At dispatch, a resolver bound to the current conversation and lease prepares
 an ephemeral input copy. Its local workspace is the canonical path selected by
 the same provider generation; selecting a path alias does not change placement.
+Local placement is offered on Unix hosts under the existing POSIX path contract;
+other hosts return `NotOffered` before filesystem or byte reads.
 Local retained-handle placement or SSH fetch verifies
 the bytes and refuses an unrelated existing destination. Required outcome
 evidence precedes dispatch. All ACP profiles receive resource links to confirmed
