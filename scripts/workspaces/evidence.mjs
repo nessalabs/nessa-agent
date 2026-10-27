@@ -8,3 +8,11 @@ export function settledMessage(view, executionId) {
     ) ?? null
   )
 }
+
+/** Streaming deltas may split a marker at any character boundary. */
+export function messageText(message) {
+  return message.parts
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+}

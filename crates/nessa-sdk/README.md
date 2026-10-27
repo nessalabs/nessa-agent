@@ -530,10 +530,15 @@ checks mapping, omission, scoped owner retention and local-variable removal.
 
 A managed attachment asks `AgentProvider::restores_saved_context` with the saved
 context ID and whether its SDK history has any admitted invocations. Claude
-declines an uninvoked context because its native session is persisted only on
+declines restoration only when the entire conversation has zero admitted invocations, because its native session is persisted only on
 first prompt. Attachment records the replacement through the existing provider
 context transition. Any history with admitted work still requires native resume;
 a missing used context is an error, with saved inputs and context retained. Direct
 provider opens honor their explicit restore request. The regression
 `claude_replaces_only_uninvoked_context_and_requires_resume_after_work` exercises
 new context, durable reattachment, and missing used history against the ACP fixture.
+
+The empty-history exception does not classify a fresh native context created by
+switching agents or changing a workspace after earlier work. That existing cold
+context case remains conservatively refused if native resume fails; tracking
+admission per context is [issue 1164](https://github.com/nessalabs/nessa-agent/issues/1164).

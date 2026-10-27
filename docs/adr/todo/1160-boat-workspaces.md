@@ -174,7 +174,7 @@ The cold-main test observed ACP `-32002` (resource not found) after a gateway
 restart before the coordinator's first message. Claude's `session/new` supplies
 an ID but does not persist it until a prompt. Restoration now asks the provider
 with the saved ID and the authoritative fact of whether the SDK has admitted any
-invocations. Claude declines restoration only for an uninvoked context. The
+invocations. Claude declines restoration only when the entire conversation has zero admitted invocations. The
 existing attachment path records its replacement ID before publishing readiness;
 VM identity and workspace files are unchanged. Contexts with any admitted work
 still require successful native resume; a missing native history remains a typed
@@ -182,8 +182,49 @@ failure. No prompt or uncertain provider input is replayed.
 
 | Row | History / provider | Effect |
 | --- | --- | --- |
-| R1 | Uninvoked Claude context | Open fresh native context; record before/after through existing context transition |
+| R1 | Claude conversation with zero admitted invocations | Open fresh native context; record before/after through existing context transition |
 | R2 | Claude history with admitted work | Resume exact saved native context |
 | R3 | Used context missing at provider | Refuse; preserve saved history and context |
 | R4 | Pool worker does not hold saved context | Existing host ownership check and provider persistence constraint both apply |
 | R5 | Other provider / custom adapter | Existing restoration behavior by default |
+
+The empty-history exception does not classify a fresh native context created by
+switching agents or changing a workspace after earlier work. That existing cold
+context case remains conservatively refused if native resume fails; tracking
+admission per context is [issue 1164](https://github.com/nessalabs/nessa-agent/issues/1164).
+
+
+## Review corrections and image provenance
+
+Receipt publication enforces the same 8192-byte bound as reopening, including
+JSON overhead. A rejected oversized receipt preserves the intent and enters the
+existing failed-save cleanup path. Tests cover ASCII, multibyte and the exact
+serialized boundary.
+
+Coordinator retirement occurs only after confirmed history erasure. A failed
+channel transaction is a retryable summary-cleanup failure; the deletion cannot
+publish its finished tombstone until the replacement journal commits. Failed
+history erasure preserves the current main ID.
+
+The pinned worker was built from source `00efca5ef94d1a43635989f521daca91558353ea`,
+lease protocol `b698f20053f8bb7c`, Workspace SDK
+`33b8382d72657d176baca19797d8d146803f3d89`. Its Nessa binary SHA-256 is
+`bd83ce27d670741d9b378762f68c928563c249b73a0103bc587ed8a4cc73e089`;
+supervisor SHA-256 is
+`afe8510ce3f9fce707a14b221d28ea68a0a8298c983443eee1dbe14a77cd90d6`.
+`/opt/nessa/BUILD.json` and source licenses accompany the binaries. The image has
+no provider auth files, Nessa pairing identity or SSH keys. Later local allocation
+and channel-cleanup corrections do not change the worker's lease serving path.
+This is a manually published alpha image, not a release automation pipeline.
+
+
+Receipt-save failure retains the returned VM target in independent recovery
+audit evidence before rollback, and records rollback observation afterward.
+Failed or panicking audit ports do not skip cleanup; an unconfirmed cleanup or
+audit failure remains visible in the typed recovery error with its target.
+An accepted allocation task owns these steps after caller loss. Boat receives
+`NESSA_THREAD_ID` as a non-secret per-VM correlation marker before creation, so
+provider-side inspection still links the VM to the durable intent if both local
+stores are unavailable. No automatic replacement is authorized. Recovery audit
+files use the existing private, timestamped EnvironmentAudit store and backup
+inventory; their thread ID links the original conversation creation/lease actor.

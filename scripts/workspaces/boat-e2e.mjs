@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { settledMessage } from "./evidence.mjs"
+import { messageText, settledMessage } from "./evidence.mjs"
 /** Opt-in, paid-provider check. Uses an isolated gateway and disposable VMs.
  * The token is read from a private file, never argv, environment or evidence.
  * See README.md before running; Boat must already have a connected subscription. */
@@ -364,9 +364,7 @@ try {
     return view.messages.some(
       (message) =>
         message.status === "completed" &&
-        message.parts.some(
-          (part) => part.kind === "text" && part.text.includes("NESSA_DELEGATED_OK"),
-        ),
+        messageText(message).includes("NESSA_DELEGATED_OK"),
     )
   }, "delegated worker reply")
   record("coordinator dispatches real child on another VM", {

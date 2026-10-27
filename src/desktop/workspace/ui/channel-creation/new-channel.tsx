@@ -624,7 +624,8 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
       ))}
       <p>
         Boat runs Claude or Codex in a cloud workspace using your connected subscriptions.
-        Keep your Nessa gateway online; local folders need an approved connection.
+        Keep your Nessa gateway online; local folders need an approved connection. Alpha
+        VMs stop after one hour, including active work.
       </p>
     </div>
   )

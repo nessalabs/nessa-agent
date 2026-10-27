@@ -92,3 +92,20 @@ existing context transition records its replacement. A history with admitted wor
 still requires successful resume. Missing used native history is refused with
 its saved inputs and context retained. VM identity and workspace files do not
 change when the untouched native context is replaced.
+
+The empty-history exception does not classify a fresh native context created by
+switching agents or changing a workspace after earlier work. That existing cold
+context case remains conservatively refused if native resume fails; tracking
+admission per context is [issue 1164](https://github.com/nessalabs/nessa-agent/issues/1164).
+
+
+Receipt-save failure retains the returned VM target in independent recovery
+audit evidence before rollback, and records rollback observation afterward.
+Failed or panicking audit ports do not skip cleanup; an unconfirmed cleanup or
+audit failure remains visible in the typed recovery error with its target.
+An accepted allocation task owns these steps after caller loss. Boat receives
+`NESSA_THREAD_ID` as a non-secret per-VM correlation marker before creation, so
+provider-side inspection still links the VM to the durable intent if both local
+stores are unavailable. No automatic replacement is authorized. Recovery audit
+files use the existing private, timestamped EnvironmentAudit store and backup
+inventory; their thread ID links the original conversation creation/lease actor.

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { settledMessage } from "./evidence.mjs"
+import { messageText, settledMessage } from "./evidence.mjs"
 
 test("waits for the admitted execution rather than accepting a previous completion", () => {
   const old = { executionId: "previous", status: "completed" }
@@ -13,4 +13,17 @@ test("waits for the admitted execution rather than accepting a previous completi
     const terminal = { ...pending, status }
     assert.equal(settledMessage({ messages: [old, terminal] }, "new"), terminal)
   }
+})
+
+test("text evidence joins streaming deltas before matching", () => {
+  assert.equal(
+    messageText({
+      parts: [
+        { kind: "text", text: "NESSA_" },
+        { kind: "tool", text: "ignore" },
+        { kind: "text", text: "DELEGATED_OK" },
+      ],
+    }),
+    "NESSA_DELEGATED_OK",
+  )
 })
