@@ -48,3 +48,31 @@ fn contradictory_and_invalid_configuration_is_refused_before_any_edit() {
         );
     }
 }
+
+#[test]
+fn global_override_map_does_not_apply_a_single_owners_channel_quota() {
+    let channels = (0u64..1001)
+        .map(|n| {
+            let mut bytes = [0; 10];
+            for (index, byte) in bytes.iter_mut().enumerate() {
+                *byte = ((n >> (index * 5)) & 31) as u8;
+            }
+            (
+                ChannelId::from_random(bytes).as_str().to_owned(),
+                Value::Null,
+            )
+        })
+        .collect::<Map<String, Value>>();
+    assert_eq!(channels.len(), 1001);
+    let bytes =
+        serde_json::to_vec(&serde_json::json!({"boat":{"channelAutoStopSeconds":channels}}))
+            .unwrap();
+    let parsed = BoatRuntimeConfig::from_document(&bytes).unwrap();
+    assert_eq!(
+        parsed.section()["channelAutoStopSeconds"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1001
+    );
+}

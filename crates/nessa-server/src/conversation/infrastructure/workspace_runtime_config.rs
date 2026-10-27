@@ -2,7 +2,7 @@
 //! reader validates it with RuntimeConfig before any writer changes the file.
 #[cfg(any(unix, test))]
 use crate::conversation::domain::VmLifetimeSettings;
-use crate::conversation::domain::{ChannelId, VmLifetime, MAX_CHANNELS_PER_OWNER};
+use crate::conversation::domain::{ChannelId, VmLifetime};
 use serde::{de, Deserialize, Deserializer};
 use serde_json::{Error, Map, Value};
 use std::collections::BTreeMap;
@@ -110,9 +110,6 @@ fn overrides<'de, D: Deserializer<'de>>(
                 let id = ChannelId::new(&id).map_err(|_| de::Error::custom("invalid channel"))?;
                 if id.is_default() || channels.contains_key(&id) {
                     return Err(de::Error::custom("invalid channel override"));
-                }
-                if channels.len() == MAX_CHANNELS_PER_OWNER {
-                    return Err(de::Error::custom("too many channel overrides"));
                 }
                 let lifetime = VmLifetime::from_seconds(seconds)
                     .ok_or_else(|| de::Error::custom("invalid VM lifetime"))?;
