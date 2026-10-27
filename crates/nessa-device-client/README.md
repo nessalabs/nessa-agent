@@ -45,14 +45,39 @@ Current development surface:
   admission and checked protocol-bounded serialization.
 
 The explicit saved selector grants no connection, enrollment or command
-permission. It is not the phone repository. The native session and compound
+permission. The phone publication lease (`PhoneLease`) is what a later saved
+read or held-file fetch must present. Saved catalogue and transcript reads on
+the session go through that stamp; there is no unstamped session entry point. Session composition mints that lease's
+instance and its unexported identity from the injected entropy; a source that refuses opens no session.
+A published lease id is not itself a stamp.
+A stamp from an earlier receiver, or from an earlier session's lease, reads
+nothing and does not dial. A successful purge releases that receiver even when
+the status carries no observation. A later bind refuses that receiver while the purge receipt remains, including when the credential itself is still stored. A cache path whose metadata cannot be read is a cache failure and does not bind. Catalogue presence reads one stored identity;
+absence is not a tombstone, from one snapshot of the fence and the row.
+Held-file freshness is either a local digest match, with no range asked, or a
+gateway confirmation of the part on disk. Elapsed time is the session clock,
+including the status read when the file is not already local. A fault also
+reports the bytes the part had already resumed. A malformed digest, media type,
+or size is an invalid argument on the native call and does not dial. Busy-range
+retries wait on the pause the session was composed with. A stop during that wait
+returns within one stop slice and does not ask the next range. A spent fetch budget
+ends that wait the same way and is unreachable. A gateway refusal, including a
+handshake that refuses before a fetch exists, asks status again even when stop
+arrives after that refusal settled. The initial status and that recheck are
+returned with the fetch, including a terminal status that selected no reader.
+A local fault already produced stays that
+fault. A stop during the product handshake is a session stop. A stop during the
+part sync does not link the output. A budget that expires after the last range,
+or during that sync, is unreachable and does not link. A budget that expires
+after that sync check and before the link starts does not link either. A budget that expires
+while the hard link holds the gate leaves the output published. Once the hard link exists, a failure to remove
+the part or to sync the directory reports that the output exists. The native session and compound
 refresh API have run against paired records through generated Swift on macOS.
 `swift/NativeSessionWorker.swift` supplies pre-queue admission, cancellation latches
 and a shared physical close task around generated calls. The release Apple package
 builds and links for device/simulator; its session runs in the simulator and its
-macOS static package passes the paired/offline/revocation fixture. Nessa's actual
-retained repository, remote artifacts and durable uncertain deletion remain unfinished
-under issue 782. Enrollment retry returns its original receipt only when the
+macOS static package passes the paired/offline/revocation fixture. Saved
+publication and held-file fetch go through the phone lease. Enrollment retry returns its original receipt only when the
 whole retry succeeds. An outer status failure cannot establish absence of purge;
 recover durable receipts using the previously captured receiver separately.
 Caller composition must keep the eventual enrolled session's immutable private
