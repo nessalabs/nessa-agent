@@ -1,5 +1,8 @@
 # Local vault verification
 
+See the [final phone/main integration](phone-main-completion.md) for the current
+worker, native/browser/provider checks and source-specific review limits.
+
 See the [retention-gap wire follow-up](retention-gap-followup.md) for the late
 automated finding, shared receipt regression, and fresh closing review.
 
