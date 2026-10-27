@@ -4,7 +4,7 @@ title: "Send an uploaded file from the phone"
 kind: "flow"
 status: "implemented"
 summary: "Original file references survive sending and recovery; verified paths belong to one execution environment."
-sourceRevision: "e1873d42aaf09c01302454ce7b04516f6efe3327"
+sourceRevision: "030302e18aa44a718ca98b23d63f24d6f735791a"
 parent: "gateway-attachments"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/uploaded_file.rs"
@@ -15,6 +15,11 @@ sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-server/src/conversation/application/input_files.rs"
   - "crates/nessa-server/src/conversation/infrastructure/input_files.rs"
+  - "crates/nessa-server/src/conversation/infrastructure/input_files/unix.rs"
+  - "crates/nessa-local-storage/src/retained_directory.rs"
+  - "crates/nessa-local-storage/src/unix/retained_directory.rs"
+  - "crates/nessa-local-storage/tests/retained_directory.rs"
+  - "crates/nessa-sdk/tests/domain/agent_execution/uploaded_delivery.rs"
   - "crates/nessa-server/tests/conversation/input_files.rs"
   - "crates/nessa-server/tests/conversation/ssh_artifacts.rs"
 diagramLinks: {}
@@ -36,6 +41,9 @@ an ephemeral input copy. Its local workspace is the canonical path selected by
 the same provider generation; selecting a path alias does not change placement.
 Local placement is offered on Unix hosts under the existing POSIX path contract;
 other hosts return `NotOffered` before filesystem or byte reads.
+The selected root is caller trust, as for private-root acquisition; writable
+locator ancestry does not reject it. Current ownership, no group/other write
+bits, no-follow and retained binding checks remain required.
 Local retained-handle placement or SSH fetch verifies
 the bytes and refuses an unrelated existing destination. Required outcome
 evidence precedes dispatch. All ACP profiles receive resource links to confirmed
