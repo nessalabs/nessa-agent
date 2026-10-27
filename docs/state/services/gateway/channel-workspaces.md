@@ -42,6 +42,10 @@ diagramLinks: {}
 
 # Channel workspaces
 
+The phone-input parent is being integrated. This page retains its earlier source
+checkpoint until the combined lifetime, input-delivery and worker-image contract
+has completed its new source review and verification.
+
 This page reviews the alpha placement, allocation and main-chat lifecycle. It
 does not claim deployment, provider availability or completion of cloud wake,
 capacity scheduling, provider OAuth or live migration. Local remains the default

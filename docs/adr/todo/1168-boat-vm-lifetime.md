@@ -88,6 +88,7 @@ edit.
 | Simultaneous runtime/MCP/native edits | Shared config lock preserves unrelated values | Gated concurrent publication tests |
 | Caller loses save response | Read back saved preference; no automatic replay | Public client contract |
 | Settings change during a running VM | Existing deadline unchanged | UI sentence and allocation assertions |
+| Uploaded input is sent to a finite Boat thread, then that VM resumes unlimited | Deliver the stored bytes into the selected workspace without replacing the VM or changing its active deadline; workspace copy survives resume | Combined real-provider uploaded-text, lifetime and restart receipts |
 | Default-channel membership (None) | Use global preference; synthetic default channel has no override | Default membership test |
 | Close saved-channel settings | Return keyboard focus to the channel's settings control; preserve label and click space beside row status | Both-engine/layout browser geometry and focus check |
 | Row has settings actions and decorative status | Keep action hit testing separate: settings receives its click, status/count passes the pointer to the row. Presence of actions does not replace the decoration's identity. | Shared-controls real-browser row hit tests and settings matrix |
