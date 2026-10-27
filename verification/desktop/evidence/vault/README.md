@@ -1,5 +1,8 @@
 # Local vault verification
 
+See the [retention-gap wire follow-up](retention-gap-followup.md) for the late
+automated finding, shared receipt regression, and fresh closing review.
+
 See [mainline completion](completion.md) for the integration with current main,
 matching worker publication, fresh reviews and separately tracked baseline limits.
 
