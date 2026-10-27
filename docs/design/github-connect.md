@@ -16,8 +16,8 @@ phone or a second window sees the same one. The owner is
 | Fact | Owner | Kept in |
 | --- | --- | --- |
 | Which app, and GitHub's addresses | `github/infrastructure/app.rs` | `protocol/defaults/github-app.json`, or the file `NESSA_GITHUB_APP` names (checks point it at a fake GitHub on this machine) |
-| Signed out, waiting for a code, or signed in | `GithubConnections` | memory, and the OS credential entry when signed in |
-| The token and whose it is | `GithubTokenKeychain` | injected OS credential entry scoped by namespace; legacy `sign-in.json` is consumed only for a verified one-time upgrade |
+| Signed out, waiting for a code, or signed in | `GithubConnections` | memory, and an encrypted vault entry when signed in |
+| The token and whose it is | `GithubTokenVault` | injected entry in the session-unlocked local vault; legacy `sign-in.json` is consumed only for a verified one-time upgrade |
 | Each step, for the owner to look back on | `DurableGithubAudit` | `<namespace>/conversations/audit/github`, one private file per record, never a token or a code; a `connect-ended` record names what decided it (`github_answered`, `deadline_passed`, `github_unreachable`, `store_failed`) |
 | What an agent is started with | `GithubLaunchCredentials` (an SDK `OpenCredentialSource`) | read again at every agent open, never saved with the conversation |
 | What the person sees | `src/desktop/settings/ui/github-row.tsx` | nothing: it reads `github.status` |
@@ -48,7 +48,7 @@ sequenceDiagram
     H-->>G: access_token
     G->>H: GET /user (Bearer token)
     H-->>G: id, login
-    G->>G: audit connected, save and verify OS credential entry, then Connected
+    G->>G: audit connected, save and verify encrypted vault entry, then Connected
     S->>G: github.status
     G-->>S: connected {account}
     A->>G: opens (new conversation, or a parked one woken)
@@ -114,7 +114,7 @@ waiting.
 | G8 | connecting | poll: expired, or the code's time passes | signed out, `last: expired` | connect-ended |
 | G9 | connecting | poll: denied | signed out, `last: denied` | connect-ended |
 | G9a | connecting | any end (G8, G9, G11, G12, G14) whose record cannot be kept | ends all the same, the cause kept in `last`, with `unrecorded` | — |
-| G10 | connecting | poll: token; account read | `connected` recorded, then the file saved, then connected | connected |
+| G10 | connecting | poll: token; account read | `connected` approval recorded, then the encrypted entry saved and verified, then connected; reports connecting while either receipt waits | connected |
 | G11 | connecting | token; account read refused | signed out, `last: rejected`; the token is dropped | connect-ended |
 | G12 | connecting | token; account read never answers (or keeps failing) before the code would expire | signed out, `last: unreachable` | connect-ended |
 | G13 | connecting | token; the record cannot be kept | signed out, `last: audit_unavailable`; never saved, never given out | — |
@@ -143,7 +143,7 @@ read its app. See the [protocol table](../../protocol/README.md).
 
 - Owner orderings: `crates/nessa-server/tests/github/mod.rs`, with a scripted
   GitHub, a memory store and a recording audit on a manual clock.
-- The HTTP answers, the app file, the OS credential entry, the audit and the git
+- The HTTP answers, the app file, the encrypted vault entry, the audit and the git
   helper (a real `git credential fill`): unit tests beside each in
   `github/infrastructure`.
 - Open credentials reach each agent at each open, and never print:
@@ -184,3 +184,15 @@ requires an explicit **Continue with retained events** action. No event starts a
 conversation or an agent turn in this feature.
 
 OS storage, migration and encrypted inbox orderings are recorded in [ADR 1132](../adr/todo/1132-github-relay-hardening.md).
+
+## Approval while durable receipts are pending
+
+After GitHub approves a code, the gateway keeps reporting Connecting until both
+the audit and encrypted-storage receipts complete. The internal Saving projection
+retains the code and original deadline without a second poll or terminal-audit
+owner. This lets Settings keep polling instead of treating a temporary SignedOut
+snapshot as the end of the attempt. Only the final verified publication exposes
+a token to an agent. Refusal or storage/audit failure still ends the attempt with
+its actual reason. Locking drops a stale projection; the original completion
+continues to own its evidence and cannot publish into a newer unlock generation.
+The ordering table is in [ADR 1152](../adr/todo/1152-local-vault.md).

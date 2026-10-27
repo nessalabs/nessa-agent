@@ -174,3 +174,30 @@ Audit restoration validates the same bounded row contract as append. It checks
 legal action/cause/result and target/state combinations, identity bounds and
 contiguous durable sequence. It does not invent global ordering across concurrent
 leases, authenticate same-user file edits, or infer absent rows outside retention.
+
+## Approval receipts remain pending in the public status
+
+CI rerun40446076479 reported a later GitHub-row failure after provider approval.
+The following source ordering matches that symptom; its regression is tested
+independently of attributing a precise interleaving to the hosted run.
+The completion path took the pending attempt into its own terminal ownership,
+then awaited audit and encrypted-storage receipts while projecting SignedOut.
+A Settings poll during that interval stopped polling and could miss the later
+Connected publication. Returning SignedOut before either receipt was a false
+terminal result, rather than an authorization or persistence failure.
+
+Keep ownership of the terminal operation in the completion task, but project an
+explicit Saving state as Connecting while those receipts are pending. The saving
+projection retains only immutable generation/code/deadline information; it does
+not own another poll task or another terminal audit. Taking the attempt and
+installing that projection must happen under the same state mutex. The existing
+per-generation mutation gate still orders disconnect/cancel/restore with save.
+
+| Ordering | Required result |
+| --- | --- |
+| Provider approved; Connected audit is waiting | Status stays Connecting with the same code; no token is exposed |
+| Audit accepted; encrypted save receipt is waiting | Still Connecting; only both receipts permit Connected/token |
+| Audit or save fails | Publish the existing actual failure as SignedOut; do not leave a permanent pending projection |
+| Vault locks or its owner closes during save | Drop stale Saving projection; original completion owns remaining evidence, and its old-generation result cannot publish |
+| Disconnect arrives during save | Same-generation gate orders it after save, then deletes the resulting stored credential |
+| Denial, expiry or cancel | The existing terminal paths continue projecting SignedOut; Saving is specific to approved credentials awaiting receipts |

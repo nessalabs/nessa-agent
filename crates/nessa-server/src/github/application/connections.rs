@@ -54,6 +54,14 @@ enum State {
         unrecorded: bool,
     },
     Connecting(Attempt),
+    /// Completion owns the terminal operation; this immutable projection keeps
+    /// status pending until both durable receipts arrive. It owns no poll task.
+    Saving {
+        generation: u64,
+        user_code: String,
+        verification_uri: String,
+        expires_at: Moment,
+    },
     Connected {
         generation: u64,
         sign_in: GithubSignIn,
@@ -67,7 +75,9 @@ impl State {
         match self {
             Self::SignedOut { .. } => None,
             Self::Connecting(attempt) => Some(attempt.generation),
-            Self::Connected { generation, .. } => Some(*generation),
+            Self::Saving { generation, .. } | Self::Connected { generation, .. } => {
+                Some(*generation)
+            }
         }
     }
     /// Signed out, with the end of the latest attempt (if any) on record.
@@ -331,7 +341,7 @@ impl GithubConnections {
         // Read, then let go of the state before answering from it.
         let held = match &*inner.state.lock().unwrap() {
             State::Connected { sign_in, .. } => Held::SignedIn(sign_in.account.clone()),
-            State::Connecting(_) => Held::Waiting,
+            State::Connecting(_) | State::Saving { .. } => Held::Waiting,
             State::SignedOut { .. } => Held::Nothing,
         };
         let account = match held {
@@ -483,11 +493,17 @@ impl Inner {
                 last: *last,
                 unrecorded: *unrecorded,
             },
-            State::Connecting(attempt) => GithubStatus::Connecting {
-                user_code: attempt.user_code.clone(),
-                verification_uri: attempt.verification_uri.clone(),
-                expires_in_seconds: attempt.expires_at.since(self.timer.now()).as_secs(),
-            },
+            State::Connecting(attempt) => self.connecting_status(
+                &attempt.user_code,
+                &attempt.verification_uri,
+                attempt.expires_at,
+            ),
+            State::Saving {
+                user_code,
+                verification_uri,
+                expires_at,
+                ..
+            } => self.connecting_status(user_code, verification_uri, *expires_at),
             State::Connected {
                 sign_in,
                 unrecorded,
@@ -496,6 +512,19 @@ impl Inner {
                 account: sign_in.account.clone(),
                 unrecorded: *unrecorded,
             },
+        }
+    }
+
+    fn connecting_status(
+        &self,
+        user_code: &str,
+        verification_uri: &str,
+        expires_at: Moment,
+    ) -> GithubStatus {
+        GithubStatus::Connecting {
+            user_code: user_code.to_owned(),
+            verification_uri: verification_uri.to_owned(),
+            expires_in_seconds: expires_at.since(self.timer.now()).as_secs(),
         }
     }
 
@@ -551,7 +580,11 @@ impl Inner {
         }
     }
 
-    fn take_waiting(&self, operation_id: &str) -> Option<Attempt> {
+    fn take_waiting(
+        &self,
+        operation_id: &str,
+        projection: impl FnOnce(&Attempt) -> State,
+    ) -> Option<Attempt> {
         if self.retire_stale().is_err() {
             tracing::error!("GitHub vault cleanup audit failed");
         }
@@ -561,7 +594,12 @@ impl Inner {
             return None;
         }
         match std::mem::replace(&mut *state, State::signed_out(None)) {
-            State::Connecting(attempt) => Some(attempt),
+            State::Connecting(attempt) => {
+                // Taking terminal ownership and replacing the public projection
+                // are one transition; a status read cannot observe the temporary value.
+                *state = projection(&attempt);
+                Some(attempt)
+            }
             _ => unreachable!("matched above"),
         }
     }
@@ -575,7 +613,7 @@ impl Inner {
         let Ok(_change) = self.change_in(generation).await else {
             return;
         };
-        let Some(attempt) = self.take_waiting(operation_id) else {
+        let Some(attempt) = self.take_waiting(operation_id, |_| State::signed_out(None)) else {
             return;
         };
         let generation = attempt.generation;
@@ -611,11 +649,17 @@ impl Inner {
         let Ok(_change) = self.change_in(generation).await else {
             return;
         };
-        let Some(attempt) = self.take_waiting(operation_id) else {
-            return;
+        let (generation, caller) = {
+            let Some(attempt) = self.take_waiting(operation_id, |attempt| State::Saving {
+                generation: attempt.generation,
+                user_code: attempt.user_code.clone(),
+                verification_uri: attempt.verification_uri.clone(),
+                expires_at: attempt.expires_at,
+            }) else {
+                return;
+            };
+            (attempt.generation, attempt.caller)
         };
-        let generation = attempt.generation;
-        let caller = attempt.caller;
         let record = |event| GithubAuditRecord {
             operation_id: operation_id.to_owned(),
             caller: caller.clone(),

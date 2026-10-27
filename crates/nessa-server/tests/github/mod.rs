@@ -1258,3 +1258,157 @@ async fn approved_sign_in_stays_connecting_until_audit_and_store_receipts() {
         assert_eq!(connections.token().unwrap().expose(), "approved-token");
     }
 }
+
+#[tokio::test]
+async fn disconnect_during_approved_receipts_waits_and_removes_the_saved_sign_in() {
+    for audit_wait in [true, false] {
+        let f = Fixture::new();
+        let hold = Arc::new(Notify::new());
+        if audit_wait {
+            *f.audit.hold_connected.lock().unwrap() = Some(hold.clone());
+        } else {
+            *f.store.hold_save.lock().unwrap() = Some(hold.clone());
+        }
+        let connections = f.connections().await;
+        connections.connect(caller("desktop")).await.unwrap();
+        f.github
+            .answer([Ok(PollAnswer::Granted(token("approved-token")))]);
+        f.next_poll().await;
+        let reached = if audit_wait {
+            &f.audit.connected_started
+        } else {
+            &f.store.save_started
+        };
+        tokio::time::timeout(Duration::from_secs(5), reached.notified())
+            .await
+            .unwrap();
+        let disconnect = connections.disconnect(caller("disconnecting-desktop"));
+        tokio::pin!(disconnect);
+        tokio::select! {
+            biased;
+            result = &mut disconnect => panic!("disconnect overtook pending receipts: {result:?}"),
+            _ = std::future::ready(()) => {}
+        }
+        hold.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), disconnect)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(connections.status(), signed_out(None));
+        assert!(connections.token().is_none());
+        assert!(f.store.held.lock().unwrap().is_none());
+        assert!(matches!(
+            f.audit.events().last(),
+            Some(GithubAuditEvent::Disconnected)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn a_closed_vault_during_approved_receipts_preserves_a_new_restoration_and_terminal_owner() {
+    for audit_wait in [true, false] {
+        let f = Fixture::new();
+        let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+        let connections = GithubConnections::load(
+            f.github.clone(),
+            access.clone(),
+            f.store.clone(),
+            f.audit.clone(),
+            f.timer.clone(),
+        )
+        .await;
+        let hold = Arc::new(Notify::new());
+        if audit_wait {
+            *f.audit.hold_connected.lock().unwrap() = Some(hold.clone());
+        } else {
+            *f.store.hold_save.lock().unwrap() = Some(hold.clone());
+        }
+        connections
+            .connect(caller("original-desktop"))
+            .await
+            .unwrap();
+        f.github
+            .answer([Ok(PollAnswer::Granted(token("old-approved-token")))]);
+        f.next_poll().await;
+        let reached = if audit_wait {
+            &f.audit.connected_started
+        } else {
+            &f.store.save_started
+        };
+        tokio::time::timeout(Duration::from_secs(5), reached.notified())
+            .await
+            .unwrap();
+        // Queue a real old-generation command: its eventual rejection proves
+        // the old completion released its generation gate after publication.
+        let cancel = connections.cancel(caller("departed-desktop"));
+        tokio::pin!(cancel);
+        tokio::select! {
+            biased;
+            result = &mut cancel => panic!("cancel overtook pending receipts: {result:?}"),
+            _ = std::future::ready(()) => {}
+        }
+        access.0.store(0, std::sync::atomic::Ordering::SeqCst);
+        connections.clear_locked().unwrap();
+        connections.clear_locked().unwrap();
+        assert_eq!(connections.status(), signed_out(None));
+        assert!(connections.token().is_none());
+        let before = f.audit.events();
+        assert!(!before
+            .iter()
+            .any(|event| matches!(event, GithubAuditEvent::ConnectEnded { .. })));
+        access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+        *f.store.held.lock().unwrap() = Some(GithubSignIn {
+            account: octo(),
+            token: token("new-session-token"),
+        });
+        // When the old save has not started, model the scoped store's refusal.
+        // Real read/save/delete generation fences are exercised by token_vault tests.
+        *f.store.unwritable.lock().unwrap() = audit_wait;
+        tokio::time::timeout(Duration::from_secs(5), connections.restore())
+            .await
+            .unwrap()
+            .unwrap();
+        hold.notify_one();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), cancel)
+                .await
+                .unwrap(),
+            Err(GithubError::StoreUnavailable)
+        ));
+        assert_eq!(connections.token().unwrap().expose(), "new-session-token");
+        assert_eq!(
+            f.store
+                .held
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .token
+                .expose(),
+            "new-session-token"
+        );
+        let rows = f.audit.records.lock().unwrap();
+        let ends: Vec<_> = rows
+            .iter()
+            .filter(|row| matches!(row.event, GithubAuditEvent::ConnectEnded { .. }))
+            .collect();
+        assert_eq!(ends.len(), usize::from(audit_wait));
+        if let Some(ended) = ends.first() {
+            assert_eq!(ended.operation_id, rows[0].operation_id);
+            assert_eq!(ended.caller, caller("original-desktop"));
+            assert!(matches!(
+                ended.event,
+                GithubAuditEvent::ConnectEnded {
+                    cause: EndCause::VaultLocked,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            rows.iter()
+                .filter(|row| matches!(row.event, GithubAuditEvent::Connected { .. }))
+                .count(),
+            1
+        );
+    }
+}
