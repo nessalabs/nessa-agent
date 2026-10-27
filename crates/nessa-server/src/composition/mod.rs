@@ -65,6 +65,8 @@ mod tunnel;
 mod runtime_config;
 
 mod agent;
+#[cfg(test)]
+pub(crate) use agent::REVIEW_WAIT;
 
 // Where its consumers are: the provider's agent budgets and the conversation
 // service's deletion budgets are both built only with Unix process supervision.

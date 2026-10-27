@@ -133,6 +133,7 @@ pub(super) fn configure(
             selected: None,
             runtimes: HashMap::new(),
             channel_instructions: None,
+            review_deadlines: super::agent::review_deadlines(),
         });
     }
     let agents = settings.agents.as_mut().expect("agents configured above");

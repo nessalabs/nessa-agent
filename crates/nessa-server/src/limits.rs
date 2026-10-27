@@ -116,6 +116,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one",
         },
         Limit {
+            id: "agent.review_wait_seconds",
+            tier: "configured",
+            owner: "config.json agents.reviewWaitSeconds",
+            meaning: "a tool review nobody answers in this many seconds is denied and the agent goes on without the tool; a read inside the workspace is allowed after 8 seconds instead (ADR 141)",
+        },
+        Limit {
             id: "organization.leases",
             tier: "configured",
             owner: "config.json limits.organizationLeases",
@@ -563,6 +569,7 @@ fn count(value: usize) -> u64 {
 pub(crate) fn effective_json(
     limits: &OperationalLimits,
     session: &SessionSettings,
+    review_wait: Duration,
 ) -> serde_json::Value {
     let mut values = BTreeMap::new();
     let mut put = |id: &str, value: u64| {
@@ -594,6 +601,7 @@ pub(crate) fn effective_json(
         "server.agent_idle_seconds",
         limits.agent_idle().map_or(0, |idle| idle.as_secs()),
     );
+    put("agent.review_wait_seconds", review_wait.as_secs());
     put(
         "organization.leases",
         limits.organization_leases().map_or(0, count),
@@ -765,7 +773,7 @@ fn value_of(id: &str, values: &serde_json::Map<String, serde_json::Value>) -> St
 /// The catalogue rendered as the committed `docs/limits.md`.
 #[cfg(test)]
 fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
-    let values = match effective_json(limits, session) {
+    let values = match effective_json(limits, session, crate::composition::REVIEW_WAIT) {
         serde_json::Value::Object(values) => values,
         _ => serde_json::Map::new(),
     };
@@ -868,7 +876,7 @@ mod tests {
     fn effective_values_follow_the_owners() {
         let limits = OperationalLimits::default();
         let session = SessionSettings::default();
-        let document = effective_json(&limits, &session);
+        let document = effective_json(&limits, &session, crate::composition::REVIEW_WAIT);
         let values = document.as_object().expect("object");
         assert_eq!(
             values.get("server.requests").and_then(|v| v.as_u64()),

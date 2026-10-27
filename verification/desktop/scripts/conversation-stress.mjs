@@ -1064,6 +1064,14 @@ async function expectShown(page, text, failures, ms) {
     failures.push(`the window does not show ${JSON.stringify(text)}`)
 }
 
+/**
+ * How long a review the deadline would deny waits, as the gateway arms it
+ * when `agents.reviewWaitSeconds` is left out (`REVIEW_WAIT` in
+ * crates/nessa-server/src/composition/agent.rs). The stress gateway leaves it
+ * out, so this is the default a person gets.
+ */
+const REVIEW_WAIT_MS = 300_000
+
 /** The visible agent card, once there is one; `null` after `ms`. */
 async function card(page, ms = 30_000) {
   const cards = page.locator(css.agentApproval)
@@ -1109,6 +1117,22 @@ async function answerCard(run, conversationId, answer, failures, reason) {
   const permission =
     view?.permissions?.find((each) => !reason || each.title === reason) ??
     view?.permissions?.[0]
+  // A review the deadline would deny waits long enough to answer from the
+  // phone, and the card counts it down in minutes.
+  const deadline = permission?.deadline
+  if (deadline?.effect === "deny") {
+    if (deadline.waitMs !== REVIEW_WAIT_MS)
+      failures.push(
+        `a review waits ${deadline.waitMs} ms before it is denied, not ${REVIEW_WAIT_MS}`,
+      )
+    const said = await asking
+      .first()
+      .locator('[role="timer"]')
+      .getAttribute("aria-label", { timeout: 5_000 })
+      .catch(() => null)
+    if (!said || !/within \d+ minutes?,/.test(said))
+      failures.push(`the card's countdown says ${JSON.stringify(said)}, not minutes`)
+  }
   const label = offeredLabel(permission?.options, answer === "allow" ? "allow" : "deny")
   if (!label) {
     failures.push(`the review offers no ${answer}`)

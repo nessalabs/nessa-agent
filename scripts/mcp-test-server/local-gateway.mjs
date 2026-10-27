@@ -190,6 +190,9 @@ export async function exited(child, ms) {
  *   agent (`signedOutEnvironment`), for an agent that needs none
  * @param {object} [o.limits] the config's `limits`, as `docs/limits.md` names
  *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
+ * @param {number} [o.reviewWaitSeconds] `agents.reviewWaitSeconds`: how long a
+ *   review other than a read inside the workspace waits before it is denied;
+ *   the gateway's default (five minutes) when absent
  * @param {object} [o.native] the config's `native` section
  *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
  * @param {string} [o.evidence] task-owned output directory. Before private data
@@ -302,6 +305,7 @@ export async function startLocalGateway(o) {
             // Other agents the gateway may carry a conversation on under.
             ...o.runtimes,
           },
+          ...(o.reviewWaitSeconds ? { reviewWaitSeconds: o.reviewWaitSeconds } : {}),
         },
         ...(o.limits ? { limits: o.limits } : {}),
         ...(o.native ? { native: o.native } : {}),
