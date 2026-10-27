@@ -2226,7 +2226,9 @@ surfaces use.
 
 `user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only, uploaded-file-only and mixed inputs retain the exact image encoding/size, linked path, and original uploaded-file name, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.
 
-The conversation stress `inputFiles` step repeats PDF, ZIP and text sends from another surface, checks placed bytes, saved references, same-identity retries and visible names. Raise `--inputFiles` to repeat it.
+The conversation stress `inputFiles` step runs the production Swift phone model through both its prepared-command journal and persistent outbox while background conversations run. It sends PDF, ZIP and text, retries through the same product path and identity, and checks placed bytes, saved references, one turn per identity and visible names. Build `PhoneSyncVerification` in the companion nessa-ios repository and set `NESSA_PHONE_FILES_VERIFIER` to its absolute executable path. Raise `--inputFiles` to repeat it. A missing verifier fails before starting a gateway.
+
+The iOS repository's `phone-files-stress` macOS workflow owns default and raised phone runs against pinned public gateway source, alongside its private Swift product. The gateway's Ubuntu core and nightly jobs explicitly use `--inputFiles 0`; those jobs alone do not verify phone sending. For the full companion check, run `node <nessa-ios>/scripts/verify-phone-files-stress.mjs <gateway-root> <evidence-directory>` with the verifier environment set.
 
 ## Compact send recovery (#914)
 

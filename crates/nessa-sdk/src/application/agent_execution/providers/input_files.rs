@@ -1,5 +1,6 @@
 //! Stored input is resolved for one provider delivery, not rewritten in history.
 #![deny(missing_docs)]
+use crate::application::agent_execution::{agents::AgentError, executions::ExecutionRequest};
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{LinkedFile, UploadedFileReference},
@@ -47,13 +48,8 @@ impl PreparedInputFile {
 }
 /// Preparation result for one dispatch. Dropping it cancels interest in delivery;
 /// an adapter retains ownership of physical work and required evidence until settled.
-pub type InputFileFuture<'a> = Pin<
-    Box<
-        dyn Future<Output = Result<Vec<PreparedInputFile>, super::super::agents::AgentError>>
-            + Send
-            + 'a,
-    >,
->;
+pub type InputFileFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<PreparedInputFile>, AgentError>> + Send + 'a>>;
 /// Injected preparation bound to one conversation and execution environment.
 ///
 /// Resolve original references in order. Verify bytes before returning confirmed
@@ -70,3 +66,12 @@ pub trait InputFileResolver: Send + Sync {
         files: Vec<UploadedFileReference>,
     ) -> InputFileFuture<'_>;
 }
+
+/// One admitted input's asynchronous preparation and final validation.
+///
+/// The backend polls this before native handoff, under the same deadline as
+/// dispatch and response. A failure is an undispatched rejection. Dropping the
+/// future abandons delivery interest; the resolver still owns physical cleanup
+/// and required evidence. It carries no adapter clock or dispatch authority.
+pub type ProviderInputFuture =
+    Pin<Box<dyn Future<Output = Result<ExecutionRequest, AgentError>> + Send>>;

@@ -135,7 +135,7 @@ and settles undispatched work as cancelled without a provider/cleanup report;
 after handoff it delegates to native cancellation. Dropping preparation interest
 signals the resolver's retained worker, which joins physical placement and required
 evidence before releasing its slot. Range reads and audit waits have 10-second
-limits; a resolution has a 120-second caller deadline. No second preparation
+limits; a resolution has a 120-second caller deadline. ACP also owns the operation deadline: after generation acquisition it arms execution or steering time before polling the prepared-input future, and carries that absolute deadline through image reads and native dispatch. A preparation deadline is an undispatched rejection, not a fabricated provider result. No second preparation
 registry owns execution state.
 
 Original references survive snapshot decoding, retained-allocation accounting,
@@ -159,6 +159,9 @@ the refreshed Apple package to decode records containing uploaded files.
 | F9 | Close, stop or deletion overtakes placement | Bound and stop the transfer; record confirmed versus uncertain effects honestly; do not dispatch an unconfirmed path. |
 | F9a | Stop arrives before native handoff, including while ranges are pending | WorkPermit records undispatched cancellation; no provider report or prompt; later turns remain usable. |
 | F9b | Native handoff wins before Stop | The native owner receives cancellation; preparation cannot retroactively claim an undispatched stop. |
+| F9c | Execution or steering deadline expires while placement is pending, or placement becomes ready exactly at expiry | ACP rejects before handoff; no provider events/report or late dispatch. Preparation interest drops while its physical owner settles cleanup/evidence. |
+| F9d | Placement succeeds before the deadline | Image reads, queueing and provider response spend the remaining time on the same absolute deadline. |
+| F9e | Close or generation loss overtakes preparation | Reject before handoff; a close already observed before polling preparation starts no placement. |
 | F10 | Bytes become unreadable or their hold is released while streaming | Typed delivery failure; no successful prompt with a missing file. |
 | F11 | Destination exists with the same bytes | Reuse only after the placement owner verifies the file. |
 | F12 | Destination is occupied by other bytes, a symlink, or a name escapes the workspace | Refuse placement without replacing the existing target. |
@@ -179,7 +182,7 @@ transport fixture, not evidence of a live network SSH daemon or model service.
 `FileVerification --files` sends PDF, ZIP and text bytes from the production Swift
 phone model through a live gateway to an ACP fixture that reads the file and
 returns its SHA-256. Native exchange tests cover piece writes and exact references
-in send/receipt. The desktop `inputFiles` stress step repeats cross-surface sends,
+in send/receipt. The desktop `inputFiles` stress step invokes the production Swift journal/outbox against its main conversation while background turns run,
 checks placed bytes, original references, retry identity and visible filenames.
 UI evidence uses Chromium and WebKit. PR verification records the exact revisions,
 commands, results and any exclusions; source presence alone is not a test result.

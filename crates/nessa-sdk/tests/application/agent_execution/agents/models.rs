@@ -134,10 +134,14 @@ impl ProviderSessionBackend for Backend {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            let input = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             // This fixture owns its native turn before announcing started;
             // the inner backend below supplies its terminal result.
             if let Err(error) = handoff() {
@@ -167,17 +171,23 @@ impl ProviderSessionBackend for Backend {
                     .await
                     .unwrap();
             }
-            self.inner.execute(input, handoff).await
+            self.inner
+                .execute(Box::pin(async move { Ok(input) }), handoff)
+                .await
         })
     }
     fn steer<'a>(
         &'a self,
         target: ExecutionId,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
+            let input = input.await.map_err(|error| {
+                started();
+                ProviderOperationFailure::new(error, ProviderSessionState::Usable)
+            })?;
             started();
             let outcome = *self.steering.lock().unwrap();
             match outcome {

@@ -350,12 +350,15 @@ jobs:
         run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
       - name: Verify pane dragging after deferred fitting in both browsers
         run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+      # The private Swift phone product is exercised by nessa-ios's macOS
+      # phone-files-stress workflow against this exact gateway source.
+      # This Ubuntu job cannot build that product; it retains core window load.
       - name: Run the conversation stress check
         shell: bash
         run: |
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
-          pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+          pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
       # The menu-bar panel ships in WKWebView, so its step also runs alone in
       # WebKit: page dots, the sent bubble's accent and rim, and the undo card.

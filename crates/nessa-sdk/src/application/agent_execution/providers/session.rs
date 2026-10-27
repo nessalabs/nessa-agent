@@ -226,13 +226,12 @@ impl ProviderSession {
             if let Err(error) = self.validate(&input) {
                 return ProviderExecutionReply::Rejected(error);
             }
-            let input = match self.prepare_input(input).await {
-                Ok(input) => input,
-                Err(error) => return ProviderExecutionReply::Rejected(error),
-            };
-            if let Err(error) = self.validate(&input) {
-                return ProviderExecutionReply::Rejected(error);
-            }
+            let session = self.clone();
+            let input = Box::pin(async move {
+                let input = session.prepare_input(input).await?;
+                session.validate(&input)?;
+                Ok(input)
+            });
             match self.backend.execute(input, handoff).await {
                 ProviderExecutionReply::Rejected(error) => {
                     ProviderExecutionReply::Rejected(error.bounded())
@@ -262,23 +261,13 @@ impl ProviderSession {
                     ProviderSessionState::Usable,
                 ));
             }
-            let input = match self.prepare_input(input).await {
-                Ok(input) => input,
-                Err(error) => {
-                    started();
-                    return Err(ProviderOperationFailure::new(
-                        error,
-                        ProviderSessionState::Usable,
-                    ));
-                }
-            };
-            if let Err(error) = self.validate_with_capabilities(capabilities, &input) {
-                started();
-                return Err(ProviderOperationFailure::new(
-                    error,
-                    ProviderSessionState::Usable,
-                ));
-            }
+            let session = self.clone();
+            let binding = capabilities.clone();
+            let input = Box::pin(async move {
+                let input = session.prepare_input(input).await?;
+                session.validate_with_capabilities(&binding, &input)?;
+                Ok(input)
+            });
             self.backend
                 .steer(target, input, capabilities, started)
                 .await

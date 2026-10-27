@@ -22,8 +22,8 @@ use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
-    ExecutionUpdate, PermissionAuthoritySource,
+    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionUpdate,
+    PermissionAuthoritySource,
 };
 use nessa_sdk::application::agent_execution::permissions::{
     ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
@@ -33,10 +33,10 @@ use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
     ExecutionReport, ModelChange, ModelChangeEffect, ModelChangeTiming, ObservationFailure,
     OpenedProviderSession, ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-    ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
-    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
-    SteeringOutcome,
+    ProviderInputFuture, ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture,
+    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
+    ProviderOperationFuture, ProviderSession, ProviderSessionBackend, ProviderSessionState,
+    SessionCloseRequest, SteeringOutcome,
 };
 use nessa_sdk::application::agent_execution::providers::{
     HarnessHostIdentity, NativeExecutionHandoff,
@@ -2123,11 +2123,15 @@ impl ProviderSessionBackend for Backend {
     fn steer<'a>(
         &'a self,
         _: nessa_sdk::domain::agent_execution::executions::ExecutionId,
-        _: ExecutionRequest,
+        input: ProviderInputFuture,
         _: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
+            input.await.map_err(|error| {
+                started();
+                ProviderOperationFailure::new(error, ProviderSessionState::Usable)
+            })?;
             started();
             if self.factory.inject_steers.load(Ordering::SeqCst) {
                 return Ok(SteeringOutcome::Injected);
@@ -2140,10 +2144,14 @@ impl ProviderSessionBackend for Backend {
     }
     fn execute(
         &self,
-        request: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            let request = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }

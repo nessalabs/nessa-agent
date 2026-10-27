@@ -31,10 +31,11 @@ use crate::application::agent_execution::providers::{
     ExecutionReportSource, FailedOpenCauseSource, FailedOpenCleanup, ImageInputRefusal,
     ModelChange, ModelChangeEffect, NativeExecutionHandoff, ObservationFailure,
     ObservationFailureCause, OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture,
-    ProviderExecutionReply, ProviderObservationFuture, ProviderOpenControl, ProviderOpenError,
-    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
-    ProviderOperationFuture, ProviderOperationResult, ProviderSession, ProviderSessionBackend,
-    ProviderSessionState, ResourceCleanup, SessionCloseRequest, SteeringOutcome,
+    ProviderExecutionReply, ProviderInputFuture, ProviderObservationFuture, ProviderOpenControl,
+    ProviderOpenError, ProviderOpenRequest, ProviderOperationCapabilities,
+    ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult, ProviderSession,
+    ProviderSessionBackend, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
+    SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
@@ -978,7 +979,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
@@ -1003,13 +1004,23 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             };
             // The generation lock is released: a stalled source must not hold
             // up steering, permission answers, or the next restoration. The
-            // execution's own deadline starts here, before the read, so reading
-            // spends it instead of adding to it.
+            // execution's deadline starts before file preparation; placement,
+            // image reads and dispatch all spend the same budget.
             let execution_timeout = self.factory.config.execution_timeout;
             let clock = &*self.factory.config.clock;
             let deadline = execution_timeout.map(|limit| clock.now() + limit);
-            let limit =
-                execution_timeout.map_or(IMAGE_READ_TIMEOUT, |limit| limit.min(IMAGE_READ_TIMEOUT));
+            let input = match self
+                .prepared_input(input, &commands, closing.clone(), deadline)
+                .await
+            {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
+            let limit = deadline.map_or(IMAGE_READ_TIMEOUT, |deadline| {
+                deadline
+                    .saturating_duration_since(clock.now())
+                    .min(IMAGE_READ_TIMEOUT)
+            });
             let images = match self
                 .images(&input.user_message, &commands, closing, limit)
                 .await
@@ -1062,7 +1073,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     fn steer<'a>(
         &'a self,
         target: ExecutionId,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
@@ -1085,7 +1096,21 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             // The steering deadline starts here, before the read, so the whole
             // call is answered within it rather than within it twice over.
             let deadline = self.factory.config.clock.now() + RESPONSE_TIMEOUT;
-            let limit = IMAGE_READ_TIMEOUT.min(RESPONSE_TIMEOUT);
+            let input = self
+                .prepared_input(input, &commands, closing.clone(), Some(deadline))
+                .await
+                .map_err(|error| {
+                    started();
+                    let state = if error == AgentError::Closed {
+                        ProviderSessionState::CleanupRequired
+                    } else {
+                        ProviderSessionState::Usable
+                    };
+                    ProviderOperationFailure::new(error, state)
+                })?;
+            let limit = deadline
+                .saturating_duration_since(self.factory.config.clock.now())
+                .min(IMAGE_READ_TIMEOUT);
             let images = self
                 .images(&input.user_message, &commands, closing, limit)
                 .await
@@ -1258,6 +1283,41 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     }
 }
 impl<P: AcpProfile + Clone> AcpSession<P> {
+    /// Resolve delivery input without extending the owning operation's deadline.
+    /// Physical placement and evidence remain the resolver's responsibility when
+    /// this consumer is dropped on close or expiry.
+    async fn prepared_input(
+        &self,
+        input: ProviderInputFuture,
+        commands: &mpsc::Sender<Command>,
+        mut closing: watch::Receiver<()>,
+        deadline: Option<ClockInstant>,
+    ) -> Result<ExecutionRequest, AgentError> {
+        let clock = &*self.factory.config.clock;
+        if closing.has_changed().unwrap_or(true) || commands.is_closed() {
+            return Err(AgentError::Closed);
+        }
+        if deadline.is_some_and(|deadline| clock.now() >= deadline) {
+            return Err(AgentError::Deadline);
+        }
+        let expired = async {
+            match deadline {
+                Some(deadline) => clock.sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        };
+        let input = tokio::select! { biased;
+            result = input => result?,
+            _ = closing.changed() => return Err(AgentError::Closed),
+            () = commands.closed() => return Err(AgentError::Closed),
+            () = expired => return Err(AgentError::Deadline),
+        };
+        // A ready preparation cannot authorize dispatch after its budget.
+        if deadline.is_some_and(|deadline| clock.now() >= deadline) {
+            return Err(AgentError::Deadline);
+        }
+        Ok(input)
+    }
     /// The image blocks for `message`, read before its command is queued so
     /// the worker never waits on the injected source.
     ///

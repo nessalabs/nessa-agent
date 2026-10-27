@@ -135,10 +135,13 @@ impl ProviderSessionBackend for ExhaustedBackend {
     }
     fn execute(
         &self,
-        _: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = input.await {
+                return ProviderExecutionReply::Rejected(error);
+            }
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -196,10 +199,13 @@ impl ProviderSessionBackend for CloseDependentBackend {
     }
     fn execute(
         &self,
-        _: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = input.await {
+                return ProviderExecutionReply::Rejected(error);
+            }
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }

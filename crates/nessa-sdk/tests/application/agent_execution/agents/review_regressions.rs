@@ -136,7 +136,7 @@ impl ProviderSessionBackend for Probe {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         // Each operation retains the output generation current when the provider
@@ -144,6 +144,10 @@ impl ProviderSessionBackend for Probe {
         // the replacement attachment's stream.
         let sender = self.sender.lock().unwrap().clone();
         Box::pin(async move {
+            let input = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -208,7 +212,7 @@ impl ProviderSessionBackend for Probe {
     fn steer<'a>(
         &'a self,
         _: ExecutionId,
-        _: ExecutionRequest,
+        _: ProviderInputFuture,
         _: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {

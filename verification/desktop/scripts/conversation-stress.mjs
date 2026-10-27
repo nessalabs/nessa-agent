@@ -280,7 +280,7 @@ import {
   openStressConversation,
   selectedStressConversation,
 } from "./lib/stress-conversation.mjs"
-import { uploadedInputFiles } from "./lib/stress-input-files.mjs"
+import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
@@ -5821,6 +5821,7 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
+  if (knobs.inputFiles > 0) phoneFilesVerifier()
   if (knobs.pairedCatalogues > 0) await preparePairedCatalogue()
   // Linking listens on every interface, as Settings sets it up, so the
   // gateway announces itself; clients on this machine dial it on loopback.

@@ -8,9 +8,10 @@ use crate::domain::agent_execution::permissions::{
 
 use super::{
     ApprovalMode, CleanupFuture, HarnessHost, HarnessHostIdentity, ModelChange, ModelChangeEffect,
-    ProviderExecutionFuture, ProviderIdentity, ProviderObservationFuture, ProviderOpenRequest,
-    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderSession, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
+    ProviderExecutionFuture, ProviderIdentity, ProviderInputFuture, ProviderObservationFuture,
+    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
+    ProviderOperationFuture, ProviderSession, ProviderSessionState, SessionCloseRequest,
+    SteeringOutcome,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::ProviderOpenFuture;
@@ -142,6 +143,7 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// Ensure the context and its event stream are live without sending user input.
     /// Restoration must complete before Agent starts polling observations.
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()>;
+    /// Poll input preparation within the operation deadline before handoff.
     /// Deliver input only to the target execution. An ambiguous delivery failure
     /// is an error, never permission to replay the input as a fresh invocation.
     ///
@@ -156,7 +158,7 @@ pub trait ProviderSessionBackend: Send + Sync {
     fn steer<'a>(
         &'a self,
         _target: ExecutionId,
-        _input: ExecutionRequest,
+        _input: ProviderInputFuture,
         _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
@@ -185,9 +187,11 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// settlement; Agent captures an already-ready result without waiting indefinitely.
     /// It retains accepted observations but stops polling further chunks after
     /// unconfirmed cleanup, so ready output cannot delay settlement or close.
+    /// Poll preparation under the execution deadline; preparation and dispatch
+    /// share that deadline. A preparation error is an undispatched rejection.
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_>;
     /// Answer one question the agent asked, or decline it.
