@@ -246,6 +246,15 @@ pub enum ReadFailure {
     /// and it does not ask pinned status again. It is not an ungranted
     /// conversation.
     SubscriptionCapacity,
+    /// `artifact.read` answered `conversation_deleted`. The conversation is
+    /// gone. A catalogue or checkpoint read does not produce this, and it
+    /// does not ask pinned status again.
+    ConversationDeleted,
+    /// `artifact.read` answered `conversation_not_found`: this device has no
+    /// grant, or the gateway does not hold that conversation. A catalogue or
+    /// checkpoint read does not produce this, and it does not ask pinned
+    /// status again.
+    ConversationNotFound,
 }
 
 /// Stops a read in progress: the flag every physical read and write asks,

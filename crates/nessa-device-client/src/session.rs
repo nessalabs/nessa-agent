@@ -799,7 +799,8 @@ impl Driver {
 }
 /// A gateway fault that is this device's authority being refused. Status is
 /// asked again, as it is after a refused catalogue read. A stop, a local
-/// match, and a transport failure are not.
+/// match, a transport failure, and a terminal `conversation_deleted` or
+/// `conversation_not_found` are not.
 fn artifact_authority_refused(outcome: Result<ArtifactFreshness, ArtifactFault>) -> bool {
     matches!(
         outcome,
@@ -1431,7 +1432,9 @@ impl NativeSession {
     /// A stop the fetch itself observed does not ask. A dial or handshake
     /// that fails as `Away`, `Unreachable`, `Protocol`, or any other read
     /// failure keeps that failure beside the initial status and does not ask
-    /// again. A stop during the product handshake is
+    /// again. A range that answers `conversation_deleted` or
+    /// `conversation_not_found` keeps that code and does not ask pinned
+    /// status. A stop during the product handshake is
     /// [`SessionFailure::Stopped`], as a stop before the fetch starts is.
     pub fn fetch_artifact(
         &self,

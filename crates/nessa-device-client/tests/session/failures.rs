@@ -89,6 +89,22 @@ fn cursor_ahead_stays_distinct_from_an_ungranted_conversation() {
         NativeReadFailure::from(ReadFailure::SubscriptionCapacity),
         NativeReadFailure::Refused
     );
+    assert_eq!(
+        NativeReadFailure::from(ReadFailure::ConversationDeleted),
+        NativeReadFailure::ConversationDeleted
+    );
+    assert_eq!(
+        NativeReadFailure::from(ReadFailure::ConversationNotFound),
+        NativeReadFailure::ConversationNotFound
+    );
+    assert_ne!(
+        NativeReadFailure::from(ReadFailure::ConversationDeleted),
+        NativeReadFailure::Protocol
+    );
+    assert_ne!(
+        NativeReadFailure::from(ReadFailure::ConversationNotFound),
+        NativeReadFailure::Refused
+    );
 }
 
 #[test]

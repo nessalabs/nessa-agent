@@ -763,6 +763,97 @@ impl HeldFileSource for BusyOnce {
     }
 }
 
+struct TerminalRefusal {
+    code: ConversationErrorCode,
+    reads: Arc<AtomicUsize>,
+}
+impl HeldFileSource for TerminalRefusal {
+    fn read(
+        &mut self,
+        _: &crate::read_only_sync::domain::HeldFile,
+        _: HeldRange,
+    ) -> Result<RangeAnswer, GatewayError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        Err(GatewayError::HeldFile(HeldFileRefusal::Conversation(
+            self.code,
+        )))
+    }
+}
+
+#[test]
+fn a_terminal_conversation_refusal_keeps_its_code() {
+    let cases = [
+        (
+            ConversationErrorCode::ConversationDeleted,
+            ReadFailure::ConversationDeleted,
+        ),
+        (
+            ConversationErrorCode::ConversationNotFound,
+            ReadFailure::ConversationNotFound,
+        ),
+    ];
+    for (code, failure) in cases {
+        let bytes = b"ab";
+        let conversation = conversation();
+        let digest = digest_of(bytes);
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("file.bin");
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut source = TerminalRefusal {
+            code,
+            reads: reads.clone(),
+        };
+        let stop = ReadStop::new();
+        let ending = running(stop.clone());
+        let fault = confirmed_held_file(
+            &mut source,
+            &Still,
+            &request(&conversation, &digest, &output),
+            &ending,
+            &super::DiskArtifactFiles,
+        )
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(
+            fault.kind(),
+            ArtifactFaultKind::Gateway(failure),
+            "{code:?}"
+        );
+        assert_ne!(failure, ReadFailure::Protocol);
+        assert_ne!(failure, ReadFailure::Refused);
+        assert_eq!(fault.reached(), 0);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert!(!output.exists());
+        stop.stop();
+        assert_eq!(
+            super::classify_artifact_fault(fault, &ending).kind(),
+            ArtifactFaultKind::Gateway(failure),
+            "{code:?}"
+        );
+    }
+    let conversation = conversation();
+    let digest = digest_of(b"ab");
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("file.bin");
+    let mut other = TerminalRefusal {
+        code: ConversationErrorCode::InvalidRequest,
+        reads: Arc::new(AtomicUsize::new(0)),
+    };
+    let other_fault = confirmed_held_file(
+        &mut other,
+        &Still,
+        &request(&conversation, &digest, &output),
+        &running(ReadStop::new()),
+        &super::DiskArtifactFiles,
+    )
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        other_fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Protocol)
+    );
+}
+
 struct AlwaysBusy {
     reads: Arc<AtomicUsize>,
 }

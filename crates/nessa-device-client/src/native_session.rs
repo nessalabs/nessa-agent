@@ -960,6 +960,8 @@ impl NativeArtifactFetch {
         })
     }
     /// Gateway refusal, when `fault` is gateway.
+    /// `ConversationDeleted` and `ConversationNotFound` are the terminal
+    /// conversation codes from `artifact.read`. They are not an authority refusal.
     pub fn gateway_failure(&self) -> Option<NativeReadFailure> {
         match self.value.outcome().err()?.kind() {
             ArtifactFaultKind::Gateway(failure) => Some(failure.into()),

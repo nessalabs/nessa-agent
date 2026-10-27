@@ -460,6 +460,20 @@ fn a_refused_artifact_is_an_authority_failure_and_a_transport_failure_is_not() {
     assert!(!super::artifact_authority_refused(unreachable.outcome()));
     let fresh = ArtifactFetch::decided(Ok(ArtifactFreshness::LocalMatch { bytes: 2 }), 1);
     assert!(!super::artifact_authority_refused(fresh.outcome()));
+    for failure in [
+        ReadFailure::ConversationDeleted,
+        ReadFailure::ConversationNotFound,
+    ] {
+        let terminal = ArtifactFetch::decided(
+            Err(ArtifactFault::progress(
+                ArtifactFaultKind::Gateway(failure),
+                0,
+                0,
+            )),
+            1,
+        );
+        assert!(!super::artifact_authority_refused(terminal.outcome()));
+    }
 }
 
 #[test]

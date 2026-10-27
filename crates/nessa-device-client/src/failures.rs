@@ -71,7 +71,9 @@ copied_enum!(
         Quota,
         Stopped,
         CursorAhead,
-        SubscriptionCapacity
+        SubscriptionCapacity,
+        ConversationDeleted,
+        ConversationNotFound
     ]
 );
 copied_enum!(
