@@ -38,3 +38,10 @@ Sanitized real provider response fixtures live under
 `crates/nessa-server/tests/workspaces/fixtures`; allocation interruption and
 concurrency checks run in the normal Rust suite. Channel placement is covered by
 the desktop conversation stress test's `channel` step.
+
+After deleting a saved VM, reopening must refuse without allocating a replacement.
+A direct environment refusal is valid; an `agent_operation_failed` is valid only
+when the authoritative lifecycle also reports failed cleanup from the previous
+session. Other errors fail the test. Both the wire code and lifecycle/lease facts
+are saved in `missing-vm-refusal.json`; cleanup uncertainty is never reset to make
+this test pass.

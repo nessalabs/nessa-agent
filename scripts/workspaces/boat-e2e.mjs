@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { messageText, settledMessage } from "./evidence.mjs"
+import { messageText, missingVmRefused, settledMessage } from "./evidence.mjs"
 /** Opt-in, paid-provider check. Uses an isolated gateway and disposable VMs.
  * The token is read from a private file, never argv, environment or evidence.
  * See README.md before running; Boat must already have a connected subscription. */
@@ -378,10 +378,22 @@ try {
     "deleted worker absent",
   )
   let missingRefused = false
+  let missingFailure
   try {
     await open(channel, worker, "full")
   } catch (error) {
-    missingRefused = error.code === "environment_unavailable"
+    const view = await client.conversation.read(worker)
+    missingFailure = {
+      code: error.code,
+      phase: view.lifecycle.phase,
+      failureCode: view.lifecycle.failure?.code,
+      lease: view.lease,
+    }
+    writeFileSync(
+      join(evidence, "missing-vm-refusal.json"),
+      JSON.stringify(missingFailure, null, 2),
+    )
+    missingRefused = missingVmRefused(error.code, view.lifecycle)
   }
   assert(missingRefused, "Missing VM was not refused with its typed environment failure")
   assignments()
@@ -389,6 +401,7 @@ try {
   record("missing VM fails without replacement or Local fallback", {
     vm: workerVm,
     operation: deleted?.operation?.id,
+    refusal: missingFailure,
   })
   record("PASS")
 } finally {

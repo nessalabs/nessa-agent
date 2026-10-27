@@ -16,3 +16,13 @@ export function messageText(message) {
     .map((part) => part.text)
     .join("")
 }
+
+/** A prior uncertain cleanup remains a block; unrelated failures are not proof. */
+export function missingVmRefused(code, lifecycle) {
+  return (
+    code === "environment_unavailable" ||
+    (code === "agent_operation_failed" &&
+      lifecycle.phase === "failed" &&
+      lifecycle.failure?.code === "cleanup")
+  )
+}
