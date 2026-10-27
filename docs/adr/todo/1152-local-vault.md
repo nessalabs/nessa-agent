@@ -222,3 +222,24 @@ owner or relax approval, retention or stage boundaries.
 Generated Rust/TypeScript product payloads are rebuilt from the combined schema
 and manifest, not resolved by choosing one generated side. The final integration
 gets a fresh source review, affected local checks and hosted full-platform CI.
+
+## Retention-gap wire contract before mainline completion
+
+The late external review found that Worker tests checked HTTP410 while native
+catch-up tests injected a typed Gap directly. Neither crossed the actual JSON
+boundary: the producer sends `expiredThrough`, but the native decoder expected
+snake_case. This is a missing shared boundary receipt, not a new gap policy.
+A shared protocol fixture now holds the producer/consumer spelling in place.
+
+| Incoming receipt | Required outcome |
+| --- | --- |
+| Current-stage HTTP410 gap with camelCase watermark | Decode the typed gap; persist the encrypted gap before reporting it; reopening remains paused |
+| No explicit owner acceptance | Keep the gap and original cursor; no replay request can silently skip it |
+| Gap/acceptance audit sink refuses | Roll back the transition and retain its prior cursor/gap; replay succeeds after recovery |
+| Explicit existing owner acceptance | Advance only to the stored watermark, then allow the next valid page to commit |
+| Wrong stage/kind, missing or snake_case watermark | Preserve stage/type refusal; leave cursor and inbox unchanged; no compatibility alias |
+
+The loopback transport tests use the injected HTTP client and private adapter
+state; they do not weaken the shipping constructor's HTTPS-only origin contract.
+TLS itself is outside this serialization regression. The worker release protocol
+inputs are unchanged, so its published image does not need replacement.
