@@ -10,6 +10,7 @@ use crate::application::agent_execution::providers::{
 use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
+use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::effective_capabilities::value_objects::{
     BindingRestrictions, EffectiveCapabilities,
@@ -247,6 +248,12 @@ impl ClaudeAcpProvider {
     }
 }
 impl AgentProvider for ClaudeAcpProvider {
+    fn restores_saved_context(&self, _: &ExecutionSessionId, has_invocations: bool) -> bool {
+        // Claude persists native context on its first prompt, not session/new.
+        // An untouched context can be replaced without dropping admitted work.
+        // Used histories still require a successful native resume.
+        has_invocations
+    }
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
     }
