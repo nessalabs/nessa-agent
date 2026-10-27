@@ -110,6 +110,10 @@ prevents successful dispatch while preserving placement and cleanup facts.
 
 ## Placement and lifecycle ownership
 
+Local execution retains the existing POSIX absolute-path contract. Non-Unix
+local placement returns `NotOffered` before filesystem or source reads; Windows
+gateway hosting is not enabled by this change.
+
 `LocalInputFiles` owns retained workspace/file handles, bounded reads, digest
 verification and publication without replacement. Existing destinations are opened
 without blocking or following symlinks; only matching regular files can be reused.

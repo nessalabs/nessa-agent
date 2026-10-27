@@ -154,6 +154,7 @@ impl Fixture {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn files_only_are_placed_before_dispatch_and_views_keep_original_references() {
     let fixture = Fixture::new().await;
@@ -257,6 +258,7 @@ async fn a_foreign_or_mismatched_reference_is_refused_before_placement() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_saved_retry_keeps_original_input_and_reads_no_released_upload() {
     let fixture = Fixture::new().await;
@@ -281,6 +283,7 @@ async fn a_saved_retry_keeps_original_input_and_reads_no_released_upload() {
     assert_eq!(fixture.audit.input_records.lock().unwrap().len(), 3);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn corrupt_stored_bytes_fail_without_a_provider_prompt_or_published_file() {
     let fixture = Fixture::new().await;
@@ -394,4 +397,25 @@ async fn a_hanging_audit_has_a_bounded_wait() {
         write.await.unwrap(),
         Err(super::super::ConversationError::Audit)
     ));
+}
+
+#[cfg(not(unix))]
+#[tokio::test]
+async fn unsupported_local_placement_is_refused_before_any_file_effect() {
+    let fixture = Fixture::new().await;
+    let file = fixture.keep(b"hello", "text/plain", "hello.txt");
+    fixture.send("unsupported-host", &file).await.unwrap();
+    let view = fixture.ended("unsupported-host").await;
+    assert_eq!(view.messages[0].uploads[0].name, "hello.txt");
+    assert!(fixture.provider.messages.lock().unwrap().is_empty());
+    assert!(fixture.attachments.ranges.lock().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_dir(fixture.directory.path()).unwrap().count(),
+        0
+    );
+    let records = fixture.audit.input_records.lock().unwrap();
+    let ended = records.last().unwrap();
+    assert_eq!(ended.stage, InputFileStage::Failed);
+    assert_eq!(ended.failure, Some(UserFileError::NotOffered));
+    assert!(!ended.delivered);
 }

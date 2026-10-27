@@ -23,6 +23,11 @@ impl LocalInputFilePlacement for LocalInputFiles {
         &self,
         request: LocalInputFile,
     ) -> EnvironmentFuture<'static, Result<String, UserFileError>> {
+        // ACP linked inputs use the existing POSIX absolute-path contract.
+        // Refuse unsupported hosts before opening a directory or reading bytes.
+        if !cfg!(unix) {
+            return Box::pin(async { Err(UserFileError::NotOffered) });
+        }
         let runtime = tokio::runtime::Handle::current();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
