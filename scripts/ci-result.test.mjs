@@ -174,13 +174,13 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
       "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk",
     )
     assert.match(local, /fail-fast: false/)
-    assert.match(local, /os: \[windows-latest, ubuntu-latest, macos-latest\]/)
+    assert.match(local, /os: \[windows-latest, ubuntu-24\.04, macos-latest\]/)
     for (const [os, partition] of [
-      ["windows", "remaining"],
-      ["ubuntu", "all"],
-      ["macos", "all"],
+      ["windows-latest", "remaining"],
+      ["ubuntu-24\\.04", "all"],
+      ["macos-latest", "all"],
     ])
-      assert.match(local, new RegExp(`- os: ${os}-latest\\s+partition: ${partition}`))
+      assert.match(local, new RegExp(`- os: ${os}\\s+partition: ${partition}`))
     assert.match(server, /runs-on: windows-latest/)
     for (const block of [local, server]) {
       assert.match(block, /needs: changes/)

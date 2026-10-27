@@ -374,7 +374,7 @@ test("the existing Windows matrix leg uniquely owns the Task Scheduler model pro
   // following `sdk_coverage` into this body and the proof would still look unique.
   const localAuth = workflowJobs(workflow).find(([name]) => name === "local-auth")?.[1]
   assert.ok(localAuth, "local-auth job")
-  assert.match(localAuth, /matrix:\s+os: \[windows-latest, ubuntu-latest, macos-latest\]/)
+  assert.match(localAuth, /matrix:\s+os: \[windows-latest, ubuntu-24\.04, macos-latest\]/)
   assert.equal(localAuth.split(proof).length - 1, 1)
   assert.match(
     localAuth,

@@ -446,12 +446,15 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     strategy:
       fail-fast: false
+      # Ubuntu 26.04 ships /usr/bin/env as a symlink to uutils. The gateway
+      # admits only a root-owned regular mode 0755 /usr/bin/env, so this leg
+      # stays on 24.04.
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-24.04, macos-latest]
         include:
           - os: windows-latest
             partition: remaining
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             partition: all
           - os: macos-latest
             partition: all
