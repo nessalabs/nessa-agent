@@ -265,27 +265,28 @@ async fn a_failed_lock_audit_still_retires_github_with_attributed_evidence() {
         "vault_audit_unavailable"
     );
     assert_eq!(vault.status(), Ok(Status::Locked));
-    let rows = evidence.0.lock().unwrap();
-    let ended: Vec<_> = rows
-        .iter()
-        .filter(|row| {
-            matches!(
-                row.event,
-                GithubAuditEvent::ConnectEnded {
-                    cause: EndCause::VaultLocked,
-                    ..
-                }
-            )
-        })
-        .collect();
-    assert_eq!(
-        ended.len(),
-        1,
-        "cleanup must happen even when key audit fails, without a status read triggering it"
-    );
-    assert_eq!(ended[0].caller, rows[0].caller);
-    assert_eq!(ended[0].operation_id, rows[0].operation_id);
-    drop(rows);
+    {
+        let rows = evidence.0.lock().unwrap();
+        let ended: Vec<_> = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.event,
+                    GithubAuditEvent::ConnectEnded {
+                        cause: EndCause::VaultLocked,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            ended.len(),
+            1,
+            "cleanup must happen even when key audit fails, without a status read triggering it"
+        );
+        assert_eq!(ended[0].caller, rows[0].caller);
+        assert_eq!(ended[0].operation_id, rows[0].operation_id);
+    }
     drop(peer);
     task.await.unwrap();
 }

@@ -66,6 +66,13 @@ impl InboxKeySource for VaultInboxKey {
     }
 }
 
+fn secret_failure(problem: crate::secrets::SecretUnavailable) -> Failure {
+    match problem {
+        crate::secrets::SecretUnavailable::Locked => Failure::VaultLocked,
+        crate::secrets::SecretUnavailable::Unavailable => Failure::Storage,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,12 +145,5 @@ mod tests {
             Err(Failure::Storage)
         ));
         assert!(!path.exists());
-    }
-}
-
-fn secret_failure(problem: crate::secrets::SecretUnavailable) -> Failure {
-    match problem {
-        crate::secrets::SecretUnavailable::Locked => Failure::VaultLocked,
-        crate::secrets::SecretUnavailable::Unavailable => Failure::Storage,
     }
 }
