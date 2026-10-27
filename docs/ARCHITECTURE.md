@@ -904,14 +904,14 @@ the Pending/Held predecessor shared by discard results, reversal audit and saved
 retirement. The local port supplies no access grant
 and is not yet wired into composed gateway shutdown.
 
-What happens to an attached file is decided by its type and never by the
+In the desktop local-path composer, attachment handling is decided by type rather than the
 gesture that attached it: an image is uploaded and normalised wherever it came
 from, and anything else is named. That rule is `declaredMediaType`, and it is
 why a file chosen through the host's picker — which reads nothing, so its name
 is the only evidence — has its images read back through `read_attachment_bytes`
 before they are uploaded.
 
-A file that is not an image does not travel at all. The gateway, the agent and
+A desktop file attached by local path does not travel. The gateway, the agent and
 the panel are on one machine, so the message names an absolute path and the
 agent opens it itself — as a `resource_link` block, which the adapter writes into
 the prompt as a link and which the model may then read with its own file tool, or
@@ -929,6 +929,16 @@ admitted, with the paths, the verified caller and the submission — evidence of
 the naming, which is intent, and never of a read or even of an admission. An
 audit sink that cannot take that record refuses the send. This is local-only
 by construction. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
+
+The phone sends stored non-image references in `uploads`: digest, media type,
+size and original name. Conversation admission verifies the exact hold and records
+the sender. The SDK persists those facts, then its `ProviderSession` prepares an
+ephemeral delivery copy through a conversation/lease-scoped resolver. Local
+placement and SSH fetch verify bytes before returning a path; required delivery
+evidence precedes native dispatch. WorkPermit arbitrates Stop against native
+handoff. Claude, Codex and OpenCode share ACP resource-link encoding; OpenCode
+host launch preserves its private-home policy and cleanup. See
+[phone file uploads](design/phone-file-uploads.md), issue #1149.
 
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
 Audio and video in a message, and more provider adapters, remain separate

@@ -1,5 +1,8 @@
 # Mainline completion of #1158
 
+This is the first integration checkpoint. The [later phone/main integration](phone-main-completion.md)
+records the newer runtime and worker; the source-specific results below remain historical.
+
 Reviewed integration source: `29af2efb974ddb90a95c8921c4192a3603684af8`.
 Release pin and shipping regression: `ada97db78` (full source checkpoint in the
 state pages). The worker binary is built from the integration source; changing

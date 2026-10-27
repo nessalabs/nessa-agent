@@ -327,9 +327,14 @@ fn successor_request(
     } else {
         original.images().to_vec()
     };
-    let message = UserMessage::new(Some(text), images, original.files().to_vec())
-        .map_err(|error| AgentError::InvalidInput(error.to_string()))?
-        .sent_by(original.sender().clone());
+    let message = UserMessage::new(
+        Some(text),
+        images,
+        original.files().to_vec(),
+        original.uploads().to_vec(),
+    )
+    .map_err(|error| AgentError::InvalidInput(error.to_string()))?
+    .sent_by(original.sender().clone());
     Ok(ExecutionRequest {
         execution_id: successor,
         user_message: message,

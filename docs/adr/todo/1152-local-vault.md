@@ -222,3 +222,43 @@ owner or relax approval, retention or stage boundaries.
 Generated Rust/TypeScript product payloads are rebuilt from the combined schema
 and manifest, not resolved by choosing one generated side. The final integration
 gets a fresh source review, affected local checks and hosted full-platform CI.
+
+## Retention-gap wire contract before mainline completion
+
+The late external review found that Worker tests checked HTTP410 while native
+catch-up tests injected a typed Gap directly. Neither crossed the actual JSON
+boundary: the producer sends `expiredThrough`, but the native decoder expected
+snake_case. This is a missing shared boundary receipt, not a new gap policy.
+A shared protocol fixture now holds the producer/consumer spelling in place.
+
+| Incoming receipt | Required outcome |
+| --- | --- |
+| Current-stage HTTP410 gap with camelCase watermark | Decode the typed gap; persist the encrypted gap before reporting it; reopening remains paused |
+| No explicit owner acceptance | Keep the gap and original cursor; no replay request can silently skip it |
+| Gap/acceptance audit sink refuses | Roll back the transition and retain its prior cursor/gap; replay succeeds after recovery |
+| Explicit existing owner acceptance | Advance only to the stored watermark, then allow the next valid page to commit |
+| Wrong stage/kind, missing or snake_case watermark | Preserve stage/type refusal; leave cursor and inbox unchanged; no compatibility alias |
+
+The loopback transport tests use the injected HTTP client and private adapter
+state; they do not weaken the shipping constructor's HTTPS-only origin contract.
+TLS itself is outside this serialization regression. The worker release protocol
+inputs are unchanged, so its published image does not need replacement.
+
+## Current-main phone-file integration before landing
+
+Main advanced to `41339b0ba52dbddb2441389c9ebce1e4f7426c9e` (#1159) while
+the repaired relay head was in CI. Integrating that source keeps the reviewed
+vault/relay contracts and the newly shipped provider-input contract together.
+
+| Boundary | Required integration result |
+| --- | --- |
+| Lazy provider input preparation and Local/Boat placement | Retain the new input-file resolver and deadline/handoff ownership for the selected environment; preserve explicit uploaded-file intent and existing scoped SSH fetch; no implicit local-folder mount or credential forwarding |
+| Native vault, relay gap and phone-file routes | Preserve current protected-session ownership, current camelCase gap receipt, audit/failure atomicity, and both product payload families |
+| Shipping worker and new lease sources | Recompute the actual merged fingerprint and publish/verify its matching credential-free worker before pinning; do not relax the readiness regression or reuse an incompatible artifact |
+| CI order and package coverage | Keep main's early strict Clippy and phone-stress ownership while retaining all eight vault-inclusive package selections and the shipping Linux baseline |
+| OpenCode hosted configuration | Forward only the host's explicit scoped MCP relay through the shared credential-free `on_host` projection, alongside its workspace; retain the host private-home policy and no-relay omission contract |
+| Generated product bindings | Regenerate from combined owner schema and generator; retain uploads plus workspace/vault fields without hand-editing generated output |
+
+Fresh scoped integration/ownership review, affected checks, real worker verification
+and hosted CI must refer to this combined source. Earlier source-specific evidence
+remains historical and is not relabeled as validation of a later runtime.

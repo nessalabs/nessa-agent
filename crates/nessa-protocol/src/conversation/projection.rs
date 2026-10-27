@@ -920,6 +920,13 @@ impl Projection {
                             .iter()
                             .map(Into::into)
                             .collect(),
+                        uploads: record
+                            .request
+                            .user_message
+                            .uploads()
+                            .iter()
+                            .map(Into::into)
+                            .collect(),
                         files: record
                             .request
                             .user_message
@@ -1134,6 +1141,7 @@ impl Projection {
             user_text: String::new(),
             attachments: Vec::new(),
             files: Vec::new(),
+            uploads: Vec::new(),
             app: None,
             steering_target: None,
             status: ConversationMessageStatus::Running,
@@ -1757,6 +1765,13 @@ impl Projection {
             .request
             .user_message
             .images()
+            .iter()
+            .map(Into::into)
+            .collect();
+        self.view.messages[index].uploads = record
+            .request
+            .user_message
+            .uploads()
             .iter()
             .map(Into::into)
             .collect();

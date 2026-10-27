@@ -235,7 +235,7 @@ inventory; their thread ID links the original conversation creation/lease actor.
 
 Integrating main changes the fingerprinted environment dial/pairing sources. The
 original `b698f20053f8bb7c` worker correctly refuses the new gateway contract.
-The current worker was rebuilt from integration source
+The first refreshed worker was rebuilt from integration source
 `29af2efb974ddb90a95c8921c4192a3603684af8` and reports lease protocol
 `066217f7701b98b9`. Its stripped Linux binary SHA-256 is
 `e2c9d38b652ee798bca1de09e9b539233aa0c205b79c7880604e9553f885f825`. The
@@ -254,3 +254,30 @@ The existing `worker_image` boundary still refuses unmatched protocols.
 release mapping fail the normal test selection. It fails against the old pin;
 updating the verified artifact mapping must make it pass. This does not relax
 protocol matching, invent a compatibility alias or replace a retained VM.
+
+
+## Phone-input integration worker refresh
+
+Main `41339b0ba52dbddb2441389c9ebce1e4f7426c9e` adds fingerprinted hosted
+OpenCode/private-home sources. Integration source
+`a79f324f39c9cd58c2082206b531b438d794d438` also forwards the selected host's
+explicit MCP relay through the existing credential-free configuration projection.
+The previous worker is correctly incompatible with this source.
+
+The new runtime reports `b6e4f48aa694ce08`; release pin
+`a162d7ef7cc7abbe5f714f74737b34421ec15e6b` selects
+`bsh_1WtCS3oK4SWwNbdpOnBXzFPq_PwIT1aGCwnJSQHWakU`. Snapshot
+`nessa-worker-b6e4f48a-a79f324-linux-x64` contains the stripped Linux binary
+SHA-256 `4594f98d379ccdb129b31302e43f1d4e119d821c5b96a2f3787d6cfd37d49a50`
+(138,010,664 bytes). Workspace SDK and supervisor provenance are unchanged.
+
+A separate credential-free builder used the exact source archive. Only the
+runtime binary, BUILD.json and Cargo.lock were copied into the clean runtime seed;
+build inputs were excluded. Clean-image and fresh-clone checks verified protocol,
+both runtime checksums and the named personal credential-path exclusions. The
+three owned publication VMs are provider-confirmed absent, with completed deletion
+operations. These checks are not an exhaustive secret scan or independent secure
+erasure attestation. Prior saved images remain available. The original readiness
+regression failed with the stale pin and passed with this mapping; exact protocol
+refusal is unchanged. See the source-specific
+[publication receipt](../../../verification/desktop/evidence/vault/phone-worker-release-receipt.json).

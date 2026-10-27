@@ -12,6 +12,10 @@ sources:
   - crates/nessa-server/src/conversation/infrastructure/ssh_environment/audit.rs
   - crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
   - crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs
+  - crates/nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs
+  - crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs
+  - crates/nessa-sdk/src/application/agent_execution/providers/input_files.rs
+  - crates/nessa-server/src/conversation/application/input_files.rs
   - crates/nessa-server/src/workspaces/infrastructure/settings.rs
   - crates/nessa-server/src/workspaces/infrastructure/release.rs
   - crates/nessa-server/src/workspaces/application/mod.rs
@@ -150,6 +154,15 @@ provider credentials are omitted from hosted configuration. Removing an MCP
 connection applies to new openings. Existing sessions keep theirs until closed;
 closing and reopening revokes the old grants and uses the new set. There is no automatic local-folder copy or
 mount, and local Nessa GitHub sign-in is not copied into remote Git.
+
+Explicit uploaded-file inputs are a separate delivery contract. Their durable
+references stay in conversation history. The resolver bound to that conversation's
+opening lease prepares a transient link in the selected Local or remote workspace;
+the SDK verifies correlation before dispatch. Preparation spends the original
+operation deadline, and required placement evidence remains owned after caller
+cancellation. This does not authorize mounting local folders or forwarding local
+provider credentials. The shared hosted configuration projection accepts only the
+selected host's explicit scoped MCP relay, including for OpenCode.
 
 ```mermaid
 stateDiagram-v2

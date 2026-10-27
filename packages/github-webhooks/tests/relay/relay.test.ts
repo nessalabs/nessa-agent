@@ -207,7 +207,17 @@ test("R10/R15: expiry writes an atomic gap watermark and deletion evidence", asy
     .bind(id)
     .run()
   await inbox.expire("2001-01-01T00:00:00.000Z")
-  assert.equal((await page()).status, 410)
+  const gap = await page()
+  assert.equal(gap.status, 410)
+  assert.deepEqual(
+    await gap.json(),
+    JSON.parse(
+      await readFile(
+        new URL("../../../../protocol/fixtures/github-relay-gap.json", import.meta.url),
+        "utf8",
+      ),
+    ),
+  )
   const audit = await db
     .prepare("SELECT delivery_id, cause, initiator FROM relay_cleanup_audit")
     .first()

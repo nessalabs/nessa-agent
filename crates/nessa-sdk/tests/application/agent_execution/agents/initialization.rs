@@ -353,7 +353,7 @@ impl ProviderSessionBackend for PanickingCleanupBackend {
     }
     fn execute(
         &self,
-        _input: ExecutionRequest,
+        _input: ProviderInputFuture,
         _handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async { ProviderExecutionReply::Rejected(AgentError::Closed) })

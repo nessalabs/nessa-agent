@@ -62,6 +62,7 @@ struct WireRefusal {
     kind: String,
 }
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WireGap {
     kind: String,
     stage: String,
@@ -245,3 +246,7 @@ impl RelayLiveSource for HttpRelaySource {
         Ok(Box::new(self.open_watch(ticket).await?))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/github_relay/transport.rs"]
+mod tests;

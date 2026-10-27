@@ -1433,6 +1433,12 @@ async fn conversations(
     )?;
     let environment = environment.with_workspaces(workspace_environments);
     let dependencies = ConversationDependencies {
+        input_files: Some(Arc::new(
+            crate::conversation::application::InputFileDelivery {
+                local: Arc::new(crate::conversation::infrastructure::LocalInputFiles),
+                timer: Arc::new(crate::timer::TokioTimer::new()),
+            },
+        )),
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
         storage: storage.clone(),

@@ -5,12 +5,16 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "ada97db780cd9457f6e1a5efdaa30eda2e64f1d3"
+sourceRevision: "ed64020f5162d1601511724e439fd4ec9b1bf36d"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
   - packages/github-webhooks/src/webhooks/infrastructure/signature.ts
   - packages/github-webhooks/src/relay/application/read.ts
+  - packages/github-webhooks/src/relay/infrastructure/http.ts
+  - crates/nessa-server/src/github_relay/infrastructure/transport.rs
+  - crates/nessa-server/tests/github_relay/transport.rs
+  - protocol/fixtures/github-relay-gap.json
   - packages/github-webhooks/src/relay/infrastructure/cedar/evaluator.ts
   - packages/github-webhooks/src/relay/infrastructure/d1.ts
   - packages/github-webhooks/src/relay/infrastructure/wake-room.ts
@@ -135,8 +139,12 @@ saved locally. Reconnect does not silently skip it. The owner can acknowledge th
 missing range; that transition records its original cursor and cause before
 advancing. Local retention is seven days from import, cleaned during page commits,
 with the same payload/event caps and at most 16 account/repository bindings.
-Audit metadata is bounded to recent records, not an indefinite archive. Erasing
-retention also ends that store's deduplication history.
+Page commits and Settings selection trim local audit records. Direct gap and CLI
+acceptance paths may exceed that row cap until the next cleanup; the
+[source-observed follow-up](https://github.com/nessalabs/nessa-agent/issues/1185)
+needs an API-level runtime regression and a transaction-owned correction. This
+exception concerns encrypted local audit metadata, not the cloud payload cap.
+Erasing retention also ends that store's deduplication history.
 
 ## User and stage boundaries
 

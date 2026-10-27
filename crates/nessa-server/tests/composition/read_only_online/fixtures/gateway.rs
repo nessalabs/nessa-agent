@@ -554,6 +554,9 @@ async fn gateway_child() {
                     });
                     context = next;
                 }
+                if mode == "phone-files" {
+                    changes.push(stored_phone_file(&setup.owner));
+                }
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
@@ -804,4 +807,49 @@ pub(super) async fn share_with_devices(
         .unwrap();
         assert!(receipt.applied);
     }
+}
+
+/// Stored metadata for the native reader; this fixture claims no file delivery.
+fn stored_phone_file(owner: &str) -> SessionChange {
+    use nessa_sdk::application::agent_execution::{
+        executions::{ExecutionRequest, SubmissionMode},
+        permissions::ActionContext,
+        sessions::{InvocationRecord, SubmissionAcknowledgement},
+    };
+    use nessa_sdk::domain::{
+        agent_execution::{
+            executions::{ExecutionId, Initiation},
+            prompts::{UploadedFileReference, UserMessage},
+        },
+        common::value_objects::{MediaType, Sha256Digest},
+    };
+    let reference = UploadedFileReference::new(
+        Sha256Digest::from_bytes([7; 32]),
+        MediaType::parse("application/pdf").unwrap(),
+        12,
+        "native-report.pdf".into(),
+    )
+    .unwrap();
+    SessionChange::InputAccepted(Box::new(InvocationRecord {
+        target_event_offset: None,
+        submission: SubmissionMode::Immediate,
+        request: ExecutionRequest {
+            execution_id: ExecutionId::new("phone-file").unwrap(),
+            user_message: UserMessage::new(None, vec![], vec![], vec![reference]).unwrap(),
+            estimated_input_tokens: 1,
+            reserved_output_tokens: 1,
+        },
+        actor: ActionContext::new(owner, "native-fixture", "phone-file").unwrap(),
+        initiation: Initiation::owner(),
+        notes: vec![],
+        handoff: None,
+        acknowledgement: SubmissionAcknowledgement::Pending,
+        events: vec![],
+        scheduling: vec![],
+        cancellation: None,
+        provider_report: None,
+        local_cancellation: None,
+        local_outcome: None,
+        result: None,
+    }))
 }

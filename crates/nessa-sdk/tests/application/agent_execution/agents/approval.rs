@@ -45,11 +45,14 @@ impl ProviderSessionBackend for Backend {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         match self.next_reply.lock().unwrap().take() {
             Some(reply) => Box::pin(async move {
+                if let Err(error) = input.await {
+                    return ProviderExecutionReply::Rejected(error);
+                }
                 if matches!(&reply, ProviderExecutionReply::Finished(_)) {
                     if let Err(error) = handoff() {
                         return ProviderExecutionReply::Rejected(error);

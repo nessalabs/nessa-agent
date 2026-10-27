@@ -1031,13 +1031,14 @@ before starting the SDK-owned attachment. The SDK scheduler remains the only que
 on both sides of attachment. Replacement views project its `Waiting` and `Starting`
 phases as `starting`, and retain typed, bounded late attachment failures.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
-A message refers to images by digest, never by bytes: the service asks its
+A message retains image and uploaded-file references by digest, never inline
+file bytes: the service asks its
 `ConversationAttachments` port whether this conversation holds each one before it
 accepts the message, and `close` releases what the conversation holds in the
 closer's name, reporting a failed release without hiding a failed agent close.
 The [attachments context](#attachments) implements that port.
-A message may also point at files on this machine by path, which is how anything
-that is not an image travels: nothing is uploaded, so there is no hold to check
+A message may also point at files already on the execution machine by path.
+For these linked files nothing is uploaded, so there is no hold to check
 and no ownership to verify, and the whole of what the gateway checks is that the
 path means the file that was chosen, through the SDK's `LinkedFile` — absolute,
 no control character, no component that a URI would drop or resolve away. It
@@ -1771,6 +1772,24 @@ defines that command's boundary; #324 storage changes remain separately owned.
 oversized-session drill. The plan command does not call those use cases.
 
 ## Attachments
+
+[Phone file uploads](design/phone-file-uploads.md) describes #1149's stored
+references and dispatch boundary. SDK `prompts/value_objects/uploaded_file.rs`
+owns original-file identity and bounds; `providers/input_files.rs` defines the
+resolver port. `ProviderSession` prepares only the delivery copy. The server's
+`conversation/application/input_files.rs` owns lease-scoped orchestration and
+truthful automatic-delivery evidence; `conversation/infrastructure/input_files.rs`
+implements retained local placement. SSH reuses the existing lease fetch/inbox.
+Both phone journals and product views retain original references. SDK lifecycle
+WorkPermit remains the sole authority for preparation cancellation and native handoff.
+
+The phone file-input adapter separates capability dispatch in
+`crates/nessa-server/src/conversation/infrastructure/input_files.rs` from Unix
+retained-handle placement in `input_files/unix.rs`. The selected shared workspace
+root is acquired by `nessa-local-storage::PrivateDirectory::open_shared_root`;
+its locator ancestry stays caller trust, while root ownership and binding remain
+checked. Private delivery-copy tests live in
+`crates/nessa-sdk/tests/domain/agent_execution/uploaded_delivery.rs`.
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
 its messages can refer to them. `domain/value_objects/` describe a file

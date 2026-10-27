@@ -324,6 +324,7 @@ impl CurrentAgentResolver {
                     return Ok(None);
                 };
                 Ok(Some(ConversationAgent {
+                    workspace: built.workspace,
                     provider: built.provider,
                     execution_audit: built.execution_audit,
                     reserved_output_tokens: source

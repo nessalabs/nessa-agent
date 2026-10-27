@@ -28,13 +28,13 @@ use crate::domain::{
         },
         prompts::{
             AppModelContext as DomainAppModelContext, ImageReference, LinkedFile, McpAppSource,
-            MessageSender, PromptText, UserMessage,
+            MessageSender, PromptText, UploadedFileReference, UserMessage,
         },
         questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
         sessions::ExecutionSessionId,
         tools::{McpTool, ToolCallId},
     },
-    common::value_objects::{ImageMediaType, Sha256Digest},
+    common::value_objects::{ImageMediaType, MediaType, Sha256Digest},
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +68,36 @@ impl Image {
             Sha256Digest::parse(&self.digest).map_err(corrupt)?,
             ImageMediaType::parse(&self.media_type).map_err(corrupt)?,
             self.size,
+        )
+        .map_err(corrupt)
+    }
+}
+/// A durable uploaded input, independent of its eventual placement path.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UploadedFile {
+    digest: String,
+    media_type: String,
+    size: u64,
+    name: String,
+}
+impl From<&UploadedFileReference> for UploadedFile {
+    fn from(file: &UploadedFileReference) -> Self {
+        Self {
+            digest: file.digest().to_string(),
+            media_type: file.media_type().as_str().into(),
+            size: file.size(),
+            name: file.name().into(),
+        }
+    }
+}
+impl UploadedFile {
+    fn decode(self) -> Result<UploadedFileReference, StorageError> {
+        UploadedFileReference::new(
+            Sha256Digest::parse(&self.digest).map_err(corrupt)?,
+            MediaType::parse(&self.media_type).map_err(corrupt)?,
+            self.size,
+            self.name,
         )
         .map_err(corrupt)
     }
@@ -179,6 +209,9 @@ pub(super) struct Metadata {
     pub(super) user_images: Vec<Image>,
     /// Empty when a message has no linked files.
     pub(super) user_files: Vec<FileLink>,
+    /// Absent in records written before stored-file input existed means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) user_uploads: Vec<UploadedFile>,
     /// The app that wrote the message on the person's behalf; `null` when
     /// the person did. Required: a record without it is not of this shape
     /// (`deserialize_with` keeps serde from reading its absence as `None`).
@@ -404,6 +437,13 @@ impl From<&InvocationRecord> for Metadata {
                 .iter()
                 .map(Into::into)
                 .collect(),
+            user_uploads: value
+                .request
+                .user_message
+                .uploads()
+                .iter()
+                .map(UploadedFile::from)
+                .collect(),
             user_files: value
                 .request
                 .user_message
@@ -612,6 +652,10 @@ impl Metadata {
                     self.user_files
                         .into_iter()
                         .map(FileLink::decode)
+                        .collect::<Result<_, _>>()?,
+                    self.user_uploads
+                        .into_iter()
+                        .map(UploadedFile::decode)
                         .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?

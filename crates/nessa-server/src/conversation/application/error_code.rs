@@ -164,7 +164,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
                 ImageInputRefusal::MediaType(_) | ImageInputRefusal::ImageTooLarge { .. },
             )
             | AgentError::MessageTooLarge { .. } => ConversationErrorCode::InvalidRequest,
-            AgentError::UserImage(_) => ConversationErrorCode::AttachmentUnavailable,
+            AgentError::UserImage(_) | AgentError::UserFile(_) => {
+                ConversationErrorCode::AttachmentUnavailable
+            }
             AgentError::AuditFailure => ConversationErrorCode::AuditUnavailable,
             // Startup never reaches the provider with input. This code carries
             // no claim that a later attachment attempt will succeed.

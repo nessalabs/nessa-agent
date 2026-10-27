@@ -35,6 +35,7 @@ import {
 } from "@nessa/client"
 import {
   referencedContent,
+  type UploadedFileReference,
   historyExtent,
   placeNotes,
   placePublished,
@@ -336,9 +337,13 @@ function inputParts(
   text: string,
   images: readonly ImageAttachment[],
   files: readonly LinkedFile[],
+  uploads: readonly UploadedFileReference[] = [],
 ): Part[] {
-  const content = referencedContent("", images, files).filter(
-    (part) => part.type === "image-reference" || part.type === "file-reference",
+  const content = referencedContent("", images, files, uploads).filter(
+    (part) =>
+      part.type === "image-reference" ||
+      part.type === "file-reference" ||
+      part.type === "uploaded-file-reference",
   )
   return [
     { kind: "text", text },
@@ -494,7 +499,7 @@ export function transcriptFrom(
       id: input,
       role: "user",
       at: seen(input),
-      parts: inputParts(turn.userText, turn.attachments, turn.files),
+      parts: inputParts(turn.userText, turn.attachments, turn.files, turn.uploads),
       ...writtenBy(turn.app),
     }
     const parts: Part[] = []
@@ -581,7 +586,12 @@ export function transcriptFrom(
       id: input,
       role: "user",
       at: seen(input),
-      parts: inputParts(waiting.text, waiting.attachments, waiting.files),
+      parts: inputParts(
+        waiting.text,
+        waiting.attachments,
+        waiting.files,
+        waiting.uploads,
+      ),
       // Waiting, it is labelled as it will be once it is a turn (D-H).
       ...writtenBy(waiting.app),
     })

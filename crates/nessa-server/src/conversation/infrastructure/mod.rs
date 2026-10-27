@@ -213,3 +213,8 @@ pub(crate) use workspaces::ThreadWorkspaces;
 
 mod workspace_runtime_config;
 pub(crate) use workspace_runtime_config::BoatRuntimeConfig;
+
+#[cfg(any(unix, test))]
+mod input_files;
+#[cfg(any(unix, test))]
+pub(crate) use input_files::LocalInputFiles;

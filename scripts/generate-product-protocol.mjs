@@ -633,6 +633,9 @@ const bounds = {
   maxMessageImages: arrayBound("attachments", "ImageAttachment", "maxItems"),
   maxMessageImageBytes: arrayBound("attachments", "ImageAttachment", "x-maxTotalBytes"),
   maxUploadBytes: schema.$defs.AttachmentBeginParams.properties.size.maximum,
+  maxUploadedFileNameBytes:
+    schema.$defs.UploadedFileAttachment.properties.name["x-utf8MaxBytes"],
+  uploadedFileNamePattern: schema.$defs.UploadedFileAttachment.properties.name.pattern,
   maxMessageFiles: arrayBound("files", "LinkedFile", "maxItems"),
   maxFilePathBytes: linked.path["x-utf8MaxBytes"],
   filePathPattern: linked.path.pattern,

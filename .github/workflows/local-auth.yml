@@ -354,12 +354,15 @@ jobs:
         run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
       - name: Verify pane dragging after deferred fitting in both browsers
         run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+      # The private Swift phone product is exercised by nessa-ios's macOS
+      # phone-files-stress workflow against this exact gateway source.
+      # This Ubuntu job cannot build that product; it retains core window load.
       - name: Run the conversation stress check
         shell: bash
         run: |
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
-          pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+          pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
       # The menu-bar panel ships in WKWebView, so its step also runs alone in
       # WebKit: page dots, the sent bubble's accent and rim, and the undo card.
@@ -504,7 +507,7 @@ jobs:
       - run: node scripts/check-architecture.mjs
       # Endpoint file publication crosses the platform-specific local-storage
       # adapters, so each OS gives a different answer. Lint this new crate before
-      # its tests; the existing package group below retains its measured order.
+      # its tests; the package group below also lints before its runtime tests.
       - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
       - run: cargo test -p nessa-gateway-endpoint
       # The database opener's privacy checks cross the same platform-specific
@@ -526,6 +529,8 @@ jobs:
           while IFS= read -r line; do
             printf '::notice title=Native load acceptance::%s\n' "$line"
           done < "$RUNNER_TEMP/page-load-acceptance.txt"
+      # Platform-only unused ports must fail before the long runtime suites.
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault --all-targets -- -D warnings
       # A test that deadlocks here held this job for six hours, until GitHub's
       # job limit cancelled it (#366). Over 53 green runs this step took at most
       # 7 minutes on Linux, 11 on macOS and 19 on Windows, compile included, so
@@ -579,7 +584,6 @@ jobs:
         shell: bash
         run: cargo test -p nessa-local-storage --lib fresh_hardlink_security_queries_reverse_provider_order_without_inheritance_assumptions -- --nocapture
         timeout-minutes: 5
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
       # Not on Linux: `gateway-contract` is an ubuntu-latest job and already
       # runs exactly what this script runs — fmt, clippy and test for

@@ -102,6 +102,7 @@ fn service(
 ) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
@@ -197,6 +198,7 @@ pub(super) async fn serve(
             caller("first-input"),
             "first".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "First accepted input".into(),
                 ..SubmittedMessage::default()
             },
@@ -211,6 +213,7 @@ pub(super) async fn serve(
             caller("second-input"),
             "second".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Second queued input".into(),
                 ..SubmittedMessage::default()
             },
