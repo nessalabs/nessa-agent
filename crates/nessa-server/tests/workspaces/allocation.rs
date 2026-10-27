@@ -20,6 +20,7 @@ fn connection() -> BoatConnection {
 struct Store {
     records: Mutex<std::collections::BTreeMap<String, Assignment>>,
     fail_receipt: std::sync::atomic::AtomicBool,
+    panic_receipt: AtomicBool,
 }
 #[async_trait]
 impl Assignments for Store {
@@ -27,6 +28,11 @@ impl Assignments for Store {
         Ok(self.records.lock().unwrap().get(thread).cloned())
     }
     async fn save(&self, value: Assignment) -> Result<(), Failure> {
+        assert!(
+            !(matches!(value, Assignment::Assigned { .. })
+                && self.panic_receipt.load(Ordering::SeqCst)),
+            "injected receipt publication panic"
+        );
         if matches!(value, Assignment::Assigned { .. }) && self.fail_receipt.load(Ordering::SeqCst)
         {
             return Err(Failure::Storage);
@@ -488,6 +494,32 @@ async fn recovery_port_panics_keep_cleanup_and_target_evidence_owned() {
     );
     assert_eq!(
         service.open(id(3), true).await.err(),
+        Some(Failure::ProvisioningUncertain)
+    );
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn receipt_publication_panic_keeps_external_target_in_the_recovery_owner() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    store.panic_receipt.store(true, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert_eq!(
+        service.open(id(4), true).await.err(),
+        Some(Failure::ReceiptRecovery {
+            vm: format!("vm-{}", id(4)),
+            receipt_audit_failed: false,
+            cleanup_unconfirmed: true,
+            cleanup_audit_failed: false,
+        })
+    );
+    assert_eq!(
+        *audit.events.lock().unwrap(),
+        recovery_events(&id(4), false)
+    );
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        service.open(id(4), true).await.err(),
         Some(Failure::ProvisioningUncertain)
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);

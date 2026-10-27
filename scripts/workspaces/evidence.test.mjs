@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { messageText, missingVmRefused, settledMessage } from "./evidence.mjs"
+import { messageText, settledMessage } from "./evidence.mjs"
 
 test("waits for the admitted execution rather than accepting a previous completion", () => {
   const old = { executionId: "previous", status: "completed" }
@@ -25,34 +25,5 @@ test("text evidence joins streaming deltas before matching", () => {
       ],
     }),
     "NESSA_DELEGATED_OK",
-  )
-})
-
-test("missing VM evidence accepts only environment refusal or retained cleanup failure", () => {
-  assert.equal(missingVmRefused("environment_unavailable", { phase: "failed" }), true)
-  assert.equal(
-    missingVmRefused("agent_operation_failed", {
-      phase: "failed",
-      failure: { code: "cleanup" },
-    }),
-    true,
-  )
-  for (const code of [
-    "agent_operation_failed",
-    "conversation_closed",
-    "invalid_request",
-    undefined,
-  ]) {
-    assert.equal(
-      missingVmRefused(code, { phase: "failed", failure: { code: "provider" } }),
-      false,
-    )
-  }
-  assert.equal(
-    missingVmRefused("agent_operation_failed", {
-      phase: "attached",
-      failure: { code: "cleanup" },
-    }),
-    false,
   )
 })

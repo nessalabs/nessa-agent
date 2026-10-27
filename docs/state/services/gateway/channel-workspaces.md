@@ -6,6 +6,8 @@ status: implemented
 summary: A channel independently places its main agent and new threads on Local or Boat.
 parent: gateway
 sources:
+  - crates/nessa-server/src/composition/local_auth.rs
+  - crates/nessa-server/src/conversation/infrastructure/ssh_environment/audit.rs
   - crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
   - crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs
   - crates/nessa-server/src/workspaces/infrastructure/settings.rs

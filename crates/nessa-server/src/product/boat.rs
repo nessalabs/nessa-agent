@@ -1,26 +1,22 @@
 //! Credential-managed Boat setup. Ordinary reads never expose the saved token.
-use super::{
-    socket::{failure, success},
-    state::ProductRouteState,
-};
+#[cfg(unix)]
+use super::socket::success;
+use super::{socket::failure, state::ProductRouteState};
 #[cfg(unix)]
 use crate::workspaces::domain::Failure;
-use nessa_protocol::{
-    product::generated::BoatSaveParams,
-    protocol::{OutgoingMessage, RequestFrame},
-};
+#[cfg(unix)]
+use nessa_protocol::product::generated::BoatSaveParams;
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
-pub(super) async fn dispatch(
-    state: &ProductRouteState,
-    mut frame: RequestFrame,
-) -> OutgoingMessage {
+pub(super) async fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> OutgoingMessage {
     #[cfg(not(unix))]
     {
         let _ = state;
-        return failure(&frame.id, "boat_not_supported");
+        failure(&frame.id, "boat_not_supported")
     }
     #[cfg(unix)]
     {
+        let mut frame = frame;
         let Some(service) = &state.workspaces else {
             return failure(&frame.id, "boat_unavailable");
         };

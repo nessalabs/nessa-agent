@@ -172,7 +172,11 @@ impl Workspaces {
                     image: connection.image.clone(),
                     environment: connection.environment.clone(),
                 };
-                if self.assignments.save(receipt).await.is_err() {
+                let publication = AssertUnwindSafe(async { self.assignments.save(receipt).await })
+                    .catch_unwind()
+                    .await
+                    .unwrap_or(Err(Failure::Storage));
+                if publication.is_err() {
                     // Preserve the external target before attempting rollback.
                     // Audit failure never prevents cleanup; neither a dropped
                     // observer nor a failing port can discard its outcome.

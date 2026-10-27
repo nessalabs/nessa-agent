@@ -2624,11 +2624,13 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 
 `crates/nessa-server/src/workspaces/` owns Boat connection settings and VM
 allocation receipts: `domain` contains values and failures; `application` orders
-allocation through Settings, Assignments and Provider ports; `infrastructure`
+allocation through Settings, Assignments, Provider and RecoveryAudit ports; `infrastructure`
 implements encrypted vault settings, private receipt files, Boat/workspace-sdk
 preparation and scoped SSH access. Tests live in `tests/workspaces`; real-provider
 verification lives in `scripts/workspaces`, with the single-file local MCP fixture
-under `scripts/mcp-test-server`.
+under `scripts/mcp-test-server`. Composition maps recovery evidence into the
+existing durable EnvironmentAudit store; failed receipt publication retains its
+VM target independently of the assignment writer and initiating observer.
 
 Conversation placement and main-agent identity remain in `conversation`.
 `conversation/infrastructure/workspaces.rs` adapts a workspace stream into the

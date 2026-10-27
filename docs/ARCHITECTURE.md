@@ -1159,6 +1159,10 @@ conversation infrastructure carries existing agent leases over SSH, with scoped
 MCP relay forwarding and SFTP artifact channels. Authorization remains in the
 existing conversation, credential and MCP policies. The gateway never treats a
 missing VM as permission to allocate a replacement or fall back to Local.
+Receipt-publication failure, including a port panic, enters a target-bearing
+recovery path that records evidence independently and attempts rollback even if
+audit delivery fails. Provider-side thread correlation survives local persistence
+failure; unconfirmed cleanup stays uncertain.
 
 The main agent runs when messaged or notified by workers. Cloud wake endpoints,
 VM parking, live migration and local-folder mounts are outside this alpha. See

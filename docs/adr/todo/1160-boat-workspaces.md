@@ -1,6 +1,6 @@
 # 1160 — Local or Boat workspaces for channel threads
 
-- Status: implementation in progress
+- Status: implemented alpha; in review
 - Issue: https://github.com/nessalabs/nessa-agent/issues/1160
 
 A channel independently selects Local or Boat for its main agent and its new

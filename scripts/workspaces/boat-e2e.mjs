@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { messageText, missingVmRefused, settledMessage } from "./evidence.mjs"
+import { messageText, settledMessage } from "./evidence.mjs"
 /** Opt-in, paid-provider check. Uses an isolated gateway and disposable VMs.
  * The token is read from a private file, never argv, environment or evidence.
  * See README.md before running; Boat must already have a connected subscription. */
@@ -377,23 +377,22 @@ try {
     async () => (await boat(`/sandboxes/${workerVm}`)) === null,
     "deleted worker absent",
   )
+  // A surviving SSH generation can retain an uncertain cleanup after external
+  // deletion. Test durable assignment recovery through a fresh gateway, rather
+  // than confusing that earlier generation with a new provider availability check.
+  client.close()
+  await gateway.restart("SIGTERM")
+  client = await connectClient(gateway, instance, "panel")
+  await client.vault.unlock(passphrase)
   let missingRefused = false
-  let missingFailure
   try {
     await open(channel, worker, "full")
   } catch (error) {
-    const view = await client.conversation.read(worker)
-    missingFailure = {
-      code: error.code,
-      phase: view.lifecycle.phase,
-      failureCode: view.lifecycle.failure?.code,
-      lease: view.lease,
-    }
     writeFileSync(
       join(evidence, "missing-vm-refusal.json"),
-      JSON.stringify(missingFailure, null, 2),
+      JSON.stringify({ code: error.code }, null, 2),
     )
-    missingRefused = missingVmRefused(error.code, view.lifecycle)
+    missingRefused = error.code === "environment_unavailable"
   }
   assert(missingRefused, "Missing VM was not refused with its typed environment failure")
   assignments()
@@ -401,7 +400,6 @@ try {
   record("missing VM fails without replacement or Local fallback", {
     vm: workerVm,
     operation: deleted?.operation?.id,
-    refusal: missingFailure,
   })
   record("PASS")
 } finally {
