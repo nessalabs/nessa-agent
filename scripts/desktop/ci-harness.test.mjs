@@ -155,6 +155,44 @@ test("the existing Linux matrix leg uniquely owns direct runtime assembly", () =
   )
 })
 
+test("native Linux verification matches the release distribution and retains smoke commands", () => {
+  const integration = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const release = readFileSync(".github/workflows/release.yml", "utf8")
+  for (const newline of ["\n", "\r\n"]) {
+    const checkout = (text) => text.replace(/\r?\n/g, newline)
+    const native = workflowJobs(checkout(integration)).find(
+      ([name]) => name === "local-auth",
+    )?.[1]
+    const shipping = workflowJobs(checkout(release)).find(
+      ([name]) => name === "build",
+    )?.[1]
+    assert.ok(native && shipping, "native verification and release build jobs exist")
+    const linux = shipping.match(
+      /- runner: (ubuntu-\d{2}\.\d{2})\r?\n\s+target: x86_64-unknown-linux-gnu/,
+    )
+    assert.ok(linux, "the Linux release declares an explicit Ubuntu baseline")
+    const matrix = native.match(/matrix:\s+os: \[([^\]]+)\]/)
+    assert.ok(matrix, "native verification declares its platform matrix")
+    assert.deepEqual(
+      matrix[1].split(",").map((name) => name.trim()),
+      ["windows-latest", linux[1], "macos-latest"],
+      "native verification must use the release's Linux distribution",
+    )
+    assert.ok(native.includes(`- os: ${linux[1]}${newline}            partition: all`))
+    assert.ok(
+      native.includes("key: ${{ runner.os == 'Linux' && matrix.os || '' }}"),
+      "Linux Rust cache must distinguish the selected distribution's ABI",
+    )
+    assert.match(
+      native,
+      /run: bash scripts\/desktop\/install-linux-build-deps\.sh webkit2gtk-driver xvfb/,
+    )
+    assert.match(native, /run: node scripts\/check-desktop\.mjs/)
+    assert.match(native, /run: node scripts\/desktop\/prepare\.mjs/)
+    assert.match(native, /run: xvfb-run --auto-servernum pnpm desktop:smoke/)
+  }
+})
+
 test("every Linux build installs the one list of host build dependencies", () => {
   const install = "bash scripts/desktop/install-linux-build-deps.sh"
   for (const name of readdirSync(".github/workflows").filter((file) =>
@@ -374,7 +412,7 @@ test("the existing Windows matrix leg uniquely owns the Task Scheduler model pro
   // following `sdk_coverage` into this body and the proof would still look unique.
   const localAuth = workflowJobs(workflow).find(([name]) => name === "local-auth")?.[1]
   assert.ok(localAuth, "local-auth job")
-  assert.match(localAuth, /matrix:\s+os: \[windows-latest, ubuntu-latest, macos-latest\]/)
+  assert.match(localAuth, /matrix:\s+os: \[[^\]]*\bwindows-latest\b[^\]]*\]/)
   assert.equal(localAuth.split(proof).length - 1, 1)
   assert.match(
     localAuth,

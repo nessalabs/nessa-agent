@@ -1407,7 +1407,10 @@ and reuses a generation only for the complete desired command ([ADR 689](adr/689
   compiling. `verify-linux-bundle.mjs` checks the runtime inside the `.deb` this
   build wrote; it is the Linux counterpart of `verify-macos-bundle.mjs`.
   `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
-  the release build against. `release-assets.mjs` names what each release
+  the release build against. Native Linux CI uses the explicit Ubuntu release
+  baseline, with its Rust cache keyed by distribution to avoid reusing binaries
+  built against a newer glibc; `ci-harness.test.mjs` checks that agreement and
+  retains the required native smoke commands. `release-assets.mjs` names what each release
   target publishes and its updater key: one per macOS architecture, and
   `linux-x86_64-deb`. Windows has no preparation.
 - `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
