@@ -2,7 +2,7 @@
 
 Issue: [#1168](https://github.com/nessalabs/nessa-agent/issues/1168)
 
-Status: implementation in progress in an isolated follow-up worktree. Not yet verified for handoff.
+Status: implemented, independently reviewed and verified against real Boat VMs. CI and broad-suite disposition remain pending.
 
 ## User behavior
 
@@ -19,7 +19,7 @@ compute can remain billable. Provider/account restrictions still apply.
 
 ## Ownership
 
-The workspace domain owns the finite-or-unlimited lifetime value. A finite
+The conversation domain owns the shared finite-or-unlimited lifetime value. A finite
 lifetime contains positive seconds representable by Boat's u32 API. Inheritance
 is absence of a channel override, distinct from an explicit unlimited value.
 
@@ -70,7 +70,7 @@ edit.
 
 ## Ordering and refusal table
 
-| Event | Decision/effect | Regression evidence to add |
+| Event | Decision/effect | Regression evidence |
 | --- | --- | --- |
 | No saved default or override | Unlimited on next allocation/resume | Default resolution |
 | Save finite default | Validate, persist, acknowledge | Boundary and config round-trip |
@@ -90,15 +90,27 @@ edit.
 | Default-channel membership (None) | Use global preference; synthetic default channel has no override | Default membership test |
 | Close saved-channel settings | Return keyboard focus to the channel's settings control; preserve label and click space beside row status | Both-engine/layout browser geometry and focus check |
 | Membership read fails or names missing channel | Refuse opening rather than use global policy | Adapter failure test |
+| Channel lookup returns another valid identity | Refuse before using its owner facts or provisioning the requested target | Substituted-channel authority and membership tests |
+| Several owners have over 1000 combined overrides | Parse the gateway-wide map under the existing configuration byte bound, without applying one owner's channel quota | Global-map parser regression |
 
 ## Verification and scope
 
 This follows PR #1166, whose Linux dependency fix is verified independently.
-Add focused domain/application/config/client/UI tests, real browser settings and
-channel editing verification, a conversation stress step, provider create/resume
-TTL receipts, and independent review. Update the channel-workspaces state page
-only against the exact completed runtime source. The worker lease protocol and
-published image should remain unchanged because lifetime is gateway-side policy.
+The source review closed clean after three bounded rounds at
+`471fa51e1f92fad5e17ddd20bc5dee407de1cffb`. Configuration, audit, allocation,
+membership, authority, client and rendered tests cover the table. Source revert
+probes fail before the restored tests pass. Browser settings verification passed
+both engines/layouts, and raised conversation stress passed both engines. The
+first real Boat workflow confirmed finite creation, unlimited resume, unchanged
+active deadlines and default inheritance, with all four VMs confirmed absent.
+The corrected-source repeat also passed with all four VMs confirmed absent;
+the final CI package selection passed 3907 server tests with 15 existing ignores.
+CI remains pending. Exact checkpoints,
+receipts, screenshots, review dispositions and exclusions live in
+[verification evidence](../../../verification/desktop/evidence/boat-runtime-settings/README.md).
+The channel-workspaces state page names its exact reviewed source. The worker
+lease protocol and published image remain unchanged because lifetime is
+gateway-side policy.
 
 Cloud wake, automatic idle detection, renewing active finite lifetimes and
 altering already running VM deadlines are separate capabilities.
@@ -106,8 +118,8 @@ altering already running VM deadlines are separate capabilities.
 
 ## Design review dispositions
 
-The bounded design review identified four issues, resolved in this proposal:
-vault capacity/entry naming excludes storing ordinary preferences as secrets;
+The bounded design review identified four issues, resolved in implementation:
+ordinary preferences must remain separate from credentials;
 audit records need caller and before/after meaning; inheritance reads one
 snapshot; and default membership is distinguished from read failure or a
 dangling stored channel identity. The user then explicitly directed reuse of
@@ -115,4 +127,5 @@ existing config/settings files. That takes precedence over the reviewer
 recommendation for separate SQLite storage: reuse ConfigJson and its publication
 audit pattern instead. Channel settings gets an explicit Cedar action. Extend existing
 config capture to include these preferences; #1161 remains the separate channel
-catalogue backup gap. Runtime verification and implementation remain pending.
+catalogue backup gap. The verification record distinguishes completed checks from
+the remaining final repeat, broad-suite baselines and CI.

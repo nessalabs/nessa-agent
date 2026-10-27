@@ -1,0 +1,12 @@
+{
+  "sourceRevision": "471fa51e1f92fad5e17ddd20bc5dee407de1cffb",
+  "workerProtocol": "b698f20053f8bb7c",
+  "provider": "Boat",
+  "modelCredentials": "connected subscription",
+  "host": "macOS arm64",
+  "browserMode": "prod",
+  "notes": "Sanitized selected provider receipts and isolated fixture UI only; no credentials or raw gateway logs.",
+  "providerSourceRevision": "471fa51e1f92fad5e17ddd20bc5dee407de1cffb",
+  "browserSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db",
+  "initialProviderSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db"
+}
