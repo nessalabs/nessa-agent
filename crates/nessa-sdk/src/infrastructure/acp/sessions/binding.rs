@@ -41,7 +41,7 @@ use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
-use crate::infrastructure::clock::ClockInstant;
+use crate::infrastructure::clock::{within, ClockInstant};
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
     sync::{
@@ -1014,7 +1014,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                 .await
             {
                 Ok(input) => input,
-                Err(error) => return ProviderExecutionReply::Rejected(error),
+                Err(failure) => return ProviderExecutionReply::Rejected(failure.into_error()),
             };
             let limit = deadline.map_or(IMAGE_READ_TIMEOUT, |deadline| {
                 deadline
@@ -1099,15 +1099,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             let input = self
                 .prepared_input(input, &commands, closing.clone(), Some(deadline))
                 .await
-                .map_err(|error| {
-                    started();
-                    let state = if error == AgentError::Closed {
-                        ProviderSessionState::CleanupRequired
-                    } else {
-                        ProviderSessionState::Usable
-                    };
-                    ProviderOperationFailure::new(error, state)
-                })?;
+                .inspect_err(|_| started())?;
             let limit = deadline
                 .saturating_duration_since(self.factory.config.clock.now())
                 .min(IMAGE_READ_TIMEOUT);
@@ -1292,31 +1284,49 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
         commands: &mpsc::Sender<Command>,
         mut closing: watch::Receiver<()>,
         deadline: Option<ClockInstant>,
-    ) -> Result<ExecutionRequest, AgentError> {
+    ) -> Result<ExecutionRequest, ProviderOperationFailure> {
         let clock = &*self.factory.config.clock;
+        let refused = |error| ProviderOperationFailure::new(error, ProviderSessionState::Usable);
+        // A resolver's diagnostic says nothing about the native connection.
+        // Only this backend's close or channel observation can retire it.
+        let context_closed = || {
+            ProviderOperationFailure::new(AgentError::Closed, ProviderSessionState::CleanupRequired)
+        };
         if closing.has_changed().unwrap_or(true) || commands.is_closed() {
-            return Err(AgentError::Closed);
+            return Err(context_closed());
         }
         if deadline.is_some_and(|deadline| clock.now() >= deadline) {
-            return Err(AgentError::Deadline);
+            return Err(refused(AgentError::Deadline));
         }
-        let expired = async {
-            match deadline {
-                Some(deadline) => clock.sleep_until(deadline).await,
-                None => std::future::pending().await,
+        let preparation = async {
+            tokio::select! { biased;
+                result = input => result.map_err(refused),
+                _ = tokio::task::unconstrained(closing.changed()) => Err(context_closed()),
+                () = tokio::task::unconstrained(commands.closed()) => Err(context_closed()),
             }
         };
-        let input = tokio::select! { biased;
-            result = input => result?,
-            _ = closing.changed() => return Err(AgentError::Closed),
-            () = commands.closed() => return Err(AgentError::Closed),
-            () = expired => return Err(AgentError::Deadline),
+        let answer = match deadline {
+            Some(deadline) => within(clock, deadline, preparation)
+                .await
+                .unwrap_or_else(|| Err(refused(AgentError::Deadline))),
+            None => preparation.await,
         };
-        // A ready preparation cannot authorize dispatch after its budget.
-        if deadline.is_some_and(|deadline| clock.now() >= deadline) {
-            return Err(AgentError::Deadline);
+        let context_lost = closing.has_changed().unwrap_or(true) || commands.is_closed();
+        match answer {
+            // Keep a known source failure as the cause, even when independent
+            // close evidence now requires cleanup. Diagnostics never retire it.
+            Err(failure) if context_lost => Err(ProviderOperationFailure::new(
+                failure.into_error(),
+                ProviderSessionState::CleanupRequired,
+            )),
+            Err(failure) => Err(failure),
+            Ok(_) if context_lost => Err(context_closed()),
+            // A ready success cannot authorize dispatch after its budget.
+            Ok(_) if deadline.is_some_and(|deadline| clock.now() >= deadline) => {
+                Err(refused(AgentError::Deadline))
+            }
+            Ok(input) => Ok(input),
         }
-        Ok(input)
     }
     /// The image blocks for `message`, read before its command is queued so
     /// the worker never waits on the injected source.

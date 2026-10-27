@@ -38,8 +38,11 @@ async function phoneFiles(run, step, prefix) {
     const result = await new Promise((resolve) => {
       timer = setTimeout(() => resolve({ timeout: true }), 180_000)
       const keep = (chunk) => {
-        output += chunk.toString()
-        if (output.length > 1024 * 1024) resolve({ overflow: true })
+        const remaining = 1024 * 1024 - output.length
+        if (remaining <= 0) return
+        const text = chunk.toString()
+        output += text.slice(0, remaining)
+        if (text.length >= remaining) resolve({ overflow: true })
       }
       owned.child.stdout.on("data", keep)
       owned.child.stderr.on("data", keep)

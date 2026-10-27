@@ -55,9 +55,10 @@ range reader, the selected workspace, the environment's placement boundary, a
 delivery audit sink and lease cancellation. It does not resolve a session ID
 through a global registry or call back into the live Agent to find its context.
 
-The `ProviderSession` execute and steer wrappers prepare delivery input before
-calling their backend. That input replaces each upload with a confirmed file
-link for that dispatch; the SDK's saved request remains the original references.
+The `ProviderSession` execute and steer wrappers pass a validation/preparation
+future to their backend. After acquiring its generation, ACP arms the operation
+deadline and then polls that future. The delivery copy replaces each upload with
+a confirmed link; the SDK's saved request remains the original references.
 Preparation must participate in the owning execution/steering cancellation and
 deadline, including local turn cancellation that leaves the lease live. Provider
 admission must account for the maximum encoded path overhead before it saves
@@ -81,6 +82,7 @@ sequenceDiagram
   participant A as Attachment service
   participant C as Conversation service
   participant S as SDK scheduler and storage
+  participant B as ACP backend
   participant R as Lease-scoped input resolver
   participant E as Execution environment
   participant H as ACP harness
@@ -91,14 +93,16 @@ sequenceDiagram
   A-->>C: Held or refused
   C->>S: Admit original reference and command identity
   S->>S: Persist / wait for dispatch
-  S->>R: Prepare this execution's delivery input
+  S->>B: Validation/preparation future
+  B->>B: Arm operation deadline
+  B->>R: Poll delivery preparation
   R->>R: Record delivery asked with execution and lease
   R->>A: Read held ranges
   R->>E: Stream and verify file placement
   E-->>R: Confirmed path or typed failure
   R->>R: Record delivery outcome
-  R-->>S: Confirmed links or preparation failure
-  S->>H: Dispatch prepared input only after preparation succeeds
+  R-->>B: Confirmed links or preparation failure
+  B->>H: Handoff and dispatch within the remaining deadline
 ```
 
 Automatic input delivery has its own evidence: original reference, destination,
@@ -162,6 +166,9 @@ the refreshed Apple package to decode records containing uploaded files.
 | F9c | Execution or steering deadline expires while placement is pending, or placement becomes ready exactly at expiry | ACP rejects before handoff; no provider events/report or late dispatch. Preparation interest drops while its physical owner settles cleanup/evidence. |
 | F9d | Placement succeeds before the deadline | Image reads, queueing and provider response spend the remaining time on the same absolute deadline. |
 | F9e | Close or generation loss overtakes preparation | Reject before handoff; a close already observed before polling preparation starts no placement. |
+| F9f | A file resolver returns `Closed` while the ACP context remains live | Preserve the source failure with `Usable`; only the backend's own close/channel observation authorizes `CleanupRequired`. The active turn remains available for steering. |
+| F9g | A bounded source drains ready Tokio channels and repeatedly exhausts its cooperative poll budget | The shared clock deadline still fires before source completion; close/channel waits cannot be starved either. |
+| F9h | A ready source failure coincides with expiry or actual context close | Preserve its primary error; independently attach cleanup state from owned close/channel observations. Successful preparation still cannot dispatch after expiry. |
 | F10 | Bytes become unreadable or their hold is released while streaming | Typed delivery failure; no successful prompt with a missing file. |
 | F11 | Destination exists with the same bytes | Reuse only after the placement owner verifies the file. |
 | F12 | Destination is occupied by other bytes, a symlink, or a name escapes the workspace | Refuse placement without replacing the existing target. |
