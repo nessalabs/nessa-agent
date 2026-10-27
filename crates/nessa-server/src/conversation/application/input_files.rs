@@ -74,6 +74,8 @@ pub(crate) trait LocalInputFilePlacement: Send + Sync {
         request: LocalInputFile,
     ) -> EnvironmentFuture<'static, Result<String, UserFileError>>;
 }
+// The request port remains shared; only Unix composition consumes its fields.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) struct LocalInputFile {
     pub workspace: String,
     pub file: UploadedFileReference,

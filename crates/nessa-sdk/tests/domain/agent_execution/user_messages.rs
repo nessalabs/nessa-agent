@@ -44,6 +44,11 @@ fn uploaded_input_keeps_original_identity_and_bounds_names_and_payloads() {
     let longest = upload(&format!("{}é", "a".repeat(253)), 12).unwrap();
     assert!(longest.destination_name().len() <= 255);
     assert!(longest.destination_name().starts_with("nessa-"));
+    let multibyte = upload(&format!("{}€", "é".repeat(89)), 12).unwrap();
+    assert_eq!(
+        multibyte.destination_name(),
+        format!("nessa-{}-{}", multibyte.digest().to_hex(), "é".repeat(89))
+    );
     assert!(upload("report.pdf", 0).is_err());
     assert!(upload("report.pdf", UploadedFileReference::MAX_BYTES).is_ok());
     assert!(upload("report.pdf", UploadedFileReference::MAX_BYTES + 1).is_err());

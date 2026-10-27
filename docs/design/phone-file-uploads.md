@@ -114,6 +114,9 @@ Local execution retains the existing POSIX absolute-path contract. Non-Unix
 local placement returns `NotOffered` before filesystem or source reads; Windows
 gateway hosting is not enabled by this change.
 
+`PrivateDirectory::open_shared_root` retains the already selected workspace as
+its caller-trusted root, including beneath a writable locator. It requires current
+ownership and no group/other write bits without changing permissions.
 `LocalInputFiles` owns retained workspace/file handles, bounded reads, digest
 verification and publication without replacement. Existing destinations are opened
 without blocking or following symlinks; only matching regular files can be reused.
@@ -144,6 +147,7 @@ the refreshed Apple package to decode records containing uploaded files.
 
 | Row | Initial facts / event order | Required result |
 | --- | --- | --- |
+| F0 | A selected workspace has shared read/search bits under a writable locator (for example Linux `/tmp`) | Retain that selected root with owner/no-follow checks; locator ancestry is caller trust, as for `open_root`. Permission drift or replacement still refuses. |
 | F1 | A PDF, zip or text file is uploaded; its conversation sends its reference | Accept the reference; deliver the bytes; prompt names the confirmed agent-side path. |
 | F2 | Another conversation names the same digest | Refuse before admission or placement; learning a digest grants no access. |
 | F3 | Digest, media type or size differs from the hold | Refuse the reference without reading or placing bytes. |

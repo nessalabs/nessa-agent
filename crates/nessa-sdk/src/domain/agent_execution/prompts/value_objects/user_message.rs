@@ -465,3 +465,7 @@ impl UserMessage {
         self.history.as_deref()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/domain/agent_execution/uploaded_delivery.rs"]
+mod uploaded_delivery_tests;

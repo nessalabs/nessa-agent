@@ -16,6 +16,8 @@ use nessa_sdk::{
 use sha2::{Digest, Sha256};
 
 struct Fixture {
+    #[cfg(unix)]
+    _public_parent: tempfile::TempDir,
     directory: tempfile::TempDir,
     service: ConversationService,
     provider: Arc<ProviderFactory>,
@@ -33,6 +35,20 @@ fn caller(action: &str) -> ConversationCaller {
 }
 impl Fixture {
     async fn new() -> Self {
+        #[cfg(unix)]
+        let public_parent = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let directory = {
+            use std::os::unix::fs::PermissionsExt;
+            // A chosen workspace is the trust root, not its writable locator.
+            std::fs::set_permissions(public_parent.path(), std::fs::Permissions::from_mode(0o777))
+                .unwrap();
+            let directory = tempfile::tempdir_in(public_parent.path()).unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            directory
+        };
+        #[cfg(not(unix))]
         let directory = tempfile::tempdir().unwrap();
         let provider = Arc::new(ProviderFactory::default());
         let attachments = Arc::new(MemoryAttachments::default());
@@ -89,6 +105,8 @@ impl Fixture {
             .await
             .unwrap();
         Self {
+            #[cfg(unix)]
+            _public_parent: public_parent,
             directory,
             service,
             provider,

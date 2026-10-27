@@ -206,6 +206,7 @@ pub(crate) use record_read::TestReadGate;
 mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
 
+#[cfg(any(unix, test))]
 mod input_files;
 #[cfg(any(unix, test))]
 pub(crate) use input_files::LocalInputFiles;
