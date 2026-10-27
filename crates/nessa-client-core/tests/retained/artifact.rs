@@ -854,6 +854,58 @@ fn a_terminal_conversation_refusal_keeps_its_code() {
     );
 }
 
+#[test]
+fn an_attachment_refusal_keeps_its_code() {
+    let cases = [
+        (
+            ConversationErrorCode::AttachmentNotFound,
+            ReadFailure::AttachmentNotFound,
+        ),
+        (
+            ConversationErrorCode::AttachmentUnavailable,
+            ReadFailure::AttachmentUnavailable,
+        ),
+    ];
+    for (code, failure) in cases {
+        let conversation = conversation();
+        let digest = digest_of(b"ab");
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("file.bin");
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut source = TerminalRefusal {
+            code,
+            reads: reads.clone(),
+        };
+        let stop = ReadStop::new();
+        let ending = running(stop.clone());
+        let fault = confirmed_held_file(
+            &mut source,
+            &Still,
+            &request(&conversation, &digest, &output),
+            &ending,
+            &super::DiskArtifactFiles,
+        )
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(
+            fault.kind(),
+            ArtifactFaultKind::Gateway(failure),
+            "{code:?}"
+        );
+        assert_ne!(failure, ReadFailure::Protocol);
+        assert_ne!(failure, ReadFailure::Refused);
+        assert_eq!(fault.reached(), 0);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert!(!output.exists());
+        stop.stop();
+        assert_eq!(
+            super::classify_artifact_fault(fault, &ending).kind(),
+            ArtifactFaultKind::Gateway(failure),
+            "{code:?}"
+        );
+    }
+}
+
 struct AlwaysBusy {
     reads: Arc<AtomicUsize>,
 }

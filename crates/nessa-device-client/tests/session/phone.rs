@@ -463,6 +463,8 @@ fn a_refused_artifact_is_an_authority_failure_and_a_transport_failure_is_not() {
     for failure in [
         ReadFailure::ConversationDeleted,
         ReadFailure::ConversationNotFound,
+        ReadFailure::AttachmentNotFound,
+        ReadFailure::AttachmentUnavailable,
     ] {
         let terminal = ArtifactFetch::decided(
             Err(ArtifactFault::progress(

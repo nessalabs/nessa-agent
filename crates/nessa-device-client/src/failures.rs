@@ -73,7 +73,9 @@ copied_enum!(
         CursorAhead,
         SubscriptionCapacity,
         ConversationDeleted,
-        ConversationNotFound
+        ConversationNotFound,
+        AttachmentNotFound,
+        AttachmentUnavailable
     ]
 );
 copied_enum!(

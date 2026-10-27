@@ -295,15 +295,18 @@ fn file_step(step: FileStep) -> ArtifactFileStep {
 /// A range that stayed busy through every retry is unreachable, the same
 /// outcome as a subscription that answers `temporarily_unavailable`.
 /// `fetch_held_file` has already asked the range again for each busy pause.
-/// `conversation_deleted` and `conversation_not_found` stay those codes.
-/// They are not this device's authority being refused, so pinned status is
-/// not asked again. Any other held-file refusal uses [`failure`].
+/// `conversation_deleted`, `conversation_not_found`, `attachment_not_found`,
+/// and `attachment_unavailable` stay those codes. They are not this device's
+/// authority being refused, so pinned status is not asked again. Any other
+/// held-file refusal uses [`failure`].
 fn held_file_failure(error: GatewayError) -> ReadFailure {
     match error {
         GatewayError::HeldFile(HeldFileRefusal::Conversation(code)) => match code {
             ConversationErrorCode::TemporarilyUnavailable => ReadFailure::Unreachable,
             ConversationErrorCode::ConversationDeleted => ReadFailure::ConversationDeleted,
             ConversationErrorCode::ConversationNotFound => ReadFailure::ConversationNotFound,
+            ConversationErrorCode::AttachmentNotFound => ReadFailure::AttachmentNotFound,
+            ConversationErrorCode::AttachmentUnavailable => ReadFailure::AttachmentUnavailable,
             other => failure(GatewayError::HeldFile(HeldFileRefusal::Conversation(other))),
         },
         other => failure(other),
@@ -684,8 +687,9 @@ impl RetainedCache {
     /// `Stopped`, including a local match cancelled while the output was
     /// read. A budget the operation already observed stays `Unreachable`
     /// when `stop` is set afterwards. A `Protocol`, `Unreachable`, `Refused`,
-    /// `ConversationDeleted`, or `ConversationNotFound` result that already
-    /// settled stays that result when `stop` is set afterwards.
+    /// `ConversationDeleted`, `ConversationNotFound`, `AttachmentNotFound`, or
+    /// `AttachmentUnavailable` result that already settled stays that result
+    /// when `stop` is set afterwards.
     /// A relay that says the gateway is offline, when the direct dial did
     /// not connect, is `Away`, including after that later stop.
     pub fn fetch_artifact(
@@ -745,8 +749,9 @@ impl RetainedCache {
 /// operation observed the caller stop, which [`Stopping::note_end`] recorded
 /// then; that still wins over a spent budget. A budget observed while the
 /// stop was clear stays `Unreachable` when `stop` is set afterwards.
-/// `Protocol`, `Unreachable`, `Refused`, `ConversationDeleted`, and
-/// `ConversationNotFound` stay when `stop` is set afterwards. A relay
+/// `Protocol`, `Unreachable`, `Refused`, `ConversationDeleted`,
+/// `ConversationNotFound`, `AttachmentNotFound`, and `AttachmentUnavailable`
+/// stay when `stop` is set afterwards. A relay
 /// `Offline` on an unreachable dial is `Away`, including after that later
 /// stop.
 fn dial_failure(failure: ReadFailure, ending: &Stopping, offline: bool) -> ReadFailure {
@@ -766,7 +771,8 @@ fn dial_failure(failure: ReadFailure, ending: &Stopping, offline: bool) -> ReadF
 /// [`Stopping::note_end`] recorded, so a later `stop` does not replace a
 /// budget. A gateway `Refused`, `Protocol`, or `Unreachable` that already
 /// settled stays that cause when `stop` is set afterwards, as do
-/// `ConversationDeleted` and `ConversationNotFound`.
+/// `ConversationDeleted`, `ConversationNotFound`, `AttachmentNotFound`, and
+/// `AttachmentUnavailable`.
 fn classify_artifact_fault(fault: ArtifactFault, ending: &Stopping) -> ArtifactFault {
     let ArtifactFaultKind::Gateway(failure) = fault.kind() else {
         return fault;

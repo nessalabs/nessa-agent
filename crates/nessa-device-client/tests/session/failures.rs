@@ -105,6 +105,22 @@ fn cursor_ahead_stays_distinct_from_an_ungranted_conversation() {
         NativeReadFailure::from(ReadFailure::ConversationNotFound),
         NativeReadFailure::Refused
     );
+    assert_eq!(
+        NativeReadFailure::from(ReadFailure::AttachmentNotFound),
+        NativeReadFailure::AttachmentNotFound
+    );
+    assert_eq!(
+        NativeReadFailure::from(ReadFailure::AttachmentUnavailable),
+        NativeReadFailure::AttachmentUnavailable
+    );
+    assert_ne!(
+        NativeReadFailure::from(ReadFailure::AttachmentNotFound),
+        NativeReadFailure::Protocol
+    );
+    assert_ne!(
+        NativeReadFailure::from(ReadFailure::AttachmentUnavailable),
+        NativeReadFailure::Refused
+    );
 }
 
 #[test]

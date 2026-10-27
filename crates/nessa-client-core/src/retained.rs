@@ -256,6 +256,14 @@ pub enum ReadFailure {
     /// checkpoint read does not produce this, and it does not ask pinned
     /// status again.
     ConversationNotFound,
+    /// `artifact.read` answered `attachment_not_found`. The conversation does
+    /// not hold this file. A catalogue or checkpoint read does not produce
+    /// this, and it does not ask pinned status again.
+    AttachmentNotFound,
+    /// `artifact.read` answered `attachment_unavailable`. The artifact store
+    /// could not be read. A catalogue or checkpoint read does not produce
+    /// this, and it does not ask pinned status again.
+    AttachmentUnavailable,
 }
 
 /// Stops a read in progress: the flag every physical read and write asks,
