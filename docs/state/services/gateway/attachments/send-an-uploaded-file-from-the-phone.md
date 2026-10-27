@@ -4,11 +4,13 @@ title: "Send an uploaded file from the phone"
 kind: "flow"
 status: "implemented"
 summary: "Original file references survive sending and recovery; verified paths belong to one execution environment."
-sourceRevision: "030302e18aa44a718ca98b23d63f24d6f735791a"
+sourceRevision: "b1a2bcb9e69c7e80c0bff8600d457313562b35e5"
 parent: "gateway-attachments"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/uploaded_file.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/session.rs"
+  - "crates/nessa-sdk/src/infrastructure/acp/sessions/binding.rs"
+  - "crates/nessa-sdk/tests/infrastructure/acp/contracts/input_files.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/input_files.rs"
   - "crates/nessa-server/src/composition/agent.rs"
@@ -57,6 +59,7 @@ stateDiagram-v2
     Saved --> Preparing: SDK selects execution under current lease
     Preparing --> Ready: Bytes and placement confirmed, outcome evidence committed
     Preparing --> Refused: Hold, bytes, placement or audit fails
+    Preparing --> Refused: ACP operation deadline expires before handoff
     Preparing --> Cancelled: WorkPermit accepts Stop before handoff
     Ready --> Cancelled: Stop wins lifecycle mutex
     Ready --> Dispatched: Native handoff wins lifecycle mutex
@@ -77,10 +80,16 @@ stateDiagram-v2
 Read ranges and audit calls have ten-second waits. A resolver caller waits at
 most two minutes. Losing the waiter signals cancellation while the retained
 worker owns placement and evidence until they settle. An uncertain outcome
-cannot authorize a provider prompt.
+cannot authorize a provider prompt. ACP arms its execution or steering deadline
+before preparing files, and image reads and native response waits spend what
+remains of that same deadline. Expiry before native handoff rejects the input
+without inventing provider execution or cleanup evidence.
 
 The production Swift `FileVerification --files` runner and desktop `inputFiles`
-stress step exercise sending. The SSH test uses an in-process environment loop
+stress step exercise sending. The stress step invokes the actual Swift journal
+and outbox in its loaded conversation. The private iOS repository owns the
+macOS CI run against pinned public gateway source; the Ubuntu core stress job
+explicitly excludes the phone step. The SSH test uses an in-process environment loop
 and scripted SFTP channel; it does not claim a live SSH daemon or model service.
 
 ## Further reading
