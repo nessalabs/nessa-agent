@@ -2297,3 +2297,11 @@ transient input clearing, concise help, reload without re-unlock, and pipe EOF
 locking through the actual gateway and native child. Check keyboard focus and
 Later/Escape leave ordinary workspace use available. GitHub protected actions
 still require backend admission after a canceled dialog.
+
+The conversation stress notice and launch reloads check the current vault state.
+After an earlier gateway restart has sealed it, they wait for the unlock dialog,
+enter the disposable passphrase through the UI, and verify unlocked state before
+continuing ordinary clicks. Review-notice identity, delivery and at-rest automatic
+denial checks still apply. The minimized sequence is seed 2 with one pool step
+and one notice step; pool precedes notice, whose page reload used to leave the
+vault dialog blocking the main conversation click.

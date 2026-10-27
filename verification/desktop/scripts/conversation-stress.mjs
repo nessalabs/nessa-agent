@@ -2149,6 +2149,7 @@ const steps = {
         failures.push("the startup screen covers the window after the gateway was up")
         return
       }
+      await unlockReloadedVault(run, page)
       await openStressConversation(page, run.main.id, run.main.title)
     })
     if (failures.length === 0) await steps.reply(run, step, failures)
@@ -3143,6 +3144,7 @@ const steps = {
       )
       return
     }
+    await unlockReloadedVault(run, run.page)
     await openStressConversation(run.page, run.main.id, run.main.title)
     const { permissionTargets } = await import("@nessa/client")
     const view = await readWithReviews(run.client, conversationId)
@@ -4108,6 +4110,17 @@ async function replayOnboarding(page, evidence) {
   const asked = (await page.evaluate(() => window.__fakeHostReplays)) - before
   await closeSettings(page)
   return asked
+}
+
+/** A prior gateway restart seals the app's lease. A reloaded window asks
+ * again; answer through the UI before the next ordinary click, as a person does.
+ * The backend state, not an early isVisible snapshot, decides whether to wait. */
+async function unlockReloadedVault(run, page) {
+  if ((await run.client.vault.status()).state !== "locked") return
+  await page.locator('[data-vault-dialog="unlock"]').waitFor()
+  await unlockVault(page)
+  if ((await run.client.vault.status()).state !== "unlocked")
+    throw new Error("Reloaded window did not unlock its vault")
 }
 
 /** The menu-bar panel as the host opens it, over the run's gateway. */
