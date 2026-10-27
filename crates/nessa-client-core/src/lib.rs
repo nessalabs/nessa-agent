@@ -18,6 +18,7 @@ pub mod product;
 mod protected;
 mod read_only_sync;
 pub mod retained;
+pub mod tunnel;
 #[cfg(feature = "cli")]
 pub use composition::error::CommandError;
 

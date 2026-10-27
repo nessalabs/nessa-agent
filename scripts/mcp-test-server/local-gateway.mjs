@@ -192,6 +192,9 @@ export async function exited(child, ms) {
  *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
  * @param {object} [o.native] the config's `native` section
  *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
+ * @param {string} [o.evidence] task-owned output directory. Before private data
+ *   cleanup, preserve gateway.log and gateway-status.json here, never credentials
+ *   or audit record contents. A failed evidence write still removes private data.
  * @param {Record<string, string>} [o.environment] more of the gateway's
  *   environment, such as `NESSA_GITHUB_APP`
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
@@ -236,7 +239,26 @@ export async function startLocalGateway(o) {
       // that kept the streams open does not hold the stop up for long.
       if (stopped) await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
     }
-    rmSync(directory, { recursive: true, force: true })
+    try {
+      if (o.evidence) {
+        mkdirSync(o.evidence, { recursive: true })
+        writeFileSync(join(o.evidence, "gateway.log"), output.join(""))
+        writeFileSync(
+          join(o.evidence, "gateway-status.json"),
+          `${JSON.stringify(
+            {
+              stopped,
+              exitCode: server?.exitCode ?? null,
+              signal: server?.signalCode ?? null,
+            },
+            null,
+            2,
+          )}\n`,
+        )
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
     return stopped
   }
   try {
@@ -353,8 +375,16 @@ export async function startLocalGateway(o) {
       restart,
     }
   } catch (error) {
-    await stop()
-    error.gatewayLog = output.join("")
-    throw error
+    let failure = error
+    try {
+      await stop()
+    } catch (cleanup) {
+      failure = new AggregateError(
+        [error, cleanup],
+        "The gateway failed and its cleanup or diagnostic retention also failed",
+      )
+    }
+    failure.gatewayLog = output.join("")
+    throw failure
   }
 }

@@ -1,0 +1,46 @@
+{
+  "comment": "The pinned cloudflared the gateway's Cloudflare tunnel runs (docs/design/auth/tunnel.md). Sizes and digests are measured from the published release files: archiveBytes and archiveDigest over what is downloaded, programBytes and programDigest over the program it holds. Released 2026-09-24; bump only to a release at least two weeks old.",
+  "version": "2026.9.3",
+  "builds": [
+    {
+      "operatingSystem": "macos",
+      "architecture": "aarch64",
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-darwin-arm64.tgz",
+      "packaging": "tgz",
+      "archiveBytes": 19784166,
+      "archiveDigest": "587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095",
+      "programBytes": 39380544,
+      "programDigest": "5472c1a01c84bc31b3021056a73b4e5774ddddefc572124ea8fdf6c340639f32"
+    },
+    {
+      "operatingSystem": "macos",
+      "architecture": "x86_64",
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-darwin-amd64.tgz",
+      "packaging": "tgz",
+      "archiveBytes": 21740193,
+      "archiveDigest": "d1155d0837487f261183b15c1eab6c4ebcad9dc49b94675f1524c3564cea3977",
+      "programBytes": 42319616,
+      "programDigest": "ab588b3b4db9cdb4476c30a3db2a72635b1d8327d44741fee6799a0f37b0ec07"
+    },
+    {
+      "operatingSystem": "linux",
+      "architecture": "x86_64",
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-linux-amd64",
+      "packaging": "program",
+      "archiveBytes": 40122749,
+      "archiveDigest": "77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2",
+      "programBytes": 40122749,
+      "programDigest": "77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2"
+    },
+    {
+      "operatingSystem": "linux",
+      "architecture": "aarch64",
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-linux-arm64",
+      "packaging": "program",
+      "archiveBytes": 37685657,
+      "archiveDigest": "aaeb2d7d0da3614634c7e03ab13487a1522c2e79165ed2929cfe23d5e95b326d",
+      "programBytes": 37685657,
+      "programDigest": "aaeb2d7d0da3614634c7e03ab13487a1522c2e79165ed2929cfe23d5e95b326d"
+    }
+  ]
+}

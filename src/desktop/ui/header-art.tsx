@@ -164,11 +164,18 @@ export function HeaderArt() {
               }}
               disabled={!image}
             >
+              <DesktopIcon name="nightScene" />
               Night scene
             </MenuItem>
-            <MenuItem onSelect={choosePicture}>Choose image or GIF…</MenuItem>
+            <MenuItem onSelect={choosePicture}>
+              <DesktopIcon name="picture" />
+              Choose image or GIF…
+            </MenuItem>
             {image ? (
-              <MenuItem onSelect={() => setDraft(framing)}>Adjust position…</MenuItem>
+              <MenuItem onSelect={() => setDraft(framing)}>
+                <DesktopIcon name="position" />
+                Adjust position…
+              </MenuItem>
             ) : null}
             {image && palette.length > 0 ? (
               <>
@@ -191,6 +198,7 @@ export function HeaderArt() {
                   onCheckedChange={(checked) => setTint(checked === true)}
                   onSelect={(event) => event.preventDefault()}
                 >
+                  <DesktopIcon name="appearance" />
                   Tint app from picture
                 </MenuCheckboxItem>
               </>

@@ -119,8 +119,17 @@ fn each_failure_keeps_its_typed_cause() {
             local,
         ),
         (
-            FetchCause::File(FileStep::SyncDirectory),
-            json!({"code":"file","step":"syncDirectory"}),
+            FetchCause::Published {
+                step: FileStep::Remove,
+            },
+            json!({"code":"linked","step":"remove"}),
+            local,
+        ),
+        (
+            FetchCause::Published {
+                step: FileStep::SyncDirectory,
+            },
+            json!({"code":"linked","step":"syncDirectory"}),
             local,
         ),
         (

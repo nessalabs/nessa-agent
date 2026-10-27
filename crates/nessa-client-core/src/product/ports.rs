@@ -1,4 +1,5 @@
 //! Injected socket/independent stop/wake effects for the product owner.
+use nessa_protocol::tunnel::TunnelAddress;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::{Arc, Condvar, Mutex};
@@ -72,7 +73,21 @@ impl ProductWake for ThreadProductWake {
     }
 }
 /// Real TCP composition adapter; the stop handle owns a cloned descriptor.
-pub struct LocalProductConnector;
+/// With a tunnel it dials direct first, then the gateway's web tunnel once
+/// the direct dial has not connected within the head start or was refused
+/// (`retained::dial_native`). Either way the socket carries the same pinned
+/// TLS.
+#[derive(Default)]
+pub struct LocalProductConnector {
+    tunnel: Option<TunnelAddress>,
+}
+impl LocalProductConnector {
+    /// A connector that falls back on `tunnel`, the gateway's public address
+    /// as it last named it, when the direct dial does not connect.
+    pub fn reaching(tunnel: Option<TunnelAddress>) -> Self {
+        Self { tunnel }
+    }
+}
 struct Socket(TcpStream);
 impl Read for Socket {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
@@ -105,7 +120,7 @@ impl ProductInterrupt for Socket {
 }
 impl ProductConnector for LocalProductConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-        let socket = TcpStream::connect_timeout(&address, timeout)?;
+        let socket = crate::retained::dial_native(address, self.tunnel.as_ref(), timeout)?;
         let interrupt = Arc::new(Socket(socket.try_clone()?));
         Ok(ConnectedProduct {
             stream: Box::new(Socket(socket)),

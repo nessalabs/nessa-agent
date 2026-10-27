@@ -169,7 +169,7 @@ fn sessions_on(
                 nessa_server::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new()
                     .unwrap(),
             ),
-            owner_phone_receivers: None,
+            owner_phone_receivers: Some(fixture.receivers.clone()),
             verifier: fixture.registry.clone(),
             access: fixture.registry.clone(),
             clock: Arc::new(super::support::Time),
@@ -220,8 +220,13 @@ async fn pair_as(
         .await
         .unwrap();
     let (_, store) = pending(fixture.directory.path(), name);
+    // A phone enrolls as the owner's device; the owner chose full access.
     let client = NativeEnrollmentClient::enrolling(
-        class,
+        if class == ConsentClass::OwnerPhoneReadWrite {
+            ConsentClass::DeviceRead
+        } else {
+            class
+        },
         store.clone(),
         RuntimeDependencies::default().clock,
     );
@@ -391,7 +396,12 @@ async fn protected_session_reads_with_the_issued_credential() {
         let nonce = probe.nonce.clone();
         let ready = probe.authenticate(&credential, &nonce).unwrap();
         let head = probe.catalogue_head(&receiver, epoch).unwrap();
-        let write = probe.call("conversation.list", json!({})).unwrap();
+        let write = probe
+            .call(
+                "conversation.create",
+                json!({"conversationId": Uuid::new_v4().to_string(), "requestId": "read-only-create"}),
+            )
+            .unwrap();
         (ready, head, write)
     })
     .await;
@@ -411,6 +421,75 @@ async fn protected_session_reads_with_the_issued_credential() {
         "forbidden",
         "the device credential reads only"
     );
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
+}
+
+/// An owner's phone paired by code, with full access, acts as the owner
+/// phone: it reads an owned conversation it was never shared and calls
+/// owner methods such as `server.health`. A device paired the ordinary way on
+/// the same gateway is refused both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_phone_paired_by_code_reads_every_owned_conversation() {
+    let fixture = Fixture::phone_owner().await;
+    let metadata = conversation_store(&fixture);
+    let sessions = sessions_on(
+        &fixture,
+        Arc::new(Devices(fixture.registry.clone())),
+        metadata.clone(),
+    );
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions)).await;
+    let phone = pair_as(
+        &fixture,
+        address,
+        "phone",
+        ConsentClass::OwnerPhoneReadWrite,
+    )
+    .await;
+    let device = pair(&fixture, address, "device").await;
+    let conversation = Conversation::new(
+        ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+        fixture.session.context().organization_id().clone(),
+        fixture.session.context().principal_id().clone(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap();
+    let id = conversation.id().to_string();
+    metadata.create(conversation).await.unwrap();
+    let reads = |paired: &Paired| {
+        let credential = paired.credential.clone();
+        let (receiver, epoch) = (paired.receiver.clone(), paired.epoch.to_string());
+        let saved = paired.store.clone();
+        let id = id.clone();
+        blocking(move || {
+            let mut probe = Probe::open(address, &saved);
+            let nonce = probe.nonce.clone();
+            let ready = probe.authenticate(&credential, &nonce).unwrap();
+            assert_eq!(ready["ok"], true, "{ready}");
+            assert_eq!(ready["payload"]["principalId"], "owner");
+            let records = probe
+                .call(
+                    "conversation.recordsHead",
+                    json!({"receiverId": receiver, "accessEpoch": epoch, "conversationId": id}),
+                )
+                .unwrap();
+            let health = probe.call("server.health", json!({})).unwrap();
+            (records, health)
+        })
+    };
+    let (records, health) = reads(&phone).await;
+    // Admitted: the read reaches the record source, which answers pruned.
+    assert_eq!(code(&records), "history_pruned", "{records}");
+    assert_eq!(health["ok"], true, "{health}");
+    let (records, health) = reads(&device).await;
+    assert_eq!(code(&records), "wrong_owner", "{records}");
+    assert_eq!(code(&health), "forbidden", "{health}");
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
     fixture.gateway.shutdown().await;

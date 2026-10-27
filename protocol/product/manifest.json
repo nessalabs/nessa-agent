@@ -14,6 +14,10 @@
       "params": null,
       "grant": "server.read"
     },
+    "server.reach": {
+      "params": null,
+      "grant": "server.read"
+    },
     "credential.issue": {
       "params": "CredentialIssueParams",
       "grant": "credential.manage"
@@ -128,6 +132,10 @@
     },
     "attachment.begin": {
       "params": "AttachmentBeginParams",
+      "grant": "conversation.write"
+    },
+    "attachment.write": {
+      "params": "AttachmentWriteParams",
       "grant": "conversation.write"
     },
     "agents.list": {
@@ -256,6 +264,14 @@
     },
     "pairing.setLinking": {
       "params": "PairingSetLinkingParams",
+      "grant": "credential.manage"
+    },
+    "pairing.setTunnel": {
+      "params": "PairingSetTunnelParams",
+      "grant": "credential.manage"
+    },
+    "pairing.tunnel": {
+      "params": null,
       "grant": "credential.manage"
     },
     "github.liveEvents": {

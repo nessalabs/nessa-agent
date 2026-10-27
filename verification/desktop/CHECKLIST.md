@@ -31,6 +31,28 @@ Opt-in. Not part of `run-all`. The contract is
 
 ## Alpha startup and stress
 
+- [ ] **Follower reference replay reaches its captured head.** After background
+  turns settle, the verifier replays to a checkpoint candidate, closes that
+  source, and captures the default event subscription's current committed head.
+  Exact opaque cursor equality proves convergence; otherwise it resumes strictly
+  after the applied candidate, preserving every ordered event through idle parking.
+  Quiet, an intermediate empty batch, and a matching event count do not prove
+  completion. Capture and replay share the existing 60-second overall deadline;
+  stalled or ended streams fail, and closure is requested for every source;
+  the client's abort gate owns late opens and close acknowledgements. Ordered event identity
+  and count assertions remain unchanged.
+  _Check:_ `lib/stress-followers.test.mjs` includes late, missing, empty, terminal,
+  shared-deadline and late-open controls; `conversation-stress.mjs` uses it.
+
+- [ ] **Native paired catalogue stress uses the actual protected product child.**
+  `conversation-stress.mjs` runs `native_paired_catalogue_stress` while its window,
+  background conversations and followers remain active. `--pairedCatalogues` is
+  the cycle count (default 1; raise it with the other load knobs). Hidden rows
+  exceed the list bound. Replacement, restore, revoke, archive and reconnect
+  preserve the independent granted-identity oracle; hidden activity and a former
+  receiver's later replacement stay quiet. This native check runs once per
+  browser engine; it does not claim that a browser itself holds native credentials.
+
 Opt-in. Not part of `run-all`. It does not change the frame budget and it
 does not replace `workspace-load.mjs`.
 
@@ -174,6 +196,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   (`sweep-across-zones`, one-way).
 - [ ] **Zones are direction-aware**: a sideways sweep near a tall, narrow
   pane's top reaches its side, never above or below. _Check:_ `drag.mjs` (`sideways-top`).
+  The receipt separates pointer event time, delivery time and DOM observation.
+  Missing observations inside the model's 150 ms rest window fail the check;
+  late announcements do not prove a decision made while moving.
 - [ ] **A zone holds at its boundary** (another must win by 12px): ±6px
   jitter does not flicker it. _Check:_ `drag.mjs` (`boundary-jitter`).
 - [ ] **The zone settles at rest**: approached fast, then still for 300 ms, a
@@ -220,6 +245,13 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   lifts cancels nothing). _Check:_ unit tests `split-panes/model/drag.test.ts`,
   `split-panes/adapters/dom/drag.test.tsx`,
   `workspace/adapters/dom/split-panes-drag.test.tsx`.
+- [ ] **A compact card never acquires pane-preview glass.** Cancel and drop,
+  with full or reduced motion, neither set the pressing marker nor pulse the
+  blur-restoration marker, including the four deferred release frames. The
+  displayed swap commits on drop; cancel preserves order; both remove drag
+  residue. _Check:_ `drag.mjs` (`compact-glass-release`, Chromium and WebKit),
+  `split-panes/adapters/dom/drag.test.tsx`; resource ownership in
+  [`pane frame budget`](../../docs/design/pane-frame-budget.md).
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
@@ -363,10 +395,14 @@ _ADR 238 › Focus follows the focused pane_; keys in
 
 - [ ] **The caret lands in the focused pane's composer** after ⌘N, ⇧⌘N,
   ⌘\\ and a pick, ⇧⌘\\, ⌘1–4, ⇧⌘] and ⇧⌘[, and ⌘W. _Check:_ `focus.mjs` (`focus-panes`).
+  Wait for the command's expected pane membership, destination, focus mark and
+  composer together, with finite motion finished, within the existing 3 s
+  settlement budget. The old pane's caret cannot complete a new-pane command.
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
-  held callbacks after the old workspace unmounts; they enqueue zero new frame
+  all held callbacks after the old workspace unmounts (at least one must have
+  been queued); they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
 - [ ] **Keys during incremental overview rendering use the mounted prefix.**
@@ -376,7 +412,8 @@ _ADR 238 › Focus follows the focused pane_; keys in
 - [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
   With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
   panes unchanged, and retain the switcher. An unbound key remains unconsumed;
-  closing the switcher restores ordinary split commands.
+  closing the switcher restores ordinary split commands, observed by the exact
+  additional pane within the existing 3 s pane-count budget.
   _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
@@ -399,6 +436,11 @@ Header and group measurements wait for the published `data-overview-listed`
 marker, including a reopened list; finite motion finishing does not mean its
 deferred rows have all mounted. The sampling order is in
 [UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
+
+- [ ] **Complete-list drawing has its own result**, independent of focus on a
+  mounted prefix: `focus.mjs` (`focus-overview-complete-list`) still requires the
+  published marker within 2,000 ms. Focus/navigation waits for a focused mounted
+  row (and a mounted successor before Down), without requiring later rows.
 
 _ADR 238 › What fills the content region_ (the overview is workspace state).
 
@@ -843,10 +885,13 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
   The real gateway's message path in a browser is #550.
   _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label,message-bidi --shots <dir>`.
-- [ ] **An established conversation changes model through its existing picker,
-  within the same provider.** The source-confirmed model remains shown while
-  the correlated control and authoritative source recovery settle;
-  refusal/recovery is explicit. An unsent draft,
+- [ ] **An established conversation stages its next model through its existing
+  picker, within the same provider.** The picker shows the staged choice
+  immediately; the source keeps running its confirmed model until the next
+  Send or Retry applies the choice. Picking the source's current model again
+  before sending takes the choice back. A message goes only after authoritative
+  source recovery confirms the target. A definite refusal drops the choice;
+  uncertainty keeps it for the next send to check again. An unsent draft,
   original review and Stop survive the control. No automatic native retry.
   _Check:_ model command/adapter tests; `conversation-stress.mjs`'s actual-window
   model step (default `--modelSwitches 1`, raised `--modelSwitches 6`), both
@@ -905,7 +950,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   session that is not the last pane drops the draft and its composer text
   at once and keeps the box. On the next frame that box still shows the
   home, labelled New session, with the unsent text. After the box goes,
-  the pane count is what it was before the split.
+  the pane count is what it was before the split. The check makes room for the
+  second readable pane before splitting; in columns layout it hides the session
+  list. Refusal of a split with no room remains the command's contract.
   _Check:_ `columns.mjs --only draft-held`.
 - [ ] **A removed session keeps its unsent reply until the box goes.** The
   source taking an established session out of two panes drops its composer
@@ -1028,12 +1075,18 @@ phone's scanner is not this screen.
   _Check:_ by hand.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; one line under its
-  title says what it is for, and with one tab there is no tab strip; it
+  title says what it is for, and its strip offers Experimental and Setup; Experimental
   offers each preview as one switch — the subagents preview (on unless
   turned off) and the side rail (off until turned on); General has no Experimental tab; search finds it as "advanced",
   "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
   unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
   `icon-provider.test.tsx`; the flask by eye in both families.
+- [ ] **Advanced › Setup distinguishes the native app from a browser.** The
+  native app offers Replay; a browser offers the app-only hint without a button
+  that cannot work. Visiting the tab does not replay setup; Settings' Back
+  returns to the panes. _Check:_ `smoke.mjs` (`settings`, browser fallback);
+  `setup-tab.test.tsx` (native Replay, pending/refused and browser cases);
+  conversation stress (`onboarding`, the native-host replay sequence).
 - [ ] **A page's title stands clear of the window's controls**: at 1440 × 900,
   1000 × 700, 760 × 700 and 600 × 700 (sidebar folded) every category's
   title starts at least 16px below the titlebar row; at 1000 × 700 every row
@@ -1330,6 +1383,12 @@ in both themes, and screenshot what a rule is about (a highlighted item, a
 menu near the window's right edge, a pane header on hover).
 
 - [ ] **Every rule in _Interaction and visual rules_ holds.** _Check:_ manual.
+- [ ] **Menu rows lead with their icon, 30px high; a check comes before its
+  number, and the numbers line up.** In the Agents overview's filter, pressing
+  a choice's number picks it and closes the menu. _Check:_
+  `conversation-stress.mjs` step `menu` (knob `menus`): the pane's "…" menu
+  and the overview filter, with screenshots, in Chromium within the default
+  run and alone in WebKit in CI (`local-auth.yml`).
 
 ## Motion and reduced motion
 
@@ -1346,7 +1405,9 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   system's), and script motion follows. _Check:_ `safe-area.mjs --reduced-motion`
   and by hand; with less motion, a drag moves only the copy: `drag.mjs`
   (`reduced-motion`), and `drag.mjs --reduced-motion` for every drag check
-  with the system's reduced motion on.
+  with the system's reduced motion on. The reduced-motion landing recorder
+  retains every frame through the expected committed order, within the existing
+  3 s settlement budget; intermediate geometry and final residue still fail.
 
 ## Themes, zoom and sizes
 
@@ -1367,7 +1428,7 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   WKWebView) before it is reported as a bug; Playwright's WebKit is close,
   not identical (pointer events outside the viewport differ, for one).
 - _Known:_ headless WebKit does not draw `backdrop-filter`: the window's glass
-  (menus, tooltips, the revealed sidebar, the model picker) shows as its flat
+  (tooltips, the revealed sidebar, the model picker) shows as its flat
   fill in headless WebKit screenshots. Judge glass with `--headed` or in the
   app, not from a headless WebKit shot.
 
@@ -1559,6 +1620,14 @@ says why where the conversations would be.
   pattern is installed. Recovery requires the current successor userText and its
   completion together in one existing60-second window poll. _Check:_ `lib/stress-restart.test.mjs` and the default
   and raised `conversation-stress.mjs` runs in Chromium and WebKit (#1024).
+  A metadata-upgrade Send first requires a successful workspace subscription
+  acknowledgement on this page's replacement live socket. Gateway health,
+  another Node client, a challenge or authentication alone cannot substitute.
+  Recovery and the click share the original10-second Send-click budget;
+  stalled recovery fails without submitting or retrying a message. This
+  readiness proof never grants a console exemption: later frames on the same
+  socket cannot erase a later console error. _Check:_ the same helper controls
+  and the controlled upgrade recovery regression.
   The current WebKit SIGKILL probe records the exact reset dialect
   "The network connection was lost." on both the owned socket and console
   inside this scope, followed by a distinct receiving connection. That exact

@@ -422,12 +422,27 @@ const workspaceSlice = createSlice({
       state,
       {
         payload,
-      }: Payload<{ opening: string; paths: readonly string[]; kind: ResourceKind }>,
+      }: Payload<{
+        opening: string
+        added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+      }>,
     ) => channelCreation.channelResourcesAdded(state, payload),
     channelResourceRemoved: (
       state,
       { payload }: Payload<{ opening: string; path: string }>,
     ) => channelCreation.channelResourceRemoved(state, payload),
+    channelDropLanded: (state, { payload }: Payload<{ opening: string; drop: string }>) =>
+      channelCreation.channelDropLanded(state, payload),
+    channelDropSettled: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        drop: string
+        added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+        unread: number
+      }>,
+    ) => channelCreation.channelDropSettled(state, payload),
     channelStepAsked: (
       state,
       { payload }: Payload<{ opening: string; step: ChannelStep }>,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { SessionStatus, SessionSummary } from "../workspace-index"
 import {
+  choiceKey,
   defaultFilter,
   filterLabel,
   filtered,
@@ -137,5 +138,15 @@ describe("filterLabel", () => {
     expect(filterLabel({ ...defaultFilter, scope: "all", range: "week" })).toBe(
       "All · Last 7 days",
     )
+  })
+})
+
+describe("picking by number", () => {
+  it("numbers the scopes, then the spans, from 1", () => {
+    expect(
+      ["ongoing", "all", "any", "today", "week", "month"].map((choice) =>
+        choiceKey(choice as Parameters<typeof choiceKey>[0]),
+      ),
+    ).toEqual(["1", "2", "3", "4", "5", "6"])
   })
 })

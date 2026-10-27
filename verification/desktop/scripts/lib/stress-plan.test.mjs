@@ -15,6 +15,11 @@ test("every required step appears as often as its number says", () => {
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
   assert.equal(count("model"), knobs.modelSwitches)
+  assert.equal(count("pairedCatalogue"), 1)
+  assert.equal(
+    steps.find((step) => step.kind === "pairedCatalogue").cycles,
+    knobs.pairedCatalogues,
+  )
   assert.equal(count("stop"), knobs.stops)
   assert.equal(count("fail"), knobs.fails)
   assert.equal(count("usageLimit"), knobs.usageLimits)
@@ -33,12 +38,14 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("rail"), knobs.rails)
   assert.equal(count("panel"), knobs.panels)
   assert.equal(count("menuPanel"), knobs.menuPanels)
+  assert.equal(count("menu"), knobs.menus)
   assert.equal(count("listAnswer"), knobs.listAnswers)
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
   assert.equal(count("trace"), knobs.traces)
   assert.equal(count("notice"), knobs.notices)
   assert.equal(count("pool"), knobs.pools)
+  assert.equal(count("tunnel"), knobs.tunnels)
   assert.equal(count("drift"), knobs.drifts)
   assert.equal(count("upgrade"), knobs.upgrades)
   assert.equal(count("launch"), knobs.launches)
@@ -140,10 +147,12 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         traces: "0",
         notices: "0",
         pools: "0",
+        tunnels: "0",
         drifts: "0",
         upgrades: "0",
         launches: "0",
         menuPanels: "0",
+        menus: "0",
         githubs: "0",
         channels: "0",
         awaits: "0",
@@ -161,6 +170,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
   const original = steps.filter(
     (step, index) =>
       step.kind !== "model" &&
+      step.kind !== "pairedCatalogue" &&
       !(step.kind === "switch" && steps[index + 1]?.after !== "switch"),
   )
   assert.deepEqual(

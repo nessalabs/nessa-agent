@@ -10,6 +10,7 @@ import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -68,7 +69,10 @@ if (process.env.FAKE_NESSA_FAIL) {
       ["-e", "setTimeout(() => process.stdout.write('last words\\\\n'), 300)"],
       { stdio: ["ignore", "inherit", "inherit"] },
     )
-    process.exit(0)
+    const finish = () => process.exit(Number(process.env.FAKE_NESSA_EXIT ?? 0))
+    if (process.env.FAKE_NESSA_AUDIT_FAILURE)
+      process.stderr.write('audit_kind="execution" audit_phase="persist" error_kind=StorageFull os_error=Some(28) Audit persistence failed\\n', finish)
+    else finish()
   })
 }
 `
@@ -103,6 +107,65 @@ test("once stop() returns, the log holds what the gateway said as it stopped", a
   assert.ok(gateway.log().startsWith("started\n"))
   assert.equal(await gateway.stop(), true)
   assert.ok(gateway.log().endsWith("\nlast words\n"), gateway.log().slice(-40))
+})
+
+test("task evidence preserves failed audit phase and exit before private cleanup", async (t) => {
+  t.after(() => {
+    delete process.env.MCP_LIVE_NESSA
+    delete process.env.FAKE_NESSA_AUDIT_FAILURE
+    delete process.env.FAKE_NESSA_EXIT
+  })
+  process.env.MCP_LIVE_NESSA = nessa
+  process.env.FAKE_NESSA_AUDIT_FAILURE = "1"
+  process.env.FAKE_NESSA_EXIT = "27"
+  const evidence = mkdtempSync(join(scratch, "audit-evidence-"))
+  const gateway = await start({ evidence })
+  writeFileSync(join(gateway.directory, "credential.token"), "secret-token")
+  writeFileSync(join(gateway.directory, "audit.json"), "secret-audit-content")
+  assert.equal(await gateway.stop(), true)
+  assert.equal(existsSync(gateway.directory), false)
+  const log = readFileSync(join(evidence, "gateway.log"), "utf8")
+  assert.match(log, /audit_phase="persist".*os_error=Some\(28\)/)
+  assert.ok(log.endsWith("\nlast words\n"), log)
+  assert.ok(!log.includes("secret-token"))
+  assert.ok(!log.includes("secret-audit-content"))
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(evidence, "gateway-status.json"), "utf8")),
+    {
+      stopped: true,
+      exitCode: 27,
+      signal: null,
+    },
+  )
+})
+
+test("an evidence write failure still removes the private gateway directory", async (t) => {
+  t.after(() => delete process.env.MCP_LIVE_NESSA)
+  process.env.MCP_LIVE_NESSA = nessa
+  const evidence = join(scratch, "not-an-evidence-directory")
+  writeFileSync(evidence, "occupied")
+  const gateway = await start({ evidence })
+  await assert.rejects(gateway.stop(), { code: "EEXIST" })
+  assert.equal(existsSync(gateway.directory), false)
+})
+
+test("failed startup keeps its original cause when diagnostic retention also fails", async (t) => {
+  t.after(() => {
+    delete process.env.MCP_LIVE_NESSA
+    delete process.env.FAKE_NESSA_FAIL
+  })
+  process.env.MCP_LIVE_NESSA = nessa
+  process.env.FAKE_NESSA_FAIL = "1"
+  const evidence = join(scratch, "failed-start-evidence-file")
+  writeFileSync(evidence, "occupied")
+  await assert.rejects(start({ evidence }), (error) => {
+    assert.ok(error instanceof AggregateError)
+    assert.equal(error.errors.length, 2)
+    assert.equal(error.errors[1].code, "EEXIST")
+    assert.equal(error.gatewayLog, "could not bind\n")
+    assert.match(error.errors[0].message, /gateway|exit|start/)
+    return true
+  })
 })
 
 test("the stored servers are mcptest alone by default, and exactly those given otherwise", async (t) => {

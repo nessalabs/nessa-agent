@@ -480,6 +480,28 @@ export interface AttachmentBeginResult {
   /** When stored: length in bytes of what the conversation holds. Null when an upload is required. */
   size: number | null
 }
+/** Send one piece of an upload over the session itself, for a surface that cannot reach `PUT /attachments`, such as a phone over its native link. Pieces go in order, one at a time, each starting where the last ended: the piece at offset 0 starts the upload, and the one marked `last` ends it and answers with what the conversation now keeps. As with `PUT /attachments`, the ticket is the whole authority and the first piece spends it. An upload whose pieces stop for longer than the upload deadline is refused. A refused piece ends its upload: begin again for a new ticket. */
+export interface AttachmentWriteParams {
+  /** The secret single-use ticket `attachment.begin` answered with. Do not log it. */
+  ticket: string
+  /** First byte of this piece: 0 for the first, then the bytes of every piece before it. */
+  offset: number
+  /** This piece's bytes, standard base64 with padding: at most 32768 bytes. Only a last piece may be empty. */
+  data: string
+  /** Whether this piece ends the upload. Its answer carries the stored file. */
+  last: boolean
+}
+/** How much of the upload the gateway has taken, and after the last piece the file the conversation now keeps, which is what `conversation.send` refers to. As with `PUT /attachments`, for an image that is the normalized image, so its digest, type and size can differ from what was sent. */
+export interface AttachmentWriteResult {
+  /** Bytes taken so far: where the next piece starts. */
+  received: number
+  /** After the last piece: digest of what the conversation holds. Null before it. */
+  digest: string | null
+  /** After the last piece: media type of what the conversation holds. Null before it. */
+  mimeType: string | null
+  /** After the last piece: length in bytes of what the conversation holds. Null before it. */
+  size: number | null
+}
 /** A provider usage limit on a failed turn. resetsAtMs is present only for a timed reset whose instant parsed. autoResuming is present only when this gateway has accepted a one-shot continuation for the turn. */
 export interface ConversationUsageLimit {
   /** The harness that reported the limit. OpenCode is not a value. */
@@ -1723,7 +1745,7 @@ export const McpServersErrorCode = {
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -1764,6 +1786,10 @@ export const ConversationErrorCode = {
   AttachmentCapacity: "attachment_capacity",
   AttachmentStorageUnavailable: "attachment_storage_unavailable",
   AttachmentCleanupUnavailable: "attachment_cleanup_unavailable",
+  UploadTicketInvalid: "upload_ticket_invalid",
+  UploadFailed: "upload_failed",
+  UnsupportedImage: "unsupported_image",
+  ImageTooLarge: "image_too_large",
   ConversationDeleted: "conversation_deleted",
   ConversationErasureIncomplete: "conversation_erasure_incomplete",
   McpAppUnknown: "mcp_app_unknown",
@@ -2297,9 +2323,10 @@ export interface PhoneAuthorizationStatus {
   /** Typed activation interruption, when present. */
   activationStopped?: PairingActivationStop
 }
-/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
+/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner and reads what is shared with it. ownerPhone: the owner's own phone; its credential acts as the owner over every conversation the owner has, now and later, reading and writing as the owner phone purpose allows, with no per-conversation share. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
 export const PairingEnrollee = {
   Device: "device",
+  OwnerPhone: "ownerPhone",
   Gateway: "gateway",
   Environment: "environment",
 } as const
@@ -2447,7 +2474,63 @@ export interface PairingSetLinkingResult {
   /** How the saved choice takes effect. */
   applies: PairingLinkingApply
 }
-/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). */
+/** How the web tunnel is carried. quick: a free Cloudflare quick tunnel at a random trycloudflare.com address, which changes whenever cloudflared starts again (it is kept running across gateway restarts, so it changes only when cloudflared itself has to start again). named: a tunnel made in the person's Cloudflare account, at their own hostname, which never changes. */
+export const PairingTunnelMode = { Quick: "quick", Named: "named" } as const
+export type PairingTunnelMode = (typeof PairingTunnelMode)[keyof typeof PairingTunnelMode]
+/** Turn the web tunnel on or off for this gateway, so a paired phone reaches it from anywhere. Needs native linking on. The gateway saves the choice in its config.json (the token in a private file beside its state, never in config.json) and, when the running gateway does not already match it, restarts itself to apply it. A field left out keeps what is saved. */
+export interface PairingSetTunnelParams {
+  /** True turns the tunnel on; false turns it off and keeps its other settings. Sending the same request again changes nothing, so a retry is safe. */
+  enabled: boolean
+  /** Quick or named. Left out, the saved mode, or quick when none is saved. */
+  mode?: PairingTunnelMode
+  /** A named tunnel's public address, https://host or https://host:port, with no path. Left out, the saved one. */
+  hostname?: string
+  /** A named tunnel's token from Cloudflare's dashboard: printable ASCII with no spaces. Left out, the saved one. It is never sent back. */
+  token?: string
+}
+/** Result of pairing.setTunnel. */
+export interface PairingSetTunnelResult {
+  /** The saved choice. */
+  enabled: boolean
+  /** The saved mode. */
+  mode: PairingTunnelMode
+  /** How the saved choice takes effect. */
+  applies: PairingLinkingApply
+}
+/** Where the running gateway's tunnel stands. off: this run has no tunnel. starting: it is being started, or started again. ready: it answers at address. failed: the last attempt failed for failure; it is tried again. */
+export const PairingTunnelStatus = {
+  Off: "off",
+  Starting: "starting",
+  Ready: "ready",
+  Failed: "failed",
+} as const
+export type PairingTunnelStatus =
+  (typeof PairingTunnelStatus)[keyof typeof PairingTunnelStatus]
+/** Result of pairing.tunnel: the saved tunnel setting and the running tunnel. The token is never included. */
+export interface PairingTunnelResult {
+  /** Whether the saved setting turns the tunnel on. */
+  enabled: boolean
+  /** The saved mode, quick when none is saved. */
+  mode: PairingTunnelMode
+  /** The saved named tunnel's address, when one is saved. */
+  hostname?: string
+  /** Whether a named tunnel's token is saved. */
+  hasToken: boolean
+  /** The loopback address the tunnel forwards to: where a named tunnel's public hostname must point in Cloudflare's dashboard, as http://<ingress>. */
+  ingress: string
+  /** The running tunnel's status. */
+  status: PairingTunnelStatus
+  /** The running tunnel's public address, when it is ready. */
+  address?: string
+  /** Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready. */
+  failure?: string
+}
+/** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
+export interface ServerReachResult {
+  /** The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages. */
+  tunnel: string | null
+}
+/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking and pairing.setTunnel, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). pairing.setTunnel refuses with the same codes: pairing_busy and pairing_unavailable as above, pairing_address_in_use when the tunnel's loopback ingress cannot be bound, and pairing_audit_unavailable as above. pairing_linking_off: pairing.setTunnel cannot turn the tunnel on while native linking is off; nothing was saved. pairing_tunnel_incomplete: a named tunnel needs a hostname and a token, given or saved; nothing was saved. */
 export const PairingErrorCode = {
   PairingNotConfigured: "pairing_not_configured",
   PairingNotFound: "pairing_not_found",
@@ -2459,6 +2542,8 @@ export const PairingErrorCode = {
   PairingUnavailable: "pairing_unavailable",
   PairingAddressInUse: "pairing_address_in_use",
   PairingAuditUnavailable: "pairing_audit_unavailable",
+  PairingLinkingOff: "pairing_linking_off",
+  PairingTunnelIncomplete: "pairing_tunnel_incomplete",
 } as const
 export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
 /** The GitHub account a sign-in belongs to. */
@@ -2524,7 +2609,7 @@ export interface GithubConnection {
   /** Where the person chooses the repositories the Nessa app may use. A token reaches only those. */
   installUrl: string
 }
-/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the OS credential store could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
+/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the encrypted local vault could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
 export const GithubErrorCode = {
   GithubNotConfigured: "github_not_configured",
   GithubUnreachable: "github_unreachable",
@@ -3289,7 +3374,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 95,
+  maxReadyMethods: 99,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3509,6 +3594,7 @@ export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",
   ServerHealth: "server.health",
+  ServerReach: "server.reach",
   CredentialIssue: "credential.issue",
   CredentialList: "credential.list",
   CredentialRevoke: "credential.revoke",
@@ -3538,6 +3624,7 @@ export const ProductMethod = {
   ConversationReorder: "conversation.reorder",
   ArtifactRead: "artifact.read",
   AttachmentBegin: "attachment.begin",
+  AttachmentWrite: "attachment.write",
   AgentsList: "agents.list",
   AgentsSetNativeHooks: "agents.setNativeHooks",
   AgentsSubscribe: "agents.subscribe",
@@ -3570,6 +3657,8 @@ export const ProductMethod = {
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
   PairingSetLinking: "pairing.setLinking",
+  PairingSetTunnel: "pairing.setTunnel",
+  PairingTunnel: "pairing.tunnel",
   GithubLiveEvents: "github.liveEvents",
   GithubStatus: "github.status",
   GithubConnect: "github.connect",
@@ -3617,6 +3706,7 @@ export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
   "auth.session",
   "server.health",
+  "server.reach",
   "credential.issue",
   "credential.list",
   "credential.revoke",
@@ -3646,6 +3736,7 @@ export const productReadyMethods = [
   "conversation.reorder",
   "artifact.read",
   "attachment.begin",
+  "attachment.write",
   "agents.list",
   "agents.setNativeHooks",
   "agents.subscribe",
@@ -3678,6 +3769,8 @@ export const productReadyMethods = [
   "pairing.deny",
   "pairing.cancel",
   "pairing.setLinking",
+  "pairing.setTunnel",
+  "pairing.tunnel",
   "github.liveEvents",
   "github.status",
   "github.connect",
@@ -3716,6 +3809,7 @@ export const productMethodGrants = {
   "session.authenticate": null,
   "auth.session": null,
   "server.health": "server.read",
+  "server.reach": "server.read",
   "credential.issue": "credential.manage",
   "credential.list": "credential.manage",
   "credential.revoke": "credential.manage",
@@ -3745,6 +3839,7 @@ export const productMethodGrants = {
   "conversation.reorder": "conversation.write",
   "artifact.read": "conversation.read",
   "attachment.begin": "conversation.write",
+  "attachment.write": "conversation.write",
   "agents.list": "server.read",
   "agents.setNativeHooks": "credential.manage",
   "agents.subscribe": "server.read",
@@ -3777,6 +3872,8 @@ export const productMethodGrants = {
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
   "pairing.setLinking": "credential.manage",
+  "pairing.setTunnel": "credential.manage",
+  "pairing.tunnel": "credential.manage",
   "github.liveEvents": "credential.manage",
   "github.status": "credential.manage",
   "github.connect": "credential.manage",

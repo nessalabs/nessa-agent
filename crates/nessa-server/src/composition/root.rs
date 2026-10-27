@@ -138,12 +138,14 @@ impl CompositionRoot {
             Command::EnvDial {
                 address,
                 relay,
+                tunnel,
                 drain_deadline_ms,
                 enroll_code_file,
             } => {
                 super::env_dial_command::dial_in(
                     &address,
                     relay.as_ref(),
+                    tunnel.as_ref(),
                     drain_deadline_ms.map(std::time::Duration::from_millis),
                     enroll_code_file.as_deref(),
                 )
@@ -327,9 +329,9 @@ impl CompositionRoot {
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"
                 );
-                Some(bound.with_announcer(Arc::new(
-                    crate::device_pairing::infrastructure::MulticastAnnouncer,
-                )))
+                Some(bound.with_announcer(
+                    crate::device_pairing::infrastructure::platform_announcer(),
+                ))
             }
             None => None,
         };

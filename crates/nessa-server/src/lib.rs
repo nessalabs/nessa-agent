@@ -27,6 +27,7 @@ pub(crate) mod relay;
 pub mod secrets;
 pub mod server;
 pub(crate) mod timer;
+pub mod tunnel;
 
 pub use core::run;
 
