@@ -171,7 +171,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     assert.equal(localCommand[3], serverCommand[3])
     assert.equal(
       localCommand[3],
-      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk",
+      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault",
     )
     assert.match(local, /fail-fast: false/)
     assert.match(local, /os: \[windows-latest, ubuntu-latest, macos-latest\]/)
