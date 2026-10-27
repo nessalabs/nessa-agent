@@ -161,6 +161,25 @@ async function mount(node: React.ReactNode) {
   })
 }
 
+/** Run both deferred close-focus callbacks without advancing the product clock. */
+async function closePairingDialog(control: string) {
+  // Radix closes its focus scope on one timer; the kit's body fallback runs
+  // on a second. One virtual millisecond admits that nested zero-delay timer,
+  // but does not admit a genuinely delayed fallback or release a held read.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  try {
+    const button = document.querySelector<HTMLButtonElement>(
+      `[data-slot='dialog'] ${control}`,
+    )
+    expect(button).not.toBeNull()
+    expect(button?.disabled).toBe(false)
+    await act(async () => button?.click())
+    await act(async () => vi.advanceTimersByTimeAsync(1))
+  } finally {
+    vi.useRealTimers()
+  }
+}
+
 describe("Linked devices", () => {
   it("L1: with no gateway the page is pending and offers no pairing", async () => {
     await mount(<LinkedDevicesTab />)
@@ -322,18 +341,13 @@ describe("Linked devices", () => {
     expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
 
     // Closing the modal leaves the code open; the row shows it again.
-    await act(async () =>
-      dialog
-        ?.querySelector<HTMLButtonElement>("[data-slot='dialog-close-button']")
-        ?.click(),
-    )
+    await closePairingDialog("[data-slot='dialog-close-button']")
     expect(document.querySelector("[data-slot='dialog']")).toBeNull()
     expect(gate.creates).toBe(1)
     const show = host.querySelector<HTMLButtonElement>("[data-linked-action='show']")
     expect(show).not.toBeNull()
     // The Pair button that opened it is gone: focus goes to the row's Show code,
     // once Radix's own restore has left it resting.
-    await act(async () => new Promise((done) => setTimeout(done, 0)))
     expect(document.activeElement).toBe(show)
     await act(async () => show?.click())
     expect(
@@ -363,11 +377,7 @@ describe("Linked devices", () => {
     await act(async () =>
       host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
     )
-    const cancel = document.querySelector<HTMLButtonElement>(
-      "[data-slot='dialog'] [data-linked-action='cancel']",
-    )
-    expect(cancel?.disabled).toBe(false)
-    await act(async () => cancel?.click())
+    await closePairingDialog("[data-linked-action='cancel']")
     expect(document.querySelector("[data-slot='dialog']")).toBeNull()
     expect(host.querySelector("[data-linked-action='pair']")).not.toBeNull()
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
@@ -396,24 +406,7 @@ describe("Linked devices", () => {
     await act(async () =>
       host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
     )
-    // Radix closes its focus scope on one timer; the kit's fallback focus
-    // runs on a second. Keep the gateway read held while both callbacks run,
-    // without waiting on elapsed host time or changing the injected clock.
-    // One virtual millisecond admits the nested zero-delay timer clamp, but
-    // does not admit a genuinely delayed fallback.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
-    try {
-      await act(async () =>
-        document
-          .querySelector<HTMLButtonElement>(
-            "[data-slot='dialog'] [data-linked-action='cancel']",
-          )
-          ?.click(),
-      )
-      await act(async () => vi.advanceTimersByTimeAsync(1))
-    } finally {
-      vi.useRealTimers()
-    }
+    await closePairingDialog("[data-linked-action='cancel']")
     expect(document.querySelector("[data-slot='dialog']")).toBeNull()
     expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
     await act(async () => answerRead?.())
