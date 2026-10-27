@@ -102,7 +102,10 @@ it("saves an ordinary global default without receiving token capabilities", asyn
   expect(host.textContent).toContain("Active VM deadlines stay unchanged")
 })
 it("keeps explicit unlimited separate from inheritance and resets one channel", async () => {
-  let stored: BoatRuntimeSettings = { defaultLifetime: { mode: "after", seconds: 3600 } }
+  let stored: BoatRuntimeSettings = {
+    channelId: "ch_bbbbbbbbbb",
+    defaultLifetime: { mode: "after", seconds: 3600 },
+  }
   const writes: BoatRuntimeSetParams[] = []
   const gateway = {
     runtimeSettings: async () => stored,
@@ -117,6 +120,7 @@ it("keeps explicit unlimited separate from inheritance and resets one channel", 
               defaultLifetime: { mode: "after", seconds: 14_400 },
             }
           : {
+              channelId: params.channelId,
               defaultLifetime: { mode: "after", seconds: 3600 },
               channelOverride: { mode: "never" },
             }
