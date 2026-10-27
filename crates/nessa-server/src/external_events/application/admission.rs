@@ -110,6 +110,7 @@ impl EventBinding {
                 false,
                 execution_id.clone(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text,
                     ..SubmittedMessage::default()
                 },

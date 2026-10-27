@@ -210,3 +210,8 @@ pub use agent_tool_audit::DurableAgentToolAudit;
 mod workspaces;
 #[cfg(unix)]
 pub(crate) use workspaces::ThreadWorkspaces;
+
+#[cfg(any(unix, test))]
+mod input_files;
+#[cfg(any(unix, test))]
+pub(crate) use input_files::LocalInputFiles;

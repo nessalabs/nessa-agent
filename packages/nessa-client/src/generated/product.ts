@@ -423,6 +423,17 @@ export interface ImageAttachment {
   /** Image length in bytes, at most 5 MiB. */
   size: number
 }
+/** One original stored file input. Placement is resolved where the agent executes; the original reference is retained for retries and restoration. */
+export interface UploadedFileAttachment {
+  /** SHA-256 of the bytes to be uploaded; the upload is refused unless the received bytes hash to it. */
+  digest: string
+  /** Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower. */
+  mimeType: string
+  /** Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long. */
+  size: number
+  /** Original filename, at most 255 UTF-8 bytes. No separators or control characters; not a destination path. */
+  name: string
+}
 /** One file a message points the agent at. The gateway, the agent and the panel run on one machine, so the path travels and the bytes never do; the agent opens the file itself, with the reader's approval, or does not open it at all. */
 export interface LinkedFile {
   /** Absolute path on the machine the gateway runs on, at most 4096 UTF-8 bytes (`x-utf8MaxBytes`; the `maxLength` beside it counts code points and is only a coarse upper bound, since a path within the byte limit always has fewer code points than bytes). Every component below the root is a name: no control character (C0 or C1), none empty, and none `.` or `..`. A component that is empty or a dot does not survive being written as a URI, which would make the link name a different path; a control character makes a path nobody can be shown before they approve the read. Nothing here is a rule about markdown — the gateway hands the path to the agent inside a link and encodes both halves of it down to an allowlist, so a bracket or a backslash in a name is the encoder's business and not the caller's. */
@@ -521,6 +532,8 @@ export interface ConversationMessage {
   userText: string
   /** Images the user sent with this turn, in attachment order. */
   attachments: ImageAttachment[]
+  /** Original stored file inputs, in order; at most 64 MiB together. Omitted means none. */
+  uploads?: UploadedFileAttachment[]
   /** Files the user pointed this turn at, in attachment order. No bytes were ever carried for them. */
   files: LinkedFile[]
   /** The app that wrote this turn on the person's behalf; absent when the person wrote it. */
@@ -550,6 +563,8 @@ export interface ConversationPending {
   text: string
   /** Images waiting with this input, in attachment order. */
   attachments: ImageAttachment[]
+  /** Original stored file inputs, in order; at most 64 MiB together. Omitted means none. */
+  uploads?: UploadedFileAttachment[]
   /** Files the waiting input points at, in attachment order. */
   files: LinkedFile[]
   /** The app that wrote this waiting input on the person's behalf; absent when the person wrote it. */
@@ -882,6 +897,8 @@ export interface ConversationSendParams {
   text: string
   /** Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone. */
   attachments: ImageAttachment[]
+  /** Original stored file inputs, in order; at most 64 MiB together. Omitted means none. */
+  uploads?: UploadedFileAttachment[]
   /** Files on this machine the message points the agent at, in attachment order. Nothing is uploaded for them and nothing is read here. Empty for a message that points at none. */
   files: LinkedFile[]
 }
@@ -956,6 +973,8 @@ export interface ConversationReceiptParams {
   text?: string
   /** Original submit or steer images, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
   attachments?: ImageAttachment[]
+  /** Original stored file inputs, in order; at most 64 MiB together. Omitted means none. */
+  uploads?: UploadedFileAttachment[]
   /** Original submit or steer file paths, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none. */
   files?: LinkedFile[]
   /** Creation hint. Omitted when the original creation named no agent. */
@@ -3399,6 +3418,8 @@ export const bounds = {
   maxMessageImages: 10,
   maxMessageImageBytes: 10485760,
   maxUploadBytes: 67108864,
+  maxUploadedFileNameBytes: 255,
+  uploadedFileNamePattern: "^[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+$",
   maxMessageFiles: 10,
   maxFilePathBytes: 4096,
   filePathPattern:

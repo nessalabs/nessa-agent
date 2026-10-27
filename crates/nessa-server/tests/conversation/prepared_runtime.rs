@@ -102,11 +102,13 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
     );
     let service = ConversationService::new(
         ConversationDependencies {
+ input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([(
                     AgentId::Claude,
                     ConversationAgent {
+                workspace: None,
                         provider: Arc::new(Provider::new(provider.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,

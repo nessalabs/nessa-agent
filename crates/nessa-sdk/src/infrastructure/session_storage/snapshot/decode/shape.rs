@@ -15,7 +15,7 @@ use crate::domain::agent_execution::{
     permissions::PermissionOption,
     prompts::{
         AppModelContext as DomainAppModelContext, CarriedHistory, CarriedTurn, LinkedFile,
-        McpAppSource, UserMessage,
+        McpAppSource, UploadedFileReference, UserMessage,
     },
     questions::{
         MAX_KEY_BYTES as MAX_QUESTION_KEY_BYTES, MAX_OPTIONS as MAX_QUESTION_OPTIONS,
@@ -87,6 +87,8 @@ pub(super) enum Shape {
     Image,
     Files,
     FileLink,
+    Uploads,
+    UploadedFile,
     App,
     AppModelContexts,
     AppModelContext,
@@ -271,6 +273,10 @@ impl Shape {
             (Metadata, "user_message") => Text(ExecutionRequest::MAX_MESSAGE_BYTES),
             (Metadata, "user_images") => Images,
             (Metadata, "user_files") => Files,
+            (Metadata, "user_uploads") => Uploads,
+            (UploadedFile, "name") => Text(UploadedFileReference::MAX_NAME_BYTES),
+            (UploadedFile, "digest") => Text(DIGEST_BYTES),
+            (UploadedFile, "media_type") => Text(127),
             (Metadata, "user_app") | (AppModelContext, "app") => App,
             (Metadata, "user_app_model_context") => AppModelContexts,
             (App, "execution_id") => Text(ExecutionId::MAX_BYTES),
@@ -368,6 +374,7 @@ impl Shape {
             FixedBytes(_) | Number => false,
             Image => matches!(key, "digest" | "media_type" | "size"),
             FileLink => key == "path",
+            UploadedFile => matches!(key, "digest" | "media_type" | "size" | "name"),
             App => matches!(key, "execution_id" | "tool_id" | "server" | "tool"),
             AppModelContext => matches!(key, "app" | "update" | "text" | "structured_content"),
             McpTool => matches!(key, "server" | "tool"),
@@ -421,6 +428,7 @@ impl Shape {
             Self::Events => Self::Event,
             Self::Images => Self::Image,
             Self::Files => Self::FileLink,
+            Self::Uploads => Self::UploadedFile,
             Self::AppModelContexts => Self::AppModelContext,
             Self::SemanticChanges => Self::Semantic,
             Self::LeaseRecords => Self::LeaseRecord,
@@ -462,7 +470,7 @@ impl Shape {
             // before the excess references are built.
             Self::Images => UserMessage::MAX_IMAGES,
             // The same, for the paths a message points at.
-            Self::Files => UserMessage::MAX_FILES,
+            Self::Files | Self::Uploads => UserMessage::MAX_FILES,
             // And the apps' contexts it carries.
             Self::AppModelContexts => UserMessage::MAX_APP_MODEL_CONTEXTS,
             // Collection slots alone cannot exceed the live 32 MiB tool/review

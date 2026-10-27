@@ -98,7 +98,7 @@ impl ProviderSessionBackend for Backend {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         self.inner.execute(input, handoff)

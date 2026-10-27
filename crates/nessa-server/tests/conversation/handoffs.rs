@@ -72,6 +72,7 @@ impl Fixture {
         let agent = |provider: Arc<
             dyn nessa_sdk::application::agent_execution::providers::AgentProvider,
         >| ConversationAgent {
+            workspace: None,
             provider,
             execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
             reserved_output_tokens: 4096,
@@ -98,6 +99,7 @@ impl Fixture {
         .unwrap();
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents,
                 storage: storage.clone(),
@@ -152,6 +154,7 @@ impl Fixture {
                 caller(action),
                 action.to_owned(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: format!("said {action}"),
                     ..SubmittedMessage::default()
                 },
@@ -307,6 +310,7 @@ impl Fixture {
                 caller(action),
                 action.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: format!("blocked {action}"),
                     ..Default::default()
                 },
@@ -475,6 +479,7 @@ async fn a_switch_is_refused_to_the_same_agent_and_while_a_turn_runs() {
                 caller("running"),
                 "running".into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "hold on".into(),
                     ..SubmittedMessage::default()
                 },
@@ -954,6 +959,7 @@ async fn a_pending_agent_switch_retries_invalidation_as_its_original_request() {
             caller("new-work"),
             "new-work".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "must wait".into(),
                 ..Default::default()
             },
@@ -990,6 +996,7 @@ async fn a_pending_agent_switch_retries_invalidation_as_its_original_request() {
             caller("new-work"),
             "new-work".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "still must wait".into(),
                 ..Default::default()
             },
@@ -1035,6 +1042,7 @@ async fn a_pending_agent_switch_retries_invalidation_as_its_original_request() {
             recovering,
             "new-work".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "now allowed".into(),
                 ..Default::default()
             },

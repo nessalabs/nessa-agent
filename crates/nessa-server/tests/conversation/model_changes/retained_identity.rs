@@ -108,6 +108,7 @@ async fn a_submission_retry_keeps_its_original_budget_after_a_model_change() {
             .unwrap();
         let actor = caller();
         let message = SubmittedMessage {
+            uploads: Vec::new(),
             text: "recover my delivery".into(),
             ..SubmittedMessage::default()
         };
@@ -171,6 +172,7 @@ async fn a_submission_retry_keeps_its_original_budget_after_a_model_change() {
             (
                 actor.clone(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "different".into(),
                     ..SubmittedMessage::default()
                 },

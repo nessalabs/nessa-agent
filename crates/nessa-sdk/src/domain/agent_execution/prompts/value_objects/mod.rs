@@ -55,3 +55,6 @@ pub use note_context::{NoteAuthor, NoteContext};
 
 mod user_message;
 pub use user_message::{ImageReference, LinkedFile, UserMessage};
+
+mod uploaded_file;
+pub use uploaded_file::UploadedFileReference;

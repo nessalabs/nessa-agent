@@ -101,6 +101,7 @@ fn settled_view(conversation: &str) -> ConversationView {
         revision: "rev".into(),
         server_now_ms: 1,
         messages: vec![ConversationMessage {
+            uploads: None,
             execution_id: "exec".into(),
             user_text: "settled".into(),
             attachments: Vec::new(),
