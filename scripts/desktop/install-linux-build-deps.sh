@@ -52,5 +52,15 @@ for attempt in 1 2 3; do
   fi
   sleep $((attempt * 15))
 done
+# Ubuntu 26.04 drops webkit2gtk-driver. Its replacement is webkitgtk-webdriver,
+# and the smoke still calls WebKitWebDriver. Ubuntu 24.04 still has the old name.
+resolved=()
+for package in "${packages[@]}"; do
+  if [ "$package" = webkit2gtk-driver ] && ! apt-cache show --no-all-versions webkit2gtk-driver >/dev/null 2>&1; then
+    resolved+=(webkitgtk-webdriver)
+  else
+    resolved+=("$package")
+  fi
+done
 sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "${apt_options[@]}" install -y \
-  "${packages[@]}"
+  "${resolved[@]}"
