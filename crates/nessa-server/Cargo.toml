@@ -23,6 +23,7 @@ name = "nessa-backup-plan"
 path = "src/backup_plan_main.rs"
 
 [dependencies]
+nessa-vault = { path = "../nessa-vault" }
 base64 = "0.22"
 # The local-network announcement while native linking listens there
 # (device_pairing::infrastructure::announcer), so a phone that scanned the

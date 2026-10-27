@@ -527,3 +527,19 @@ fn github_connection_has_no_user_facing_stage_or_endpoint_override() {
         assert!(parse(&args(&["github", "events", "nessalabs/nessa-agent", extra])).is_err());
     }
 }
+
+#[test]
+fn github_passphrases_use_stdin_and_never_an_argument_or_stage_override() {
+    for verb in ["connect", "events", "disconnect"] {
+        let args: Vec<String> = ["github", verb, "owner/repo", "--passphrase-stdin"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert!(parse(&args).is_ok());
+        for extra in ["--stage", "private-passphrase", "--passphrase-stdin"] {
+            let mut rejected = args.clone();
+            rejected.push(extra.into());
+            assert!(parse(&rejected).is_err());
+        }
+    }
+}

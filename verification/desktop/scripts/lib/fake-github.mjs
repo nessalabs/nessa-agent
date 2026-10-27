@@ -16,12 +16,9 @@
  * Each code is a new one and the last is the one approved; a token is only
  * ever handed out for an approved code, and `token` is the one it hands out.
  */
-import { homedir } from "node:os"
-import { spawnSync } from "node:child_process"
-import { join, basename } from "node:path"
-import { createHash, randomBytes } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import { createServer } from "node:http"
-import { writeFileSync, realpathSync } from "node:fs"
+import { writeFileSync } from "node:fs"
 
 /** The account the fake signs in. */
 export const FAKE_ACCOUNT = { id: 4242, login: "stress-octo" }
@@ -151,35 +148,10 @@ function letters(n) {
   return [...randomBytes(n)].map((byte) => alphabet[byte % alphabet.length]).join("")
 }
 
-/** macOS resolves the login keychain through the OS user's home. These checks
- * use the real OS boundary with namespace-scoped disposable entries. The only
- * provider programs started are hermetic scripted agents; both supported API
- * credential sources are placeholders, so provider sign-ins are not imported. */
-export function nativeGithubEnvironment() {
+/** Hermetic provider placeholders; the disposable vault never reads an OS store. */
+export function disposableGithubEnvironment() {
   return {
-    ...(process.platform === "darwin" ? { HOME: homedir() } : {}),
     ANTHROPIC_API_KEY: "signed-out-gateway-placeholder",
     OPENAI_API_KEY: "signed-out-gateway-placeholder",
-  }
-}
-
-/** Remove only this fixture's disposable login-keychain entries after its gateway
- * stops. Linux CI owns an ephemeral Secret Service collection for the whole job. */
-export function nativeGithubCleanup(gateway, stage, instance) {
-  if (process.platform !== "darwin") return () => {}
-  if (!basename(gateway.directory).startsWith("nessa-mcp-live-"))
-    throw new Error("Not a disposable gateway")
-  const namespace = realpathSync(join(gateway.directory, stage, "instances", instance))
-  const service = `ai.nessalabs.nessa.${createHash("sha256").update(namespace).digest("hex")}`
-  return () => {
-    for (const purpose of ["github-sign-in", "github-inbox-key"]) {
-      const result = spawnSync(
-        "security",
-        ["delete-generic-password", "-s", service, "-a", purpose],
-        { stdio: "ignore", timeout: 10000 },
-      )
-      if (result.status !== 0 && result.status !== 44)
-        throw new Error("Disposable OS credential cleanup failed")
-    }
   }
 }

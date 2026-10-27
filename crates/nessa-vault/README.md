@@ -32,7 +32,10 @@ corruption preserve ciphertext rather than initializing a replacement.
 The metadata audit is separate and writable while locked. Its bounded journal
 records caller identifiers, connection/operation identity, transition, cause and
 result and injected UTC observation time, and contains no secret values. Secret Debug formatting is redacted. Audit failure refuses unlock publication;
-close still removes its key before reporting audit failure.
+close still removes its key before reporting audit failure. Restored rows must satisfy
+the same action/state/target and identity contract as new observations, with a
+contiguous retained sequence. Invalid history is refused before replacement or
+retention; UTC clock reversal and valid suffixes starting above one remain valid.
 
 `cargo test -p nessa-vault` exercises real encrypted files and audit persistence,
 including connection-close/KDF races, audit faults, corruption, quota admission,

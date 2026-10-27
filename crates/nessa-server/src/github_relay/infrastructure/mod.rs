@@ -12,5 +12,5 @@ mod connected_store;
 pub use connected_store::ConnectedRelayStore;
 mod selection;
 
-mod keychain;
-pub use keychain::KeychainInboxKey;
+mod vault;
+pub use vault::VaultInboxKey;

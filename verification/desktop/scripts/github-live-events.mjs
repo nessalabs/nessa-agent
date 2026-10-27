@@ -7,11 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import app from "../../../protocol/defaults/github-app.json" with { type: "json" }
-import {
-  startFakeGithub,
-  nativeGithubEnvironment,
-  nativeGithubCleanup,
-} from "./lib/fake-github.mjs"
+import { startFakeGithub, disposableGithubEnvironment } from "./lib/fake-github.mjs"
 import { startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { attempt } from "./lib/cli.mjs"
@@ -29,6 +25,7 @@ await main(
     const stack = target
     await withEngines(options, rep, async (engine, browser) => {
       const opened = await openPage(browser, {
+        preparePage: (page) => stack.vault.install(page),
         url: new URL("/desktop.html", stack.url).href,
         layout: "columns",
         width: 1000,
@@ -281,9 +278,10 @@ await main(
         "github-live-events",
         {
           stage: "dev",
+          vault: true,
           scenario: TEXT_REPLY_SCENARIO,
           environment: {
-            ...nativeGithubEnvironment(),
+            ...disposableGithubEnvironment(),
             NESSA_GITHUB_APP: github.app(join(directory, "app.json")),
           },
         },
@@ -293,7 +291,6 @@ await main(
       rmSync(directory, { recursive: true, force: true })
       throw error
     }
-    const cleanupSecrets = nativeGithubCleanup(stack.gateway, "dev", "github-live-events")
     return {
       ...stack,
       github,
@@ -301,7 +298,6 @@ await main(
         try {
           await stack.close()
         } finally {
-          cleanupSecrets()
           await github.close()
           rmSync(directory, { recursive: true, force: true })
         }

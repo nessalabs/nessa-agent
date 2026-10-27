@@ -182,6 +182,9 @@ pub struct ProductRouteState {
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// Shared vault; each socket attaches a distinct non-owning lease.
+    pub(crate) vault: Option<Arc<super::VaultRoutes>>,
+    pub(crate) vault_lease: Option<nessa_vault::application::Lease>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -318,6 +321,8 @@ impl ProductRouteState {
             pairing: None,
             native_linking: None,
             github: None,
+            vault: None,
+            vault_lease: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -410,6 +415,11 @@ impl ProductRouteState {
         self
     }
 
+    /// Register the reusable vault independently of provider configuration.
+    pub fn with_vault(mut self, vault: Arc<super::VaultRoutes>) -> Self {
+        self.vault = Some(vault);
+        self
+    }
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
         self.github = Some(github);

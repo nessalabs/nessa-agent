@@ -1,6 +1,6 @@
-//! GitHub sign-in in the injected OS credential entry. A pre-existing private
+//! GitHub sign-in in the injected encrypted vault entry. A pre-existing private
 //! JSON file is consumed only for a verified, crash-retryable one-time upgrade.
-use crate::secrets::SecretStore;
+use crate::github::application::GithubSecret;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,14 +17,14 @@ use crate::github::domain::{AccessToken, GithubAccount, GithubSignIn};
 const FILE_LIMIT: u64 = 16_384;
 const FILE_NAME: &str = "sign-in.json";
 
-pub struct GithubTokenKeychain {
+pub struct GithubTokenVault {
     directory: PathBuf,
-    secret: Arc<dyn SecretStore>,
+    secret: Arc<dyn GithubSecret>,
 }
 
-impl GithubTokenKeychain {
+impl GithubTokenVault {
     /// The sign-in in `directory`, created private by its first save.
-    pub fn new(directory: PathBuf, secret: Arc<dyn SecretStore>) -> Self {
+    pub fn new(directory: PathBuf, secret: Arc<dyn GithubSecret>) -> Self {
         Self { directory, secret }
     }
 }
@@ -37,7 +37,7 @@ struct Stored {
     token: String,
 }
 
-impl GithubTokenKeychain {
+impl GithubTokenVault {
     fn legacy(&self) -> Result<Option<GithubSignIn>, StoreUnavailable> {
         let file = match open(&self.directory.join(FILE_NAME), OpenMode::Read) {
             Ok(file) => file,
@@ -54,16 +54,16 @@ impl GithubTokenKeychain {
         decode(&bytes).map(Some)
     }
 
-    fn read(&self) -> Result<Option<GithubSignIn>, StoreUnavailable> {
+    fn read(&self, generation: u64) -> Result<Option<GithubSignIn>, StoreUnavailable> {
         let _lock = self.lock()?;
-        let saved = self.secret.read().map_err(|_| StoreUnavailable)?;
+        let saved = self.secret.read(generation).map_err(|_| StoreUnavailable)?;
         let decoded = saved.as_ref().map(|bytes| decode(bytes)).transpose()?;
         match (decoded, self.legacy()?) {
             (current, None) => Ok(current),
             (Some(current), Some(legacy)) if current != legacy => Err(StoreUnavailable),
             (current, Some(legacy)) => {
                 if current.is_none() {
-                    self.write_verified(&legacy)?;
+                    self.write_verified(generation, &legacy)?;
                 }
                 self.remove_legacy()?;
                 Ok(Some(legacy))
@@ -80,7 +80,11 @@ impl GithubTokenKeychain {
         lock.lock().map_err(|_| StoreUnavailable)?;
         Ok(lock)
     }
-    fn write_verified(&self, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable> {
+    fn write_verified(
+        &self,
+        generation: u64,
+        sign_in: &GithubSignIn,
+    ) -> Result<(), StoreUnavailable> {
         let bytes = Zeroizing::new(
             serde_json::to_vec(&Stored {
                 account_id: sign_in.account.id,
@@ -89,10 +93,12 @@ impl GithubTokenKeychain {
             })
             .map_err(|_| StoreUnavailable)?,
         );
-        self.secret.write(&bytes).map_err(|_| StoreUnavailable)?;
+        self.secret
+            .write(generation, &bytes)
+            .map_err(|_| StoreUnavailable)?;
         let receipt = self
             .secret
-            .read()
+            .read(generation)
             .map_err(|_| StoreUnavailable)?
             .ok_or(StoreUnavailable)?;
         if receipt.as_slice() != bytes.as_slice() {
@@ -100,17 +106,17 @@ impl GithubTokenKeychain {
         }
         Ok(())
     }
-    fn write(&self, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable> {
+    fn write(&self, generation: u64, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable> {
         let _lock = self.lock()?;
-        self.write_verified(sign_in)?;
+        self.write_verified(generation, sign_in)?;
         self.remove_legacy()
     }
-    fn remove(&self) -> Result<(), StoreUnavailable> {
+    fn remove(&self, generation: u64) -> Result<(), StoreUnavailable> {
         let _lock = self.lock()?;
         // Delete any migration source first: an interrupted disconnect must not
-        // resurrect it on next load. A failed OS delete remains unavailable.
+        // resurrect it on next load. A failed protected delete remains unavailable.
         self.remove_legacy()?;
-        self.secret.delete().map_err(|_| StoreUnavailable)
+        self.secret.delete(generation).map_err(|_| StoreUnavailable)
     }
     fn remove_legacy(&self) -> Result<(), StoreUnavailable> {
         match std::fs::remove_file(self.directory.join(FILE_NAME)) {
@@ -146,19 +152,19 @@ async fn blocking<T: Send + 'static>(
 }
 
 #[async_trait]
-impl GithubTokenStore for GithubTokenKeychain {
-    async fn load(&self) -> Result<Option<GithubSignIn>, StoreUnavailable> {
+impl GithubTokenStore for GithubTokenVault {
+    async fn load(&self, generation: u64) -> Result<Option<GithubSignIn>, StoreUnavailable> {
         let store = Self::new(self.directory.clone(), self.secret.clone());
-        blocking(move || store.read()).await
+        blocking(move || store.read(generation)).await
     }
-    async fn save(&self, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable> {
+    async fn save(&self, generation: u64, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable> {
         let store = Self::new(self.directory.clone(), self.secret.clone());
         let sign_in = sign_in.clone();
-        blocking(move || store.write(&sign_in)).await
+        blocking(move || store.write(generation, &sign_in)).await
     }
-    async fn delete(&self) -> Result<(), StoreUnavailable> {
+    async fn delete(&self, generation: u64) -> Result<(), StoreUnavailable> {
         let store = Self::new(self.directory.clone(), self.secret.clone());
-        blocking(move || store.remove()).await
+        blocking(move || store.remove(generation)).await
     }
 }
 
@@ -168,15 +174,15 @@ mod tests {
 
     #[derive(Default)]
     struct Memory(std::sync::Mutex<Option<Vec<u8>>>);
-    impl SecretStore for Memory {
-        fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, crate::secrets::SecretUnavailable> {
+    impl GithubSecret for Memory {
+        fn read(&self, _generation: u64) -> Result<Option<Zeroizing<Vec<u8>>>, StoreUnavailable> {
             Ok(self.0.lock().unwrap().clone().map(Zeroizing::new))
         }
-        fn write(&self, bytes: &[u8]) -> Result<(), crate::secrets::SecretUnavailable> {
+        fn write(&self, _generation: u64, bytes: &[u8]) -> Result<(), StoreUnavailable> {
             *self.0.lock().unwrap() = Some(bytes.to_vec());
             Ok(())
         }
-        fn delete(&self) -> Result<(), crate::secrets::SecretUnavailable> {
+        fn delete(&self, _generation: u64) -> Result<(), StoreUnavailable> {
             *self.0.lock().unwrap() = None;
             Ok(())
         }
@@ -192,61 +198,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupted_migration_finishes_only_after_matching_os_receipt() {
+    async fn interrupted_migration_finishes_only_after_matching_encrypted_receipt() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("github");
         create_directory(&directory).unwrap();
         let secret = Arc::new(Memory::default());
-        let store = GithubTokenKeychain::new(directory.clone(), secret.clone());
+        let store = GithubTokenVault::new(directory.clone(), secret.clone());
         let legacy = br#"{"accountId":7,"login":"octo","token":"ghu_one"}"#;
         let file = directory.join(FILE_NAME);
         let mut private = open(&file, OpenMode::OpenOrCreate).unwrap();
         std::io::Write::write_all(&mut private, legacy).unwrap();
         drop(private);
-        assert_eq!(store.load().await, Ok(Some(sign_in("ghu_one"))));
+        assert_eq!(store.load(1).await, Ok(Some(sign_in("ghu_one"))));
         assert!(!file.exists());
         let mut private = open(&file, OpenMode::OpenOrCreate).unwrap();
         std::io::Write::write_all(&mut private, legacy).unwrap();
         drop(private);
-        store.write_verified(&sign_in("ghu_two")).unwrap();
-        assert_eq!(store.load().await, Err(StoreUnavailable));
+        store.write_verified(1, &sign_in("ghu_two")).unwrap();
+        assert_eq!(store.load(1).await, Err(StoreUnavailable));
         assert!(file.exists());
-        store.write_verified(&sign_in("ghu_one")).unwrap();
-        assert_eq!(store.load().await, Ok(Some(sign_in("ghu_one"))));
+        store.write_verified(1, &sign_in("ghu_one")).unwrap();
+        assert_eq!(store.load(1).await, Ok(Some(sign_in("ghu_one"))));
         assert!(!file.exists());
     }
     #[tokio::test]
-    async fn locked_os_store_preserves_legacy_source_and_refuses_save_or_disconnect() {
+    async fn locked_vault_entry_preserves_legacy_source_and_refuses_save_or_disconnect() {
         struct Locked;
-        impl SecretStore for Locked {
+        impl GithubSecret for Locked {
             fn read(
                 &self,
-            ) -> Result<Option<Zeroizing<Vec<u8>>>, crate::secrets::SecretUnavailable> {
-                Err(crate::secrets::SecretUnavailable)
+                _generation: u64,
+            ) -> Result<Option<Zeroizing<Vec<u8>>>, StoreUnavailable> {
+                Err(StoreUnavailable)
             }
-            fn write(&self, _: &[u8]) -> Result<(), crate::secrets::SecretUnavailable> {
-                Err(crate::secrets::SecretUnavailable)
+            fn write(&self, _generation: u64, _: &[u8]) -> Result<(), StoreUnavailable> {
+                Err(StoreUnavailable)
             }
-            fn delete(&self) -> Result<(), crate::secrets::SecretUnavailable> {
-                Err(crate::secrets::SecretUnavailable)
+            fn delete(&self, _generation: u64) -> Result<(), StoreUnavailable> {
+                Err(StoreUnavailable)
             }
         }
         let root = tempfile::tempdir().unwrap();
-        let store = GithubTokenKeychain::new(root.path().join("github"), Arc::new(Locked));
-        assert_eq!(store.load().await, Err(StoreUnavailable));
-        assert_eq!(store.save(&sign_in("ghu_one")).await, Err(StoreUnavailable));
+        let store = GithubTokenVault::new(root.path().join("github"), Arc::new(Locked));
+        assert_eq!(store.load(1).await, Err(StoreUnavailable));
+        assert_eq!(
+            store.save(1, &sign_in("ghu_one")).await,
+            Err(StoreUnavailable)
+        );
         assert!(!root.path().join("github/sign-in.json").exists());
-        assert_eq!(store.delete().await, Err(StoreUnavailable));
+        assert_eq!(store.delete(1).await, Err(StoreUnavailable));
     }
     #[tokio::test]
     async fn a_saved_sign_in_reads_back_privately_and_is_deleted_once() {
         let root = tempfile::tempdir().unwrap();
-        let store =
-            GithubTokenKeychain::new(root.path().join("github"), Arc::new(Memory::default()));
-        assert_eq!(store.load().await, Ok(None));
-        store.save(&sign_in("ghu_one")).await.unwrap();
-        store.save(&sign_in("ghu_two")).await.unwrap();
-        assert_eq!(store.load().await, Ok(Some(sign_in("ghu_two"))));
+        let store = GithubTokenVault::new(root.path().join("github"), Arc::new(Memory::default()));
+        assert_eq!(store.load(1).await, Ok(None));
+        store.save(1, &sign_in("ghu_one")).await.unwrap();
+        store.save(1, &sign_in("ghu_two")).await.unwrap();
+        assert_eq!(store.load(1).await, Ok(Some(sign_in("ghu_two"))));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -254,9 +263,9 @@ mod tests {
             assert!(!root.path().join("github/sign-in.json").exists());
             assert_eq!(mode(root.path().join("github")) & 0o077, 0);
         }
-        store.delete().await.unwrap();
-        store.delete().await.unwrap();
-        assert_eq!(store.load().await, Ok(None));
+        store.delete(1).await.unwrap();
+        store.delete(1).await.unwrap();
+        assert_eq!(store.load(1).await, Ok(None));
     }
 
     #[tokio::test]
@@ -264,10 +273,76 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("github");
         std::fs::create_dir(&directory).unwrap();
-        let store = GithubTokenKeychain::new(directory.clone(), Arc::new(Memory::default()));
+        let store = GithubTokenVault::new(directory.clone(), Arc::new(Memory::default()));
         for bytes in [b"{".to_vec(), vec![b' '; FILE_LIMIT as usize + 1]] {
             std::fs::write(directory.join(FILE_NAME), bytes).unwrap();
-            assert_eq!(store.load().await, Err(StoreUnavailable));
+            assert_eq!(store.load(1).await, Err(StoreUnavailable));
         }
+    }
+    #[tokio::test]
+    async fn an_old_codec_save_or_delete_cannot_touch_a_new_vault_generation() {
+        use nessa_vault::{
+            application::{Clock, ObservationClock, Vault},
+            domain::{EntryName, Failure, Passphrase},
+            infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
+        };
+        struct Time;
+        impl Clock for Time {
+            fn seconds(&self) -> u64 {
+                0
+            }
+        }
+        impl ObservationClock for Time {
+            fn unix_millis(&self) -> Result<u64, Failure> {
+                Ok(1793030400000)
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let vault = Vault::new(
+            Arc::new(EncryptedFileVault::new(
+                root.path().join("vault"),
+                Arc::new(OsEntropy),
+            )),
+            Arc::new(FileAudit::new(root.path().join("audit"), Arc::new(Time))),
+            Arc::new(Time),
+        );
+        let caller = nessa_vault::application::Caller {
+            principal: "owner".into(),
+            credential: "desktop".into(),
+        };
+        let first = vault.session("first".into(), caller.clone());
+        vault
+            .create(
+                &first.lease(),
+                Passphrase::new("disposable long passphrase".into()).unwrap(),
+                &[],
+            )
+            .unwrap();
+        let old = vault.unlocked_generation().unwrap();
+        let store = GithubTokenVault::new(
+            root.path().join("github"),
+            Arc::new(crate::secrets::VaultSecret::new(
+                vault.clone(),
+                EntryName::new("github-sign-in").unwrap(),
+            )),
+        );
+        store.save(old, &sign_in("ghu_old")).await.unwrap();
+        drop(first);
+        let second = vault.session("second".into(), caller);
+        vault
+            .unlock(
+                &second.lease(),
+                Passphrase::new("disposable long passphrase".into()).unwrap(),
+            )
+            .unwrap();
+        let current = vault.unlocked_generation().unwrap();
+        store.save(current, &sign_in("ghu_current")).await.unwrap();
+        assert_eq!(store.load(old).await, Err(StoreUnavailable));
+        assert_eq!(
+            store.save(old, &sign_in("ghu_stale")).await,
+            Err(StoreUnavailable)
+        );
+        assert_eq!(store.delete(old).await, Err(StoreUnavailable));
+        assert_eq!(store.load(current).await, Ok(Some(sign_in("ghu_current"))));
     }
 }

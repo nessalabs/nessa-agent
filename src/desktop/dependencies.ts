@@ -1,3 +1,5 @@
+import { gatewayVault, type VaultSource } from "../vault"
+import type { VaultApi } from "@nessa/client"
 /**
  * The desktop window's composition: every outside thing it talks to — the
  * workspace source, the clock, ids, the page's measure of the panes' room,
@@ -124,6 +126,7 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly permissionRules: PermissionRulesGateway | undefined
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly github: GithubGateway | undefined
+  readonly vault: VaultSource | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
    * published — verified, for the transcript to show and save. Through the
@@ -148,6 +151,7 @@ export function createDesktopDependencies(
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
      */
+    vault?: VaultSource
     gateway?: () => Promise<WindowGatewayClient>
     now?: () => number
     newId?: () => string
@@ -238,6 +242,7 @@ export function createDesktopDependencies(
     permissionRules: source
       ? permissionRulesGateway({ connected: () => source.connected() })
       : undefined,
+    vault: options.vault ?? (source ? gatewayVault(() => source.connected()) : undefined),
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
@@ -284,8 +289,7 @@ export function createDesktopDependencies(
 
 /** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub and share sessions through. */
 type WindowGatewayClient = GatewayClient &
-  GithubClient &
-  McpServersClient &
+  GithubClient & { readonly vault: VaultApi } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
   PermissionRulesClient &

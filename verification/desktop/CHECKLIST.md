@@ -2289,3 +2289,11 @@ _Check:_ `settings-action-owners.mjs` (both engines), component regressions in
 
 _Check:_ `conversation-stress.mjs` step `menuPanel` (knob `menuPanels`), in
 Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).
+
+## Local vault
+
+`vault.mjs` exercises setup strength and confirmation, wrong passphrase refusal,
+transient input clearing, concise help, reload without re-unlock, and pipe EOF
+locking through the actual gateway and native child. Check keyboard focus and
+Later/Escape leave ordinary workspace use available. GitHub protected actions
+still require backend admission after a canceled dialog.

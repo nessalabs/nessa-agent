@@ -46,6 +46,7 @@ export {
   retrySetupRecord,
   retryGatewayStartup,
   saveAgentApiKey,
+  vaultCommand,
   signInToProvider,
   providerLoginAvailable,
   hasNativeHost,

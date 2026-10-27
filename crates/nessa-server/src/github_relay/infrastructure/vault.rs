@@ -3,34 +3,21 @@ use crate::{
     secrets::SecretStore,
 };
 use nessa_local_database::DatabaseKey;
-use std::{
-    io::Read,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{io::Read, path::PathBuf, sync::Arc};
 
 /// The inbox key has a different lifetime from GitHub sign-in. A process-shared
 /// lock prevents two starters from overwriting each other's newly minted key.
-pub struct KeychainInboxKey {
+pub struct VaultInboxKey {
     path: PathBuf,
     secret: Arc<dyn SecretStore>,
-    cached: Mutex<Option<Arc<DatabaseKey>>>,
 }
-impl KeychainInboxKey {
+impl VaultInboxKey {
     pub fn new(path: PathBuf, secret: Arc<dyn SecretStore>) -> Self {
-        Self {
-            path,
-            secret,
-            cached: Mutex::new(None),
-        }
+        Self { path, secret }
     }
 }
-impl InboxKeySource for KeychainInboxKey {
+impl InboxKeySource for VaultInboxKey {
     fn load(&self) -> Result<Arc<DatabaseKey>, Failure> {
-        let mut cached = self.cached.lock().map_err(|_| Failure::Storage)?;
-        if let Some(key) = cached.as_ref() {
-            return Ok(key.clone());
-        }
         let parent = self.path.parent().ok_or(Failure::Storage)?;
         nessa_local_storage::create_directory(parent).map_err(|_| Failure::Storage)?;
         let lock = nessa_local_storage::open(
@@ -39,7 +26,7 @@ impl InboxKeySource for KeychainInboxKey {
         )
         .map_err(|_| Failure::Storage)?;
         lock.lock().map_err(|_| Failure::Storage)?;
-        let bytes = match self.secret.read().map_err(|_| Failure::Storage)? {
+        let bytes = match self.secret.read().map_err(secret_failure)? {
             Some(bytes) => bytes,
             None => {
                 // Only a missing/empty/legacy plaintext inbox may mint a key.
@@ -60,7 +47,7 @@ impl InboxKeySource for KeychainInboxKey {
                 }
                 let mut bytes = zeroize::Zeroizing::new(vec![0; 32]);
                 getrandom::fill(&mut bytes).map_err(|_| Failure::Storage)?;
-                self.secret.write(&bytes).map_err(|_| Failure::Storage)?;
+                self.secret.write(&bytes).map_err(secret_failure)?;
                 let saved = self
                     .secret
                     .read()
@@ -75,7 +62,6 @@ impl InboxKeySource for KeychainInboxKey {
         let key = Arc::new(DatabaseKey::new(
             bytes.as_slice().try_into().map_err(|_| Failure::Storage)?,
         ));
-        *cached = Some(key.clone());
         Ok(key)
     }
 }
@@ -84,6 +70,7 @@ impl InboxKeySource for KeychainInboxKey {
 mod tests {
     use super::*;
     use crate::secrets::SecretUnavailable;
+    use std::sync::Mutex;
     #[derive(Default)]
     struct Memory(Mutex<Option<Vec<u8>>>);
     impl SecretStore for Memory {
@@ -106,7 +93,7 @@ mod tests {
         let secret = Arc::new(Memory::default());
         let handles: Vec<_> = (0..4)
             .map(|_| {
-                let key = KeychainInboxKey::new(path.clone(), secret.clone());
+                let key = VaultInboxKey::new(path.clone(), secret.clone());
                 let path = path.clone();
                 std::thread::spawn(move || {
                     let key = key.load().unwrap();
@@ -124,18 +111,18 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         secret.delete().unwrap();
         assert!(matches!(
-            KeychainInboxKey::new(path.clone(), secret.clone()).load(),
+            VaultInboxKey::new(path.clone(), secret.clone()).load(),
             Err(Failure::Storage)
         ));
         assert!(secret.read().unwrap().is_none());
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
     #[test]
-    fn unavailable_os_store_does_not_create_a_database_or_file_secret() {
+    fn unavailable_vault_entry_does_not_create_a_database_or_file_secret() {
         struct Locked;
         impl SecretStore for Locked {
             fn read(&self) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, SecretUnavailable> {
-                Err(SecretUnavailable)
+                Err(SecretUnavailable::Unavailable)
             }
             fn write(&self, _: &[u8]) -> Result<(), SecretUnavailable> {
                 panic!("locked store must not write")
@@ -147,9 +134,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("private/inbox");
         assert!(matches!(
-            KeychainInboxKey::new(path.clone(), Arc::new(Locked)).load(),
+            VaultInboxKey::new(path.clone(), Arc::new(Locked)).load(),
             Err(Failure::Storage)
         ));
         assert!(!path.exists());
+    }
+}
+
+fn secret_failure(problem: crate::secrets::SecretUnavailable) -> Failure {
+    match problem {
+        crate::secrets::SecretUnavailable::Locked => Failure::VaultLocked,
+        crate::secrets::SecretUnavailable::Unavailable => Failure::Storage,
     }
 }

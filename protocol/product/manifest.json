@@ -258,7 +258,10 @@
       "params": "PairingSetLinkingParams",
       "grant": "credential.manage"
     },
-    "github.liveEvents": { "params": "GithubLiveEventsParams", "grant": "credential.manage" },
+    "github.liveEvents": {
+      "params": "GithubLiveEventsParams",
+      "grant": "credential.manage"
+    },
     "github.status": {
       "params": null,
       "grant": "credential.manage"
@@ -354,6 +357,22 @@
     "conversation.fork": {
       "params": "ConversationForkParams",
       "grant": "conversation.write"
+    },
+    "vault.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "vault.setup": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.unlock": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.lock": {
+      "params": null,
+      "grant": "credential.manage"
     }
   },
   "events": {

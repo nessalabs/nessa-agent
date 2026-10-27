@@ -1,3 +1,4 @@
+import { appVault } from "./vault.mjs"
 /**
  * A real gateway, the dev server in front of it, and a `NessaClient` on it as
  * a surface of its own: what the checks against a real gateway start from
@@ -131,6 +132,8 @@ export async function startGatewayStack(
   options,
   instance,
   {
+    vault = false,
+    initializeVault = true,
     as = "owner",
     stage = "ci",
     scripted,
@@ -202,10 +205,12 @@ export async function startGatewayStack(
   timings.gatewayMs = Date.now() - started
   let dev = null
   let client = null
+  let protectedVault = null
   // The gateway stops, and its directory with the credentials goes, whatever
   // the client or the dev server did as they closed.
   const close = async () => {
     try {
+      await protectedVault?.close()
       client?.close()
       await dev?.close()
     } finally {
@@ -236,11 +241,19 @@ export async function startGatewayStack(
         : await startDevServer(options, stageEnvironment)
     timings.devServerMs = Date.now() - started
     client = await connectClient(gateway, instance, as)
+    if (vault) {
+      protectedVault = appVault({
+        endpoint: () => gateway.url,
+        credential: () => token(),
+      })
+      if (initializeVault) await protectedVault.unlock()
+    }
     return {
       url: dev.url,
       mode: options.mode === "prod" ? "prod" : "dev",
       close,
       client,
+      vault: protectedVault,
       gateway,
       timings,
       token,

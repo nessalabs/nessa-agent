@@ -151,3 +151,26 @@ a timed-out old request cannot create a replacement. A Settings-triggered unlock
 uses its portal layer for both the unlock form and transport refusals.
 
 Explicit lock fences publication and clears retained key state in one mutex scope; an observer cannot obtain a new generation for an old retained key between those effects.
+
+## Round-three structural correction
+
+Vault generation proves session identity, but does not order operations within
+that session. Restore previously bypassed the sole mutation gate to avoid waiting
+for a departed provider call. That exemption allowed a same-session restore to
+revive a token after disconnect. Replace the process-wide mutation gate with a
+generation-owned gate: restore, connect, disconnect, cancel and poll termination
+all serialize within their captured generation; a new generation has its own gate.
+Revalidate generation after waiting and keep atomic generation checks in storage.
+
+| Ordering | Required result |
+| --- | --- |
+| Restore captures token, then disconnect arrives | Disconnect runs after restore publication and deletes both cache and persistence |
+| Restore fails while connect arrives | Connect runs after restore refusal and retains its own attributed attempt |
+| Old provider blocks while a new session restores | Different generation gates allow new restore; old publication remains fenced |
+| Retained audit has illegal values or sequence | Refuse before replacement or retention; preserve original evidence bytes |
+| Valid retained suffix starts above one or wall clock reverses | Accept; durable sequence orders observations, not wall-clock monotonicity |
+
+Audit restoration validates the same bounded row contract as append. It checks
+legal action/cause/result and target/state combinations, identity bounds and
+contiguous durable sequence. It does not invent global ordering across concurrent
+leases, authenticate same-user file edits, or infer absent rows outside retention.

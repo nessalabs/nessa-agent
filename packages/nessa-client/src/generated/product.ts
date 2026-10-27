@@ -2507,7 +2507,7 @@ export interface GithubLiveEventsParams {
   /** Explicit acknowledgement of missing history, continue within retained events. */
   acceptGaps?: boolean
 }
-/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its namespace-scoped OS credential store, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
+/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its passphrase-protected local vault, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
 export interface GithubConnection {
   /** Where the sign-in stands. */
   state: GithubConnectState
@@ -2533,6 +2533,7 @@ export const GithubErrorCode = {
   GithubAuditUnavailable: "github_audit_unavailable",
   GithubLiveUnavailable: "github_live_unavailable",
   GithubLiveCapacity: "github_live_capacity",
+  VaultLocked: "vault_locked",
 } as const
 export type GithubErrorCode = (typeof GithubErrorCode)[keyof typeof GithubErrorCode]
 /** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
@@ -3157,6 +3158,39 @@ export interface WorkspacePublishResult {
   /** False when a later revision was already held, so this one changed nothing. */
   applied: boolean
 }
+/** The local vault state. Unlock belongs to the connection that proved its passphrase; closing its owner locks the vault. */
+export const VaultState = {
+  Unconfigured: "unconfigured",
+  Locked: "locked",
+  Unlocked: "unlocked",
+} as const
+export type VaultState = (typeof VaultState)[keyof typeof VaultState]
+/** The current state of the local encrypted vault; never includes secret contents. */
+export interface VaultStatus {
+  /** Whether protected local credentials are unconfigured, locked, or available to this app session. */
+  state: VaultState
+}
+/** Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed. */
+export interface VaultPassphraseParams {
+  /** Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json. */
+  passphrase: string
+}
+/** Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault. */
+export const VaultErrorCode = {
+  VaultUnavailable: "vault_unavailable",
+  VaultLocked: "vault_locked",
+  VaultPassphrasePolicy: "vault_passphrase_policy",
+  VaultWrongPassphrase: "vault_wrong_passphrase",
+  VaultBusy: "vault_busy",
+  VaultCooldown: "vault_cooldown",
+  VaultSessionClosed: "vault_session_closed",
+  VaultSessionOwned: "vault_session_owned",
+  VaultAlreadyConfigured: "vault_already_configured",
+  VaultCapacity: "vault_capacity",
+  VaultAuditUnavailable: "vault_audit_unavailable",
+  VaultMigrationUnavailable: "vault_migration_unavailable",
+} as const
+export type VaultErrorCode = (typeof VaultErrorCode)[keyof typeof VaultErrorCode]
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -3217,7 +3251,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 88,
+  maxReadyMethods: 92,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3523,6 +3557,10 @@ export const ProductMethod = {
   ConversationSetModel: "conversation.setModel",
   ConversationSwitchAgent: "conversation.switchAgent",
   ConversationFork: "conversation.fork",
+  VaultStatus: "vault.status",
+  VaultSetup: "vault.setup",
+  VaultUnlock: "vault.unlock",
+  VaultLock: "vault.lock",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3624,6 +3662,10 @@ export const productReadyMethods = [
   "conversation.setModel",
   "conversation.switchAgent",
   "conversation.fork",
+  "vault.status",
+  "vault.setup",
+  "vault.unlock",
+  "vault.lock",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3716,6 +3758,10 @@ export const productMethodGrants = {
   "conversation.setModel": "conversation.write",
   "conversation.switchAgent": "conversation.write",
   "conversation.fork": "conversation.write",
+  "vault.status": "credential.manage",
+  "vault.setup": "credential.manage",
+  "vault.unlock": "credential.manage",
+  "vault.lock": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

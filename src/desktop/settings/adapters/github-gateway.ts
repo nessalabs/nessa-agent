@@ -33,6 +33,7 @@ export interface GithubGateway {
 }
 
 const refusals: Record<GithubRefusal, string> = {
+  [GithubRefusalCode.VaultLocked]: "Unlock Nessa to access your GitHub connection.",
   [GithubRefusalCode.GithubLiveUnavailable]:
     "Couldn't change live GitHub events. Check your connection and the Nessa App's repository permissions, then try again.",
   [GithubRefusalCode.GithubLiveCapacity]:

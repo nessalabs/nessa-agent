@@ -14,7 +14,8 @@ pub struct KeychainSecret {
 }
 impl KeychainSecret {
     pub fn new(namespace: &Path, purpose: &'static str) -> Result<Self, SecretUnavailable> {
-        let namespace = std::fs::canonicalize(namespace).map_err(|_| SecretUnavailable)?;
+        let namespace =
+            std::fs::canonicalize(namespace).map_err(|_| SecretUnavailable::Unavailable)?;
         Ok(Self {
             service: format!(
                 "ai.nessalabs.nessa.{:x}",
@@ -31,12 +32,12 @@ impl KeychainSecret {
         {
             let credential = platform::default_credential_builder()
                 .build(None, &self.service, self.purpose)
-                .map_err(|_| SecretUnavailable)?;
+                .map_err(|_| SecretUnavailable::Unavailable)?;
             Ok(keyring::Entry::new_with_credential(credential))
         }
         #[cfg(not(target_os = "windows"))]
         {
-            Err(SecretUnavailable)
+            Err(SecretUnavailable::Unavailable)
         }
     }
 }
@@ -46,18 +47,18 @@ impl SecretStore for KeychainSecret {
         match self.entry()?.get_secret() {
             Ok(bytes) => Ok(Some(Zeroizing::new(bytes))),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => Err(SecretUnavailable),
+            Err(_) => Err(SecretUnavailable::Unavailable),
         }
     }
     fn write(&self, bytes: &[u8]) -> Result<(), SecretUnavailable> {
         self.entry()?
             .set_secret(bytes)
-            .map_err(|_| SecretUnavailable)
+            .map_err(|_| SecretUnavailable::Unavailable)
     }
     fn delete(&self) -> Result<(), SecretUnavailable> {
         match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err(SecretUnavailable),
+            Err(_) => Err(SecretUnavailable::Unavailable),
         }
     }
 }
@@ -97,7 +98,7 @@ mod tests {
         assert_eq!(original.service, aliased.service);
         assert!(matches!(
             KeychainSecret::new(&root.path().join("missing"), "verification"),
-            Err(SecretUnavailable)
+            Err(SecretUnavailable::Unavailable)
         ));
     }
     #[test]

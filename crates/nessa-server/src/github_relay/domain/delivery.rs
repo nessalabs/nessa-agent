@@ -84,6 +84,8 @@ pub enum Failure {
     Offline,
     RateLimited,
     InvalidResponse,
+    /// Protected storage is sealed; wait for the app to unlock it.
+    VaultLocked,
     Storage,
     Capacity,
     CursorChanged,

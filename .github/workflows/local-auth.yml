@@ -325,7 +325,6 @@ jobs:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/secret-service
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
@@ -682,17 +681,6 @@ jobs:
       - run: node --import tsx scripts/smoke-install-agent.mjs
         working-directory: .ci-auth
 
-      - name: Verify locked disposable macOS credentials refuse without prompting
-        if: runner.os == 'macOS'
-        run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --lib secrets::macos::tests::locked_disposable_keychain_refuses_all_operations_without_ui -- --ignored
-        timeout-minutes: 5
-      - name: Start disposable Secret Service for native credential verification
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/secret-service
-      - name: Verify locked native credentials refuse without prompting
-        if: runner.os == 'Linux'
-        run: timeout 120 cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --lib secrets::linux::tests::locked_disposable_service_refuses_without_prompting -- --ignored
-        timeout-minutes: 5
 
   # Linux used to run this after runtime assembly on the matrix leg: about nine
   # minutes of instrumented tests, serial, on a fresh target directory. The

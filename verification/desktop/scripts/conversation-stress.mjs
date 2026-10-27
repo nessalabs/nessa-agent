@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { unlockVault } from "./lib/vault.mjs"
 /**
  * The conversation stress check: a person using one conversation for many
  * rounds through the real gateway and the desktop window, with the scripted
@@ -243,8 +244,7 @@ import {
   FAKE_AVATAR,
   GITHUB_AVATARS,
   startFakeGithub,
-  nativeGithubEnvironment,
-  nativeGithubCleanup,
+  disposableGithubEnvironment,
 } from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
@@ -1883,13 +1883,22 @@ const steps = {
     // Answered until the step ends: its Disconnect reopens the signed-in row.
     try {
       await run.exclusive(async () => {
+        const needsUnlock = (await run.client.vault.status()).state === "locked"
         await openAccounts(run.page)
+        if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+        await unlockVault(run.page, {
+          screenshot: run.evidence
+            ? join(run.evidence, `vault-unlock-settings-${run.engine}.png`)
+            : undefined,
+          expectedContainer: "[data-settings-layers]",
+        })
         if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
           failures.push(`GitHub was ${await state()} before Connect`)
           return
         }
         await shot("signed-out")
         await row.getByRole("button", { name: names.githubConnect }).click()
+        await unlockVault(run.page)
         const code = row.locator("[data-github-code]")
         const shown = await waitFor(
           async () =>
@@ -4138,6 +4147,7 @@ async function panelNamed(page, title, failures) {
 async function setupWindow(run, prepare) {
   const page = await run.page.context().newPage()
   // Before the page loads, so nothing it asks on its first frames gets past.
+  await run.stack.vault.install(page)
   await prepare?.(page)
   await page.addInitScript(gatewayHost, {
     endpoint: run.stack.endpoint,
@@ -4181,6 +4191,8 @@ async function setupWindow(run, prepare) {
     }
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
+  await page.locator(".nessa-setup-window").waitFor()
+  await unlockVault(page)
   return page
 }
 
@@ -5152,13 +5164,14 @@ async function startStack(options) {
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
   const environment = github
     ? {
-        ...nativeGithubEnvironment(),
+        ...disposableGithubEnvironment(),
         NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")),
       }
     : {}
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
+      vault: true,
       environment,
       servers,
       as: "panel",
@@ -5175,15 +5188,11 @@ async function startStack(options) {
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
-  const cleanupSecrets = github
-    ? nativeGithubCleanup(stack.gateway, "ci", INSTANCE)
-    : () => {}
   const close = stack.close
   stack.close = async () => {
     try {
       await close()
     } finally {
-      cleanupSecrets()
       await github?.close()
       rmSync(directory, { recursive: true, force: true })
     }
@@ -5213,6 +5222,7 @@ await main(
       let restartConsole
       const opened = await openPage(browser, {
         preparePage: async (page) => {
+          await stack.vault.install(page)
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
         },
         url: `${origin}/desktop.html`,

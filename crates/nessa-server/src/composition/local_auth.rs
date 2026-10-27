@@ -228,6 +228,7 @@ pub(super) async fn product_state(
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
+    let vault = super::vault::compose(namespace);
     let inventory =
         Arc::new(CommittedInventory::open(namespace, Arc::new(SystemClock)).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
@@ -297,7 +298,7 @@ pub(super) async fn product_state(
     // The GitHub sign-in, composed where agents are: they are what it is for.
     #[cfg(unix)]
     let github = match &settings.agents {
-        Some(_) => super::github::compose(namespace, config).await,
+        Some(_) => super::github::compose(namespace, config, vault.vault.clone()).await,
         None => None,
     };
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
@@ -403,6 +404,7 @@ pub(super) async fn product_state(
             agent_probe,
         },
     )
+    .with_vault(vault)
     .with_caller_kinds(caller_kinds)
     .with_admin(admin)
     .with_fence_capture(inventory)

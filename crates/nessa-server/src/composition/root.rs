@@ -91,17 +91,23 @@ impl CompositionRoot {
                 credential_file,
                 ttl_seconds,
             } => super::cli::online(true, credential_file, ttl_seconds),
+            Command::VaultSession => super::vault_session::serve(),
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
             Command::Limits => print_limits(),
             Command::GithubConnect {
                 repository,
                 accept_gap,
-            } => super::github_relay::connect(repository, accept_gap).await,
-            Command::GithubEvents { repository } => super::github_relay::events(repository).await,
-            Command::GithubDisconnect { repository } => {
-                super::github_relay::disconnect(repository).await
-            }
+                passphrase_stdin,
+            } => super::github_relay::connect(repository, accept_gap, passphrase_stdin).await,
+            Command::GithubEvents {
+                repository,
+                passphrase_stdin,
+            } => super::github_relay::events(repository, passphrase_stdin).await,
+            Command::GithubDisconnect {
+                repository,
+                passphrase_stdin,
+            } => super::github_relay::disconnect(repository, passphrase_stdin).await,
             Command::EnvProtocol => {
                 writeln!(std::io::stdout(), "{}", crate::env::LEASE_PROTOCOL)?;
                 Ok(())

@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 88,
+          "maxItems": 92,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -6120,13 +6120,19 @@
     "GithubLiveEventsParams": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "enabled": { "type": "boolean" }, "acceptGaps": { "type": "boolean", "description": "Explicit acknowledgement of missing history, continue within retained events." } },
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "acceptGaps": {
+          "type": "boolean",
+          "description": "Explicit acknowledgement of missing history, continue within retained events."
+        }
+      },
       "required": ["enabled"]
     },
     "GithubConnection": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its namespace-scoped OS credential store, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
+      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its passphrase-protected local vault, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
       "properties": {
         "state": {
           "$ref": "#/$defs/GithubConnectState",
@@ -6171,7 +6177,8 @@
         "github_storage_unavailable",
         "github_audit_unavailable",
         "github_live_unavailable",
-        "github_live_capacity"
+        "github_live_capacity",
+        "vault_locked"
       ],
       "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the OS credential store could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
     },
@@ -7803,6 +7810,53 @@
         }
       },
       "required": ["revision", "applied"]
+    },
+    "VaultState": {
+      "type": "string",
+      "enum": ["unconfigured", "locked", "unlocked"],
+      "description": "The local vault state. Unlock belongs to the connection that proved its passphrase; closing its owner locks the vault."
+    },
+    "VaultStatus": {
+      "description": "The current state of the local encrypted vault; never includes secret contents.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/VaultState",
+          "description": "Whether protected local credentials are unconfigured, locked, or available to this app session."
+        }
+      },
+      "required": ["state"]
+    },
+    "VaultPassphraseParams": {
+      "description": "Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "passphrase": {
+          "type": "string",
+          "description": "Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json."
+        }
+      },
+      "required": ["passphrase"]
+    },
+    "VaultErrorCode": {
+      "type": "string",
+      "enum": [
+        "vault_unavailable",
+        "vault_locked",
+        "vault_passphrase_policy",
+        "vault_wrong_passphrase",
+        "vault_busy",
+        "vault_cooldown",
+        "vault_session_closed",
+        "vault_session_owned",
+        "vault_already_configured",
+        "vault_capacity",
+        "vault_audit_unavailable",
+        "vault_migration_unavailable"
+      ],
+      "description": "Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault."
     }
   }
 }

@@ -253,6 +253,7 @@ const dependencies = createDesktopDependencies({
         credentials: {} as CredentialApi,
         auth: {} as AuthApi,
         github: {} as GithubApi,
+        vault: {} as import("@nessa/client").VaultApi,
         attachments: desktopAttachments,
         agents: {} as AgentsApi,
       }),

@@ -68,6 +68,11 @@ pub async fn serve(
                     });
                 }
             }
+            Err(Failure::VaultLocked) => {
+                for (_, handle) in started.drain() {
+                    handle.abort();
+                }
+            }
             Err(error) => reporter.storage_failed(&error),
         }
         // Observe task panics; normal followers run until this owner is dropped.

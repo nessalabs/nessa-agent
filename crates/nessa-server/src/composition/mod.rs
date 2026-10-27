@@ -98,3 +98,7 @@ mod peer_reading_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
+
+mod vault;
+
+mod vault_session;

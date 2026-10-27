@@ -41,7 +41,7 @@ fn problem(error: LocalProductError) -> CliError {
         LocalProductError::Unauthorized => CliError::Unauthorized,
         LocalProductError::Denied => CliError::Denied,
         LocalProductError::Capacity => CliError::Capacity,
-        LocalProductError::Rejected => CliError::Rejected,
+        LocalProductError::Rejected | LocalProductError::Vault(_) => CliError::Rejected,
     }
 }
 impl Gateway for LocalGateway {

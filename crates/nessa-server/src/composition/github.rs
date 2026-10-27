@@ -13,7 +13,7 @@ use nessa_sdk::infrastructure::acp::sessions::OpenCredentials;
 use super::local_auth::{conversation_root, SystemClock};
 use crate::github::application::GithubConnections;
 use crate::github::infrastructure::{
-    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenKeychain,
+    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenVault,
 };
 use crate::product::GithubRoutes;
 use crate::timer::TokioTimer;
@@ -31,6 +31,7 @@ pub(super) struct GithubComposition {
 pub(super) async fn compose(
     namespace: &Path,
     environment: &crate::env::Environment,
+    vault: Arc<nessa_vault::application::Vault>,
 ) -> Option<GithubComposition> {
     let app = match std::env::var_os("NESSA_GITHUB_APP") {
         None => GithubApp::released(),
@@ -54,17 +55,17 @@ pub(super) async fn compose(
         tracing::error!("GitHub sign-in is off this run: no HTTPS client could be built");
         return None;
     };
-    let secret = match crate::secrets::KeychainSecret::new(namespace, "github-sign-in") {
-        Ok(secret) => secret,
-        Err(_) => {
-            tracing::error!("GitHub sign-in is off: namespace is unavailable");
-            return None;
-        }
-    };
+    let secret = crate::secrets::VaultSecret::new(
+        vault.clone(),
+        nessa_vault::domain::EntryName::new("github-sign-in").expect("static vault entry"),
+    );
     let connections = Arc::new(
         GithubConnections::load(
             Arc::new(api),
-            Arc::new(GithubTokenKeychain::new(
+            Arc::new(crate::github::infrastructure::GithubVaultAccess(
+                vault.clone(),
+            )),
+            Arc::new(GithubTokenVault::new(
                 namespace.join("github"),
                 Arc::new(secret),
             )),
@@ -81,7 +82,7 @@ pub(super) async fn compose(
     {
         match (
             super::github_relay::http(),
-            super::github_relay::store(environment),
+            super::github_relay::store(environment, vault),
         ) {
             (Ok(http), Ok(store)) => {
                 Some(Arc::new(crate::github_relay::application::LiveEvents::new(

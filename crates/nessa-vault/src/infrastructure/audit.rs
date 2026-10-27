@@ -1,7 +1,7 @@
 use crate::{
     application::{Audit, AuditRecord, ObservationClock},
     contract,
-    domain::{Failure, Status},
+    domain::{EntryName, Failure, Status},
 };
 use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use serde::{Deserialize, Serialize};
@@ -70,8 +70,6 @@ impl Audit for FileAudit {
         {
             return Err(Failure::AuditUnavailable);
         }
-        let keep = rows.len().saturating_sub(contract::AUDIT_ROWS - 1);
-        rows.drain(..keep);
         let observed_at_unix_ms = self.clock.unix_millis()?;
         if observed_at_unix_ms > 9_007_199_254_740_991 {
             return Err(Failure::AuditUnavailable);
@@ -90,6 +88,9 @@ impl Audit for FileAudit {
             cause: record.cause.into(),
             result: record.result.into(),
         });
+        validate(&rows)?;
+        let keep = rows.len().saturating_sub(contract::AUDIT_ROWS);
+        rows.drain(..keep);
         let bytes = serde_json::to_vec(&rows).map_err(|_| Failure::AuditUnavailable)?;
         if bytes.len() > 2_097_152 {
             return Err(Failure::AuditUnavailable);
@@ -110,4 +111,74 @@ fn state(status: Status) -> &'static str {
         Status::Locked => "locked",
         Status::Unlocked => "unlocked",
     }
+}
+
+/// Validate retained evidence before retention can discard or rewrite it. This
+/// owns row semantics for both restored and newly appended observations. Durable
+/// sequence orders writes; concurrent operations and UTC time need not be ordered.
+fn validate(rows: &[Stored]) -> Result<(), Failure> {
+    let mut identities = std::collections::BTreeMap::new();
+    let mut operations = std::collections::BTreeSet::new();
+    for (index, row) in rows.iter().enumerate() {
+        let known_state = |state: &str| matches!(state, "unconfigured" | "locked" | "unlocked");
+        if row.sequence == 0
+            || (index > 0 && rows[index - 1].sequence.checked_add(1) != Some(row.sequence))
+            || row.observed_at_unix_ms > 9_007_199_254_740_991
+            || [&row.lease, &row.principal, &row.credential]
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 256)
+            || !known_state(&row.before)
+            || !known_state(&row.after)
+            || !operations.insert((&row.lease, row.operation))
+        {
+            return Err(Failure::AuditUnavailable);
+        }
+        let actor = (&row.principal, &row.credential);
+        if identities
+            .insert(&row.lease, actor)
+            .is_some_and(|prior| prior != actor)
+        {
+            return Err(Failure::AuditUnavailable);
+        }
+        let valid = match row.action.as_str() {
+            "setup" | "unlock" if row.target.is_none() => {
+                match (row.cause.as_str(), row.result.as_str()) {
+                    ("explicit_request", "requested") => row.before == row.after,
+                    ("verified_receipt", "published") => row.after == "unlocked",
+                    ("connection_closed" | "explicit_lock", "not_published") => true,
+                    (
+                        "verification_failed",
+                        "wrong_passphrase_or_ciphertext"
+                        | "already_configured"
+                        | "capacity"
+                        | "unavailable",
+                    ) => true,
+                    _ => false,
+                }
+            }
+            "lock" => {
+                row.target.is_none()
+                    && row.before == "unlocked"
+                    && row.after == "locked"
+                    && matches!(row.cause.as_str(), "explicit_request" | "connection_closed")
+                    && row.result == "key_cleared"
+            }
+            "entry_saved" | "entry_deleted" => {
+                row.target
+                    .as_ref()
+                    .is_some_and(|target| EntryName::new(target.as_str()).is_ok())
+                    && row.before == "unlocked"
+                    && row.after == "unlocked"
+                    && matches!(
+                        (row.cause.as_str(), row.result.as_str()),
+                        ("internal_consumer", "requested") | ("encrypted_receipt", "committed")
+                    )
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(Failure::AuditUnavailable);
+        }
+    }
+    Ok(())
 }

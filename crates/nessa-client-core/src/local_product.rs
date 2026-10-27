@@ -22,6 +22,16 @@ pub struct LocalProduct {
     next_id: u64,
 }
 impl LocalProduct {
+    /// An independent cancellation handle. Shutting it down ends the connection
+    /// even while another thread is blocked waiting for a command response.
+    pub fn cancellation(&self) -> Result<LocalProductCancellation, LocalProductError> {
+        Ok(LocalProductCancellation(
+            self.socket
+                .get_ref()
+                .try_clone()
+                .map_err(|_| LocalProductError::Transport)?,
+        ))
+    }
     /// Verified identity from this connection's handshake; permissions are rechecked by the server.
     pub fn identity(&self) -> &LocalProductIdentity {
         &self.identity
@@ -44,6 +54,23 @@ impl LocalProduct {
             .map_err(|_| LocalProductError::InvalidCredential)?
             .trim();
         if credential.is_empty() || credential.len() > 16384 {
+            return Err(LocalProductError::InvalidCredential);
+        }
+        Self::connect_with_credential(address, credential)
+    }
+    /// Authenticate an app-owned connection with transient credential input.
+    /// The caller keeps the secret out of arguments, environment and persistence.
+    pub fn connect_with_credential(
+        address: SocketAddr,
+        credential: &str,
+    ) -> Result<Self, LocalProductError> {
+        if !address.ip().is_loopback() {
+            return Err(LocalProductError::NonLocal);
+        }
+        if credential.is_empty()
+            || credential.len() > 16384
+            || credential.chars().any(char::is_control)
+        {
             return Err(LocalProductError::InvalidCredential);
         }
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -91,7 +118,7 @@ impl LocalProduct {
             || ready.principal_id.is_empty()
             || ready
                 .expires_at
-                .is_some_and(|expiry| expiry > 9_007_199_254_740_991)
+                .is_some_and(|expiry| expiry > MAX_SAFE_TIMESTAMP)
         {
             return Err(LocalProductError::Protocol);
         }
@@ -134,6 +161,7 @@ impl LocalProduct {
         method: &str,
         params: Value,
     ) -> Result<T, LocalProductError> {
+        self.deadline = Instant::now() + Duration::from_secs(10);
         self.next_id += 1;
         let id = self.next_id.to_string();
         self.socket
@@ -143,7 +171,16 @@ impl LocalProduct {
                     .into(),
             ))
             .map_err(|_| LocalProductError::Transport)?;
-        let response = self.read()?;
+        // Product sessions may push review snapshots before a command response.
+        // This command-only transport does not subscribe; bound ignored notices
+        // as well as bytes and time so a stream cannot starve correlation.
+        let mut response = self.read()?;
+        for _ in 0..64 {
+            if response["type"] != "event" {
+                break;
+            }
+            response = self.read()?;
+        }
         if response["type"] != "res" || response["id"] != id {
             return Err(LocalProductError::Correlation);
         }
@@ -153,7 +190,14 @@ impl LocalProduct {
                 Some("unauthorized") => LocalProductError::Unauthorized,
                 Some("forbidden") => LocalProductError::Denied,
                 Some("credential_capacity") => LocalProductError::Capacity,
-                _ => LocalProductError::Rejected,
+                Some(code) => match serde_json::from_value::<
+                    nessa_protocol::product::generated::VaultErrorCode,
+                >(Value::String(code.to_owned()))
+                {
+                    Ok(code) => LocalProductError::Vault(code),
+                    Err(_) => LocalProductError::Rejected,
+                },
+                None => LocalProductError::Rejected,
             });
         }
         decode(response["payload"].clone())
@@ -171,6 +215,8 @@ impl Drop for LocalProduct {
 /// Redacted transport failures. Server messages never become diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalProductError {
+    /// A recognized redacted vault refusal; arbitrary server text is discarded.
+    Vault(nessa_protocol::product::generated::VaultErrorCode),
     /// The requested address is not numeric loopback.
     NonLocal,
     /// The private credential file cannot be read.
@@ -208,3 +254,21 @@ pub struct LocalProductIdentity {
     /// Exclusive credential expiry in Unix seconds, when present.
     pub expires_at: Option<u64>,
 }
+
+/// Closing the caller's input can interrupt an in-flight native request.
+pub struct LocalProductCancellation(TcpStream);
+impl LocalProductCancellation {
+    /// Stop both transport directions; the gateway's connection guard owns sealing.
+    pub fn close(&self) {
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+impl Drop for LocalProductCancellation {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+/// Largest integer exactly represented by product JSON consumers.
+pub const MAX_SAFE_TIMESTAMP: u64 = 9_007_199_254_740_991;

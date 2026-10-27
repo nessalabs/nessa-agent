@@ -456,7 +456,10 @@ test("quota refusal discloses no payload or audit and returns a retry delay", as
 test("invalid credential floods stop at the edge without audit or user-budget rows", async (t) => {
   const { page, db } = await fixture(t)
   let limited = false
-  for (let n = 0; n < 125; n++) {
+  const started = Date.now()
+  // A fixed minute window can reset once during this bounded probe. Two
+  // complete 120-request budgets still cannot admit the 241st request.
+  for (let n = 0; n < 241; n++) {
     const result = await page(0, { Authorization: "Bearer invalid_token_1234" })
     if (result.status === 429) {
       limited = true
@@ -464,6 +467,7 @@ test("invalid credential floods stop at the edge without audit or user-budget ro
     }
     assert.equal(result.status, 401)
   }
+  assert.ok(Date.now() - started < 60_000, "probe exceeded one limiter window")
   assert.equal(limited, true)
   assert.equal(
     (await db.prepare("SELECT COUNT(*) AS n FROM relay_user_budget").first())?.n,

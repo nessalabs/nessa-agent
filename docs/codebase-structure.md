@@ -2590,7 +2590,7 @@ with real local D1 and Durable Objects.
 The native `crates/nessa-server/src/github_relay` context mirrors its own feature
 vocabulary: domain identities/order, application catch-up and ports, and
 infrastructure adapters for the existing `GithubConnections` token owner,
-HTTPS/WebSocket and encrypted SQLite. `infrastructure/keychain.rs` obtains the inbox key through the injected `secrets::SecretStore`; `secrets/keychain.rs` is the OS adapter, also used by `github/infrastructure/token_keychain.rs`. `nessa-local-database::encryption` owns SQLCipher and the atomic plaintext upgrade. `application/live_events.rs` coordinates opt-in
+HTTPS/WebSocket and encrypted SQLite. `infrastructure/vault.rs` obtains the inbox key through the injected `secrets::VaultSecret`; `github/infrastructure/token_vault.rs` uses a separate vault entry for sign-in. `secrets/keychain.rs` remains the legacy import adapter. `nessa-local-database::encryption` owns SQLCipher and the atomic plaintext upgrade. `application/live_events.rs` coordinates opt-in
 and `infrastructure/selection.rs` commits selection changes and cleanup evidence.
 `product/github.rs` serializes enable/disable with sign-out;
 `settings/ui/github-row.tsx` presents that state. Composition
@@ -2603,3 +2603,19 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 `github-relay-contract.json`; the Worker deployment map supplies isolated configs.
 [The runbook](../packages/github-webhooks/README.md) and
 [ADR 1117](adr/todo/1117-github-relay.md) describe limits and operations.
+
+## Reusable local vault
+
+- `crates/nessa-vault`: domain passphrase/name/secret values; application repository,
+  clock, entropy and audit ports plus lease lifecycle; infrastructure Argon2id,
+  authenticated encrypted file and bounded secret-free audit journal. Its README
+  maps the shared contract and regression tests.
+- `crates/nessa-server/src/vault`: verified legacy import application and OS source
+  adapter. `product/vault.rs` owns authenticated controls and the unique socket
+  close guard. `composition/vault.rs` constructs it independently of providers;
+  `composition/vault_session.rs` owns the bounded anonymous-pipe command bridge.
+- `src-tauri/src/vault`: typed host connection port, retained child adapter and
+  trusted-window command. Host composition injects endpoint and credential ports.
+- `src/vault`: application dialog controller, gateway/native adapters, and UI.
+  No UI or RPC exposes stored secrets. `verification/desktop/scripts/vault.mjs`
+  tests the native lease through the real gateway and browser dialog.

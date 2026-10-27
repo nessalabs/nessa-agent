@@ -153,11 +153,11 @@ From the corresponding development checkout/binary (the packaged app receives
 its stage automatically from its host):
 
 ```sh
-nessa github connect nessalabs/nessa-agent
-nessa github events nessalabs/nessa-agent
-nessa github disconnect nessalabs/nessa-agent
+nessa github connect nessalabs/nessa-agent --passphrase-stdin
+nessa github events nessalabs/nessa-agent --passphrase-stdin
+nessa github disconnect nessalabs/nessa-agent --passphrase-stdin
 # Only after inspecting a reported catch-up gap:
-nessa github connect nessalabs/nessa-agent --accept-gap
+nessa github connect nessalabs/nessa-agent --passphrase-stdin --accept-gap
 ```
 
 The serving gateway discovers connection changes within five seconds. `events`
@@ -237,18 +237,16 @@ been disabled or a deliberate rotation has finished on both services.
 
 ## Storage and fair use hardening (#1132)
 
-GitHub sign-in and the separate random inbox encryption key use native OS secret
-storage (macOS Keychain, Windows Credential Manager, Linux Secret Service).
-No plaintext secret-file fallback is provided. Keys already acquired remain in process memory until the gateway exits. Linux desktop/headless users need
-an unlocked Secret Service session; a locked or unavailable service refuses access.
+GitHub sign-in and the separate random inbox encryption key use the
+passphrase-encrypted local vault. Unlock once per app session; the native app's retained connection survives window reloads. App quit, gateway restart or explicit lock seals the vault. Existing OS entries are imported once, with matching encrypted receipts verified before retirement. A failed import preserves the existing data. The vault uses Argon2id and authenticated encryption; it cannot recover a forgotten passphrase.
 The inbox is encrypted in full with SQLCipher, including identities, payloads,
 cursors, audits and journal pages. Sign-out deletes the login, while retaining the
 separate inbox key for encrypted cleanup evidence. Losing that key makes the
-existing inbox unreadable. Backing up a file alone does not back up its OS key.
+existing inbox unreadable. Back up the encrypted vault together with the inbox; the passphrase is required to restore protected data.
 
 Before upgrading the existing dev inbox, stop old gateway processes. The upgrade
 verifies a new encrypted copy and atomically replaces the original. Existing login
-JSON is removed only after OS write/readback. Historical plaintext backups and
+JSON is removed only after encrypted vault write/readback. Historical plaintext backups and
 filesystem snapshots are not erased by migration. Cloudflare receives plaintext
 webhooks over TLS and provides managed encryption at rest; this is not E2EE.
 
@@ -278,7 +276,7 @@ and typed outcomes, not credentials or event bodies.
 See [ADR 1132](../../docs/adr/todo/1132-github-relay-hardening.md) for orderings,
 security boundaries and the review record.
 
-Expiry uses covering indexes and an audit primary-key cutoff; the full-capacity query-plan regression rejects idle full scans. Linux Secret Service sessions use prompt timeout zero, including lock-after-lookup races. OS credential identities use the canonical namespace, so filesystem aliases share a key.
+Expiry uses covering indexes and an audit primary-key cutoff; the full-capacity query-plan regression rejects idle full scans. Legacy OS import adapters use the canonical namespace; Linux import uses prompt timeout zero, including lock-after-lookup races. Normal vault access does not open those OS stores.
 
 The [hardening verification](hardening-verification.json) and
 [adversarial review](evidence/hardening-review.md) record the source checkpoint,

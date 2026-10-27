@@ -86,7 +86,8 @@ pub(crate) fn read(service: &str, account: &str) -> Result<Option<Vec<u8>>, Secr
     read_query(query(service, account))
 }
 pub(super) fn default_keychain() -> Result<SecKeychain, SecretUnavailable> {
-    SecKeychain::default_for_domain(SecPreferencesDomain::User).map_err(|_| SecretUnavailable)
+    SecKeychain::default_for_domain(SecPreferencesDomain::User)
+        .map_err(|_| SecretUnavailable::Unavailable)
 }
 fn unlocked(keychain: &SecKeychain) -> Result<(), SecretUnavailable> {
     let mut status = 0;
@@ -94,7 +95,7 @@ fn unlocked(keychain: &SecKeychain) -> Result<(), SecretUnavailable> {
     if unsafe { SecKeychainGetStatus(keychain.as_concrete_TypeRef(), &mut status) } != 0
         || status & 1 == 0
     {
-        return Err(SecretUnavailable);
+        return Err(SecretUnavailable::Unavailable);
     }
     Ok(())
 }
@@ -112,7 +113,7 @@ pub(super) fn read_in(
     account: &str,
 ) -> Result<Option<Vec<u8>>, SecretUnavailable> {
     unlocked(keychain)?;
-    read_query(scoped_query(keychain, service, account)).map_err(|_| SecretUnavailable)
+    read_query(scoped_query(keychain, service, account)).map_err(|_| SecretUnavailable::Unavailable)
 }
 pub(super) fn write_in(
     keychain: &SecKeychain,
@@ -137,14 +138,14 @@ pub(super) fn write_in(
         return Ok(());
     }
     if status != errSecItemNotFound {
-        return Err(SecretUnavailable);
+        return Err(SecretUnavailable::Unavailable);
     }
     let mut insertion = self::query(service, account);
     unsafe {
         insertion.add(&kSecUseKeychain.to_void(), &keychain.to_void());
         insertion.add(&kSecValueData.to_void(), &data.to_void());
         if SecItemAdd(insertion.as_concrete_TypeRef(), ptr::null_mut()) != 0 {
-            return Err(SecretUnavailable);
+            return Err(SecretUnavailable::Unavailable);
         }
     }
     Ok(())
@@ -160,7 +161,7 @@ pub(super) fn delete_in(
     if status == 0 || status == errSecItemNotFound {
         Ok(())
     } else {
-        Err(SecretUnavailable)
+        Err(SecretUnavailable::Unavailable)
     }
 }
 
@@ -200,15 +201,15 @@ mod tests {
         let before = std::time::Instant::now();
         assert_eq!(
             read_in(&keychain, "nessa-disposable", "verification"),
-            Err(SecretUnavailable)
+            Err(SecretUnavailable::Unavailable)
         );
         assert_eq!(
             write_in(&keychain, "nessa-disposable", "verification", b"refused"),
-            Err(SecretUnavailable)
+            Err(SecretUnavailable::Unavailable)
         );
         assert_eq!(
             delete_in(&keychain, "nessa-disposable", "verification"),
-            Err(SecretUnavailable)
+            Err(SecretUnavailable::Unavailable)
         );
         assert!(before.elapsed() < std::time::Duration::from_secs(10));
         drop(cleanup);

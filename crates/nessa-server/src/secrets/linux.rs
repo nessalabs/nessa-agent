@@ -14,7 +14,7 @@ impl KeychainSecret {
     }
     fn service(&self) -> Result<SecretService, SecretUnavailable> {
         SecretService::connect_with_max_prompt_timeout(EncryptionType::Dh, 0)
-            .map_err(|_| SecretUnavailable)
+            .map_err(|_| SecretUnavailable::Unavailable)
     }
 }
 impl SecretStore for KeychainSecret {
@@ -22,36 +22,37 @@ impl SecretStore for KeychainSecret {
         let service = self.service()?;
         let collection = service
             .get_default_collection()
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         collection
             .ensure_unlocked()
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         let items = collection
             .search_items(self.attributes())
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         match items.as_slice() {
             [] => Ok(None),
             [item] => {
-                item.ensure_unlocked().map_err(|_| SecretUnavailable)?;
+                item.ensure_unlocked()
+                    .map_err(|_| SecretUnavailable::Unavailable)?;
                 item.get_secret()
                     .map(Zeroizing::new)
                     .map(Some)
-                    .map_err(|_| SecretUnavailable)
+                    .map_err(|_| SecretUnavailable::Unavailable)
             }
-            _ => Err(SecretUnavailable),
+            _ => Err(SecretUnavailable::Unavailable),
         }
     }
     fn write(&self, bytes: &[u8]) -> Result<(), SecretUnavailable> {
         let service = self.service()?;
         let collection = service
             .get_default_collection()
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         collection
             .ensure_unlocked()
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         let items = collection
             .search_items(self.attributes())
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         match items.as_slice() {
             [] => {
                 collection
@@ -62,35 +63,37 @@ impl SecretStore for KeychainSecret {
                         false,
                         "application/octet-stream",
                     )
-                    .map_err(|_| SecretUnavailable)?;
+                    .map_err(|_| SecretUnavailable::Unavailable)?;
                 Ok(())
             }
             [item] => {
-                item.ensure_unlocked().map_err(|_| SecretUnavailable)?;
+                item.ensure_unlocked()
+                    .map_err(|_| SecretUnavailable::Unavailable)?;
                 item.set_secret(bytes, "application/octet-stream")
-                    .map_err(|_| SecretUnavailable)
+                    .map_err(|_| SecretUnavailable::Unavailable)
             }
-            _ => Err(SecretUnavailable),
+            _ => Err(SecretUnavailable::Unavailable),
         }
     }
     fn delete(&self) -> Result<(), SecretUnavailable> {
         let service = self.service()?;
         let collection = service
             .get_default_collection()
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         collection
             .ensure_unlocked()
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         let items = collection
             .search_items(self.attributes())
-            .map_err(|_| SecretUnavailable)?;
+            .map_err(|_| SecretUnavailable::Unavailable)?;
         match items.as_slice() {
             [] => Ok(()),
             [item] => {
-                item.ensure_unlocked().map_err(|_| SecretUnavailable)?;
-                item.delete().map_err(|_| SecretUnavailable)
+                item.ensure_unlocked()
+                    .map_err(|_| SecretUnavailable::Unavailable)?;
+                item.delete().map_err(|_| SecretUnavailable::Unavailable)
             }
-            _ => Err(SecretUnavailable),
+            _ => Err(SecretUnavailable::Unavailable),
         }
     }
 }
@@ -116,9 +119,9 @@ mod tests {
         let collection = service.get_default_collection().unwrap();
         collection.lock().unwrap();
         let before = std::time::Instant::now();
-        assert_eq!(entry.read(), Err(SecretUnavailable));
-        assert_eq!(entry.write(b"refused"), Err(SecretUnavailable));
-        assert_eq!(entry.delete(), Err(SecretUnavailable));
+        assert_eq!(entry.read(), Err(SecretUnavailable::Unavailable));
+        assert_eq!(entry.write(b"refused"), Err(SecretUnavailable::Unavailable));
+        assert_eq!(entry.delete(), Err(SecretUnavailable::Unavailable));
         assert!(before.elapsed() < std::time::Duration::from_secs(10));
         // The CI job owns this collection and destroys its VM after the check.
     }

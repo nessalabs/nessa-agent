@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::agent_install::domain::AgentName;
 use nessa_protocol::relay::RelayAddress;
 
-pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO [--accept-gap]\n  nessa github events OWNER/REPO\n  nessa github disconnect OWNER/REPO\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS [--relay HOST:PORT] [--drain-deadline 20s] [--enroll-code-file PATH]\n  nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]\n  nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)\n  nessa env grants\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\nWith --relay, a dial that does not connect to ADDRESS within a moment, or is\nrefused, asks that relay for the gateway instead (`relay serve`, below);\nenrolling still needs ADDRESS itself.\nWith --drain-deadline, SIGINT or SIGTERM drains instead: every lease ends with\nits cleanup recorded on both sides, then it exits; past the deadline, or on a\nsecond signal, the connection is closed. Set it below a container's stop grace.\nWith --enroll-code-file, a machine paired with nothing first enrolls with the\ncode that file holds, and one already paired with the gateway at ADDRESS goes\nstraight to dialing, so a container can run the same command on every start;\none paired with another gateway refuses.\n`env grant` and `env ungrant` change what this machine's owner grants one\ngateway: `ssh` (whoever runs env serve over SSH) or a dialed gateway by its\npin, by default the gateway this machine is paired with, else `ssh`. Without\nan entry, `ssh` is granted everything this host runs and a dialed gateway\nnothing; a grant only narrows what config.json lets this host run. A change\napplies from the next lease; leases already running go on. `env grants`\nprints every entry as JSON on stdout. `env grant` takes agents, commands, a\nlease limit or any of them; --max-timeout replaces the peer's longest command\nrun, and --max-lease the longest an agent's lease may last before this machine\nends it (none: until ended; `ungrant --all` takes it back).\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO --passphrase-stdin [--accept-gap]\n  nessa github events OWNER/REPO --passphrase-stdin\n  nessa github disconnect OWNER/REPO --passphrase-stdin\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS [--relay HOST:PORT] [--drain-deadline 20s] [--enroll-code-file PATH]\n  nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]\n  nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)\n  nessa env grants\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\nWith --relay, a dial that does not connect to ADDRESS within a moment, or is\nrefused, asks that relay for the gateway instead (`relay serve`, below);\nenrolling still needs ADDRESS itself.\nWith --drain-deadline, SIGINT or SIGTERM drains instead: every lease ends with\nits cleanup recorded on both sides, then it exits; past the deadline, or on a\nsecond signal, the connection is closed. Set it below a container's stop grace.\nWith --enroll-code-file, a machine paired with nothing first enrolls with the\ncode that file holds, and one already paired with the gateway at ADDRESS goes\nstraight to dialing, so a container can run the same command on every start;\none paired with another gateway refuses.\n`env grant` and `env ungrant` change what this machine's owner grants one\ngateway: `ssh` (whoever runs env serve over SSH) or a dialed gateway by its\npin, by default the gateway this machine is paired with, else `ssh`. Without\nan entry, `ssh` is granted everything this host runs and a dialed gateway\nnothing; a grant only narrows what config.json lets this host run. A change\napplies from the next lease; leases already running go on. `env grants`\nprints every entry as JSON on stdout. `env grant` takes agents, commands, a\nlease limit or any of them; --max-timeout replaces the peer's longest command\nrun, and --max-lease the longest an agent's lease may last before this machine\nends it (none: until ended; `ungrant --all` takes it back).\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 /// Whether a serving process may create the local credentials it needs.
 ///
@@ -22,19 +22,24 @@ pub enum LocalProvisioning {
 
 #[derive(Debug, PartialEq)]
 pub enum Command {
+    /// Retain one app-owned encrypted-vault session over anonymous pipes.
+    VaultSession,
     Help,
     /// Connect using the current gh account in this binary's namespace.
     GithubConnect {
         repository: String,
         accept_gap: bool,
+        passphrase_stdin: bool,
     },
     /// Read the private local event inbox without contacting GitHub.
     GithubEvents {
         repository: String,
+        passphrase_stdin: bool,
     },
     /// Remove this owner's local binding and retained events.
     GithubDisconnect {
         repository: String,
+        passphrase_stdin: bool,
     },
     Server(LocalProvisioning),
     Desktop(PathBuf),
@@ -155,6 +160,9 @@ pub enum Ungranted {
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
+    if args == ["vault", "session"] {
+        return Ok(Command::VaultSession);
+    }
     if args.is_empty() || args == ["--help"] || args == ["-h"] {
         return Ok(Command::Help);
     }
@@ -165,7 +173,10 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         if github == "github" && matches!(verb.as_str(), "connect" | "events" | "disconnect") {
             let connect = verb == "connect";
             if repository.starts_with('-')
-                || !(rest.is_empty() || (connect && rest == ["--accept-gap"]))
+                || rest.iter().any(|flag| {
+                    flag != "--passphrase-stdin" && !(connect && flag == "--accept-gap")
+                })
+                || rest.iter().collect::<std::collections::HashSet<_>>().len() != rest.len()
             {
                 return Err(
                     "github connect OWNER/REPO [--accept-gap] or github events OWNER/REPO".into(),
@@ -174,12 +185,15 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             return Ok(match verb.as_str() {
                 "connect" => Command::GithubConnect {
                     repository: repository.clone(),
-                    accept_gap: !rest.is_empty(),
+                    accept_gap: rest.iter().any(|flag| flag == "--accept-gap"),
+                    passphrase_stdin: rest.iter().any(|flag| flag == "--passphrase-stdin"),
                 },
                 "disconnect" => Command::GithubDisconnect {
+                    passphrase_stdin: rest.iter().any(|flag| flag == "--passphrase-stdin"),
                     repository: repository.clone(),
                 },
                 _ => Command::GithubEvents {
+                    passphrase_stdin: rest.iter().any(|flag| flag == "--passphrase-stdin"),
                     repository: repository.clone(),
                 },
             });

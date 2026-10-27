@@ -2622,6 +2622,8 @@ pub enum GithubErrorCode {
     GithubLiveUnavailable,
     #[serde(rename = "github_live_capacity")]
     GithubLiveCapacity,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
 }
 impl GithubErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -2633,6 +2635,7 @@ impl GithubErrorCode {
             Self::GithubAuditUnavailable => "github_audit_unavailable",
             Self::GithubLiveUnavailable => "github_live_unavailable",
             Self::GithubLiveCapacity => "github_live_capacity",
+            Self::VaultLocked => "vault_locked",
         }
     }
 }
@@ -3415,6 +3418,79 @@ pub struct WorkspacePublishResult {
     pub revision: u64,
     pub applied: bool,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VaultState {
+    #[serde(rename = "unconfigured")]
+    Unconfigured,
+    #[serde(rename = "locked")]
+    Locked,
+    #[serde(rename = "unlocked")]
+    Unlocked,
+}
+impl VaultState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unconfigured => "unconfigured",
+            Self::Locked => "locked",
+            Self::Unlocked => "unlocked",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultStatus {
+    pub state: VaultState,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultPassphraseParams {
+    pub passphrase: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VaultErrorCode {
+    #[serde(rename = "vault_unavailable")]
+    VaultUnavailable,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "vault_passphrase_policy")]
+    VaultPassphrasePolicy,
+    #[serde(rename = "vault_wrong_passphrase")]
+    VaultWrongPassphrase,
+    #[serde(rename = "vault_busy")]
+    VaultBusy,
+    #[serde(rename = "vault_cooldown")]
+    VaultCooldown,
+    #[serde(rename = "vault_session_closed")]
+    VaultSessionClosed,
+    #[serde(rename = "vault_session_owned")]
+    VaultSessionOwned,
+    #[serde(rename = "vault_already_configured")]
+    VaultAlreadyConfigured,
+    #[serde(rename = "vault_capacity")]
+    VaultCapacity,
+    #[serde(rename = "vault_audit_unavailable")]
+    VaultAuditUnavailable,
+    #[serde(rename = "vault_migration_unavailable")]
+    VaultMigrationUnavailable,
+}
+impl VaultErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultUnavailable => "vault_unavailable",
+            Self::VaultLocked => "vault_locked",
+            Self::VaultPassphrasePolicy => "vault_passphrase_policy",
+            Self::VaultWrongPassphrase => "vault_wrong_passphrase",
+            Self::VaultBusy => "vault_busy",
+            Self::VaultCooldown => "vault_cooldown",
+            Self::VaultSessionClosed => "vault_session_closed",
+            Self::VaultSessionOwned => "vault_session_owned",
+            Self::VaultAlreadyConfigured => "vault_already_configured",
+            Self::VaultCapacity => "vault_capacity",
+            Self::VaultAuditUnavailable => "vault_audit_unavailable",
+            Self::VaultMigrationUnavailable => "vault_migration_unavailable",
+        }
+    }
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -3580,6 +3656,10 @@ pub mod product_method {
     pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
     pub const CONVERSATION_SWITCH_AGENT: &str = "conversation.switchAgent";
     pub const CONVERSATION_FORK: &str = "conversation.fork";
+    pub const VAULT_STATUS: &str = "vault.status";
+    pub const VAULT_SETUP: &str = "vault.setup";
+    pub const VAULT_UNLOCK: &str = "vault.unlock";
+    pub const VAULT_LOCK: &str = "vault.lock";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -3770,7 +3850,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 88
+                items.len() <= 92
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3883,6 +3963,10 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.setModel",
     "conversation.switchAgent",
     "conversation.fork",
+    "vault.status",
+    "vault.setup",
+    "vault.unlock",
+    "vault.lock",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -3932,7 +4016,11 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "peer.relay"
         | "conversation.share"
         | "conversation.unshare"
-        | "conversation.shares" => Some("credential.manage"),
+        | "conversation.shares"
+        | "vault.status"
+        | "vault.setup"
+        | "vault.unlock"
+        | "vault.lock" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"

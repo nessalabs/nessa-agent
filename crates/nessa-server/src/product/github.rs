@@ -25,6 +25,13 @@ pub(super) async fn dispatch(
     let Some(github) = state.github.as_ref() else {
         return failure(&frame.id, GithubErrorCode::GithubNotConfigured.as_str());
     };
+    if state
+        .vault
+        .as_ref()
+        .is_some_and(|vault| !vault.vault.is_unlocked())
+    {
+        return failure(&frame.id, "vault_locked");
+    }
     if frame.method != "github.liveEvents" && frame.params != json!({}) {
         return failure(&frame.id, "invalid_request");
     }
@@ -171,6 +178,7 @@ fn relay_code(error: &crate::github_relay::domain::Failure) -> &'static str {
     use crate::github_relay::domain::Failure;
     match error {
         Failure::Capacity => "github_live_capacity",
+        Failure::VaultLocked => "vault_locked",
         _ => "github_live_unavailable",
     }
 }

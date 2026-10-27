@@ -21,8 +21,8 @@ sources:
   - crates/nessa-server/src/secrets/keychain.rs
   - crates/nessa-server/src/secrets/macos.rs
   - crates/nessa-server/src/secrets/linux.rs
-  - crates/nessa-server/src/github/infrastructure/token_keychain.rs
-  - crates/nessa-server/src/github_relay/infrastructure/keychain.rs
+  - crates/nessa-server/src/github/infrastructure/token_vault.rs
+  - crates/nessa-server/src/github_relay/infrastructure/vault.rs
   - crates/nessa-server/src/github_relay/application/live_events.rs
   - crates/nessa-server/src/github_relay/infrastructure/selection.rs
   - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
@@ -114,7 +114,7 @@ restart. Each connection generation fences responses and cleanup from a removed
 binding; disconnect/reconnect cannot revive the previous generation's pending work.
 Local storage deduplicates a redelivered identity while its original copy remains.
 
-The local owner can read the downloaded inbox without network access. SQLCipher encrypts the whole database and rollback journal, including repository identities and audit records. Its separate random key lives in the OS credential store. OS ownership also protects its files; no new unauthenticated local HTTP read route is
+The local owner can read the downloaded inbox without network access. SQLCipher encrypts the whole database and rollback journal, including repository identities and audit records. Its separate random key lives in the passphrase-encrypted local vault. The native app unlocks it once per app session; closing that app or restarting the gateway seals it. The follower stops while locked and catches up after unlock. See [local vault](../gateway/local-vault.md). OS ownership also protects its files; no new unauthenticated local HTTP read route is
 mounted. Existing [conversation admission](../gateway/external-events.md) remains
 a separate authority if a future feature turns an event into a turn.
 

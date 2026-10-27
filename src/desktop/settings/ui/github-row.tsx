@@ -1,7 +1,9 @@
+import { useVaultUnlock } from "../../../vault"
 import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -85,7 +87,26 @@ const revocation =
   "Disconnecting forgets the sign-in on this gateway. To revoke it on GitHub, use Settings › Applications there."
 
 export function GithubRow() {
-  const { gateway, avatar: Avatar } = useContext(GithubContext)
+  const { gateway: source, avatar: Avatar } = useContext(GithubContext)
+  const ensure = useVaultUnlock()
+  const gateway = useMemo(() => {
+    if (!source) return undefined
+    const ask = async (work: () => Promise<GithubOutcome>): Promise<GithubOutcome> => {
+      if (!(await ensure()))
+        return { ok: false, sentence: "Unlock Nessa to access GitHub." }
+      return work()
+    }
+    return {
+      pollMs: source.pollMs,
+      read: () => ask(() => source.read()),
+      connect: () => ask(() => source.connect()),
+      cancel: () => ask(() => source.cancel()),
+      disconnect: () => ask(() => source.disconnect()),
+      liveEvents: (enabled: boolean, acceptGaps?: boolean) =>
+        ask(() => source.liveEvents(enabled, acceptGaps)),
+    }
+  }, [source, ensure])
+
   const found = useContext(FoundSetting) === "github"
   const entry = setting("github")
   const [phase, setPhase] = useState<Phase>({ kind: "reading" })

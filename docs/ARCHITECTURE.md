@@ -1113,7 +1113,7 @@ is sent over the wake-up socket. Source wire bounds are published in
 `protocol/defaults/github-relay-contract.json`.
 
 `crates/nessa-server/src/github_relay` owns the native consumer and private local
-SQLCipher-encrypted inbox, keyed from the native OS secret store. `GithubConnections` remains the sole token owner in its own OS credential entry; its injected
+SQLCipher-encrypted inbox, keyed from the session-unlocked local vault. `GithubConnections` remains the sole token owner through its injected vault entry; its injected
 credential adapter discovers the App-selected repositories. `LiveEvents` owns
 selection changes through one private SQLite transaction, including deletion
 evidence, cursor preservation and gap acknowledgement. Its application coordinates
@@ -1130,3 +1130,21 @@ or automatically dispatching turns.
 The [module map and operations runbook](../packages/github-webhooks/README.md),
 [receiver ADR](adr/todo/1107-github-webhook-receiver.md) and
 [relay ADR](adr/todo/1117-github-relay.md) own the boundaries and lifecycle.
+
+## Local vault
+
+`nessa-vault` owns encrypted named entries and the connection-scoped unlock lifetime.
+The gateway composes it before agents and GitHub, so onboarding can create it independently.
+The native host retains one `nessa vault session` child over anonymous pipes across
+window reloads. The child uses `nessa-client-core::local_product`; the host keeps
+its existing Rust toolchain floor. Pipe EOF closes the authenticated socket, whose
+unique guard seals the vault even if request work still holds cloned state.
+The passphrase never enters command arguments, environment variables or settings.
+
+`src/vault` owns the setup/unlock dialog and typed UI port. Protected GitHub use
+asks that port to unlock; backend Cedar admission and cryptographic availability
+remain authoritative. GitHub's token and SQLCipher key use separate named entries
+in the encrypted vault. Existing OS entries are read only for a verified one-time
+import; their sources are retired after matching encrypted receipts.
+See [the vault lifecycle](state/services/gateway/local-vault.md) and
+[ADR 1152](adr/todo/1152-local-vault.md).

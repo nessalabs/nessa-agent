@@ -69,3 +69,6 @@ pub(crate) use conversation::dispatch as dispatch_conversation;
 
 #[cfg(test)]
 pub(crate) use socket::HostProductFixture;
+
+mod vault;
+pub use vault::VaultRoutes;
