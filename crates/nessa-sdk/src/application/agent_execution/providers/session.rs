@@ -52,6 +52,7 @@ pub struct ProviderSession {
     id: ExecutionSessionId,
     backend: Arc<dyn ProviderSessionBackend>,
     capabilities: Arc<RwLock<EffectiveCapabilities>>,
+    input_files: Option<Arc<dyn super::InputFileResolver>>,
 }
 impl ProviderSession {
     pub(crate) fn permission_authority(
@@ -99,7 +100,48 @@ impl ProviderSession {
             id,
             backend,
             capabilities: Arc::new(RwLock::new(capabilities)),
+            input_files: None,
         }
+    }
+    /// Bind stored-file preparation to this session's execution environment.
+    /// Clones share this resolver. Accepted input and snapshots retain original
+    /// references; only the provider delivery copy receives confirmed paths.
+    #[must_use]
+    pub fn with_input_files(self, resolver: Arc<dyn super::InputFileResolver>) -> Self {
+        Self {
+            input_files: Some(resolver),
+            ..self
+        }
+    }
+    async fn prepare_input(
+        &self,
+        mut input: ExecutionRequest,
+    ) -> Result<ExecutionRequest, AgentError> {
+        let references = input.user_message.uploads();
+        if references.is_empty() {
+            return Ok(input);
+        }
+        let source = self
+            .input_files
+            .as_ref()
+            .ok_or(AgentError::UserFile(super::UserFileError::NotOffered))?;
+        let prepared = source
+            .resolve(input.execution_id.clone(), references.to_vec())
+            .await?;
+        if prepared.len() != references.len()
+            || prepared
+                .iter()
+                .zip(references)
+                .any(|(prepared, expected)| prepared.reference() != expected)
+        {
+            return Err(AgentError::UserFile(super::UserFileError::Mismatch));
+        }
+        let files = prepared
+            .into_iter()
+            .map(super::PreparedInputFile::into_file)
+            .collect();
+        input.user_message = input.user_message.delivered_uploads(files);
+        Ok(input)
     }
     pub(crate) fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move { self.backend.prepare_invocation().await })
@@ -167,6 +209,9 @@ impl ProviderSession {
                 ));
             }
         }
+        if !input.user_message.uploads().is_empty() && self.input_files.is_none() {
+            return Err(AgentError::UserFile(super::UserFileError::NotOffered));
+        }
         self.backend.validate_input(input, capabilities)
     }
     /// Dispatch `input` after checking actual message bytes and caller-estimated tokens.
@@ -178,6 +223,13 @@ impl ProviderSession {
         handoff: super::NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = self.validate(&input) {
+                return ProviderExecutionReply::Rejected(error);
+            }
+            let input = match self.prepare_input(input).await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = self.validate(&input) {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -203,6 +255,23 @@ impl ProviderSession {
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
+            if let Err(error) = self.validate_with_capabilities(capabilities, &input) {
+                started();
+                return Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                ));
+            }
+            let input = match self.prepare_input(input).await {
+                Ok(input) => input,
+                Err(error) => {
+                    started();
+                    return Err(ProviderOperationFailure::new(
+                        error,
+                        ProviderSessionState::Usable,
+                    ));
+                }
+            };
             if let Err(error) = self.validate_with_capabilities(capabilities, &input) {
                 started();
                 return Err(ProviderOperationFailure::new(
@@ -320,7 +389,11 @@ pub(crate) fn validate_configured_input(
     let mut requirements = Vec::with_capacity(2);
     // App model contexts reach the agent as a leading text block, so a
     // message carrying them is text input even with no text of its own.
-    if input.user_message.text().is_some() || !input.user_message.app_model_context().is_empty() {
+    if input.user_message.text().is_some()
+        || !input.user_message.app_model_context().is_empty()
+        || !input.user_message.files().is_empty()
+        || !input.user_message.uploads().is_empty()
+    {
         requirements.push(CapabilityRequirement::Input(Modality::Text));
     }
     if !images.is_empty() {

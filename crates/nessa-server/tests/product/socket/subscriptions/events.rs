@@ -161,6 +161,7 @@ async fn revoked_event_subscription_ends_before_new_events() {
             caller(&fixture.session, "after-revoke".into()),
             "turn-after".into(),
             SubmittedMessage {
+ uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },

@@ -473,6 +473,7 @@ fn harness_working_in(
     let metadata_store = Arc::clone(&metadata);
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
@@ -543,6 +544,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -923,6 +925,7 @@ async fn l5_l11_a_lease_whose_record_failed_to_save_ends_with_the_opening_it_fai
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -964,6 +967,7 @@ async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_ac
             caller("turn-1"),
             "turn-1".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -1062,6 +1066,7 @@ async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: Sa
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -1434,6 +1439,7 @@ async fn l5_l11_an_opening_whose_lease_cannot_be_saved_holds_nothing_and_opens_a
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2386,6 +2392,7 @@ async fn b_a_conversation_on_a_host_shows_the_hosts_workspace() {
 #[tokio::test]
 async fn b_a_file_linked_by_path_is_refused_for_a_conversation_on_a_host() {
     let linking = |execution: &str| SubmittedMessage {
+        uploads: Vec::new(),
         text: "read this".into(),
         images: Vec::new(),
         files: vec![SubmittedFile {
@@ -2535,6 +2542,7 @@ async fn b_a_conversation_whose_host_is_no_longer_configured_is_refused_never_ru
             caller("turn-1"),
             "turn-1".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2965,6 +2973,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -6131,6 +6140,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -6739,6 +6749,7 @@ async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, recei
 
 fn drive_message() -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: "hello".into(),
         images: Vec::new(),
         files: Vec::new(),

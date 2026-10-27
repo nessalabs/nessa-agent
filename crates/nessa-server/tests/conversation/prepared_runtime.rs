@@ -102,6 +102,7 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
     );
     let service = ConversationService::new(
         ConversationDependencies {
+ input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([(

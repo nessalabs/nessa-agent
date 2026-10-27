@@ -2389,3 +2389,34 @@ it.each([
     model: "selected-model",
   })
 })
+
+it("captures file-only uploads immutably and includes them in the admitted request", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ executionId: "execution", disposition: "queued" })
+  const api = createConversationApi({ request }, () => "request")
+  const upload = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "application/pdf",
+    size: 12,
+    name: "report.pdf",
+  }
+  const prepared = api.prepare(conversationId, "", [], [], {
+    executionId: "execution",
+    uploads: [upload],
+  })
+  upload.name = "changed.pdf"
+  expect(prepared.uploads[0]?.name).toBe("report.pdf")
+  expect(Object.isFrozen(prepared.uploads[0])).toBe(true)
+  await api.submit(prepared)
+  expect(request.mock.calls[0]?.[1]).toMatchObject({
+    uploads: [{ name: "report.pdf" }],
+    attachments: [],
+    files: [],
+  })
+  expect(() =>
+    api.prepare(conversationId, "", [], [], {
+      uploads: [{ ...upload, name: "../escape" }],
+    }),
+  ).toThrow("filename")
+})

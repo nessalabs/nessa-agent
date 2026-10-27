@@ -153,6 +153,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
@@ -210,6 +211,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
             caller("send-1"),
             "turn-1".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "read this".into(),
                 images: Vec::new(),
                 files: vec![SubmittedFile {

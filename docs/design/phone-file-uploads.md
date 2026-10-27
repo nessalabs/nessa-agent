@@ -1,9 +1,9 @@
 # Files uploaded from a phone
 
-Proposed for [issue #1149](https://github.com/nessalabs/nessa-agent/issues/1149).
-This document describes work to implement; it is not a shipped contract.
+Implemented in source for [issue #1149](https://github.com/nessalabs/nessa-agent/issues/1149).
+This document describes the implemented ownership and regression contracts; verification evidence is recorded on the pull request.
 
-## Existing owners
+## Owners
 
 `attachments` owns upload tickets, byte verification, conversation holds and
 release. `attachment.begin` and `attachment.write` already carry arbitrary media
@@ -16,10 +16,10 @@ ACP adapters supply the message to Claude, Codex and OpenCode. `LeaseHold::fetch
 already transfers held bytes into an SSH workspace, beneath the agent-facing
 `artifacts_fetch` use case.
 
-The iOS composer already has an Add Files action and a file importer. Its
-production `AttachmentPolicy.nessa` currently restricts that importer to images.
-Both the prepared-command journal and the phone outbox retain image references;
-both need to retain file references for retry and receipt lookup.
+The iOS composer's Add Files importer accepts files under `AttachmentPolicy.nessa`.
+Both the prepared-command journal and phone outbox retain original file references
+for send, receipt lookup and retry. Outbox transport bindings fence the captured
+connection scope at the actual send/lookup boundary.
 
 ## Required behavior
 
@@ -41,7 +41,7 @@ operation: it requires a running turn's observed tool call and its Drive tool
 authorization. Upload delivery may reuse its transport and placement mechanism,
 but cannot invent a tool call to pass its admission checks.
 
-## Proposed delivery boundary
+## Delivery boundary
 
 Keep uploaded references in `UserMessage`, separate from `ImageReference` and
 `LinkedFile`. The stored representation, receipt fingerprint and transcript
@@ -69,7 +69,7 @@ A replacement lease gets a new resolver. Retrying a saved execution first goes
 through the SDK's existing identity and delivery recovery; it must not re-place
 files merely to answer an already-known delivery.
 
-Proposed ordering for a fresh send:
+Ordering for a fresh send:
 
 ```mermaid
 sequenceDiagram
@@ -104,26 +104,33 @@ uncertain. Existing tool-call `FetchAsked`/`FetchEnded` evidence cannot describe
 this operation by pretending an agent asked for it. A required audit failure
 prevents successful dispatch while preserving placement and cleanup facts.
 
-## Existing gaps the implementation must cover
+## Placement and lifecycle ownership
 
-- `InProcessEnvironment` has no fetch implementation. Local placement needs an
-  injected filesystem adapter with the same verification and non-overwrite
-  contract as remote placement.
-- SSH transfer is available through `LeaseHold::fetch`; the paired environment
-  link has no file-write channel and currently answers no fetch capability.
-  A connected paired environment must report its missing capability honestly;
-  enabling that transport is additional work if it is to receive these inputs.
-  The phone-to-gateway native link is a different connection and already carries
-  uploads through `attachment.write`.
-- `OpencodeAcpProvider` currently declares local host identity and does not
-  implement `AgentProvider::on_host`. The issue's requirement for all three
-  profiles on SSH includes adding and verifying OpenCode host support.
-- Record decoding, retained-allocation accounting, resumption input construction,
-  transcript/pending views, and both iOS journals must carry the new reference.
-  A field added only to `conversation.send` would leave retry and restoration
-  incomplete. Existing records need an explicit additive-field interpretation
-  through the owning record codec; no unrelated protocol version change is
-  proposed.
+`LocalInputFiles` owns retained workspace/file handles, bounded reads, digest
+verification and publication without replacement. Existing destinations are opened
+without blocking or following symlinks; only matching regular files can be reused.
+SSH uses `LeaseHold::fetch` and the existing remote inbox/SFTP placement owner.
+The paired environment link still lacks a file-write channel and refuses this
+capability. The phone-to-gateway native link is separate and supports upload pieces.
+
+`OpencodeAcpProvider::on_host` uses the host's process, credentials and persistent
+session database. Host launch retains the same private home, fixed policy and
+cleanup owner as local OpenCode. Model selection remains ACP configuration.
+
+The SDK's `WorkPermit` owns cancellation, including preparation. Active execution
+publishes its work identity under the lifecycle mutex. Targeted Stop and native
+handoff arbitrate under that same lock: Stop before handoff records `TurnStopped`
+and settles undispatched work as cancelled without a provider/cleanup report;
+after handoff it delegates to native cancellation. Dropping preparation interest
+signals the resolver's retained worker, which joins physical placement and required
+evidence before releasing its slot. Range reads and audit waits have 10-second
+limits; a resolution has a 120-second caller deadline. No second preparation
+registry owns execution state.
+
+Original references survive snapshot decoding, retained-allocation accounting,
+resumption, pending/transcript views and both iOS journals. Absent `user_uploads`
+in an old record means none; empty collections are omitted. Native clients need
+the refreshed Apple package to decode records containing uploaded files.
 
 ## Orderings and regression cases
 
@@ -138,6 +145,8 @@ prevents successful dispatch while preserving placement and cleanup facts.
 | F7 | Send succeeds but its answer is lost | Retry/receipt lookup carries the original reference and identity; no second logical message. |
 | F8 | A retry changes file digest, media type, size, display name or order | Conflict; retain the first accepted input and its evidence. |
 | F9 | Close, stop or deletion overtakes placement | Bound and stop the transfer; record confirmed versus uncertain effects honestly; do not dispatch an unconfirmed path. |
+| F9a | Stop arrives before native handoff, including while ranges are pending | WorkPermit records undispatched cancellation; no provider report or prompt; later turns remain usable. |
+| F9b | Native handoff wins before Stop | The native owner receives cancellation; preparation cannot retroactively claim an undispatched stop. |
 | F10 | Bytes become unreadable or their hold is released while streaming | Typed delivery failure; no successful prompt with a missing file. |
 | F11 | Destination exists with the same bytes | Reuse only after the placement owner verifies the file. |
 | F12 | Destination is occupied by other bytes, a symlink, or a name escapes the workspace | Refuse placement without replacing the existing target. |
@@ -146,21 +155,19 @@ prevents successful dispatch while preserving placement and cleanup facts.
 | F15 | The phone restarts after a send leaves the device | Both durable send paths retain file references for receipt lookup and explicit retry. |
 | F16 | Local and SSH agents use Claude, Codex or OpenCode | Each receives a usable file path through its existing ACP prompt representation. |
 
-## Implementation and verification order
+## Verification owners
 
-1. Add the stored-file message value and its bounds, equality and persistence;
-   extend the product schema and generate its Rust and TypeScript contracts.
-2. Admit references through conversation holds and bind them to command receipts.
-3. Resolve and place files at dispatch through injected boundaries, reusing the
-   SSH fetch mechanism below its tool-specific application operation. Cover local
-   placement, transfer interruption and durable delivery evidence.
-4. Extend both iOS durable send paths and upload validation, then allow files in
-   the existing picker. A failed send keeps the draft it captured.
-5. Add the conversation verification scenario; exercise native phone selection
-   and local/SSH provider delivery. Record the actual environment and exclusions
-   beside each result before claiming a row is covered.
+SDK message and snapshot tests cover reference equality, bounds and persistence.
+The application test for targeted Stop covers immediate and queued preparation.
+Server input-file tests cover local placement, hold mismatch, corrupt bytes, audit
+failure/deadline, occupied FIFO and saved retry after hold release. The SSH artifact
+suite drives the environment frame loop and SFTP writer in process; it is a
+transport fixture, not evidence of a live network SSH daemon or model service.
 
-No rows are marked verified yet. The design review inspected the existing
-owners and identified the gaps above. Each implementation slice must prove its
-rows against the exact changed tree; this design review is not implementation
-or end-to-end verification.
+`FileVerification --files` sends PDF, ZIP and text bytes from the production Swift
+phone model through a live gateway to an ACP fixture that reads the file and
+returns its SHA-256. Native exchange tests cover piece writes and exact references
+in send/receipt. The desktop `inputFiles` stress step repeats cross-surface sends,
+checks placed bytes, original references, retry identity and visible filenames.
+UI evidence uses Chromium and WebKit. PR verification records the exact revisions,
+commands, results and any exclusions; source presence alone is not a test result.

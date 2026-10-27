@@ -14,6 +14,78 @@ fn file(path: &str) -> LinkedFile {
     LinkedFile::new(path.into()).unwrap()
 }
 
+fn upload(name: &str, size: u64) -> Result<UploadedFileReference, ExecutionError> {
+    UploadedFileReference::new(
+        Sha256Digest::from_bytes([8; 32]),
+        nessa_sdk::domain::common::value_objects::MediaType::parse("application/pdf").unwrap(),
+        size,
+        name.into(),
+    )
+}
+
+#[test]
+fn uploaded_input_keeps_original_identity_and_bounds_names_and_payloads() {
+    assert!(upload("\u{FEFF}", 12).is_ok());
+    let reference = upload("report.pdf", 12).unwrap();
+    assert_eq!(reference.name(), "report.pdf");
+    assert_eq!(reference.media_type().as_str(), "application/pdf");
+    assert_eq!(reference.size(), 12);
+    for name in [
+        "",
+        " ",
+        "../report.pdf",
+        "dir\\report.pdf",
+        "a\n.pdf",
+        "\u{85}.pdf",
+    ] {
+        assert!(upload(name, 12).is_err(), "{name:?}");
+    }
+    assert!(upload(&"é".repeat(128), 12).is_err());
+    let longest = upload(&format!("{}é", "a".repeat(253)), 12).unwrap();
+    assert!(longest.destination_name().len() <= 255);
+    assert!(longest.destination_name().starts_with("nessa-"));
+    assert!(upload("report.pdf", 0).is_err());
+    assert!(upload("report.pdf", UploadedFileReference::MAX_BYTES).is_ok());
+    assert!(upload("report.pdf", UploadedFileReference::MAX_BYTES + 1).is_err());
+    assert_ne!(reference, upload("renamed.pdf", 12).unwrap());
+    assert_ne!(reference, upload("report.pdf", 13).unwrap());
+}
+
+#[test]
+fn stored_file_only_messages_are_complete_and_share_the_file_count_budget() {
+    let reference = upload("report.pdf", 1).unwrap();
+    let message = UserMessage::new(None, vec![], vec![], vec![reference.clone()]).unwrap();
+    assert_eq!(message.uploads(), std::slice::from_ref(&reference));
+    assert!(message.files().is_empty());
+    assert!(message.text().is_none());
+    assert!(UserMessage::new(
+        None,
+        vec![],
+        vec![],
+        vec![reference.clone(); UserMessage::MAX_FILES]
+    )
+    .is_ok());
+    assert!(UserMessage::new(
+        None,
+        vec![],
+        vec![file("/tmp/a")],
+        vec![reference; UserMessage::MAX_FILES]
+    )
+    .is_err());
+    let largest = upload("report.pdf", UploadedFileReference::MAX_BYTES).unwrap();
+    assert!(UserMessage::new(None, vec![], vec![], vec![largest]).is_ok());
+    assert!(UserMessage::new(
+        None,
+        vec![],
+        vec![],
+        vec![
+            upload("one.pdf", UploadedFileReference::MAX_BYTES).unwrap(),
+            upload("two.pdf", 1).unwrap()
+        ]
+    )
+    .is_err());
+}
+
 #[test]
 fn an_image_reference_is_nonempty_and_within_the_single_image_budget() {
     let digest = Sha256Digest::from_bytes([7; 32]);
@@ -38,7 +110,7 @@ fn an_image_reference_is_nonempty_and_within_the_single_image_budget() {
 #[test]
 fn a_user_message_needs_text_or_an_image() {
     assert_eq!(
-        UserMessage::new(None, Vec::new(), Vec::new()),
+        UserMessage::new(None, Vec::new(), Vec::new(), Vec::new()),
         Err(ExecutionError::EmptyValue("user message"))
     );
 
@@ -46,19 +118,20 @@ fn a_user_message_needs_text_or_an_image() {
     let only_text = UserMessage::text_only(text.clone());
     assert_eq!(
         only_text,
-        UserMessage::new(Some(text.clone()), Vec::new(), Vec::new()).unwrap()
+        UserMessage::new(Some(text.clone()), Vec::new(), Vec::new(), Vec::new()).unwrap()
     );
     assert_eq!(only_text.text_str(), " look \n");
     assert!(only_text.images().is_empty());
 
-    let only_image = UserMessage::new(None, vec![image(1, 10)], Vec::new()).unwrap();
+    let only_image = UserMessage::new(None, vec![image(1, 10)], Vec::new(), Vec::new()).unwrap();
     assert_eq!(only_image.text(), None);
     assert_eq!(only_image.text_str(), "");
     assert_eq!(only_image.images(), [image(1, 10)]);
     assert!(only_image.files().is_empty());
 
     // A file alone is a message too: "here, look at this" is a whole turn.
-    let only_file = UserMessage::new(None, Vec::new(), vec![file("/tmp/report.pdf")]).unwrap();
+    let only_file =
+        UserMessage::new(None, Vec::new(), vec![file("/tmp/report.pdf")], Vec::new()).unwrap();
     assert_eq!(only_file.text(), None);
     assert!(only_file.images().is_empty());
     assert_eq!(only_file.files(), [file("/tmp/report.pdf")]);
@@ -198,6 +271,7 @@ fn a_user_message_keeps_file_order_and_bounds_how_many_it_points_at() {
         None,
         Vec::new(),
         vec![file("/b.txt"), file("/a.txt"), file("/b.txt")],
+        Vec::new(),
     )
     .unwrap();
     assert_eq!(
@@ -210,15 +284,16 @@ fn a_user_message_keeps_file_order_and_bounds_how_many_it_points_at() {
             None,
             Vec::new(),
             vec![file("/a.txt"), file("/b.txt"), file("/b.txt")],
+            Vec::new(),
         )
         .unwrap()
     );
 
     let at_count = (0..UserMessage::MAX_FILES).map(|n| file(&format!("/{n}.txt")));
-    assert!(UserMessage::new(None, Vec::new(), at_count.collect()).is_ok());
+    assert!(UserMessage::new(None, Vec::new(), at_count.collect(), Vec::new()).is_ok());
     let over_count = (0..=UserMessage::MAX_FILES).map(|n| file(&format!("/{n}.txt")));
     assert_eq!(
-        UserMessage::new(None, Vec::new(), over_count.collect()),
+        UserMessage::new(None, Vec::new(), over_count.collect(), Vec::new()),
         Err(ExecutionError::TooManyValues {
             field: "user message files",
             max: UserMessage::MAX_FILES,
@@ -229,7 +304,7 @@ fn a_user_message_keeps_file_order_and_bounds_how_many_it_points_at() {
     // paths, so the longest ten are still one ordinary message.
     let longest = format!("/{}", "a".repeat(LinkedFile::MAX_PATH_BYTES - 1));
     let full = vec![LinkedFile::new(longest).unwrap(); UserMessage::MAX_FILES];
-    assert!(UserMessage::new(None, Vec::new(), full).is_ok());
+    assert!(UserMessage::new(None, Vec::new(), full, Vec::new()).is_ok());
 }
 
 #[test]
@@ -237,6 +312,7 @@ fn a_user_message_keeps_attachment_order_and_counts_repeats() {
     let message = UserMessage::new(
         None,
         vec![image(2, 5), image(1, 5), image(2, 5)],
+        Vec::new(),
         Vec::new(),
     )
     .unwrap();
@@ -247,6 +323,7 @@ fn a_user_message_keeps_attachment_order_and_counts_repeats() {
         UserMessage::new(
             None,
             vec![image(1, 5), image(2, 5), image(2, 5)],
+            Vec::new(),
             Vec::new()
         )
         .unwrap()
@@ -256,10 +333,10 @@ fn a_user_message_keeps_attachment_order_and_counts_repeats() {
 #[test]
 fn a_user_message_bounds_image_count_and_total_bytes() {
     let at_count = (0..UserMessage::MAX_IMAGES as u8).map(|seed| image(seed, 1));
-    assert!(UserMessage::new(None, at_count.collect(), Vec::new()).is_ok());
+    assert!(UserMessage::new(None, at_count.collect(), Vec::new(), Vec::new()).is_ok());
     let over_count = (0..=UserMessage::MAX_IMAGES as u8).map(|seed| image(seed, 1));
     assert_eq!(
-        UserMessage::new(None, over_count.collect(), Vec::new()),
+        UserMessage::new(None, over_count.collect(), Vec::new(), Vec::new()),
         Err(ExecutionError::TooManyValues {
             field: "user message images",
             max: UserMessage::MAX_IMAGES,
@@ -268,11 +345,11 @@ fn a_user_message_bounds_image_count_and_total_bytes() {
 
     // Two of the largest image fill the total exactly; one more byte does not fit.
     let full = vec![image(9, ImageReference::MAX_BYTES); 2];
-    assert!(UserMessage::new(None, full.clone(), Vec::new()).is_ok());
+    assert!(UserMessage::new(None, full.clone(), Vec::new(), Vec::new()).is_ok());
     let mut over = full;
     over.push(image(9, 1));
     assert_eq!(
-        UserMessage::new(None, over, Vec::new()),
+        UserMessage::new(None, over, Vec::new(), Vec::new()),
         Err(ExecutionError::ValueTooLong {
             field: "user message images",
             max_bytes: UserMessage::MAX_IMAGE_BYTES as usize,

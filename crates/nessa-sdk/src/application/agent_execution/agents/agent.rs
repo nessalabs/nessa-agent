@@ -43,7 +43,9 @@ use crate::application::agent_execution::sessions::{
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::agent_execution::traces::{GenAiSpan, LocalTraceStore};
-use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
+use crate::domain::agent_execution::executions::{
+    Initiation, Initiator, SchedulingCause, ToolChecking,
+};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,
     PermissionCancellationReason, PermissionEffect, PermissionId, PermissionOptionId,
@@ -508,7 +510,16 @@ impl Agent {
         contain_caller_wake(waiter, self.cancel_active_turn(id)).await
     }
     async fn cancel_active_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
-        if !self.turn_is_active(&id) || !self.supports_turn_cancel() {
+        if !self.turn_is_active(&id) {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn cancel".into()),
+                ProviderSessionState::Usable,
+            ));
+        }
+        if self.inner.lifecycle.cancel_preparing_turn(&id) {
+            return Ok(());
+        }
+        if !self.supports_turn_cancel() {
             return Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("turn cancel".into()),
                 ProviderSessionState::Usable,
@@ -1988,6 +1999,7 @@ impl Agent {
                 &self.inner.lifecycle,
                 input.execution_id.clone(),
                 self.current_provider(),
+                work,
             ) {
                 Ok(active) => active,
                 Err(error) => {
@@ -2145,7 +2157,9 @@ impl Agent {
                 _ = stop_notice.changed(), if !stop_observed => {
                     stop_observed = true;
                     if !work.execution_started() {
-                        result = Some(Err(AgentError::Closed));
+                        result = Some(if work.cancellation().is_some_and(|stop| stop.cause == SchedulingCause::TurnStopped) {
+                            Ok(ExecutionOutcome::Cancelled)
+                        } else { Err(AgentError::Closed) });
                         break;
                     }
                     // Already dispatched: keep draining confirmed provider

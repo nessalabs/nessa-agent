@@ -24,7 +24,7 @@ use nessa_sdk::{
     domain::agent_execution::leases::SandboxProfiles,
     infrastructure::{
         claude_acp::sessions::ClaudeAcpProvider, codex_acp::sessions::CodexAcpProvider,
-        harness_process::SupervisedHarness,
+        harness_process::SupervisedHarness, opencode_acp::sessions::OpencodeAcpProvider,
     },
 };
 use std::{
@@ -50,6 +50,13 @@ pub(crate) struct ConfiguredLauncher {
 }
 
 impl ConfiguredLauncher {
+    /// Host-owned durable OpenCode sessions survive isolated harness homes.
+    pub(crate) fn opencode_database(&mut self, path: PathBuf) {
+        if let Some(spec) = self.agents.get_mut(&AgentId::Opencode) {
+            spec.environment
+                .insert("OPENCODE_DB".into(), path.into_os_string());
+        }
+    }
     /// `workspace` is absolute and UTF-8, which composition checks.
     pub(crate) fn new(workspace: String, agents: HashMap<AgentId, LaunchSpec>) -> Self {
         Self { workspace, agents }
@@ -63,7 +70,7 @@ fn accepted(agent: AgentId) -> Option<&'static [&'static str]> {
     match agent {
         AgentId::Claude => Some(ClaudeAcpProvider::LAUNCH_VARIABLES),
         AgentId::Codex => Some(CodexAcpProvider::LAUNCH_VARIABLES),
-        AgentId::Opencode => None,
+        AgentId::Opencode => Some(OpencodeAcpProvider::LAUNCH_VARIABLES),
     }
 }
 
@@ -123,7 +130,11 @@ impl HarnessLauncher for ConfiguredLauncher {
                 command.env("PATH", path);
             }
         }
-        SupervisedHarness::start(command)
+        if id == AgentId::Opencode {
+            OpencodeAcpProvider::start_on_host(command)
+        } else {
+            SupervisedHarness::start(command)
+        }
     }
 }
 

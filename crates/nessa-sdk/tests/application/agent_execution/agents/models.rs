@@ -2121,6 +2121,7 @@ async fn queued_configuration_keeps_admission_authority(case: QueuedConfiguratio
                 )
                 .unwrap()],
                 Vec::new(),
+                Vec::new(),
             )
             .unwrap();
         }

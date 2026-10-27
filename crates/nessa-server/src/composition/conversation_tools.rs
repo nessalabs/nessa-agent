@@ -481,6 +481,7 @@ async fn run(
                     false,
                     execution.clone(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: args.message,
                         ..Default::default()
                     },

@@ -54,6 +54,7 @@ mod finalized_execution;
 mod harness_host;
 mod identity;
 mod images;
+mod input_files;
 mod native_hooks;
 mod open;
 mod operations;
@@ -79,6 +80,7 @@ pub use harness_host::{
 };
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
+pub use input_files::{InputFileFuture, InputFileResolver, PreparedInputFile, UserFileError};
 pub use native_hooks::NativeHooksSwitch;
 pub(crate) use open::{FailedOpenCauseSource, FailedOpenCleanup};
 pub use open::{

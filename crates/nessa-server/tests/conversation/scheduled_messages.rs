@@ -135,6 +135,7 @@ fn service_stored(
     let provider = Arc::new(ProviderFactory::default());
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
@@ -3396,6 +3397,7 @@ async fn preference_off_recovers_command_evidence_before_cancellation() {
             &schedule_caller(&row).unwrap(),
             &row.execution_id,
             &SubmittedMessage {
+                uploads: Vec::new(),
                 text: row.prompt.clone(),
                 ..Default::default()
             },
@@ -3527,6 +3529,7 @@ async fn preference_off_recovers_command_evidence_before_cancellation() {
                     false,
                     row.execution_id.clone(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: row.prompt.clone(),
                         ..Default::default()
                     },
@@ -3568,6 +3571,7 @@ async fn preference_off_recovers_a_saved_turn_after_its_delivery_audit_failed() 
             false,
             row.execution_id.clone(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: row.prompt.clone(),
                 ..Default::default()
             },
@@ -3720,6 +3724,7 @@ fn stop_receipts_do_not_prove_a_disabled_submission_was_delivered_or_refused() {
         &schedule_caller(&row).unwrap(),
         &row.execution_id,
         &SubmittedMessage {
+            uploads: Vec::new(),
             text: row.prompt.clone(),
             ..Default::default()
         },
@@ -3773,6 +3778,7 @@ async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_rest
                     &schedule_caller(&row).unwrap(),
                     &row.execution_id,
                     &SubmittedMessage {
+                        uploads: Vec::new(),
                         text: row.prompt.clone(),
                         ..Default::default()
                     },
@@ -3906,6 +3912,7 @@ async fn deleted_command_evidence_retries_a_busy_journal_without_guessing_an_out
         &schedule_caller(&row).unwrap(),
         &row.execution_id,
         &SubmittedMessage {
+            uploads: Vec::new(),
             text: row.prompt.clone(),
             ..Default::default()
         },
@@ -4018,6 +4025,7 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
         false,
         "held-command".into(),
         SubmittedMessage {
+            uploads: Vec::new(),
             text: "continue".into(),
             ..Default::default()
         },

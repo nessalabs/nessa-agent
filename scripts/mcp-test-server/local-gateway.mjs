@@ -17,6 +17,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
@@ -216,7 +217,9 @@ export async function startLocalGateway(o) {
     throw new Error(
       "build the gateway first (cargo build -p nessa-server), or set MCP_LIVE_NESSA",
     )
-  const directory = mkdtempSync(join(tmpdir(), `nessa-mcp-live-${o.agent}-`))
+  const directory = realpathSync(
+    mkdtempSync(join(tmpdir(), `nessa-mcp-live-${o.agent}-`)),
+  )
   const output = []
   let server = null
   // Its output streams closed: everything it wrote has been read.

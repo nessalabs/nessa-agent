@@ -30,7 +30,7 @@ await main(
               await page.locator(ui.ready).waitFor()
             }
             for (const phase of ["committed", "pending", "restored"]) {
-              for (const kind of ["image", "file", "mixed"]) {
+              for (const kind of ["image", "file", "upload", "mixed"]) {
                 await attempt(
                   rep,
                   {
@@ -67,7 +67,13 @@ await main(
                         ? ["PNG image, 2 KiB"]
                         : kind === "file"
                           ? ["/workspace/quarterly [report].csv"]
-                          : ["PNG image, 2 KiB", "/workspace/quarterly [report].csv"]
+                          : kind === "upload"
+                            ? ["meeting notes.pdf"]
+                            : [
+                                "PNG image, 2 KiB",
+                                "/workspace/quarterly [report].csv",
+                                "meeting notes.pdf",
+                              ]
                     return {
                       ...seen,
                       failures: [

@@ -4,6 +4,8 @@ import type {
   ImageReferencePart,
   LinkedFile,
   LinkedFileReferencePart,
+  UploadedFileReference,
+  UploadedFileReferencePart,
 } from "./attachments"
 
 /** Ordered message content; pasted payloads remain literal and independently viewable. */
@@ -13,6 +15,7 @@ export type MessagePart =
   | FileAttachment
   | ImageReferencePart
   | LinkedFileReferencePart
+  | UploadedFileReferencePart
 
 export type MessageContent = MessagePart[]
 
@@ -40,6 +43,7 @@ export function referencedContent(
   text: string,
   images: readonly ImageReference[],
   files: readonly LinkedFile[] = [],
+  uploads: readonly UploadedFileReference[] = [],
 ): MessageContent {
   return [
     ...textContent(text),
@@ -50,5 +54,6 @@ export function referencedContent(
       size: image.size,
     })),
     ...files.map((file) => ({ type: "file-reference" as const, path: file.path })),
+    ...uploads.map((file) => ({ type: "uploaded-file-reference" as const, ...file })),
   ]
 }

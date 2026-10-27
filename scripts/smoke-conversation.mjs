@@ -2,13 +2,14 @@
 /** Real gateway, @nessa/client, attachment route, and deterministic Claude ACP lifecycle. */
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
@@ -37,7 +38,7 @@ import { assertValidTinyPng, tinyPng } from "./conversation-smoke/tiny-png.mjs"
 
 globalThis.WebSocket = WebSocket
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const temporary = mkdtempSync(join(tmpdir(), "nessa-conversation-smoke-"))
+const temporary = realpathSync(mkdtempSync(join(tmpdir(), "nessa-conversation-smoke-")))
 const dataRoot = join(temporary, "data")
 const workspace = join(temporary, "workspace")
 const ownerPath = join(temporary, "owner.token")
@@ -158,6 +159,22 @@ try {
 
   gateway = startGateway(binary, root, env, port)
   await gateway.ready()
+  if (process.env.NESSA_PHONE_FILE_CHECK) {
+    const phone = spawn(
+      process.env.NESSA_PHONE_FILE_CHECK,
+      ["--files", `${gatewayUrl}/session`, ownerPath],
+      {
+        cwd: root,
+        stdio: ["ignore", "inherit", "inherit"],
+      },
+    )
+    await new Promise((resolve, reject) => {
+      phone.once("error", reject)
+      phone.once("exit", (code, signal) =>
+        code === 0 ? resolve() : reject(new Error(`phone file check: ${code ?? signal}`)),
+      )
+    })
+  }
   const setupClient = await connect(gatewayUrl)
   const authenticated = await setupClient.auth.session()
   assert.equal(authenticated.organizationId, setupClient.productSession.organizationId)

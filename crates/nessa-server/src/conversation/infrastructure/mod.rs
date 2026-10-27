@@ -205,3 +205,6 @@ pub(crate) use record_read::TestReadGate;
 
 mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
+
+mod input_files;
+pub(crate) use input_files::LocalInputFiles;

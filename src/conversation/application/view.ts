@@ -7,6 +7,7 @@ import type {
   ConversationTranscriptState,
   ImageReference,
   LinkedFile,
+  UploadedFileReference,
   Note,
   PublishedFile,
   UsageLimitNotice,
@@ -70,6 +71,7 @@ export type ConversationView = {
     attachments: ImageReference[]
     /** Files this turn pointed the agent at, by path. */
     files: LinkedFile[]
+    uploads?: UploadedFileReference[]
     authenticationRequired?: boolean
     /**
      * Independent required work failed on this authentication refusal.
@@ -86,6 +88,7 @@ export type ConversationView = {
     text: string
     attachments: ImageReference[]
     files: LinkedFile[]
+    uploads?: UploadedFileReference[]
     mode: "queued" | "steering"
   }[]
   /**

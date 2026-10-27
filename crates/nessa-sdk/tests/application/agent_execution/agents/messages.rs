@@ -135,6 +135,7 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
                     text.map(|text| PromptText::new(text).unwrap()),
                     vec![image],
                     Vec::new(),
+                    Vec::new(),
                 )
                 .unwrap(),
                 ..request("image")
@@ -480,8 +481,13 @@ async fn every_entry(
 }
 fn with_images(id: &str, images: Vec<ImageReference>) -> ExecutionRequest {
     ExecutionRequest {
-        user_message: UserMessage::new(Some(PromptText::new("look").unwrap()), images, Vec::new())
-            .unwrap(),
+        user_message: UserMessage::new(
+            Some(PromptText::new("look").unwrap()),
+            images,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
         ..request(id)
     }
 }
@@ -765,7 +771,13 @@ async fn an_image_message_carrying_a_context_is_refused_by_a_model_without_text_
     let context = AppModelContext::new(drawn_app(), "update-1", Some("x".into()), None)
         .unwrap()
         .unwrap();
-    let images = UserMessage::new(None, vec![image(ImageMediaType::Png, 6)], Vec::new()).unwrap();
+    let images = UserMessage::new(
+        None,
+        vec![image(ImageMediaType::Png, 6)],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
     let carrying = images.with_app_model_context(vec![context]).unwrap();
     let text = UserMessage::text_only(PromptText::new("plot").unwrap());
     for operation in 0..4 {

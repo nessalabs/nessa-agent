@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 
-use super::{AppModelContext, CarriedHistory, MessageSender, NoteContext, PromptText};
+use super::{
+    AppModelContext, CarriedHistory, MessageSender, NoteContext, PromptText, UploadedFileReference,
+};
 use crate::domain::{
     agent_execution::ExecutionError,
     common::value_objects::{ImageMediaType, Sha256Digest},
@@ -194,25 +196,20 @@ impl LinkedFile {
     }
 }
 
-/// What a user said in one turn: text, the images it carries, and the files it
-/// points at, in that order; who wrote it (the person, unless
-/// [`Self::sent_by`] says an app did); and what apps gave the model to know
-/// with it ([`Self::with_app_model_context`]), which is not part of what it
-/// says.
+/// One accepted user input: optional text, image references, named local paths,
+/// and original uploaded-file references. Each attachment kind keeps its order.
+/// Sender attribution and app context are separate from what the user said.
+/// A message needs at least one text or attachment part.
 ///
-/// Text is optional because an image or a file alone is a complete message; a
-/// message with none of the three is not one. Images and files each keep the
-/// order the user attached them in.
-///
-/// Images and files are separate because they are carried in opposite ways.
-/// An image's bytes travel with the message and are budgeted against the frame
-/// that has to hold them; a file's do not travel at all, so no byte budget
-/// applies and the only bound is how many paths one message may name.
+/// Images become bounded inline bytes. Named paths travel without their bytes.
+/// Uploaded files keep their original identity in storage and are resolved into
+/// confirmed environment paths only in the ephemeral provider delivery copy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserMessage {
     text: Option<PromptText>,
     images: Box<[ImageReference]>,
     files: Box<[LinkedFile]>,
+    uploads: Box<[UploadedFileReference]>,
     sender: MessageSender,
     app_model_context: Box<[AppModelContext]>,
     notes: Box<[NoteContext]>,
@@ -250,8 +247,8 @@ impl UserMessage {
     /// each, at most 64 KiB of note text goes with one turn.
     pub const MAX_NOTES: usize = 8;
 
-    /// Combine optional `text` with `images` and `files`, each in attachment
-    /// order: the person's message, carrying no app's context. All three
+    /// Combine optional text with images, local paths and uploaded references,
+    /// each in attachment order, carrying no app's context. All collections
     /// empty is [`ExecutionError::EmptyValue`]; more than
     /// [`Self::MAX_IMAGES`] or [`Self::MAX_FILES`] is
     /// [`ExecutionError::TooManyValues`]; more than [`Self::MAX_IMAGE_BYTES`]
@@ -261,11 +258,12 @@ impl UserMessage {
         text: Option<PromptText>,
         images: Vec<ImageReference>,
         files: Vec<LinkedFile>,
+        uploads: Vec<UploadedFileReference>,
     ) -> Result<Self, ExecutionError> {
-        if text.is_none() && images.is_empty() && files.is_empty() {
+        if text.is_none() && images.is_empty() && files.is_empty() && uploads.is_empty() {
             return Err(ExecutionError::EmptyValue("user message"));
         }
-        if files.len() > Self::MAX_FILES {
+        if files.len().saturating_add(uploads.len()) > Self::MAX_FILES {
             return Err(ExecutionError::TooManyValues {
                 field: "user message files",
                 max: Self::MAX_FILES,
@@ -284,10 +282,19 @@ impl UserMessage {
                 max_bytes: Self::MAX_IMAGE_BYTES as usize,
             });
         }
+        if uploads.iter().map(UploadedFileReference::size).sum::<u64>()
+            > UploadedFileReference::MAX_BYTES
+        {
+            return Err(ExecutionError::ValueTooLong {
+                field: "user message uploads",
+                max_bytes: UploadedFileReference::MAX_BYTES as usize,
+            });
+        }
         Ok(Self {
             text,
             images: images.into_boxed_slice(),
             files: files.into_boxed_slice(),
+            uploads: uploads.into_boxed_slice(),
             sender: MessageSender::Person,
             app_model_context: Box::default(),
             notes: Box::default(),
@@ -301,6 +308,7 @@ impl UserMessage {
             text: Some(text),
             images: Box::default(),
             files: Box::default(),
+            uploads: Box::default(),
             sender: MessageSender::Person,
             app_model_context: Box::default(),
             notes: Box::default(),
@@ -416,6 +424,25 @@ impl UserMessage {
     /// at none. Nothing here has been opened.
     pub fn files(&self) -> &[LinkedFile] {
         &self.files
+    }
+    /// Stored uploads, in attachment order. A placement path is a delivery fact,
+    /// not part of the durable input identity.
+    pub fn uploads(&self) -> &[UploadedFileReference] {
+        &self.uploads
+    }
+    /// Ephemeral provider input, leaving the authoritative saved message intact.
+    pub(crate) fn delivered_uploads(self, uploaded: Vec<LinkedFile>) -> Self {
+        let files = self
+            .files
+            .iter()
+            .cloned()
+            .chain(uploaded)
+            .collect::<Vec<_>>();
+        Self {
+            files: files.into_boxed_slice(),
+            uploads: Box::default(),
+            ..self
+        }
     }
     /// Who wrote it: the person, or an app on their behalf.
     pub fn sender(&self) -> &MessageSender {

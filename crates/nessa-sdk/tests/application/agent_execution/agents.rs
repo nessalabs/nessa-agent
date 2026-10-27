@@ -4,6 +4,7 @@ mod conformance;
 mod effort;
 mod handoffs;
 mod initialization;
+mod input_files;
 mod lifecycle;
 mod messages;
 mod models;

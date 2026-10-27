@@ -1204,10 +1204,24 @@ impl ConversationDeletionAudit for RecordingDeletionAudit {
 /// submission's behaviour when its evidence cannot be committed is testable.
 #[derive(Default)]
 pub(crate) struct RecordingFileLinkAudit {
+    pub(crate) input_records: Mutex<Vec<crate::conversation::application::InputFileAudit>>,
     pub(crate) records: Mutex<Vec<ConversationFileLinkAuditRecord>>,
     pub(crate) refuses: AtomicBool,
 }
 impl ConversationFileLinkAudit for RecordingFileLinkAudit {
+    fn record_input(
+        &self,
+        record: crate::conversation::application::InputFileAudit,
+    ) -> ConversationFuture<'_, ()> {
+        Box::pin(async move {
+            if self.refuses.load(Ordering::SeqCst) {
+                return Err(ConversationError::Audit);
+            }
+            self.input_records.lock().unwrap().push(record);
+            Ok(())
+        })
+    }
+
     fn record(&self, record: ConversationFileLinkAuditRecord) -> ConversationFuture<'_, ()> {
         let refuses = self.refuses.load(Ordering::SeqCst);
         Box::pin(async move {
@@ -1352,6 +1366,13 @@ pub(crate) struct ProviderFactory {
 /// What a conversation holds, as a list a test writes. Remembers every release.
 #[derive(Default)]
 pub(crate) struct MemoryAttachments {
+    pub(crate) uploads: Mutex<
+        Vec<(
+            OrganizationId,
+            ConversationId,
+            nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+        )>,
+    >,
     pub(crate) held: Mutex<Vec<(OrganizationId, ConversationId, ImageReference)>>,
     pub(crate) asked: AtomicUsize,
     pub(crate) releases: Mutex<Vec<AttachmentRelease>>,
@@ -1426,6 +1447,22 @@ impl MemoryAttachments {
     }
 }
 impl ConversationAttachments for MemoryAttachments {
+    fn holds_file<'a>(
+        &'a self,
+        organization: &'a OrganizationId,
+        conversation: &'a ConversationId,
+        file: &'a nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async move {
+            Ok(self
+                .uploads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|held| &held.0 == organization && &held.1 == conversation && &held.2 == file))
+        })
+    }
+
     fn offers_images(&self) -> bool {
         true
     }
@@ -1595,6 +1632,7 @@ pub(crate) fn image_fixture_with_model(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -1750,6 +1788,7 @@ pub(crate) fn mode_fixture_with_summaries(
     let mode_audit = Arc::new(RecordingModeAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: mode_agents(provider.clone(), execution_audit.clone()),
             storage,
@@ -1789,6 +1828,7 @@ pub(crate) fn fixture(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),

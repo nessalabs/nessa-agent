@@ -2224,7 +2224,7 @@ surfaces use.
 
 ## User attachments in desktop reads — #682
 
-`user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only and mixed inputs retain the exact image encoding/size and linked path, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.
+`user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only, uploaded-file-only and mixed inputs retain the exact image encoding/size, linked path, and original uploaded-file name, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.
 
 ## Compact send recovery (#914)
 
@@ -2345,3 +2345,5 @@ _Check:_ `settings-action-owners.mjs` (both engines), component regressions in
 
 _Check:_ `conversation-stress.mjs` step `menuPanel` (knob `menuPanels`), in
 Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).
+
+The conversation stress `inputFiles` step repeats PDF, ZIP and text sends from another surface, checks placed bytes, saved references, same-identity retries and visible names. Raise `--inputFiles` to repeat it.

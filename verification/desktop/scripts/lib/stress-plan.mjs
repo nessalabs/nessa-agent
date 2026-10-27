@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  inputFiles: {
+    default: 1,
+    what: "PDF, ZIP and text inputs uploaded by another surface, retained and drawn in the conversation",
+  },
   pairedCatalogues: {
     default: 1,
     what: "real native paired catalogue cycles through the protected product child",
@@ -220,6 +224,7 @@ export function plan(knobs) {
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
+  add(knobs.inputFiles, () => ({ kind: "inputFiles" }))
   add(knobs.modelSwitches, () => ({ kind: "model" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))

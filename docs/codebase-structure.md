@@ -1765,10 +1765,15 @@ oversized-session drill. The plan command does not call those use cases.
 
 ## Attachments
 
-The proposed [phone file uploads](design/phone-file-uploads.md) design tracks
-issue #1149 across stored message references, SDK dispatch, local and SSH
-placement, and iOS send recovery. The ownership map below describes the current
-implementation; arbitrary stored uploads are not yet message parts.
+[Phone file uploads](design/phone-file-uploads.md) describes #1149's stored
+references and dispatch boundary. SDK `prompts/value_objects/uploaded_file.rs`
+owns original-file identity and bounds; `providers/input_files.rs` defines the
+resolver port. `ProviderSession` prepares only the delivery copy. The server's
+`conversation/application/input_files.rs` owns lease-scoped orchestration and
+truthful automatic-delivery evidence; `conversation/infrastructure/input_files.rs`
+implements retained local placement. SSH reuses the existing lease fetch/inbox.
+Both phone journals and product views retain original references. SDK lifecycle
+WorkPermit remains the sole authority for preparation cancellation and native handoff.
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
 its messages can refer to them. `domain/value_objects/` describe a file

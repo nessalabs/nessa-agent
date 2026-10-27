@@ -280,6 +280,7 @@ import {
   openStressConversation,
   selectedStressConversation,
 } from "./lib/stress-conversation.mjs"
+import { uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
@@ -1592,6 +1593,14 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
 }
 
 const steps = {
+  async inputFiles(run, step, failures) {
+    await uploadedInputFiles(run, step, {
+      prefix: STRESS.reply,
+      settled: (text) =>
+        settled(run, run.main.id, new Set(), text, "completed", failures),
+      shown: (name) => expectShown(run.page, name, failures, 10000),
+    })
+  },
   async pairedCatalogue(run, step) {
     const result = await pairedCatalogue(step.cycles)
     if (run.evidence)

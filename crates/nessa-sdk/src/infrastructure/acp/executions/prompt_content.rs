@@ -143,7 +143,13 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
     let notes = notes_text(message).map_or(0, |notes| TEXT_BLOCK_BYTES + json_string_bytes(&notes));
     let history =
         history_text(message).map_or(0, |history| TEXT_BLOCK_BYTES + json_string_bytes(&history));
-    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + history + context + notes + text + images + files;
+    let uploads = message.uploads().len() as u64
+        * (RESOURCE_LINK_BLOCK_BYTES
+            + 6 * 3 * crate::domain::agent_execution::prompts::LinkedFile::MAX_PATH_BYTES as u64
+            + 6 * crate::domain::agent_execution::prompts::UploadedFileReference::MAX_NAME_BYTES
+                as u64);
+    let encoded_bytes =
+        REQUEST_ALLOWANCE_BYTES + history + context + notes + text + images + files + uploads;
     let max_bytes = max_frame_bytes as u64;
     if encoded_bytes > max_bytes {
         return Err(AgentError::MessageTooLarge {

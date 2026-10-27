@@ -311,8 +311,8 @@ pub use ports::{
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
-    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
-    UnfinishedMark, UnfinishedTurns,
+    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload,
+    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -390,3 +390,9 @@ mod local_golden_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
+
+mod input_files;
+pub(crate) use input_files::{
+    ConversationInputFiles, InputFileDelivery, LocalInputFile, LocalInputFilePlacement,
+};
+pub use input_files::{InputFileAudit, InputFileStage};
