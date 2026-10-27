@@ -16,35 +16,40 @@ import { execFile } from "node:child_process"
  */
 function systemBrowse(service, ms) {
   return new Promise((resolve, reject) => {
-    execFile("/usr/bin/dns-sd", ["-Z", service.replace(/\.local\.?$/, ""), "local."], {
-      timeout: ms,
-      maxBuffer: 1024 * 1024,
-    }, (error, stdout) => {
-      // dns-sd browses until stopped. Only our bounded stop is expected;
-      // launch failures and premature exits must not look like an empty LAN.
-      if (!error?.killed || error.signal !== "SIGTERM") {
-        reject(error ?? new Error("dns-sd stopped before the browse deadline"))
-        return
-      }
-      const found = new Map()
-      for (const line of stdout.split("\n")) {
-        const srv = line.match(/^(\S+)\s+SRV\s+\d+\s+\d+\s+(\d+)\s/)
-        if (srv) {
-          const [, instance, port] = srv
-          const entry = found.get(instance) ?? { instance, txt: {} }
-          entry.port = Number(port)
-          found.set(instance, entry)
+    execFile(
+      "/usr/bin/dns-sd",
+      ["-Z", service.replace(/\.local\.?$/, ""), "local."],
+      {
+        timeout: ms,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout) => {
+        // dns-sd browses until stopped. Only our bounded stop is expected;
+        // launch failures and premature exits must not look like an empty LAN.
+        if (!error?.killed || error.signal !== "SIGTERM") {
+          reject(error ?? new Error("dns-sd stopped before the browse deadline"))
+          return
         }
-        const txt = line.match(/^(\S+)\s+TXT\s+"gw=([^"\\]+)"\s*$/)
-        if (txt) {
-          const [, instance, gateway] = txt
-          const entry = found.get(instance) ?? { instance, txt: {} }
-          entry.txt.gw = gateway
-          found.set(instance, entry)
+        const found = new Map()
+        for (const line of stdout.split("\n")) {
+          const srv = line.match(/^(\S+)\s+SRV\s+\d+\s+\d+\s+(\d+)\s/)
+          if (srv) {
+            const [, instance, port] = srv
+            const entry = found.get(instance) ?? { instance, txt: {} }
+            entry.port = Number(port)
+            found.set(instance, entry)
+          }
+          const txt = line.match(/^(\S+)\s+TXT\s+"gw=([^"\\]+)"\s*$/)
+          if (txt) {
+            const [, instance, gateway] = txt
+            const entry = found.get(instance) ?? { instance, txt: {} }
+            entry.txt.gw = gateway
+            found.set(instance, entry)
+          }
         }
-      }
-      resolve([...found.values()].filter((each) => each.port !== undefined))
-    })
+        resolve([...found.values()].filter((each) => each.port !== undefined))
+      },
+    )
   })
 }
 
