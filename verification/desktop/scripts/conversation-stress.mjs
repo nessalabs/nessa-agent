@@ -4497,6 +4497,13 @@ async function oneHeaderPerChat(page, when, failures) {
               .map(box),
           })),
           box: box(each),
+          scroll: {
+            top: each.scrollTop,
+            left: each.scrollLeft,
+            height: each.scrollHeight,
+            viewport: each.clientHeight,
+            overflow: getComputedStyle(each).overflow,
+          },
           picture: [...each.querySelectorAll(".desktop-header, .desktop-header-image")]
             .filter(shown)
             .map(box)[0],
@@ -4513,6 +4520,8 @@ async function oneHeaderPerChat(page, when, failures) {
   if (state.strip) failures.push(`${when}: a tab strip is drawn for the chats`)
   for (const [at, pane] of state.panes.entries()) {
     const name = `${when}, pane ${at + 1}`
+    if (pane.scroll.top !== 0 || pane.scroll.left !== 0)
+      failures.push(`${name}: its root scrolled: ${JSON.stringify(pane.scroll)}`)
     if (pane.headers.length !== 1) {
       failures.push(`${name}: ${pane.headers.length} headers, not one`)
       continue
@@ -4520,7 +4529,7 @@ async function oneHeaderPerChat(page, when, failures) {
     const [header] = pane.headers
     if (header.box.top < -1 || header.box.bottom > state.bar + 1)
       failures.push(
-        `${name}: its header is not in the titlebar row: ${JSON.stringify(header.box)}`,
+        `${name}: its header is not in the titlebar row: ${JSON.stringify({ header: header.box, pane: pane.box, scroll: pane.scroll })}`,
       )
     for (const part of header.parts)
       for (const control of state.controls)

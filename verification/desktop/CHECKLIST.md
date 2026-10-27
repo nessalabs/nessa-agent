@@ -157,6 +157,11 @@ controls — text, icons, images, code, or decorative art — in any frame.
   _Check:_ `columns.mjs --only titlebar-row` for the page;
   `cargo test -p nessa-app --no-default-features --test traffic_lights` for the
   buttons in a real AppKit window (macOS) and the row height the two share.
+- [ ] **The pane root stays unscrolled after a long conversation, reviews and
+  a split.** Its transcript owns scrolling; the pane clips instead of retaining
+  a scroll offset that can move its header above the titlebar (#1184).
+  _Check:_ `conversation-stress.mjs` (`window`, full seeded sequence), which
+  records the pane offset and header geometry beside the list and panes alone.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
