@@ -211,6 +211,7 @@ owner or relax approval, retention or stage boundaries.
 
 | Concurrent feature boundaries | Integration invariant and verification |
 | --- | --- |
+| Mainline lease sources and Boat release worker | Publish a credential-free image for the exact compiled fingerprint; require the release worker to be available in CI and verify a fresh clone before pinning |
 | Mainline web tunnel and relay TLS | Keep inbound WebSocket handshake plus outbound TLS; retain both typed product routes and CLI options |
 | Mainline setup/credentials and app-session vault | Vault remains the GitHub/inbox credential owner; lock/close fences old generations; provider API-key storage remains separate |
 | Channel file drops and Boat placement | Keep both independent UI groups and their browser checks; no implicit file mounting |
