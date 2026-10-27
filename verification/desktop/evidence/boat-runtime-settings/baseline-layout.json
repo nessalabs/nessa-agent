@@ -1,0 +1,121 @@
+{
+  "baseRevision": "33b0fc6534cc30507061665cbc7d3f04cce48e66",
+  "issue": 1176,
+  "responsiveServerPort": 49423,
+  "safeAreaServerPort": 50453,
+  "results": {
+    "responsive": [
+      {
+        "name": "home-shape",
+        "engine": "chromium",
+        "layout": "columns",
+        "width": null,
+        "ok": false,
+        "failures": [
+          "crossing to the dock: nothing settles (workspace-home-docked), it jumps",
+          "a short window: the home's composer is 179px from its pane's foot",
+          "a short window: the header is 210px tall, not a band",
+          "a short window: the greeting is 134px in from the pane's left, set start",
+          "shortest, the same shape: plays workspace-home-docked, workspace-home-docked",
+          "the frame after a crossing, the composer is already there (1)"
+        ],
+        "error": null
+      }
+    ],
+    "safe-area": [
+      {
+        "name": "sampler-control",
+        "engine": "chromium",
+        "layout": null,
+        "width": null,
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "sidebar-toggle",
+        "engine": "chromium",
+        "layout": "columns",
+        "width": "1000x700",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "session-list-toggle",
+        "engine": "chromium",
+        "layout": "columns",
+        "width": "1000x700",
+        "ok": false,
+        "failures": [
+          "\u2325\u2318S show, sidebar hidden: svg.size-5 shrink-0 \"\" (safe 205, bar 48) \u2014 2 frame(s), first at 46ms [149,19,159,29]",
+          "\u2325\u2318S show, sidebar hidden: SPAN.workspace-pane-title workspace-truncate \"Split panes for the chat\" (safe 205, bar 48) \u2014 2 frame(s), first at 46ms [170,14,383,34]"
+        ],
+        "error": null
+      },
+      {
+        "name": "resize-breakpoints",
+        "engine": "chromium",
+        "layout": "columns",
+        "width": "1000x700",
+        "ok": false,
+        "failures": [
+          "widen to 620: svg.size-5 shrink-0 \"\" (safe 205, bar 48) \u2014 3 frame(s), first at 65ms [149,19,159,29]",
+          "widen to 620: SPAN.workspace-pane-title workspace-truncate \"Split panes for the chat\" (safe 205, bar 48) \u2014 2 frame(s), first at 65ms [170,14,356,34]"
+        ],
+        "error": null
+      },
+      {
+        "name": "overview",
+        "engine": "chromium",
+        "layout": "columns",
+        "width": "1000x700",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "sidebar-toggle",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "width": "1000x700",
+        "ok": false,
+        "failures": [
+          "\u2318B show: svg.size-5 shrink-0 \"\" (safe 205, bar 48) \u2014 2 frame(s), first at 50ms [151,19,161,29]",
+          "\u2318B show: SPAN.workspace-pane-title workspace-truncate \"Split panes for the chat\" (safe 205, bar 48) \u2014 2 frame(s), first at 50ms [172,14,384,34]"
+        ],
+        "error": null
+      },
+      {
+        "name": "session-list-toggle",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "width": "1000x700",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "resize-breakpoints",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "width": "1000x700",
+        "ok": true,
+        "failures": [],
+        "error": null
+      },
+      {
+        "name": "overview",
+        "engine": "chromium",
+        "layout": "sidebar",
+        "width": "1000x700",
+        "ok": false,
+        "failures": [
+          "\u2318B in overview: svg.size-5 shrink-0 \"\" (safe 205, bar 48) \u2014 3 frame(s), first at 46ms [151,19,161,29]",
+          "\u2318B in overview: SPAN.workspace-pane-title workspace-truncate \"Split panes for the chat\" (safe 205, bar 48) \u2014 3 frame(s), first at 46ms [172,14,384,34]"
+        ],
+        "error": null
+      }
+    ]
+  }
+}

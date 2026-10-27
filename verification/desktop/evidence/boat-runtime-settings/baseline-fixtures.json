@@ -1,0 +1,49 @@
+{
+  "baseRevision": "33b0fc6534cc30507061665cbc7d3f04cce48e66",
+  "baseServer": "isolated own Vite server port63470",
+  "issue": 1175,
+  "results": {
+    "committed-transcript": [
+      {
+        "name": "console",
+        "ok": false,
+        "failures": [
+          "pageerror: Invalid conversation review"
+        ],
+        "error": null
+      },
+      {
+        "name": "committed-transcript",
+        "ok": false,
+        "failures": [],
+        "error": "could not run: the desktop page did not render [data-committed-fixture] at http://127.0.0.1:63470/verification/conversation/fixture.html: page.waitForSelector: Timeout 30000ms exceeded."
+      }
+    ],
+    "approval-deadline": [
+      {
+        "name": "console",
+        "ok": false,
+        "failures": [
+          "pageerror: Conversation local notice has no source"
+        ],
+        "error": null
+      },
+      {
+        "name": "countdown",
+        "ok": false,
+        "failures": [
+          "the card was not replaced by \"Denied automatically: No human answered in time. Continue without this tool or try another approach.\""
+        ],
+        "error": null
+      }
+    ],
+    "turn-outcomes": [
+      {
+        "name": "terminals",
+        "ok": false,
+        "failures": [],
+        "error": "locator.waitFor: Error: strict mode violation: locator('#root [data-question=\"place\"]') resolved to 2 elements:"
+      }
+    ]
+  }
+}

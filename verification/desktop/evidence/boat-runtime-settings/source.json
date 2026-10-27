@@ -1,5 +1,5 @@
 {
-  "sourceRevision": "471fa51e1f92fad5e17ddd20bc5dee407de1cffb",
+  "sourceRevision": "49080c0477f23e752bb7dd90dc80e093a9d12558",
   "workerProtocol": "b698f20053f8bb7c",
   "provider": "Boat",
   "modelCredentials": "connected subscription",
@@ -7,6 +7,9 @@
   "browserMode": "prod",
   "notes": "Sanitized selected provider receipts and isolated fixture UI only; no credentials or raw gateway logs.",
   "providerSourceRevision": "471fa51e1f92fad5e17ddd20bc5dee407de1cffb",
-  "browserSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db",
-  "initialProviderSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db"
+  "browserSourceRevision": "29ef4e5985a2858bd0839de5e67050a5078d2a21",
+  "initialProviderSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db",
+  "initialBrowserSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db",
+  "postStructuralReviewDiffSha256": "48f16c0cda9684b22512bab9ed6e0358ebbc6ea443f39ad79a406dd358a0443b",
+  "platformReviewDiffSha256": "cb079b5f3237644e60160329c163a4f0133dc8b00a6b776ffd313864a55593ea"
 }

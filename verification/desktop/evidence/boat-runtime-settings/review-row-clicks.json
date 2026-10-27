@@ -1,0 +1,40 @@
+[
+  {
+    "engine": "chromium",
+    "kind": "count",
+    "name": "desktop-app 1",
+    "decorationSelectsRow": true
+  },
+  {
+    "engine": "chromium",
+    "kind": "glyph",
+    "name": "sdk Running",
+    "decorationSelectsRow": true
+  },
+  {
+    "engine": "chromium",
+    "kind": "action-only",
+    "name": "design-system",
+    "actionOwnsClick": true,
+    "restoresFocus": true
+  },
+  {
+    "engine": "webkit",
+    "kind": "count",
+    "name": "desktop-app 1",
+    "decorationSelectsRow": true
+  },
+  {
+    "engine": "webkit",
+    "kind": "glyph",
+    "name": "sdk Running",
+    "decorationSelectsRow": true
+  },
+  {
+    "engine": "webkit",
+    "kind": "action-only",
+    "name": "design-system",
+    "actionOwnsClick": true,
+    "restoresFocus": true
+  }
+]

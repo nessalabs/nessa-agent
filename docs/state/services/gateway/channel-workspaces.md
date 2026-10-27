@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: 471fa51e1f92fad5e17ddd20bc5dee407de1cffb
+sourceRevision: 49080c0477f23e752bb7dd90dc80e093a9d12558
 summary: Channels place main agents and threads on Local or Boat and override the default cloud VM lifetime.
 parent: gateway
 sources:
@@ -29,6 +29,8 @@ sources:
   - src/desktop/settings/ui/boat-row.tsx
   - src/desktop/settings/ui/boat-runtime-control.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
+  - src/desktop/workspace/ui/source-list/sidebar-row.tsx
+  - src/desktop/workspace/ui/source-list/source-list.css
 diagramLinks: {}
 ---
 
@@ -109,6 +111,12 @@ channel-owned state, which remains tracked below.
 
 The browser verifier `boat-runtime-settings.mjs` checks default/override/reset,
 invalid requests, label geometry and keyboard focus in both engines and layouts.
+The channel row keeps its settings action separate from decorative counts and
+running status. Clicking a decoration still selects the row; the settings button
+opens its dialog and returns focus when it closes. `shared-controls.mjs` checks
+the row hit targets and label clearance. No separate lifecycle is introduced for
+these simultaneous row facts.
+
 Its shared check also runs in the conversation stress channel step. Allocation
 tests cover settings propagation and scope substitution; real provider lifetime
 receipts are part of the opt-in workspace workflow.

@@ -61,5 +61,59 @@ publication/audit outcomes, provider TTL mapping, client/UI scope and lifecycle,
 and the prior dispositions. It independently reran client/rendered suites 12/12
 and a disposable client probe accepting four valid combinations and refusing
 three contradictory scope/lifetime responses. No source, build, paid-provider
-or shared-cache mutation occurred. The bounded source review loop is complete.
+or shared-cache mutation occurred. The original bounded source review loop closed at this checkpoint.
 Final verification and documentation outcomes remain the coordinator's work.
+
+## Structural correction after broad verification
+
+The first complete desktop run exposed a row interaction that the initial
+settings matrix missed: interactive actions had replaced the count/glyph
+identity, so the decorative running glyph intercepted a row click. The correction
+removes that conflation: action presence and decoration identity are independent,
+with a transparent band and pointer handling restored only on the action wrapper.
+The ADR table records the interaction before the correction. The separate CI
+failure was a missing canonical generator input in the isolated staging cut.
+
+Implementer checks: production rows 4/4, settings 4/4, repeated full shared-controls
+32/32 and smoke 32/32; pointer-rule revert fails count/glyph hit tests, exact source
+restored. Bare-Node harness 20/20; actual isolated staging replay 65/65 plus drift.
+Typecheck, targeted ESLint/format, actionlint and client/control 12/12 pass.
+
+Fresh post-structural round 4 reviewed base `fd4dbda66e8e6aa4cd1e27fb8d204e2f33a12505`,
+head `fbadc7b8de10ab69030fd6a15a584a0c98e09098` and all seven dirty source/test/doc
+files. The diff SHA256 is `48f16c0cda9684b22512bab9ed6e0358ebbc6ea443f39ad79a406dd358a0443b`.
+It closed clean at every priority. The reviewer inspected count, glyph,
+action-only and empty rows, kit sibling layout, click isolation, focus return,
+staging consumers and adjacent scope/authority boundaries. It independently ran
+20 harness tests and six actual Chromium/WebKit click/focus probes. It made no
+source, Cargo, provider or cache mutations. The reviewed source is committed as
+`d9cc877` (CI staging) and `29ef4e5985a2858bd0839de5e67050a5078d2a21` (row structure).
+
+Only the affected channel-workspaces state page is advanced under nessa-docs.
+The row interaction is simultaneous presentation facts, not a new state machine;
+its sources and verification are added to that owning page. No module moved or
+new dependency was added, so the existing module map remains accurate. Provider
+and backend checkpoint attribution stays at 471fa. Full broad classification and
+current-head CI remain separate verification work.
+
+## Final platform review, round 5
+
+Windows CI at fbadc reported an unused `default_override` getter under
+`-D warnings`. Its only caller belongs to the Unix-only workspaces module;
+portable parser tests use the neighboring getters, not this one. The correction
+narrows only this getter to `cfg(unix)`, without suppressing a warning or changing
+Unix runtime behavior. The existing Windows Clippy gate is the negative evidence
+and the enforcer; local Mac success does not establish a Windows pass.
+
+A fresh read-only reviewer inspected head 29ef plus this one-line source diff
+SHA256 `cb079b5f3237644e60160329c163a4f0133dc8b00a6b776ffd313864a55593ea`,
+the consumer's outer platform gate, adjacent helper consumers and the actual
+Windows failure log. It reported no findings at any priority. The exact local
+CI-package all-target Clippy selection passed, and the parser rerun passed 3/3.
+The reviewer made no edits or Cargo/cache/provider operations. Final source is
+`49080c0477f23e752bb7dd90dc80e093a9d12558`. The affected state-page checkpoint
+advances to that exact reviewed source; provider and UI evidence keep their own
+source attribution. No other state page advances. Nessa Docs catalog validation
+holds for 135 pages with no errors; the installed renderer reports 27 existing
+unknown-sourceRevision metadata warnings. Visual renderer interaction was not
+rechecked for this prose/source-list-only update.
