@@ -129,14 +129,25 @@ export function createBoatApi(session: RpcRequester): BoatApi {
     params: BoatRuntimeReadParams | BoatRuntimeSetParams,
   ) => {
     let channelId: string | undefined
+    let request: Record<string, unknown>
     try {
-      if (!Object.hasOwn(params, "channelId") && "channelId" in params)
-        throw new TypeError("Inherited runtime scope")
-      channelId = Object.hasOwn(params, "channelId") ? params.channelId : undefined
+      const scoped = Object.hasOwn(params, "channelId")
+      if (!scoped && "channelId" in params) throw new TypeError("Inherited runtime scope")
+      // Capture scope once, including non-enumerable own properties. Spreading
+      // the original afterward could omit it or invoke its getter again and
+      // dispatch a different scope before response binding can reject it.
+      channelId = scoped ? params.channelId : undefined
+      const fields = params as Record<string, unknown>
+      const rest = Object.fromEntries(
+        Object.keys(fields).flatMap((key) =>
+          key !== "channelId" && Object.hasOwn(fields, key) ? [[key, fields[key]]] : [],
+        ),
+      )
+      request = scoped ? { ...rest, channelId } : rest
     } catch (cause) {
       throw new NessaBoatError(cause)
     }
-    return call(method, { ...params }, (value) => {
+    return call(method, request, (value) => {
       const settings = boatRuntimeSettings(value)
       if (settings.channelId !== channelId)
         throw new TypeError("Runtime settings scope mismatch")

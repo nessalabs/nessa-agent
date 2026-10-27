@@ -105,3 +105,54 @@ it("rejects a settings response for another scope and inherited input scope befo
   await expect(boat.setRuntimeSettings(inherited)).rejects.toThrow()
   expect(request).not.toHaveBeenCalled()
 })
+
+it.each(["read", "write"] as const)(
+  "keeps an own non-enumerable channel scope in the %s request",
+  async (operation) => {
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
+      defaultLifetime: { mode: "never" },
+      ...(Object.hasOwn(params, "channelId") ? { channelId: params.channelId } : {}),
+    }))
+    const boat = createBoatApi({ request })
+    const scoped = <T extends object>(params: T) =>
+      Object.defineProperty(params, "channelId", { value: "ch_bbbbbbbbbb" })
+    const result =
+      operation === "read"
+        ? await boat.runtimeSettings(scoped({}))
+        : await boat.setRuntimeSettings(scoped({ mode: "never" } as const))
+    expect(result.channelId).toBe("ch_bbbbbbbbbb")
+    expect(request.mock.calls).toEqual([
+      [
+        operation === "read" ? "boat.runtimeSettings" : "boat.setRuntimeSettings",
+        {
+          ...(operation === "read" ? {} : { mode: "never" }),
+          channelId: "ch_bbbbbbbbbb",
+        },
+      ],
+    ])
+  },
+)
+
+it.each(["read", "write"] as const)(
+  "captures an accessor channel scope once before the %s effect",
+  async (operation) => {
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
+      defaultLifetime: { mode: "never" },
+      ...(Object.hasOwn(params, "channelId") ? { channelId: params.channelId } : {}),
+    }))
+    const boat = createBoatApi({ request })
+    let reads = 0
+    const scoped = <T extends object>(params: T) =>
+      Object.defineProperty(params, "channelId", {
+        enumerable: true,
+        get: () => (++reads === 1 ? "ch_bbbbbbbbbb" : "ch_cccccccccc"),
+      })
+    const result =
+      operation === "read"
+        ? await boat.runtimeSettings(scoped({}))
+        : await boat.setRuntimeSettings(scoped({ mode: "never" } as const))
+    expect(reads).toBe(1)
+    expect(result.channelId).toBe("ch_bbbbbbbbbb")
+    expect(request.mock.calls[0]?.[1].channelId).toBe("ch_bbbbbbbbbb")
+  },
+)

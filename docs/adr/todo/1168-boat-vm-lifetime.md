@@ -80,6 +80,7 @@ edit.
 | Reset channel | Delete only its override | Other channel/default preserved |
 | Reset global default | Remove its stored preference, preserving explicit channel overrides | Config presence and audit before/after test |
 | Snapshot identifies a different scope | Refuse before allocation or a success projection | Custom-adapter scope substitution test |
+| Caller supplies non-enumerable or accessor channel scope | Capture the own scope once and project that same value into the dispatched request and response binding; inherited scope still refuses before dispatch | Client read/write non-enumerable and changing-accessor regressions |
 | Invalid seconds or contradictory representation | Refuse before storage/provider effects | Protocol/domain boundary |
 | Credential vault locked | Preference editing remains available; provisioning still requires its token | Independent settings/credential tests |
 | Config/audit write fails | No success acknowledgement; retain intent and observed publication outcome | Config adapter fault tests |
