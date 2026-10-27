@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: 67fda00b720a0d09535905691c0fc092340ddcba
+sourceRevision: "ada97db780cd9457f6e1a5efdaa30eda2e64f1d3"
 summary: A channel independently places its main agent and new threads on Local or Boat.
 parent: gateway
 sources:
@@ -60,7 +60,9 @@ a new opening is refused. Eviction does not delete the VM assignment.
 
 Boat connects the user's existing provider subscription. Nessa stores only the
 infrastructure connection in its encrypted vault. A matching prebuilt worker
-image is required. The local gateway stays reachable and its vault must be
+image is required. Shipping checks reject a release pin that does not cover the
+compiled lease protocol; an incompatible source build refuses token-only setup
+until a matching image is published. The local gateway stays reachable and its vault must be
 unlocked to provision. The SDK prepares the attached workspace; existing SSH
 leases own agent process framing, approvals, accounting and cleanup.
 

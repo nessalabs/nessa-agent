@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "e684e77f20910b8e4c56e920005baa8d9b4d32f0"
+sourceRevision: "ada97db780cd9457f6e1a5efdaa30eda2e64f1d3"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -185,35 +185,43 @@ stateDiagram-v2
 
 ## Secret storage and fair use
 
-The gateway keeps its existing GitHub sign-in and a separate random inbox key in
-native OS credential entries scoped by stage and instance namespace. macOS uses
-noninteractive Keychain reads, writes and deletes against the existing user-default
-keychain. Linux uses encrypted Secret Service sessions with prompting disabled and
-requires an unlocked collection.
-Missing entries differ from unavailable stores. Legacy private login JSON is
-removed only after OS write/readback. Disconnect removes the login and payloads,
-while retaining the separate key needed for encrypted cleanup evidence.
+The gateway keeps GitHub sign-in and a separate random inbox key in the encrypted
+local vault, scoped by stage and instance. The owning native app unlocks the
+vault once with a passphrase; reloads retain that session, while close, explicit
+lock or gateway restart seal it. GitHub credential reads and writes retain the unlock generation that admitted
+them. Delayed credential work cannot publish into a later unlock. An inbox
+transaction already admitted with its key can finish after lock; account and
+binding generations still fence disconnect/reconnect. New key acquisition
+requires the current unlock.
+See [local vault](../gateway/local-vault.md) for key derivation and session ownership.
 
-Key acquisition refuses a locked store, missing or wrong keys, and corrupted ciphertext. Keys already acquired remain in process memory until gateway exit.
-No replacement is created for encrypted data. Development plaintext is exported
-to a verified encrypted temporary file and atomically replaced under a shared
-process lock. Stop old gateway processes before upgrading. Old plaintext backups
-and snapshots are not erased. A database backup without its OS key cannot restore
-the inbox. Cloudflare sees webhook plaintext and provides managed at-rest
-encryption; this is not end-to-end encryption.
+An explicit one-time import may read pre-existing OS-store entries. Each legacy
+entry is retired only after a verified encrypted receipt. Failed retirement or a
+missing legacy inbox key preserves the source and refuses protected use. Normal
+setup and unlock do not use the OS store. Disconnect removes the login and
+payloads, while retaining the inbox key needed for encrypted cleanup evidence.
+
+Key acquisition refuses a locked vault, missing or wrong keys, and corrupted
+ciphertext. No replacement is created for encrypted data. Legacy plaintext is
+exported to a verified encrypted temporary file and atomically replaced under a
+shared process lock. Stop old gateways before upgrading. Old plaintext backups
+and snapshots are not erased. An inbox backup needs its matching vault key;
+there is no forgotten-passphrase recovery. Cloudflare sees webhook plaintext and
+provides managed at-rest encryption, not end-to-end encryption.
 
 ```mermaid
 stateDiagram-v2
     [*] --> KeyLookup
-    KeyLookup --> Unavailable: OS store refuses
+    KeyLookup --> Unavailable: vault locked or legacy import refuses
     KeyLookup --> Unavailable: encrypted inbox exists but key is missing
-    KeyLookup --> KeyReady: OS receipt confirms key
+    KeyLookup --> KeyReady: encrypted vault receipt confirms key
     KeyReady --> Upgrade: legacy plaintext exists
     Upgrade --> KeyReady: verified encrypted copy replaces source
     Upgrade --> Unavailable: export or verification fails
     KeyReady --> Open: SQLCipher authenticates pages
     KeyReady --> Unavailable: wrong key or cipher corruption
     Open --> Open: events and cursor commit together
+    Open --> KeyLookup: vault generation changes
 ```
 
 Each signed installation retains at most 2,500 events / 16 MiB within the global
@@ -231,9 +239,9 @@ still rechecks GitHub access; revoked users may retain wake-only hints until
 lease expiry, without event bodies.
 
 This checkpoint reviews the receiver, native storage/follower, sign-in composition,
-stage tables and Settings opt-in. OS execution was checked on macOS; native
-Linux/Windows execution and provider backup/log retention are excluded from local
-verification. [ADR 1132](../../../adr/todo/1132-github-relay-hardening.md) records
+stage tables and Settings opt-in. The current source review covers the passphrase-vault composition and generation
+fences. Local runtime checks use macOS; native Linux/Windows execution and
+provider backup/log retention remain outside that local verification. [ADR 1132](../../../adr/todo/1132-github-relay-hardening.md) records
 ordering tests and the security review.
 
 Schema-owned counters admit metadata without recounting every user or repository.
