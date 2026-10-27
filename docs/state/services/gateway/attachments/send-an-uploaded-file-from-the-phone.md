@@ -4,7 +4,7 @@ title: "Send an uploaded file from the phone"
 kind: "flow"
 status: "implemented"
 summary: "Original file references survive sending and recovery; verified paths belong to one execution environment."
-sourceRevision: "b1a2bcb9e69c7e80c0bff8600d457313562b35e5"
+sourceRevision: "beca8c80d864590857174c7227b5930de48cb994"
 parent: "gateway-attachments"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/uploaded_file.rs"
@@ -83,7 +83,11 @@ worker owns placement and evidence until they settle. An uncertain outcome
 cannot authorize a provider prompt. ACP arms its execution or steering deadline
 before preparing files, and image reads and native response waits spend what
 remains of that same deadline. Expiry before native handoff rejects the input
-without inventing provider execution or cleanup evidence.
+without inventing provider execution or cleanup evidence. A resolver's error
+cannot retire the native context: only the backend's own close/channel evidence
+can require cleanup. Known source failures remain the primary cause even when
+expiry or real context loss is also observed. The shared clock helper and control
+waits stay observable when a ready source exhausts Tokio's cooperative budget.
 
 The production Swift `FileVerification --files` runner and desktop `inputFiles`
 stress step exercise sending. The stress step invokes the actual Swift journal
