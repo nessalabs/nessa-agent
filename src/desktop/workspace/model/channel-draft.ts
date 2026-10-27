@@ -13,7 +13,14 @@ import type { AccessMode } from "./access"
 import type { Channel, ModelRef } from "./workspace-index"
 
 /** The questions, in the order they are asked. */
-export const channelSteps = ["name", "folder", "model", "notes", "resources"] as const
+export const channelSteps = [
+  "name",
+  "folder",
+  "placement",
+  "model",
+  "notes",
+  "resources",
+] as const
 export type ChannelStep = (typeof channelSteps)[number]
 
 /**
@@ -49,6 +56,8 @@ export interface ChannelDraft {
   readonly folder: string | null
   readonly model: ModelRef
   readonly access: AccessMode
+  readonly coordinatorPlacement: "local" | "boat"
+  readonly threadPlacement: "local" | "boat"
   readonly notes: string
   /** Absolute files and folders, in the order they were added, none twice. */
   readonly resources: readonly string[]
@@ -56,7 +65,16 @@ export interface ChannelDraft {
 
 /** A draft before anything is answered, starting on `model`. */
 export function emptyDraft(model: ModelRef): ChannelDraft {
-  return { name: "", folder: null, model, access: "ask", notes: "", resources: [] }
+  return {
+    name: "",
+    folder: null,
+    coordinatorPlacement: "local",
+    threadPlacement: "local",
+    model,
+    access: "ask",
+    notes: "",
+    resources: [],
+  }
 }
 
 const bytes = (text: string) => new TextEncoder().encode(text).length

@@ -1218,7 +1218,7 @@ export interface ConversationLease {
   /** Which issuance of this conversation's leases this is, counting refused ones; absent when not known. */
   revision?: number
   /** Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files. */
-  environment?: "here" | "ssh" | "peer"
+  environment?: "here" | "ssh" | "peer" | "boat"
   /** The machine the agent runs on: for ssh, the OpenSSH destination as config.json names it; for peer, `peer:` and the paired environment's device key in lowercase hex. Present exactly when environment is ssh or peer. */
   host?: string
   /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. none: nothing encloses what runs beyond the account the environment runs as. */
@@ -3104,6 +3104,12 @@ export interface Channel {
   approvalMode: ApprovalMode
   /** When the channel was made, in Unix milliseconds; 0 for the default channel. */
   createdAtMs: number
+  /** Where the channel coordinator should run, independently of worker threads. */
+  coordinatorPlacement: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
+  threadPlacement: "local" | "boat"
+  /** Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity. */
+  coordinatorConversationId: string | null
 }
 /** Make a channel (channel.create). Repeating the same requestId with the same channel answers the channel it made; with another, channel_request_conflict. The folder is the one path a request may name, and only here: a conversation names its channel, never a folder. */
 export interface ChannelCreateParams {
@@ -3123,6 +3129,10 @@ export interface ChannelCreateParams {
   notes?: string
   /** Existing absolute files and folders to attach, none twice, at most x-channelRules.maxResourceBytes of paths in all; omitted is none. */
   resources?: string[]
+  /** Where the channel coordinator should run, independently of worker threads. */
+  coordinatorPlacement?: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
+  threadPlacement?: "local" | "boat"
 }
 /** The channel channel.create made, or made earlier under the same requestId. */
 export interface ChannelCreateResult {
@@ -3191,6 +3201,34 @@ export const VaultErrorCode = {
   VaultMigrationUnavailable: "vault_migration_unavailable",
 } as const
 export type VaultErrorCode = (typeof VaultErrorCode)[keyof typeof VaultErrorCode]
+/** Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription. */
+export interface BoatSaveParams {
+  /** Boat infrastructure token. Never returned or logged. */
+  token: string
+}
+/** Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
+export const BoatErrorCode = {
+  VaultLocked: "vault_locked",
+  BoatNotConfigured: "boat_not_configured",
+  InvalidRequest: "invalid_request",
+  BoatStorageUnavailable: "boat_storage_unavailable",
+  BoatResourceMissing: "boat_resource_missing",
+  BoatUnreachable: "boat_unreachable",
+  BoatWorkerUnavailable: "boat_worker_unavailable",
+  BoatEnvironmentBlocksCredentials: "boat_environment_blocks_credentials",
+  BoatProvisioningUncertain: "boat_provisioning_uncertain",
+  BoatCleanupUncertain: "boat_cleanup_uncertain",
+} as const
+export type BoatErrorCode = (typeof BoatErrorCode)[keyof typeof BoatErrorCode]
+/** Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs. */
+export interface BoatStatus {
+  /** Locked when the vault cannot be read, disconnected when no connection is saved, or connected after validation and encrypted persistence. */
+  state: "locked" | "disconnected" | "connected"
+  /** The dedicated Boat environment saved with this connection; present only while connected. */
+  environment?: string
+  /** The release-owned shared worker image saved with this connection; present only while connected. */
+  image?: string
+}
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -3251,7 +3289,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 92,
+  maxReadyMethods: 95,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3561,6 +3599,9 @@ export const ProductMethod = {
   VaultSetup: "vault.setup",
   VaultUnlock: "vault.unlock",
   VaultLock: "vault.lock",
+  BoatStatus: "boat.status",
+  BoatSave: "boat.save",
+  BoatDisconnect: "boat.disconnect",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3666,6 +3707,9 @@ export const productReadyMethods = [
   "vault.setup",
   "vault.unlock",
   "vault.lock",
+  "boat.status",
+  "boat.save",
+  "boat.disconnect",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3762,6 +3806,9 @@ export const productMethodGrants = {
   "vault.setup": "credential.manage",
   "vault.unlock": "credential.manage",
   "vault.lock": "credential.manage",
+  "boat.status": "credential.manage",
+  "boat.save": "credential.manage",
+  "boat.disconnect": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

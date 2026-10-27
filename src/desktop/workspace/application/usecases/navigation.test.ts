@@ -58,6 +58,37 @@ describe("choosing what the list shows", () => {
 })
 
 describe("opening a channel from the sidebar", () => {
+  it("opens the channel main chat ahead of a newer worker and preserves its worker draft", () => {
+    const base = loaded()
+    const state = {
+      ...base,
+      channels: base.channels.map((channel) =>
+        channel.id === "gateway"
+          ? { ...channel, coordinatorConversationId: "a" }
+          : channel,
+      ),
+      drafts: { ...base.drafts },
+    }
+    const opened = openChannel(state, { channelId: "gateway", draftId: "unused" })
+    expect(shown(opened)).toEqual(["a"])
+    expect(opened.drafts).toEqual(state.drafts)
+  })
+
+  it("uses the replacement main identity when the channel has no listed main chat", () => {
+    const base = loaded()
+    const state = {
+      ...base,
+      channels: base.channels.map((channel) =>
+        channel.id === "empty"
+          ? { ...channel, coordinatorConversationId: "replacement" }
+          : channel,
+      ),
+    }
+    const opened = openChannel(state, { channelId: "empty", draftId: "random-worker" })
+    expect(shown(opened)).toEqual(["replacement"])
+    expect(opened.drafts.replacement.channelId).toBe("empty")
+  })
+
   it("opens its newest session in place, and discloses it", () => {
     const state = openChannel(loaded(), { channelId: "gateway" })
     expect(shown(state)).toEqual(["d"])

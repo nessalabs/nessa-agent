@@ -122,7 +122,10 @@ fn read(path: PathBuf) -> Result<Option<String>, PlacementError> {
     let host = EnvironmentRef::named(&placement.host);
     if placement.schema_version != SCHEMA_VERSION
         || !(placement.host == POOL
-            || matches!(host, Ok(EnvironmentRef::Ssh(_) | EnvironmentRef::Peer(_))))
+            || matches!(
+                host,
+                Ok(EnvironmentRef::Ssh(_) | EnvironmentRef::Peer(_) | EnvironmentRef::Boat)
+            ))
     {
         return Err(PlacementError::Unreadable);
     }

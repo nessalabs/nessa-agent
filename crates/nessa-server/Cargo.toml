@@ -23,6 +23,7 @@ name = "nessa-backup-plan"
 path = "src/backup_plan_main.rs"
 
 [dependencies]
+tempfile = "3"
 nessa-vault = { path = "../nessa-vault" }
 base64 = "0.22"
 # The local-network announcement while native linking listens there
@@ -109,6 +110,7 @@ regex = "1"
 dbus-secret-service = { version = "=4.1.0", default-features = false, features = ["crypto-rust", "vendored"] }
 
 [target.'cfg(unix)'.dependencies]
+workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "33b8382d72657d176baca19797d8d146803f3d89" }
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"
 # `nessa env serve` runs command leases' commands in process scopes of their
@@ -134,7 +136,6 @@ nessa-device-client = { path = "../nessa-device-client" }
 # Plants an unmarked session record. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
-tempfile = "3"
 tokio = { version = "1", features = ["test-util", "io-util"] }
 # Only to build the pixels a substitute system decoder hands back. The image
 # library this workspace already compiles; nothing new is built.

@@ -970,7 +970,7 @@ const leaseValues = {
     refused: true,
     unreadable: true,
   } satisfies Record<ConversationLease["state"], true>,
-  environment: { here: true, ssh: true, peer: true } satisfies Record<
+  environment: { here: true, ssh: true, peer: true, boat: true } satisfies Record<
     NonNullable<ConversationLease["environment"]>,
     true
   >,

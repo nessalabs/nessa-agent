@@ -322,7 +322,11 @@ pub trait AgentProvider: Send + Sync {
     /// opened `saved` (another machine than the one that did) says no:
     /// attaching then opens new context and records it in place of the
     /// saved one, rather than asking to restore what is not there.
-    fn restores_saved_context(&self, _saved: &ExecutionSessionId) -> bool {
+    /// `has_invocations` says whether this SDK history has admitted any work.
+    /// Providers that do not persist an uninvoked session may decline its
+    /// restoration; attachment records the replacement context. A history
+    /// with admitted work must not be treated as an unused context.
+    fn restores_saved_context(&self, _saved: &ExecutionSessionId, _has_invocations: bool) -> bool {
         true
     }
     /// Live host owner retained by this factory and its configuration clones.

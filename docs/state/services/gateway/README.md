@@ -55,3 +55,6 @@ flowchart TB
 - [Attachments and content](attachments/README.md)
 - [Conversation identity and deletion](conversation.md)
 - [Bounded physical history reads](record-reads.md)
+
+[Channel workspaces](channel-workspaces.md) describes independent Local/Boat
+placement, durable VM assignments, approved local access and main-chat replacement.

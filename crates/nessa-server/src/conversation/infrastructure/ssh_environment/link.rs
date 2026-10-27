@@ -67,10 +67,11 @@
 //! lease's end has no evidence, so it is Interrupted. A dropped frame's
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
-use super::connector::{ArtifactChannels, ArtifactTransport, LeaseConnection, LeaseConnector};
+use super::connector::{ArtifactTransport, LeaseConnection, LeaseConnector};
 use super::transfer::{write_part, WriteFailure};
 use crate::conversation::application::{
-    ArtifactAnswering, BudgetPlace, FetchAsk, FetchFailure, FetchPlaced, PublishFailure,
+    ArtifactAnswering, ArtifactChannels, BudgetPlace, FetchAsk, FetchFailure, FetchPlaced,
+    PublishFailure,
 };
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
@@ -329,6 +330,7 @@ pub(crate) struct Granted {
 
 /// One open connection to a host's environment.
 pub(crate) struct HostLink {
+    mcp_relay: Option<Arc<dyn nessa_sdk::application::agent_execution::providers::HarnessMcpRelay>>,
     /// Names the host in the log and the audit: its SSH destination, or a
     /// paired environment's `peer:<key>`.
     host: String,
@@ -406,6 +408,12 @@ impl HostLink {
     ///
     /// # Errors
     /// As [`Self::open`], but for starting the connection.
+    pub(super) fn mcp_relay(
+        &self,
+    ) -> Option<&dyn nessa_sdk::application::agent_execution::providers::HarnessMcpRelay> {
+        self.mcp_relay.as_deref()
+    }
+
     pub(crate) async fn over(
         host: &str,
         connection: LeaseConnection,
@@ -474,6 +482,7 @@ impl HostLink {
             frames,
             routes,
             audit,
+            mcp_relay: connection.mcp_relay,
             keep: Mutex::new(connection.keep),
             artifacts: connection.artifacts,
             ended,

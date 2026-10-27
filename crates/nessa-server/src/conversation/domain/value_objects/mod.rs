@@ -11,10 +11,11 @@ mod share_access;
 mod tool_call;
 mod workspace_window;
 pub use channel::{
-    Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
-    ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources, MAX_CHANNELS_PER_OWNER,
-    MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES, MAX_CHANNEL_PATH_BYTES,
-    MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES, MAX_CHANNEL_RESOURCE_BYTES,
+    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources,
+    WorkspacePlacement, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
+    MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES,
+    MAX_CHANNEL_RESOURCE_BYTES,
 };
 pub use conversation_deletion::{
     ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,

@@ -433,12 +433,15 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     strategy:
       fail-fast: false
+      # Native verification uses the shipping Linux baseline. A newer
+      # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
+      # underneath the release contract (ci-harness.test.mjs, issue #1167).
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-22.04, macos-latest]
         include:
           - os: windows-latest
             partition: remaining
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             partition: all
           - os: macos-latest
             partition: all
@@ -459,6 +462,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
         with:
+          # Rust's host triple does not distinguish Ubuntu's glibc baseline.
+          # Keep other platforms' existing shared cache keys unchanged.
+          key: ${{ runner.os == 'Linux' && matrix.os || '' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - uses: actions/setup-node@v4

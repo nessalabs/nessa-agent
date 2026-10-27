@@ -1,3 +1,4 @@
+import { BoatRow } from "./boat-row"
 import { useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
@@ -486,6 +487,7 @@ function AccountsTab() {
   return (
     <Group>
       <GithubRow />
+      <BoatRow />
     </Group>
   )
 }

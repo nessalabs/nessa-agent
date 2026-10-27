@@ -109,6 +109,9 @@ const CHANNEL_KEYS = [
   "model",
   "approvalMode",
   "createdAtMs",
+  "coordinatorConversationId",
+  "coordinatorPlacement",
+  "threadPlacement",
 ] as const
 const MODES = new Set<string>(["ask", "auto", "full"])
 const CHANNEL_ID = /^(default|ch_[a-z2-7]{10})$/
@@ -118,6 +121,9 @@ function channel(value: unknown, invalid: string): Channel {
   if (!isRecord(value) || !onlyKeys(value, CHANNEL_KEYS)) throw new Error(invalid)
   const nullableText = (field: unknown) => field === null || typeof field === "string"
   if (
+    !nullableText(value.coordinatorConversationId) ||
+    (value.coordinatorPlacement !== "local" && value.coordinatorPlacement !== "boat") ||
+    (value.threadPlacement !== "local" && value.threadPlacement !== "boat") ||
     typeof value.channelId !== "string" ||
     !CHANNEL_ID.test(value.channelId) ||
     typeof value.name !== "string" ||
@@ -140,6 +146,9 @@ function channel(value: unknown, invalid: string): Channel {
     model: value.model as string | null,
     approvalMode: value.approvalMode as ApprovalMode,
     createdAtMs: value.createdAtMs as number,
+    coordinatorConversationId: value.coordinatorConversationId as string | null,
+    coordinatorPlacement: value.coordinatorPlacement as "local" | "boat",
+    threadPlacement: value.threadPlacement as "local" | "boat",
   }
 }
 

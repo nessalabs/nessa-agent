@@ -19,6 +19,7 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationModelId, LATEST_TIME_MS,
 };
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// The longest channel name, in characters. These bounds are published as
@@ -248,15 +249,46 @@ pub struct ChannelDefaults {
     pub mode: ConversationApprovalMode,
 }
 
+/// Where the channel's coordinator or worker threads execute. These choices
+/// are independent; Local is the existing path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorkspacePlacement {
+    #[default]
+    Local,
+    Boat,
+}
+impl WorkspacePlacement {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "local" => Some(Self::Local),
+            "boat" => Some(Self::Boat),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Boat => "boat",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChannelExecution {
+    pub coordinator: WorkspacePlacement,
+    pub threads: WorkspacePlacement,
+}
+
 /// One stored channel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Channel {
     id: ChannelId,
+    coordinator: nessa_protocol::conversation::domain::ConversationId,
     organization: OrganizationId,
     owner: PrincipalId,
     name: ChannelName,
     folder: ChannelFolder,
     defaults: ChannelDefaults,
+    execution: ChannelExecution,
     notes: ChannelNotes,
     resources: ChannelResources,
     request_id: String,
@@ -269,6 +301,7 @@ pub struct ChannelParts {
     pub name: ChannelName,
     pub folder: ChannelFolder,
     pub defaults: ChannelDefaults,
+    pub execution: ChannelExecution,
     pub notes: ChannelNotes,
     pub resources: ChannelResources,
 }
@@ -298,16 +331,20 @@ impl Channel {
             name,
             folder,
             defaults,
+            execution,
             notes,
             resources,
         } = parts;
+        let coordinator = initial_coordinator(&id);
         Ok(Self {
             id,
+            coordinator,
             organization,
             owner,
             name,
             folder,
             defaults,
+            execution,
             notes,
             resources,
             request_id,
@@ -330,6 +367,25 @@ impl Channel {
     pub fn folder(&self) -> &ChannelFolder {
         &self.folder
     }
+    /// Stable identity of this channel's main conversation. It is independent
+    /// of its name, folder, settings or the order worker threads are opened.
+    pub fn coordinator_id(&self) -> nessa_protocol::conversation::domain::ConversationId {
+        self.coordinator.clone()
+    }
+    /// Restore a coordinator generation recorded by the channel store after
+    /// erasure; immutable channel creation properties are retained.
+    pub(crate) fn with_coordinator(
+        &self,
+        coordinator: nessa_protocol::conversation::domain::ConversationId,
+    ) -> Self {
+        Self {
+            coordinator,
+            ..self.clone()
+        }
+    }
+    pub fn execution(&self) -> ChannelExecution {
+        self.execution
+    }
     pub fn defaults(&self) -> &ChannelDefaults {
         &self.defaults
     }
@@ -351,6 +407,7 @@ impl Channel {
     pub fn made_of(&self, parts: &ChannelRequest) -> bool {
         self.name == parts.name
             && self.defaults == parts.defaults
+            && self.execution == parts.execution
             && self.notes == parts.notes
             && self.resources == parts.resources
             && match &parts.folder {
@@ -368,6 +425,11 @@ impl Channel {
             self.name.as_str(),
             self.folder.path.as_str()
         );
+        if self.execution.coordinator == WorkspacePlacement::Boat
+            || self.execution.threads == WorkspacePlacement::Boat
+        {
+            text.push_str(" On a remote environment, the channel's local folder and resource paths belong to the gateway, not your VM. Work in your actual environment workspace; access local files only through explicitly approved connections.");
+        }
         if !self.notes.is_empty() {
             text.push_str("\n\nThe person's notes for every conversation in this channel:\n");
             text.push_str(self.notes.as_str());
@@ -393,6 +455,7 @@ pub struct ChannelRequest {
     pub name: ChannelName,
     pub folder: Option<ChannelPath>,
     pub defaults: ChannelDefaults,
+    pub execution: ChannelExecution,
     pub notes: ChannelNotes,
     pub resources: ChannelResources,
 }
@@ -400,3 +463,14 @@ pub struct ChannelRequest {
 #[cfg(test)]
 #[path = "../../../../tests/conversation/channel.rs"]
 mod tests;
+
+fn initial_coordinator(id: &ChannelId) -> nessa_protocol::conversation::domain::ConversationId {
+    let hash = Sha256::digest(format!("nessa-channel-coordinator:{id}"));
+    let mut bytes: [u8; 16] = hash[..16].try_into().expect("digest prefix");
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    nessa_protocol::conversation::domain::ConversationId::new(
+        &uuid::Uuid::from_bytes(bytes).to_string(),
+    )
+    .expect("canonical coordinator identity")
+}

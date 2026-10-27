@@ -1407,7 +1407,10 @@ and reuses a generation only for the complete desired command ([ADR 689](adr/689
   compiling. `verify-linux-bundle.mjs` checks the runtime inside the `.deb` this
   build wrote; it is the Linux counterpart of `verify-macos-bundle.mjs`.
   `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
-  the release build against. `release-assets.mjs` names what each release
+  the release build against. Native Linux CI uses the explicit Ubuntu release
+  baseline, with its Rust cache keyed by distribution to avoid reusing binaries
+  built against a newer glibc; `ci-harness.test.mjs` checks that agreement and
+  retains the required native smoke commands. `release-assets.mjs` names what each release
   target publishes and its updater key: one per macOS architecture, and
   `linux-x86_64-deb`. Windows has no preparation.
 - `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
@@ -2619,3 +2622,27 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 - `src/vault`: application dialog controller, gateway/native adapters, and UI.
   No UI or RPC exposes stored secrets. `verification/desktop/scripts/vault.mjs`
   tests the native lease through the real gateway and browser dialog.
+
+## Channel workspaces
+
+`crates/nessa-server/src/workspaces/` owns Boat connection settings and VM
+allocation receipts: `domain` contains values and failures; `application` orders
+allocation through Settings, Assignments, Provider and RecoveryAudit ports; `infrastructure`
+implements encrypted vault settings, private receipt files, Boat/workspace-sdk
+preparation and scoped SSH access. Tests live in `tests/workspaces`; real-provider
+verification lives in `scripts/workspaces`, with the single-file local MCP fixture
+under `scripts/mcp-test-server`. Composition maps recovery evidence into the
+existing durable EnvironmentAudit store; failed receipt publication retains its
+VM target independently of the assignment writer and initiating observer.
+
+Conversation placement and main-agent identity remain in `conversation`.
+Its platform-neutral placement contract owns the workspace retention bound;
+the operational catalogue and Unix cache consume that same definition.
+`conversation/infrastructure/workspaces.rs` adapts a workspace stream into the
+existing remote lease environment. `application/artifact_channels.rs` is the port
+for artifact streams. `channels.sql` owns the current schema; its two forward
+migrations preserve Local defaults and add the main replacement journal.
+
+The desktop composes a narrow Boat settings gateway into `BoatRow`. Channel draft
+placement is a projection sent to the gateway, and navigation uses the gateway's
+current main conversation ID. See [ADR 1160](adr/todo/1160-boat-workspaces.md).

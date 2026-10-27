@@ -272,7 +272,7 @@ impl AgentProvider for Provider {
     fn native_hooks_allowed(&self) -> bool {
         self.native_hooks
     }
-    fn restores_saved_context(&self, _saved: &ExecutionSessionId) -> bool {
+    fn restores_saved_context(&self, _saved: &ExecutionSessionId, _has_invocations: bool) -> bool {
         self.elsewhere.is_none()
     }
     fn effort_level(&self) -> Option<EffortLevel> {

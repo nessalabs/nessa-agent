@@ -100,6 +100,14 @@ pub(super) async fn dispatch(
 fn channel_request(params: &ChannelCreateParams) -> Option<ChannelRequest> {
     let path = |text: &str| ChannelPath::new(PathBuf::from(text)).ok();
     Some(ChannelRequest {
+        execution: crate::conversation::domain::ChannelExecution {
+            coordinator: crate::conversation::domain::WorkspacePlacement::parse(
+                params.coordinator_placement.as_deref().unwrap_or("local"),
+            )?,
+            threads: crate::conversation::domain::WorkspacePlacement::parse(
+                params.thread_placement.as_deref().unwrap_or("local"),
+            )?,
+        },
         name: ChannelName::new(&params.name).ok()?,
         folder: match &params.folder {
             Some(folder) => Some(path(folder)?),
@@ -145,6 +153,9 @@ fn wire_channel(channel: &Channel) -> WireChannel {
         agent: Some(defaults.agent.name().to_owned()),
         model: Some(defaults.model.as_str().to_owned()),
         approval_mode: wire_mode(defaults.mode),
+        coordinator_conversation_id: Some(channel.coordinator_id().to_string()),
+        coordinator_placement: channel.execution().coordinator.as_str().into(),
+        thread_placement: channel.execution().threads.as_str().into(),
         created_at_ms: channel.created_at_ms(),
     }
 }
@@ -171,6 +182,9 @@ fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResu
                 agent: None,
                 model: None,
                 approval_mode: ApprovalMode::Ask,
+                coordinator_conversation_id: None,
+                coordinator_placement: "local".into(),
+                thread_placement: "local".into(),
                 created_at_ms: 0,
             })
             .into_iter()

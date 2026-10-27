@@ -816,3 +816,55 @@ fn agent_catalog_intersects_model_images_with_the_shared_upload_offer() {
         );
     }
 }
+
+#[test]
+fn workspace_recovery_records_the_target_and_unconfirmed_cleanup_in_durable_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("audit");
+    let audit = WorkspaceRecoveryAudit(
+        DurableEnvironmentAudit::new(root.clone(), Arc::new(SystemClock)).unwrap(),
+    );
+    let thread = "d49640a4-fd71-40a4-b3e9-a35e8753db78".to_owned();
+    let vm = "bx_fixture".to_owned();
+    audit
+        .record(&RecoveryEvent::ReceiptSaveFailed {
+            thread: thread.clone(),
+            vm: vm.clone(),
+        })
+        .unwrap();
+    audit
+        .record(&RecoveryEvent::RollbackObserved {
+            thread: thread.clone(),
+            vm: vm.clone(),
+            confirmed: false,
+        })
+        .unwrap();
+    let records: Vec<serde_json::Value> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(records.len(), 2);
+    for value in &records {
+        assert_eq!(value["thread"], thread);
+        assert_eq!(value["vm"], vm);
+        assert!(value["observedAtMs"].is_u64());
+    }
+    assert!(records
+        .iter()
+        .any(|value| value["kind"] == "workspace_receipt_save_failed"));
+    assert!(
+        records
+            .iter()
+            .any(|value| value["kind"] == "workspace_rollback_observed"
+                && value["confirmed"] == false)
+    );
+    // A closed audit store cannot pretend this evidence was delivered.
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::write(&root, "blocked").unwrap();
+    assert_eq!(
+        audit.record(&RecoveryEvent::ReceiptSaveFailed { thread, vm }),
+        Err(WorkspaceFailure::Storage)
+    );
+}

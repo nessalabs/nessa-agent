@@ -463,3 +463,8 @@
   .desktop-composer {
   animation: none;
 }
+
+.workspace-pane-main-agent {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}

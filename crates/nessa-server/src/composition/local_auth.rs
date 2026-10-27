@@ -1,6 +1,22 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use super::agent::AgentsConfig;
 #[cfg(unix)]
+use crate::{
+    conversation::{
+        application::ThreadEnvironments,
+        infrastructure::{
+            ssh_environment::{DurableEnvironmentAudit, EnvironmentAudit, EnvironmentEvent},
+            ThreadWorkspaces,
+        },
+    },
+    workspaces::{
+        application::{RecoveryAudit, RecoveryEvent, Workspaces},
+        domain::Failure as WorkspaceFailure,
+        infrastructure::{worker_image, BoatProvider, FileAssignments, VaultSettings},
+    },
+};
+
+#[cfg(unix)]
 use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 #[cfg(unix)]
 use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
@@ -229,6 +245,34 @@ pub(super) async fn product_state(
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
     let vault = super::vault::compose(namespace);
+    #[cfg(unix)]
+    let workspace_audit = DurableEnvironmentAudit::new(
+        namespace.join("boat-environment-audit"),
+        Arc::new(SystemClock),
+    )
+    .map_err(setup_error)?;
+    #[cfg(unix)]
+    let workspace_service = Arc::new(
+        Workspaces::new(
+            Arc::new(VaultSettings(vault.vault.clone())),
+            Arc::new(BoatProvider {
+                // SAFETY: geteuid has no preconditions.
+                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
+                    libc::geteuid()
+                }),
+                relay_program: std::env::current_exe().map_err(setup_error)?,
+            }),
+            Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
+            Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
+        )
+        .with_image(worker_image()),
+    );
+    #[cfg(unix)]
+    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
+        service: workspace_service.clone(),
+        audit: workspace_audit,
+        environments: Default::default(),
+    });
     let inventory =
         Arc::new(CommittedInventory::open(namespace, Arc::new(SystemClock)).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
@@ -320,6 +364,8 @@ pub(super) async fn product_state(
                     packaged_agents,
                     record_origin.clone(),
                     ConversationSettings {
+                        #[cfg(unix)]
+                        workspace_environments: workspace_environments.clone(),
                         read_work_budget: limits.read_work_budget(),
                         live_conversations: limits.live_conversations(),
                         agent_idle: limits.agent_idle(),
@@ -426,6 +472,10 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    #[cfg(unix)]
+    {
+        product = product.with_workspaces(workspace_service);
+    }
     #[cfg(unix)]
     if let Some(github) = github {
         product = product.with_github(github.routes);
@@ -637,6 +687,8 @@ type PairedParts = (
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    #[cfg(unix)]
+    workspace_environments: Arc<dyn ThreadEnvironments>,
     /// How much work one passive read may do.
     read_work_budget: std::time::Duration,
     /// The most conversations open, each with its agent, at once.
@@ -983,6 +1035,7 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
+        workspace_environments,
         read_work_budget,
         live_conversations,
         agent_idle,
@@ -1301,6 +1354,7 @@ async fn conversations(
         serving,
         organization,
     )?;
+    let environment = environment.with_workspaces(workspace_environments);
     let dependencies = ConversationDependencies {
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -1748,3 +1802,31 @@ impl crate::agents::application::CallerKindSource
 #[cfg(all(test, unix))]
 #[path = "../../tests/composition/local_auth.rs"]
 mod tests;
+
+#[cfg(unix)]
+struct WorkspaceRecoveryAudit(Arc<dyn EnvironmentAudit>);
+#[cfg(unix)]
+impl RecoveryAudit for WorkspaceRecoveryAudit {
+    fn record(&self, event: &RecoveryEvent) -> Result<(), WorkspaceFailure> {
+        let record = match event {
+            RecoveryEvent::ReceiptSaveFailed { thread, vm } => {
+                EnvironmentEvent::WorkspaceReceiptSaveFailed {
+                    thread: thread.clone(),
+                    vm: vm.clone(),
+                }
+            }
+            RecoveryEvent::RollbackObserved {
+                thread,
+                vm,
+                confirmed,
+            } => EnvironmentEvent::WorkspaceRollbackObserved {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                confirmed: *confirmed,
+            },
+        };
+        self.0
+            .record(&record)
+            .map_err(|_| WorkspaceFailure::Storage)
+    }
+}

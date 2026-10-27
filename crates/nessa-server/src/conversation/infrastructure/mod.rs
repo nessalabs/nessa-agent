@@ -200,3 +200,8 @@ pub(crate) use record_read::TestReadGate;
 
 mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
+
+#[cfg(unix)]
+mod workspaces;
+#[cfg(unix)]
+pub(crate) use workspaces::ThreadWorkspaces;

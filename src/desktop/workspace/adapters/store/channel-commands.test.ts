@@ -126,12 +126,14 @@ describe("asking", () => {
     expect(flowOf(store)?.asking).toBe("name")
     store.dispatch(draftChannel({ change: { name: " design-review " } }))
     store.dispatch(answerChannelStep())
+    expect(flowOf(store)?.asking).toBe("placement")
+    store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBe("model")
     store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBe("notes")
     store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBeNull()
-    expect(flowOf(store)?.answered).toEqual(["name", "model", "notes"])
+    expect(flowOf(store)?.answered).toEqual(["name", "placement", "model", "notes"])
   })
 
   it("asks all five with pickers, and a clicked line asks its step again", async () => {
@@ -139,10 +141,11 @@ describe("asking", () => {
     const { store } = await storeWith({ channels: channels(), paths })
     store.dispatch(openChannelCreation())
     store.dispatch(draftChannel({ change: { name: "a" } }))
-    for (let n = 0; n < 5; n++) store.dispatch(answerChannelStep())
+    for (let n = 0; n < 6; n++) store.dispatch(answerChannelStep())
     expect(flowOf(store)?.answered).toEqual([
       "name",
       "folder",
+      "placement",
       "model",
       "notes",
       "resources",
@@ -246,7 +249,7 @@ describe("creating", () => {
     const { store } = await storeWith({ channels: source, paths })
     store.dispatch(openChannelCreation())
     store.dispatch(draftChannel({ change: { name: "a" } }))
-    for (let n = 0; n < 5; n++) store.dispatch(answerChannelStep())
+    for (let n = 0; n < 6; n++) store.dispatch(answerChannelStep())
     folders.push("/")
     await store.dispatch(chooseChannelFolder())
     source.refuse("folder-refused")

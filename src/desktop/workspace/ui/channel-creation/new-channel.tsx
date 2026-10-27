@@ -42,11 +42,16 @@ import {
   draftChannel,
   removeChannelResource,
 } from "../../adapters/store/commands"
-import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import {
+  useWorkspaceDispatch,
+  useWorkspaceSelector,
+  useWorkspaceStore,
+} from "../../adapters/store/hooks"
 import {
   selectAllChannels,
   selectChannelCreation,
   selectChannelMaking,
+  selectFocusedSessionId,
 } from "../../adapters/store/selectors"
 import {
   canCreate,
@@ -69,6 +74,7 @@ import "./new-channel.css"
 const questions: Record<ChannelStep, string> = {
   name: "What should this channel be called?",
   folder: "Where should its agents work?",
+  placement: "Where should this channel run?",
   model: "Which model should new conversations start on?",
   notes: "Anything every agent here should know?",
   resources: "Any files or folders agents here should have on hand?",
@@ -78,6 +84,7 @@ const questions: Record<ChannelStep, string> = {
 const composerHints: Record<ChannelStep, string> = {
   name: "Name the channel",
   folder: "Pick above, then press ↩",
+  placement: "Choose above, then press ↩",
   model: "Pick above, then press ↩",
   notes: "Notes for every agent here, or press ↩ to skip",
   resources: "Add files or folders above, or create without any",
@@ -164,8 +171,7 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
           <header className="new-channel-head">
             <h2>New channel</h2>
             <p>
-              {steps.length === 3 ? "Three" : "Five"} quick questions · click a ✓ line to
-              change it · Esc to cancel
+              {steps.length} quick questions · click a ✓ line to change it · Esc to cancel
             </p>
             <Button
               className="new-channel-close"
@@ -325,16 +331,21 @@ function AnsweredLine({
  * focuses its own composer after this.
  */
 function useFocusReturns() {
+  const store = useWorkspaceStore()
   useLayoutEffect(() => {
+    const before = selectFocusedSessionId(store.getState())
     const active = document.activeElement
     const opener =
       active instanceof HTMLElement && active !== document.body
         ? active
         : document.querySelector<HTMLElement>(".workspace-section-add")
     return () => {
+      // A successful creation opened the main chat. Leave focus to the pane
+      // controller; restoring the sidebar here would cancel its pending focus.
+      if (selectFocusedSessionId(store.getState()) !== before) return
       if (opener?.isConnected) opener.focus({ preventScroll: true })
     }
-  }, [])
+  }, [store])
 }
 
 /** What a folded line says of its step. */
@@ -345,6 +356,13 @@ function Answer({ step, draft }: { step: ChannelStep; draft: ChannelDraft }) {
       return (
         <span>
           Called <em>#{draft.name.trim()}</em>
+        </span>
+      )
+    case "placement":
+      return (
+        <span>
+          Main agent: <em>{draft.coordinatorPlacement === "boat" ? "Boat" : "Local"}</em>{" "}
+          · New threads: <em>{draft.threadPlacement === "boat" ? "Boat" : "Local"}</em>
         </span>
       )
     case "folder":
@@ -399,6 +417,7 @@ function Asked({
       <p className="new-channel-question">{questions[step]}</p>
       {/* A Create on its way holds the draft as sent: nothing here changes it. */}
       <fieldset className="new-channel-answers" disabled={flow.creating}>
+        {step === "placement" ? <PlacementAnswer flow={flow} /> : null}
         {step === "folder" ? <FolderAnswer flow={flow} /> : null}
         {step === "model" ? <ModelAnswer flow={flow} /> : null}
         {step === "resources" ? <ResourcesAnswer flow={flow} /> : null}
@@ -566,6 +585,48 @@ function ResourcesAnswer({ flow }: { flow: ChannelCreation }) {
           holds up to {channelRules.maxResources} files and folders.
         </StatusLabel>
       ) : null}
+    </div>
+  )
+}
+
+function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
+  const dispatch = useWorkspaceDispatch()
+  const onKeyDown = useReturnAnswers()
+  return (
+    <div
+      className="new-channel-placement"
+      data-answers
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+    >
+      {(
+        [
+          ["coordinatorPlacement", "Main agent"],
+          ["threadPlacement", "New threads"],
+        ] as const
+      ).map(([key, label]) => (
+        <label key={key}>
+          {label}
+          <select
+            aria-label={`${label} location`}
+            value={flow.draft[key]}
+            disabled={flow.creating}
+            onChange={(event) => {
+              const value = event.target.value
+              if (value === "local" || value === "boat")
+                dispatch(draftChannel({ change: { [key]: value } }))
+            }}
+          >
+            <option value="local">Local</option>
+            <option value="boat">Boat</option>
+          </select>
+        </label>
+      ))}
+      <p>
+        Boat runs Claude or Codex in a cloud workspace using your connected subscriptions.
+        Keep your Nessa gateway online; local folders need an approved connection. Alpha
+        VMs stop after one hour, including active work.
+      </p>
     </div>
   )
 }

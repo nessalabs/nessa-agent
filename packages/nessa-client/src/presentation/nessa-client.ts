@@ -1,3 +1,4 @@
+import { createBoatApi, type BoatApi } from "./boat-api.js"
 import { createSubscriptionApi, type SubscriptionApi } from "./subscription-api.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
 import type { ManagedSession, ConnectionState } from "../application/managed-session.js"
@@ -81,6 +82,8 @@ export class NessaClient {
    */
   static readonly defaultUrl = "ws://127.0.0.1:7421"
 
+  /** Encrypted Boat connection setup for cloud workspaces. */
+  readonly boat: BoatApi
   /** Authorized gateway health. */
   readonly server: ServerApi
   /** Authorized agent conversations, live views, and lifecycle controls. */
@@ -124,6 +127,7 @@ export class NessaClient {
     httpTimer: RequestTimer,
   ) {
     this.server = createServerApi(wire)
+    this.boat = createBoatApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
     this.threadCommands = createThreadCommands(this.conversation, newRequestId, wire)
     this.records = createRecordReadApi(wire)

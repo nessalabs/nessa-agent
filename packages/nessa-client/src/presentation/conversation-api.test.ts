@@ -2389,3 +2389,19 @@ it.each([
     model: "selected-model",
   })
 })
+
+it("keeps a channel create pending through cloud preparation without replaying it", async () => {
+  const { conversationWorkspaceCreateTimeoutMs } =
+    await import("../application/agent-budgets.js")
+  const request = vi.fn(
+    async (_method: string, _params: unknown, _deadline?: unknown) => ({
+      conversationId,
+    }),
+  )
+  const api = createConversationApi({ request }, () => "cloud-create")
+  await api.create({ conversationId, channelId: "ch_aaaaaaaaaa" })
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(request.mock.calls[0]?.[2]).toEqual({
+    atLeastMs: conversationWorkspaceCreateTimeoutMs,
+  })
+})

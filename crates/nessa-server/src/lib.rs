@@ -55,3 +55,6 @@ pub(crate) mod app_call_test_support;
 pub(crate) mod catalogue_receiver_store;
 
 pub mod vault;
+
+#[cfg(unix)]
+pub(crate) mod workspaces;
