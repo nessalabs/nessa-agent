@@ -11,5 +11,7 @@
   "initialProviderSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db",
   "initialBrowserSourceRevision": "34672659bb87d44ad9f390e9725830bfe500e7db",
   "postStructuralReviewDiffSha256": "48f16c0cda9684b22512bab9ed6e0358ebbc6ea443f39ad79a406dd358a0443b",
-  "platformReviewDiffSha256": "cb079b5f3237644e60160329c163a4f0133dc8b00a6b776ffd313864a55593ea"
+  "platformReviewDiffSha256": "cb079b5f3237644e60160329c163a4f0133dc8b00a6b776ffd313864a55593ea",
+  "scriptedSourceRevision": "49080c0477f23e752bb7dd90dc80e093a9d12558",
+  "currentStressUiRevision": "29ef4e5985a2858bd0839de5e67050a5078d2a21"
 }

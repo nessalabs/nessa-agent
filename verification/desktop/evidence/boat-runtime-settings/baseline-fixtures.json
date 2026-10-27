@@ -7,9 +7,7 @@
       {
         "name": "console",
         "ok": false,
-        "failures": [
-          "pageerror: Invalid conversation review"
-        ],
+        "failures": ["pageerror: Invalid conversation review"],
         "error": null
       },
       {
@@ -23,9 +21,7 @@
       {
         "name": "console",
         "ok": false,
-        "failures": [
-          "pageerror: Conversation local notice has no source"
-        ],
+        "failures": ["pageerror: Conversation local notice has no source"],
         "error": null
       },
       {

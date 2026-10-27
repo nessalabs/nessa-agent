@@ -117,3 +117,9 @@ source attribution. No other state page advances. Nessa Docs catalog validation
 holds for 135 pages with no errors; the installed renderer reports 27 existing
 unknown-sourceRevision metadata warnings. Visual renderer interaction was not
 rechecked for this prose/source-list-only update.
+
+The refreshed signed-out production E2E passed after building source490, and the
+raised channel stress repeated 9/9 in each engine on the corrected UI. Scoped
+calibrated performance remained over budget on both feature and unchanged base;
+that is retained as failed verification and tracked in #1177, not treated as
+source approval or a claimed improvement.

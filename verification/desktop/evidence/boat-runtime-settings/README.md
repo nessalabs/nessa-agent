@@ -56,6 +56,12 @@ click/focus interactions across both engines (`review-row-clicks.json`). The
 full repeated shared-controls group held **32/32**, and smoke held **32/32**.
 `channel-current.png` and `default-current.png` show the corrected source.
 
+The current shared helper repeated raised conversation stress on the corrected UI
+and passed **9/9 per engine** (`stress-current-chromium.json` and
+`stress-current-webkit.json`). Fresh signed-out scripted production E2E passed
+with the source490 gateway (`scripted-e2e-current.md`); its dev-only MCP check is
+explicitly not run in production.
+
 The original shared helper also passed raised conversation stress in separate engine
 processes: **9/9 Chromium and 9/9 WebKit**, seed 19, channels 3, parallel 3,
 followers 2, turns 2, rounds 6. These results do not claim the broader desktop suite
@@ -93,3 +99,10 @@ failures still require isolation; they are not assumed to be baseline. Two gatew
 because their binary was not configured. The repeated full run sets the explicit
 fresh gateway binary. Its settled outcome and current-head CI belong in PR #1174;
 these local feature checks do not make that broad suite green.
+
+Calibrated production performance checks held only **1/6** results on both the
+feature and unchanged base: calibration passed, all five interaction rows exceeded
+the 50ms budget. `performance-comparison.json` retains exact maxima, medians,
+per-run maxima and selected LoAF attribution. The host had concurrent verification
+workloads, so no performance improvement or intrinsic regression is inferred.
+The failure remains open as #1177; it is not a passing budget result.
