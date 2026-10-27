@@ -11,6 +11,8 @@ use crate::conversation::domain::{
     ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
 };
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
+#[cfg(unix)]
+use crate::conversation_test_support::channel_lookup::{ChannelLookup, ChannelRead, Membership};
 use crate::conversation_test_support::{absolute, unrooted};
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
@@ -193,6 +195,13 @@ impl Fixture {
     }
 
     fn with_erasers(provider_sessions: ProviderSessionErasers) -> Self {
+        Self::with_channel_store(provider_sessions, None)
+    }
+
+    fn with_channel_store(
+        provider_sessions: ProviderSessionErasers,
+        channel_store: Option<Arc<dyn ChannelStore>>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = &directory.path().join("gateway");
         nessa_local_storage::create_directory(root).unwrap();
@@ -238,7 +247,9 @@ impl Fixture {
         service.bind_commands(storage);
         let folders = TableFolders::default();
         service.bind_channels(
-            Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap()),
+            channel_store.unwrap_or_else(|| {
+                Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap())
+            }),
             Arc::new(folders.clone()),
         );
         Self {
@@ -263,6 +274,35 @@ impl Fixture {
     fn asked(&self) -> Vec<Asked> {
         std::mem::take(&mut self.source.asked.lock().unwrap())
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn settings_authorization_refuses_another_channels_valid_owner_facts() {
+    let real = Fixture::new();
+    let found = real.channel("owned-channel", None).await;
+    let id = found.id().clone();
+    let other = ChannelId::from_random([99; 10]);
+    assert_ne!(id, other);
+    let fixture = Fixture::with_channel_store(
+        ProviderSessionErasers::default(),
+        Some(Arc::new(ChannelLookup {
+            membership: Membership::Default,
+            channel: ChannelRead::Found(Box::new(found)),
+        })),
+    );
+    assert!(fixture
+        .service
+        .authorize_channel_settings(&caller("person", "settings"), &id)
+        .await
+        .is_ok());
+    assert!(matches!(
+        fixture
+            .service
+            .authorize_channel_settings(&caller("person", "settings"), &other)
+            .await,
+        Err(ConversationError::Unavailable)
+    ));
 }
 
 #[test]

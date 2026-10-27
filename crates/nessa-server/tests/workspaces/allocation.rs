@@ -1,6 +1,18 @@
 //! Allocation is tested through the application ports with controllable provider
 //! admission. No real account or secret is used in these ordering fixtures.
 use crate::conversation::domain::{ChannelId, VmLifetime, VmLifetimeScope, VmLifetimeSettings};
+use crate::conversation::{
+    application::ThreadEnvironments,
+    domain::{
+        Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelName, ChannelNotes,
+        ChannelParts, ChannelPath, ChannelResources,
+    },
+    infrastructure::{ssh_environment::DurableEnvironmentAudit, ThreadWorkspaces},
+};
+use crate::conversation_test_support::{
+    channel_lookup::{ChannelLookup, ChannelRead, Membership},
+    Provider as AgentProvider, ProviderFactory,
+};
 use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
 use crate::workspaces::{
     application::*,
@@ -13,6 +25,14 @@ use nessa_auth::{
     domain::{OrganizationId, PrincipalId},
 };
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::{
+    agents::AgentId,
+    conversation::domain::{ConversationApprovalMode, ConversationModelId},
+};
+use nessa_sdk::domain::agent_execution::leases::{
+    AgentWork, LeaseDeadline, LeaseGrants, LeaseId, LeaseRefusal, LeaseTerms, LeaseWork,
+    SandboxProfile,
+};
 use nessa_sdk::infrastructure::clock::RuntimeClock;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{
@@ -699,4 +719,98 @@ async fn another_scopes_valid_lifetime_snapshot_cannot_authorize_vm_allocation()
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
     assert!(store.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn invalid_membership_is_refused_before_intent_or_provider_while_valid_membership_reaches_allocation(
+) {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let channel = Channel::new(
+        ChannelId::from_random([1; 10]),
+        OrganizationId::new("fixture-org").unwrap(),
+        PrincipalId::new("fixture-owner").unwrap(),
+        ChannelParts {
+            name: ChannelName::new("fixture").unwrap(),
+            folder: ChannelFolder {
+                path: ChannelPath::new(directory.path().to_path_buf()).unwrap(),
+                made: false,
+            },
+            defaults: ChannelDefaults {
+                agent: AgentId::Claude,
+                model: ConversationModelId::new("fixture-model").unwrap(),
+                mode: ConversationApprovalMode::Ask,
+            },
+            execution: ChannelExecution::default(),
+            notes: ChannelNotes::new("").unwrap(),
+            resources: ChannelResources::new(vec![]).unwrap(),
+        },
+        "fixture-request".into(),
+        42,
+    )
+    .unwrap();
+    for (membership, read, expected_creates) in [
+        (
+            Membership::Failed,
+            ChannelRead::Found(Box::new(channel.clone())),
+            0,
+        ),
+        (
+            Membership::Channel(channel.id().clone()),
+            ChannelRead::Failed,
+            0,
+        ),
+        (
+            Membership::Channel(channel.id().clone()),
+            ChannelRead::Missing,
+            0,
+        ),
+        (
+            Membership::Channel(ChannelId::from_random([2; 10])),
+            ChannelRead::Found(Box::new(channel.clone())),
+            0,
+        ),
+        (Membership::Default, ChannelRead::Failed, 1),
+        (
+            Membership::Channel(channel.id().clone()),
+            ChannelRead::Found(Box::new(channel.clone())),
+            1,
+        ),
+    ] {
+        let (service, store, provider) = fixture();
+        provider.proceed.add_permits(1);
+        let factory = ThreadWorkspaces {
+            service,
+            channels: Arc::new(ChannelLookup {
+                membership,
+                channel: read,
+            }),
+            audit: DurableEnvironmentAudit::new(
+                directory.path().join(uuid::Uuid::new_v4().to_string()),
+                Arc::new(Time),
+            )
+            .unwrap(),
+            environments: Default::default(),
+        };
+        let environment = factory.environment(&id(1)).unwrap();
+        let terms = LeaseTerms {
+            environment: environment.declaration().environment,
+            work: LeaseWork::Agent(AgentWork::new("claude", "fixture-model").unwrap()),
+            sandbox: SandboxProfile::HarnessDefault,
+            grants: LeaseGrants::Opening,
+            deadline: LeaseDeadline::UntilEnded,
+        };
+        let lease = LeaseId::new(uuid::Uuid::new_v4().to_string()).unwrap();
+        let result = environment
+            .open(
+                &lease,
+                &terms,
+                Arc::new(AgentProvider::new(Arc::new(ProviderFactory::default()))),
+            )
+            .await;
+        // The admitted fixture deliberately cannot serve a lease stream.
+        assert!(matches!(result, Err(LeaseRefusal::EnvironmentUnreachable)));
+        assert_eq!(provider.creates.load(Ordering::SeqCst), expected_creates);
+        assert_eq!(store.records.lock().unwrap().len(), expected_creates);
+    }
 }

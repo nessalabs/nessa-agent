@@ -2716,3 +2716,6 @@ pub(crate) fn unrooted(text: &str) -> &str {
         text
     }
 }
+#[cfg(unix)]
+#[path = "channel_lookup_fixture.rs"]
+pub(crate) mod channel_lookup;

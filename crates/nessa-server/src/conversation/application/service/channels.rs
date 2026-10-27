@@ -428,6 +428,9 @@ impl ConversationService {
             .get(id)
             .await?
             .ok_or(ConversationError::ChannelNotFound)?;
+        if found.id() != id {
+            return Err(ConversationError::Unavailable);
+        }
         match self.admit_channel(
             caller,
             action,

@@ -44,7 +44,7 @@ impl WorkspaceConnector for Connector {
                     .get(id)
                     .await
                     .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?
-                    .is_none()
+                    .is_none_or(|found| found.id() != id)
                 {
                     return Err(LeaseRefusal::EnvironmentUnreachable);
                 }
