@@ -1765,6 +1765,11 @@ oversized-session drill. The plan command does not call those use cases.
 
 ## Attachments
 
+The proposed [phone file uploads](design/phone-file-uploads.md) design tracks
+issue #1149 across stored message references, SDK dispatch, local and SSH
+placement, and iOS send recovery. The ownership map below describes the current
+implementation; arbitrary stored uploads are not yet message parts.
+
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
 its messages can refer to them. `domain/value_objects/` describe a file
 (`Attachment`: digest, `MediaType`, size, which must all agree), the verified

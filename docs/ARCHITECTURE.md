@@ -930,6 +930,12 @@ the naming, which is intent, and never of a read or even of an admission. An
 audit sink that cannot take that record refuses the send. This is local-only
 by construction. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
 
+Sending stored non-image uploads from the phone is proposed in
+[phone file uploads](design/phone-file-uploads.md), issue #1149. That design
+keeps original references in durable messages and resolves delivery paths under
+the current execution lease; it is not implemented by the existing image or
+linked-path flow.
+
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
 Audio and video in a message, and more provider adapters, remain separate
 features. Implemented native TLS enrollment is described below. Existing design proposals do not replace the implemented Agent contract.
