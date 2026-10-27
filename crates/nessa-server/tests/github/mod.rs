@@ -116,6 +116,8 @@ struct MemoryStore {
     held: Mutex<Option<GithubSignIn>>,
     hold_load: Mutex<Option<Arc<Notify>>>,
     load_started: Notify,
+    hold_save: Mutex<Option<Arc<Notify>>>,
+    save_started: Notify,
     unreadable: Mutex<bool>,
     unwritable: Mutex<bool>,
     /// A save writes the file, then fails (its directory not synced).
@@ -145,6 +147,11 @@ impl GithubTokenStore for MemoryStore {
         if *self.fails_after_writing.lock().unwrap() {
             return Err(StoreUnavailable);
         }
+        let hold = self.hold_save.lock().unwrap().clone();
+        if let Some(hold) = hold {
+            self.save_started.notify_one();
+            hold.notified().await;
+        }
         Ok(())
     }
     async fn delete(&self, _generation: u64) -> Result<(), StoreUnavailable> {
@@ -162,6 +169,8 @@ type Refusal = fn(&GithubAuditEvent) -> bool;
 /// Records every event; refuses the ones `refuse` names.
 #[derive(Default)]
 struct RecordingAudit {
+    hold_connected: Mutex<Option<Arc<Notify>>>,
+    connected_started: Notify,
     records: Mutex<Vec<GithubAuditRecord>>,
     refuse: Mutex<Option<Refusal>>,
 }
@@ -180,6 +189,13 @@ impl RecordingAudit {
 #[async_trait]
 impl GithubAudit for RecordingAudit {
     async fn record(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable> {
+        let hold = self.hold_connected.lock().unwrap().clone();
+        if let Some(hold) =
+            hold.filter(|_| matches!(record.event, GithubAuditEvent::Connected { .. }))
+        {
+            self.connected_started.notify_one();
+            hold.notified().await;
+        }
         self.record_cleanup(record)
     }
     fn record_cleanup(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable> {
@@ -1202,4 +1218,43 @@ async fn a_failed_restore_cannot_erase_a_same_generation_connect_owner() {
         .unwrap();
     assert_eq!(requested.operation_id, cancelled.operation_id);
     assert_eq!(cancelled.caller, caller("current-desktop"));
+}
+
+#[tokio::test]
+async fn approved_sign_in_stays_connecting_until_audit_and_store_receipts() {
+    for audit_wait in [true, false] {
+        let f = Fixture::new();
+        let hold = Arc::new(Notify::new());
+        if audit_wait {
+            *f.audit.hold_connected.lock().unwrap() = Some(hold.clone());
+        } else {
+            *f.store.hold_save.lock().unwrap() = Some(hold.clone());
+        }
+        let connections = f.connections().await;
+        connections.connect(caller("desktop")).await.unwrap();
+        f.github
+            .answer([Ok(PollAnswer::Granted(token("approved-token")))]);
+        f.next_poll().await;
+        let reached = if audit_wait {
+            &f.audit.connected_started
+        } else {
+            &f.store.save_started
+        };
+        tokio::time::timeout(Duration::from_secs(5), reached.notified())
+            .await
+            .unwrap();
+        let waiting = connections.status();
+        let exposed = connections.token();
+        hold.notify_one();
+        assert!(
+            matches!(waiting, GithubStatus::Connecting { .. }),
+            "premature terminal status during audit_wait={audit_wait}: {waiting:?}"
+        );
+        assert!(exposed.is_none(), "no credential before both receipts");
+        f.settled(&connections, |status| {
+            matches!(status, GithubStatus::Connected { .. })
+        })
+        .await;
+        assert_eq!(connections.token().unwrap().expose(), "approved-token");
+    }
 }
