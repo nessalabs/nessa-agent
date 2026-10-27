@@ -72,6 +72,6 @@ fn code(error: Failure) -> &'static str {
         Failure::WorkerUnavailable => "boat_worker_unavailable",
         Failure::EnvironmentUnavailable => "boat_environment_blocks_credentials",
         Failure::ProvisioningUncertain => "boat_provisioning_uncertain",
-        Failure::CleanupUncertain => "boat_cleanup_uncertain",
+        Failure::ReceiptRecovery { .. } | Failure::CleanupUncertain => "boat_cleanup_uncertain",
     }
 }

@@ -5,6 +5,10 @@ use super::*;
 use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
 };
+use crate::conversation::domain::{
+    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelResources,
+};
 use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationCreation,
@@ -14,7 +18,8 @@ use crate::conversation::{
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalConversationStore,
+        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalChannelFolders,
+        LocalChannelStore, LocalConversationStore,
     },
 };
 use crate::conversation_test_support::{
@@ -275,7 +280,10 @@ fn session(id: &ConversationId) -> SessionId {
 }
 /// A conversation with one completed turn: saved history and a summary.
 async fn talked_in(fixture: &Deleting) -> ConversationId {
-    let id = new_id();
+    talked_in_as(fixture, new_id()).await
+}
+
+async fn talked_in_as(fixture: &Deleting, id: ConversationId) -> ConversationId {
     fixture
         .service
         .create(
@@ -5724,4 +5732,184 @@ async fn a_deletion_asks_the_inventory_after_the_fence() {
         Ok(true)
     ));
     assert!(asked.0.load(Ordering::SeqCst));
+}
+
+fn bind_deletion_channels(
+    service: &ConversationService,
+    store: Arc<LocalChannelStore>,
+    root: &Path,
+) {
+    service.bind_channels(
+        store,
+        Arc::new(LocalChannelFolders::with_system(root, None, vec![]).unwrap()),
+    );
+}
+
+async fn coordinator_channel(
+    fixture: &Deleting,
+    root: &Path,
+) -> (Arc<LocalChannelStore>, Channel, ConversationId) {
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = Arc::new(LocalChannelStore::open(&private.join("channels.sqlite3")).unwrap());
+    let channel = Channel::new(
+        ChannelId::from_random([7; 10]),
+        caller("channel").organization_id,
+        caller("channel").principal_id,
+        ChannelParts {
+            execution: ChannelExecution::default(),
+            name: ChannelName::new("Main deletion").unwrap(),
+            folder: ChannelFolder {
+                path: ChannelPath::new(root.to_path_buf()).unwrap(),
+                made: false,
+            },
+            defaults: ChannelDefaults {
+                agent: AgentId::Claude,
+                model: ConversationModelId::new("claude-sonnet-5").unwrap(),
+                mode: ConversationApprovalMode::Ask,
+            },
+            notes: ChannelNotes::new("").unwrap(),
+            resources: ChannelResources::new(vec![]).unwrap(),
+        },
+        "main-deletion".into(),
+        NOW,
+    )
+    .unwrap();
+    store.create(channel.clone()).await.unwrap();
+    bind_deletion_channels(&fixture.service, store.clone(), root);
+    let main = talked_in_as(fixture, channel.coordinator_id()).await;
+    store.place(&main, channel.id()).await.unwrap();
+    (store, channel, main)
+}
+
+#[tokio::test]
+async fn a_failed_coordinator_retirement_keeps_deletion_unfinished_until_channel_commit() {
+    let fixture = deleting();
+    let directory = tempfile::tempdir().unwrap();
+    let (store, channel, main) = coordinator_channel(&fixture, directory.path()).await;
+    // Inject an actual ChannelStore::forget transaction failure after history
+    // erasure. The intent, membership and current coordinator must all survive.
+    let database = nessa_local_database::rusqlite::Connection::open(
+        directory.path().join("conversations/channels.sqlite3"),
+    )
+    .unwrap();
+    database.execute_batch(
+        "CREATE TRIGGER refuse_coordinator_retirement BEFORE INSERT ON channel_coordinator_replacements BEGIN SELECT RAISE(ABORT, 'injected retirement failure'); END;",
+    ).unwrap();
+    let failures = incomplete(
+        fixture
+            .service
+            .delete(main.clone(), caller("delete-main"))
+            .await,
+    );
+    assert!(matches!(
+        failures.summary,
+        Some(ConversationError::Metadata)
+    ));
+    assert!(failures.history.is_none());
+    assert!(!tombstone(&fixture, &main).erased());
+    assert!(history(&fixture.storage, &main).await.is_none());
+    assert_eq!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        main
+    );
+    assert_eq!(
+        store.channel_of(&main).await.unwrap(),
+        Some(channel.id().clone())
+    );
+
+    database
+        .execute_batch("DROP TRIGGER refuse_coordinator_retirement")
+        .unwrap();
+    fixture
+        .service
+        .delete(main.clone(), caller("retry-main"))
+        .await
+        .unwrap();
+    let finished = tombstone(&fixture, &main);
+    assert!(finished.erased());
+    assert_eq!(finished.request(), "delete-main");
+    let replacement = store
+        .get(channel.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .coordinator_id();
+    assert_ne!(replacement, main);
+    assert_eq!(store.channel_of(&main).await.unwrap(), None);
+    fixture
+        .service
+        .delete(main, caller("repeat-main"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        replacement
+    );
+    fixture.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unconfirmed_history_erasure_does_not_retire_its_coordinator() {
+    let fixture = deleting();
+    let directory = tempfile::tempdir().unwrap();
+    let (store, channel, main) = coordinator_channel(&fixture, directory.path()).await;
+    fixture.service.shutdown().await.unwrap();
+    let storage = Arc::new(CleanupReplyFailsOnce {
+        storage: fixture.storage.clone(),
+        fail_first: Arc::new(AtomicBool::new(true)),
+    });
+    let service = service_with(&fixture, fixture.repository.clone(), storage.clone());
+    bind_deletion_channels(&service, store.clone(), directory.path());
+    let failures = incomplete(service.delete(main.clone(), caller("delete-main")).await);
+    assert!(matches!(
+        failures.history,
+        Some(ConversationError::Storage(StorageError::Io(_)))
+    ));
+    assert!(!tombstone(&fixture, &main).erased());
+    assert_eq!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        main
+    );
+    assert_eq!(
+        store.channel_of(&main).await.unwrap(),
+        Some(channel.id().clone())
+    );
+    service.shutdown().await.unwrap();
+
+    let restarted = service_with(&fixture, fixture.repository.clone(), storage);
+    bind_deletion_channels(&restarted, store.clone(), directory.path());
+    restarted
+        .delete(main.clone(), caller("retry-main"))
+        .await
+        .unwrap();
+    let finished = tombstone(&fixture, &main);
+    assert!(finished.erased());
+    assert_eq!(finished.request(), "delete-main");
+    assert_ne!(
+        store
+            .get(channel.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        main
+    );
+    assert_eq!(store.channel_of(&main).await.unwrap(), None);
+    restarted.shutdown().await.unwrap();
 }

@@ -2,7 +2,9 @@
 //! the saved VM, and observer cancellation does not cancel accepted provisioning.
 use super::domain::{Assignment, BoatConnection, Failure};
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use nessa_protocol::conversation::domain::ConversationId;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Weak},
@@ -51,11 +53,29 @@ pub(crate) trait Provider: Send + Sync {
     async fn remove(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure>;
 }
 
+/// Recovery evidence is independent of assignment publication and UI observers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RecoveryEvent {
+    ReceiptSaveFailed {
+        thread: String,
+        vm: String,
+    },
+    RollbackObserved {
+        thread: String,
+        vm: String,
+        confirmed: bool,
+    },
+}
+pub(crate) trait RecoveryAudit: Send + Sync {
+    fn record(&self, event: &RecoveryEvent) -> Result<(), Failure>;
+}
+
 #[derive(Clone)]
 pub(crate) struct Workspaces {
     pub(crate) settings: Arc<dyn Settings>,
     provider: Arc<dyn Provider>,
     assignments: Arc<dyn Assignments>,
+    recovery: Arc<dyn RecoveryAudit>,
     locks: Arc<Mutex<BTreeMap<String, Weak<Mutex<()>>>>>,
     image: Option<String>,
 }
@@ -64,14 +84,20 @@ impl Workspaces {
         settings: Arc<dyn Settings>,
         provider: Arc<dyn Provider>,
         assignments: Arc<dyn Assignments>,
+        recovery: Arc<dyn RecoveryAudit>,
     ) -> Self {
         Self {
             settings,
             image: None,
             provider,
             assignments,
+            recovery,
             locks: Arc::default(),
         }
+    }
+    fn record_recovery(&self, event: &RecoveryEvent) -> Result<(), Failure> {
+        catch_unwind(AssertUnwindSafe(|| self.recovery.record(event)))
+            .unwrap_or(Err(Failure::Storage))
     }
     pub(crate) fn with_image(mut self, image: Option<&str>) -> Self {
         self.image = image.map(str::to_owned);
@@ -147,11 +173,33 @@ impl Workspaces {
                     environment: connection.environment.clone(),
                 };
                 if self.assignments.save(receipt).await.is_err() {
-                    let cleanup = self.provider.remove(&connection, &vm).await;
-                    return Err(if cleanup.is_ok() {
-                        Failure::Storage
-                    } else {
-                        Failure::CleanupUncertain
+                    // Preserve the external target before attempting rollback.
+                    // Audit failure never prevents cleanup; neither a dropped
+                    // observer nor a failing port can discard its outcome.
+                    let receipt_audit_failed = self
+                        .record_recovery(&RecoveryEvent::ReceiptSaveFailed {
+                            thread: id.clone(),
+                            vm: vm.clone(),
+                        })
+                        .is_err();
+                    let cleanup =
+                        AssertUnwindSafe(async { self.provider.remove(&connection, &vm).await })
+                            .catch_unwind()
+                            .await
+                            .unwrap_or(Err(Failure::CleanupUncertain));
+                    let cleanup_unconfirmed = cleanup.is_err();
+                    let cleanup_audit_failed = self
+                        .record_recovery(&RecoveryEvent::RollbackObserved {
+                            thread: id.clone(),
+                            vm: vm.clone(),
+                            confirmed: !cleanup_unconfirmed,
+                        })
+                        .is_err();
+                    return Err(Failure::ReceiptRecovery {
+                        vm,
+                        receipt_audit_failed,
+                        cleanup_unconfirmed,
+                        cleanup_audit_failed,
                     });
                 }
                 vm

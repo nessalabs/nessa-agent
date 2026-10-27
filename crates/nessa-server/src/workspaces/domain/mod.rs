@@ -1,7 +1,7 @@
 //! Validated connection values and durable allocation facts. No IO or clocks.
 use nessa_vault::domain::Secret;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {
     Locked,
     NotConfigured,
@@ -13,6 +13,12 @@ pub(crate) enum Failure {
     ProvisioningUncertain,
     Missing,
     CleanupUncertain,
+    ReceiptRecovery {
+        vm: String,
+        receipt_audit_failed: bool,
+        cleanup_unconfirmed: bool,
+        cleanup_audit_failed: bool,
+    },
 }
 
 /// The user's infrastructure credential is transient, redacted and zeroizing.

@@ -4,7 +4,7 @@ use crate::workspaces::{application::*, domain::*};
 use async_trait::async_trait;
 use nessa_protocol::conversation::domain::ConversationId;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use tokio::sync::Semaphore;
@@ -61,16 +61,72 @@ impl WorkspaceRuntime for Runtime {
         Err(Failure::Provider)
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RecoveryStep {
+    Audit(RecoveryEvent),
+    Remove(String),
+}
+#[derive(Default)]
+struct Audit {
+    events: Mutex<Vec<RecoveryEvent>>,
+    steps: Arc<Mutex<Vec<RecoveryStep>>>,
+    fail_receipt: AtomicBool,
+    fail_cleanup: AtomicBool,
+    panic_receipt: AtomicBool,
+}
+impl RecoveryAudit for Audit {
+    fn record(&self, event: &RecoveryEvent) -> Result<(), Failure> {
+        self.steps
+            .lock()
+            .unwrap()
+            .push(RecoveryStep::Audit(event.clone()));
+        assert!(
+            !(matches!(event, RecoveryEvent::ReceiptSaveFailed { .. })
+                && self.panic_receipt.load(Ordering::SeqCst)),
+            "injected receipt audit panic"
+        );
+        let fail = match event {
+            RecoveryEvent::ReceiptSaveFailed { .. } => &self.fail_receipt,
+            RecoveryEvent::RollbackObserved { .. } => &self.fail_cleanup,
+        };
+        if fail.load(Ordering::SeqCst) {
+            return Err(Failure::Storage);
+        }
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+}
+fn recovery_events(thread: &ConversationId, confirmed: bool) -> Vec<RecoveryEvent> {
+    let thread = thread.to_string();
+    let vm = format!("vm-{thread}");
+    vec![
+        RecoveryEvent::ReceiptSaveFailed {
+            thread: thread.clone(),
+            vm: vm.clone(),
+        },
+        RecoveryEvent::RollbackObserved {
+            thread,
+            vm,
+            confirmed,
+        },
+    ]
+}
 struct FakeProvider {
     creates: AtomicUsize,
     connects: Mutex<Vec<String>>,
     deletes: AtomicUsize,
     entered: Semaphore,
     proceed: Semaphore,
+    confirm_remove: AtomicBool,
+    panic_remove: AtomicBool,
+    recovery_steps: Arc<Mutex<Vec<RecoveryStep>>>,
 }
 impl FakeProvider {
-    fn new() -> Self {
+    fn new(recovery_steps: Arc<Mutex<Vec<RecoveryStep>>>) -> Self {
         Self {
+            confirm_remove: AtomicBool::new(false),
+            panic_remove: AtomicBool::new(false),
+            recovery_steps,
             creates: AtomicUsize::new(0),
             connects: Mutex::new(vec![]),
             deletes: AtomicUsize::new(0),
@@ -99,25 +155,44 @@ impl Provider for FakeProvider {
         self.connects.lock().unwrap().push(vm.into());
         Ok(Arc::new(Runtime))
     }
-    async fn remove(&self, _: &BoatConnection, _: &str) -> Result<(), Failure> {
+    async fn remove(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+        self.recovery_steps
+            .lock()
+            .unwrap()
+            .push(RecoveryStep::Remove(vm.into()));
         self.deletes.fetch_add(1, Ordering::SeqCst);
-        Err(Failure::CleanupUncertain)
+        assert!(
+            !self.panic_remove.load(Ordering::SeqCst),
+            "injected cleanup panic"
+        );
+        if self.confirm_remove.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(Failure::CleanupUncertain)
+        }
     }
 }
 fn id(value: u128) -> ConversationId {
     ConversationId::new(&uuid::Uuid::from_u128(value).to_string()).unwrap()
 }
 fn fixture() -> (Arc<Workspaces>, Arc<Store>, Arc<FakeProvider>) {
+    let (service, store, provider, _) = fixture_with_audit();
+    (service, store, provider)
+}
+fn fixture_with_audit() -> (Arc<Workspaces>, Arc<Store>, Arc<FakeProvider>, Arc<Audit>) {
     let store = Arc::new(Store::default());
-    let provider = Arc::new(FakeProvider::new());
+    let audit = Arc::new(Audit::default());
+    let provider = Arc::new(FakeProvider::new(audit.steps.clone()));
     (
         Arc::new(Workspaces::new(
             Arc::new(Config),
             provider.clone(),
             store.clone(),
+            audit.clone(),
         )),
         store,
         provider,
+        audit,
     )
 }
 #[tokio::test]
@@ -201,18 +276,141 @@ async fn lost_waiter_does_not_abandon_the_creation_receipt() {
 }
 #[tokio::test]
 async fn failed_receipt_storage_attempts_cleanup_and_preserves_uncertainty() {
-    let (service, store, provider) = fixture();
+    let (service, store, provider, audit) = fixture_with_audit();
     store.fail_receipt.store(true, Ordering::SeqCst);
     provider.proceed.add_permits(1);
-    assert!(matches!(
-        service.open(id(1), true).await,
-        Err(Failure::CleanupUncertain)
-    ));
+    assert_eq!(
+        service.open(id(1), true).await.err(),
+        Some(Failure::ReceiptRecovery {
+            vm: format!("vm-{}", id(1)),
+            receipt_audit_failed: false,
+            cleanup_unconfirmed: true,
+            cleanup_audit_failed: false,
+        })
+    );
+    let events = recovery_events(&id(1), false);
+    assert_eq!(*audit.events.lock().unwrap(), events);
+    assert_eq!(
+        *audit.steps.lock().unwrap(),
+        vec![
+            RecoveryStep::Audit(events[0].clone()),
+            RecoveryStep::Remove(format!("vm-{}", id(1))),
+            RecoveryStep::Audit(events[1].clone()),
+        ]
+    );
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
     assert!(matches!(
         service.open(id(1), true).await,
         Err(Failure::ProvisioningUncertain)
     ));
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn receipt_recovery_keeps_target_and_attempts_cleanup_across_all_audit_failures() {
+    for receipt_audit_failed in [false, true] {
+        for cleanup_confirmed in [false, true] {
+            for cleanup_audit_failed in [false, true] {
+                let (service, store, provider, audit) = fixture_with_audit();
+                store.fail_receipt.store(true, Ordering::SeqCst);
+                audit
+                    .fail_receipt
+                    .store(receipt_audit_failed, Ordering::SeqCst);
+                audit
+                    .fail_cleanup
+                    .store(cleanup_audit_failed, Ordering::SeqCst);
+                provider
+                    .confirm_remove
+                    .store(cleanup_confirmed, Ordering::SeqCst);
+                provider.proceed.add_permits(1);
+                assert_eq!(
+                    service.open(id(2), true).await.err(),
+                    Some(Failure::ReceiptRecovery {
+                        vm: format!("vm-{}", id(2)),
+                        receipt_audit_failed,
+                        cleanup_unconfirmed: !cleanup_confirmed,
+                        cleanup_audit_failed,
+                    })
+                );
+                let events = recovery_events(&id(2), cleanup_confirmed);
+                assert_eq!(
+                    *audit.steps.lock().unwrap(),
+                    vec![
+                        RecoveryStep::Audit(events[0].clone()),
+                        RecoveryStep::Remove(format!("vm-{}", id(2))),
+                        RecoveryStep::Audit(events[1].clone()),
+                    ],
+                    "audit refusal must not skip rollback or its observation"
+                );
+                let persisted = events
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, event)| {
+                        let failed = if index == 0 {
+                            receipt_audit_failed
+                        } else {
+                            cleanup_audit_failed
+                        };
+                        (!failed).then_some(event)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(*audit.events.lock().unwrap(), persisted);
+                assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+                assert!(provider.connects.lock().unwrap().is_empty());
+                assert_eq!(
+                    store.records.lock().unwrap().get(&id(2).to_string()),
+                    Some(&Assignment::Provisioning {
+                        thread: id(2).to_string()
+                    })
+                );
+                assert_eq!(
+                    service.open(id(2), true).await.err(),
+                    Some(Failure::ProvisioningUncertain)
+                );
+                assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn lost_waiter_retains_failed_receipt_target_and_rollback_evidence() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    store.fail_receipt.store(true, Ordering::SeqCst);
+    let task = {
+        let service = service.clone();
+        tokio::spawn(async move { service.open(id(3), true).await })
+    };
+    provider.entered.acquire().await.unwrap().forget();
+    task.abort();
+    match task.await {
+        Err(error) => assert!(error.is_cancelled()),
+        Ok(_) => panic!("allocation waiter must be cancelled before the provider receipt"),
+    }
+    provider.proceed.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while audit.events.lock().unwrap().len() != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let events = recovery_events(&id(3), false);
+    assert_eq!(*audit.events.lock().unwrap(), events);
+    assert_eq!(
+        *audit.steps.lock().unwrap(),
+        vec![
+            RecoveryStep::Audit(events[0].clone()),
+            RecoveryStep::Remove(format!("vm-{}", id(3))),
+            RecoveryStep::Audit(events[1].clone()),
+        ]
+    );
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+    assert!(provider.connects.lock().unwrap().is_empty());
+    assert_eq!(
+        service.open(id(3), true).await.err(),
+        Some(Failure::ProvisioningUncertain)
+    );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
 }
 
@@ -265,4 +463,32 @@ fn connection_cache_refuses_capacity_without_evicting_borrowed_environments() {
         0,
         "cache admission must precede provisioning"
     );
+}
+
+#[tokio::test]
+async fn recovery_port_panics_keep_cleanup_and_target_evidence_owned() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    store.fail_receipt.store(true, Ordering::SeqCst);
+    audit.panic_receipt.store(true, Ordering::SeqCst);
+    provider.panic_remove.store(true, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert_eq!(
+        service.open(id(3), true).await.err(),
+        Some(Failure::ReceiptRecovery {
+            vm: format!("vm-{}", id(3)),
+            receipt_audit_failed: true,
+            cleanup_unconfirmed: true,
+            cleanup_audit_failed: false,
+        })
+    );
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *audit.events.lock().unwrap(),
+        vec![recovery_events(&id(3), false)[1].clone()]
+    );
+    assert_eq!(
+        service.open(id(3), true).await.err(),
+        Some(Failure::ProvisioningUncertain)
+    );
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
 }

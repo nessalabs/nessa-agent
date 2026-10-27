@@ -5735,7 +5735,14 @@ impl ConversationService {
                 }
             }
             self.forget_thread_reports_of(&id).await;
-            self.forget_channel_of(&id).await;
+            // Retiring a channel main publishes its replacement. That transition
+            // requires confirmed history erasure and participates in deletion
+            // retries; a failed channel commit must not finish the tombstone.
+            if failures.history.is_none() && !failures.history_leased_elsewhere {
+                if let Err(error) = self.forget_channel_of(&id).await {
+                    failures.summary.get_or_insert(error);
+                }
+            }
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);

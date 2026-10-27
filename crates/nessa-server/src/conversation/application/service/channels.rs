@@ -530,12 +530,14 @@ impl ConversationService {
     }
 
     /// Let go of a deleted conversation's placement.
-    pub(super) async fn forget_channel_of(&self, id: &ConversationId) {
+    pub(super) async fn forget_channel_of(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(), ConversationError> {
         if let Some(store) = self.channel_store() {
-            if let Err(error) = store.forget(id).await {
-                tracing::warn!(conversation_id = %id, ?error, "a deleted conversation's channel placement was not let go");
-            }
+            store.forget(id).await?;
         }
+        Ok(())
     }
 }
 

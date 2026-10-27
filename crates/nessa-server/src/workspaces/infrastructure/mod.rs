@@ -1,4 +1,4 @@
-//! Provider, encrypted settings, receipt storage and managed-pipe adapters.
+//! Provider, encrypted settings, receipt storage and SSH lease adapters.
 //! They implement the application ports; composition alone creates them.
 mod assignments;
 mod boat;

@@ -97,3 +97,38 @@ async fn linked_receipt_is_refused_without_reading_or_overwriting_its_target() {
     assert_eq!(store.save(intent()).await, Err(Failure::Storage));
     assert_eq!(std::fs::read_to_string(target).unwrap(), "preserve");
 }
+
+#[tokio::test]
+async fn receipt_publication_obeys_the_same_byte_bound_as_reopening() {
+    for fill in ["x", "é"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("receipts");
+        let store = FileAssignments(root.clone());
+        store.save(intent()).await.unwrap();
+        let mut oversized = receipt();
+        if let Assignment::Assigned { vm, .. } = &mut oversized {
+            *vm = fill.repeat(8193 / fill.len() + 1);
+        }
+        assert_eq!(store.save(oversized).await, Err(Failure::Storage));
+        assert_eq!(store.read(THREAD).await.unwrap(), Some(intent()));
+        store.save(receipt()).await.unwrap();
+        let path = root.join(format!("{THREAD}.json"));
+        let ordinary = std::fs::metadata(&path).unwrap().len() as usize;
+        // Exactly the reader's bound is valid, including serialization overhead.
+        let other = temporary.path().join("exact");
+        let exact = FileAssignments(other.clone());
+        exact.save(intent()).await.unwrap();
+        let mut boundary = receipt();
+        if let Assignment::Assigned { vm, .. } = &mut boundary {
+            *vm = "x".repeat(8192 - ordinary + vm.len());
+        }
+        exact.save(boundary.clone()).await.unwrap();
+        assert_eq!(
+            std::fs::metadata(other.join(format!("{THREAD}.json")))
+                .unwrap()
+                .len(),
+            8192
+        );
+        assert_eq!(exact.read(THREAD).await.unwrap(), Some(boundary));
+    }
+}

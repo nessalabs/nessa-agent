@@ -13,6 +13,8 @@ use std::{
     path::PathBuf,
 };
 
+const MAX_HISTORY_BYTES: usize = 8192;
+
 pub(crate) struct FileAssignments(pub(crate) PathBuf);
 #[derive(Serialize, Deserialize)]
 #[serde(
@@ -82,10 +84,10 @@ impl Assignments for FileAssignments {
                 Err(_) => return Err(Failure::Storage),
             };
             let mut bytes = Vec::new();
-            file.take(8193)
+            file.take((MAX_HISTORY_BYTES + 1) as u64)
                 .read_to_end(&mut bytes)
                 .map_err(|_| Failure::Storage)?;
-            if bytes.len() > 8192 {
+            if bytes.len() > MAX_HISTORY_BYTES {
                 return Err(Failure::Storage);
             }
             Ok(decode(&bytes, &thread)?
@@ -109,10 +111,10 @@ impl Assignments for FileAssignments {
                 match directory.open_file(OsStr::new(&name), OpenMode::ReadNonblocking) {
                     Ok(file) => {
                         let mut bytes = Vec::new();
-                        file.take(8193)
+                        file.take((MAX_HISTORY_BYTES + 1) as u64)
                             .read_to_end(&mut bytes)
                             .map_err(|_| Failure::Storage)?;
-                        if bytes.len() > 8192 {
+                        if bytes.len() > MAX_HISTORY_BYTES {
                             return Err(Failure::Storage);
                         }
                         decode(&bytes, assignment.thread())?
@@ -137,8 +139,11 @@ impl Assignments for FileAssignments {
             history
                 .transitions
                 .push(PersistedAssignment(assignment.clone()));
-            let temporary = directory.reserve_temp().map_err(|_| Failure::Storage)?;
             let bytes = serde_json::to_vec(&history).map_err(|_| Failure::Storage)?;
+            if bytes.len() > MAX_HISTORY_BYTES {
+                return Err(Failure::Storage);
+            }
+            let temporary = directory.reserve_temp().map_err(|_| Failure::Storage)?;
             temporary
                 .as_file()
                 .write_all(&bytes)

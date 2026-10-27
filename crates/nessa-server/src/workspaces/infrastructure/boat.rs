@@ -88,6 +88,10 @@ impl Provider for BoatProvider {
                     type_: Some("small".into()),
                     ttl_seconds: Some(Some(VM_TTL_SECONDS)),
                     environment: Some(connection.environment.clone()),
+                    env: Some(std::collections::HashMap::from([(
+                        "NESSA_THREAD_ID".into(),
+                        thread.into(),
+                    )])),
                     from: Some(connection.image.clone()),
                     snapshots: Some(true),
                     ..Default::default()
@@ -99,7 +103,16 @@ impl Provider for BoatProvider {
             )
             .await
             .map_err(|_| Failure::ProvisioningUncertain)?;
-        Ok(result.sandbox.id)
+        let id = result.sandbox.id;
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+        {
+            return Err(Failure::ProvisioningUncertain);
+        }
+        Ok(id)
     }
     async fn connect(
         &self,
