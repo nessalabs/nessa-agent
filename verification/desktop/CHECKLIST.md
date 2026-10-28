@@ -2037,6 +2037,30 @@ and is dev-only in run-all.
   Staging and Answer drops the first question. Skip drops the second. A frame
   that no longer lists the third drops it on the desktop and the panel.
 
+## Tool disclosure scroll
+
+`tool-disclosure.mjs` opens the sample conversations `split-panes` and
+`retry-budget` in the desktop window. The rule is
+`watchToolDisclosure` in `src/desktop/workspace/ui/transcript/tool-disclosure.ts`
+and the state table in `docs/design/transcript-tool-disclosure-scroll.md`.
+Chromium and WebKit, both layouts, at 1280×720, so the sample
+conversation overflows while its tool header is still on screen at the end.
+
+- [ ] **Opening or closing a tool run at the end of the transcript keeps
+  that header's top within 1px and grows the distance from the end.**
+  The same header stays within 1px when the reader is at the top.
+  _Check:_ `tool-disclosure.mjs --only group-end,group-away`. Anchoring is
+  off during the motion. The shot `group-end-<engine>-<layout>.png` is the
+  open run with its header still in view. Closing may move the header down
+  only by the browser's clamp, and only as far as `scrollTop` decreases.
+- [ ] **Opening a call's row at the end keeps that row's top within 1px.**
+  _Check:_ `--only step-end`.
+- [ ] **Showing the calls folded above a long run keeps that row's top
+  within 1px.** _Check:_ `--only earlier` (`retry-budget`).
+- [ ] **A growth while the reader is back at the end leaves them within
+  24px of it.** _Check:_ `--only follow`. This is after a disclosure, so
+  the hold has already let go.
+
 ## Transcript notes
 
 `transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page

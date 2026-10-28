@@ -4019,7 +4019,23 @@ const steps = {
       )
       return
     }
-    await line.click()
+    // The line stays where it was clicked, including when the reader is at the
+    // end (`tool-disclosure.ts`). Measuring after scroll-into-view, then
+    // clicking in the page, so the click itself does not scroll.
+    await line.scrollIntoViewIfNeeded()
+    const lineTop = await line.evaluate((element) => element.getBoundingClientRect().top)
+    await line.evaluate((element) => element.click())
+    await run.page.waitForFunction(() => {
+      const scroller = document.querySelector(".workspace-transcript")
+      const moving = scroller
+        ?.querySelector("[data-slot='tool-trace']")
+        ?.getAnimations()
+        .some((animation) => animation.playState === "running")
+      return Boolean(scroller) && !scroller.hasAttribute("data-disclosure-hold") && !moving
+    })
+    const lineMoved = await line.evaluate((element) => element.getBoundingClientRect().top)
+    if (Math.abs(lineMoved - lineTop) > 1)
+      failures.push(`opening the run moved its line ${(lineMoved - lineTop).toFixed(1)}px`)
     const rows = message.locator('[data-slot="tool-trace-step"]')
     const opened = await waitFor(
       async () =>
@@ -4078,7 +4094,19 @@ const steps = {
     // A call's card shows the input it was made with.
     const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
     const row = rows.nth(asked)
-    await row.click()
+    const rowTop = await row.evaluate((element) => element.getBoundingClientRect().top)
+    await row.evaluate((element) => element.click())
+    await run.page.waitForFunction(() => {
+      const scroller = document.querySelector(".workspace-transcript")
+      const moving = [...(scroller?.querySelectorAll("[data-slot='tool-trace']") ?? [])].some(
+        (trace) =>
+          trace.getAnimations().some((animation) => animation.playState === "running"),
+      )
+      return Boolean(scroller) && !scroller.hasAttribute("data-disclosure-hold") && !moving
+    })
+    const rowMoved = await row.evaluate((element) => element.getBoundingClientRect().top)
+    if (Math.abs(rowMoved - rowTop) > 1)
+      failures.push(`opening the call moved its row ${(rowMoved - rowTop).toFixed(1)}px`)
     const card = message.locator(`[id="${await row.getAttribute("aria-controls")}"]`)
     await card.getByRole("tab", { name: "Input" }).click()
     const value = String(Object.values(TRACE_CALLS[asked].arguments)[0])
@@ -4094,8 +4122,20 @@ const steps = {
       await message.screenshot({
         path: join(run.evidence, `trace-${run.engine ?? "window"}-opened.png`),
       })
-    // Folded again, as the person left it.
-    await line.click()
+    // Folded again, as the person left it. The line stays put for this close too.
+    const foldTop = await line.evaluate((element) => element.getBoundingClientRect().top)
+    await line.evaluate((element) => element.click())
+    await run.page.waitForFunction(() => {
+      const scroller = document.querySelector(".workspace-transcript")
+      const moving = scroller
+        ?.querySelector("[data-slot='tool-trace']")
+        ?.getAnimations()
+        .some((animation) => animation.playState === "running")
+      return Boolean(scroller) && !scroller.hasAttribute("data-disclosure-hold") && !moving
+    })
+    const foldMoved = await line.evaluate((element) => element.getBoundingClientRect().top)
+    if (Math.abs(foldMoved - foldTop) > 1)
+      failures.push(`closing the run moved its line ${(foldMoved - foldTop).toFixed(1)}px`)
     if (
       !(await waitFor(
         async () => (await line.getAttribute("aria-expanded")) === "false",
