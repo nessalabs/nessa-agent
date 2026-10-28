@@ -402,6 +402,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   Wait for the command's expected pane membership, destination, focus mark and
   composer together, with finite motion finished, within the existing 3 s
   settlement budget. The old pane's caret cannot complete a new-pane command.
+- [ ] **A document tab gives the caret to a new session** when ⌘N or ⇧⌘N
+  deselects it. Arrow selection keeps focus in the selected tab; a shortcut
+  must land in the new focused pane's composer after its finite motion.
+  _Check:_ `focus.mjs` (`focus-tab-shortcuts`) and
+  `src/desktop/workspace/adapters/dom/focus.test.tsx`.
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
