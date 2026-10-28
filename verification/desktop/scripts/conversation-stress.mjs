@@ -4997,7 +4997,7 @@ async function setupWindow(run, prepare) {
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
   await page.locator(".nessa-setup-window").waitFor()
-  await unlockVault(page)
+  await unlockRequestedVault(run.client, page)
   return page
 }
 
