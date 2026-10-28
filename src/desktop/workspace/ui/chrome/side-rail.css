@@ -53,8 +53,27 @@
   opacity: 1;
 }
 
+/*
+ * Open, the rail is a floating pill (as Outlook's is): it starts below the
+ * window bar, so nothing of it runs under or around the traffic lights, and
+ * stands a gutter clear of the window's edges. It is centred on the items'
+ * column and holds the toggle in the bottom corner.
+ */
+.side-rail-pill {
+  position: absolute;
+  top: var(--desktop-titlebar-height);
+  bottom: var(--desktop-gutter);
+  left: calc(var(--rail-column) - var(--desktop-gutter));
+  width: calc(var(--desktop-control-size) + 2 * var(--desktop-gutter));
+  border-radius: var(--desktop-radius-pill);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
 .side-rail-items {
   position: relative;
+  /* One gutter inside the pill's top, as its sides keep. */
+  margin-top: var(--desktop-gutter);
   margin-left: var(--rail-column);
   display: flex;
   flex-direction: column;
