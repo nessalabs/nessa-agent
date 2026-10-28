@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: A local command can outlive its calling agent turn and resume that conversation with its outcome.
 parent: gateway
-sourceRevision: "5ae45faa95fd88ae96c5f213e0e3fcd811284a91"
+sourceRevision: "85e8f95f7abd3f7549b772841df63d127f155f20"
 sources:
   - crates/nessa-server/src/conversation/application/service/background_tasks.rs
   - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
@@ -82,7 +82,7 @@ stateDiagram-v2
     [*] --> Waiting: outcome saved
     Waiting --> Waiting: storage or submission unavailable
     Waiting --> Delivered: stable internal execution accepted or already saved
-    Waiting --> Discarded: conversation deleted or inaccessible
+    Waiting --> Discarded: conversation missing or deleted
     Delivered --> [*]
     Discarded --> [*]
 ```
@@ -92,6 +92,13 @@ lets delivery recover a lost acknowledgement without running the command or
 submitting the result again. A busy conversation queues the continuation; an idle
 parked conversation reopens its provider session. Current access is checked using
 the original caller. Internal input does not consume held user notes or app context.
+
+Once deletion has saved its tombstone, it withdraws pending continuation delivery
+before joining task cleanup. This lets cleanup finish even when an export is
+waiting for exclusive service admission. Withdrawal is separate from the first
+process-stop cause. Discarded means delivery will not be retried; it does not
+claim a concurrent submission was never accepted. Gateway retirement leaves
+undelivered outcomes waiting for recovery.
 
 The original waterfall row reads the persisted task outcome. Native MCP completion
 only means the start request returned; it does not settle the background command.
@@ -117,7 +124,7 @@ uncertainty is outside this implementation; it requires operator investigation.
 
 The new orchestration tests cover original-call binding, retries, busy and parked
 providers, ambiguous admission, cancellation before admission, deletion, orderly
-shutdown and interrupted restart. The conversation stress step uses a real
+shutdown, deletion with queued export, and interrupted restart. The conversation stress step uses a real
 Shepherd command with a scripted harness through the production MCP relay and
 checks the existing waterfall and internal continuation in Chromium and WebKit.
 Native remote execution and process adoption after a gateway crash are excluded.
