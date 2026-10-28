@@ -21,6 +21,7 @@
  */
 import {
   clientDueAtMs,
+  type ConversationAgentSource,
   type ConversationMessageApp,
   type ImageAttachment,
   type LinkedFile,
@@ -35,6 +36,7 @@ import {
 } from "@nessa/client"
 import {
   referencedContent,
+  type AgentSource,
   type UploadedFileReference,
   historyExtent,
   placeNotes,
@@ -323,8 +325,14 @@ function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
  * The MCP App that wrote a turn of the person's, by its server and tool, as
  * the view names it (#390); nothing for the person's own.
  */
-function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp } {
-  return app ? { app: { server: app.server, tool: app.tool } } : {}
+function writtenBy(
+  app: ConversationMessageApp | undefined,
+  agent: ConversationAgentSource | undefined,
+): { app?: MessageApp; agent?: AgentSource } {
+  return {
+    ...(app ? { app: { server: app.server, tool: app.tool } } : {}),
+    ...(agent ? { agent } : {}),
+  }
 }
 
 /** Input references use the conversation owner's mapping, without reconstructed metadata. */
@@ -495,7 +503,7 @@ export function transcriptFrom(
       role: "user",
       at: seen(input),
       parts: inputParts(turn.userText, turn.attachments, turn.files, turn.uploads),
-      ...writtenBy(turn.app),
+      ...writtenBy(turn.app, turn.agent),
     }
     const parts: Part[] = []
     // The provider message the last text part came from, while text is last.
@@ -588,7 +596,7 @@ export function transcriptFrom(
         waiting.uploads,
       ),
       // Waiting, it is labelled as it will be once it is a turn (D-H).
-      ...writtenBy(waiting.app),
+      ...writtenBy(waiting.app, waiting.agent),
     })
     pushUnreadable(unreadable.byWaiting.get(waiting.executionId) ?? [])
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])

@@ -12,7 +12,9 @@ use nessa_sdk::application::agent_execution::commands::{
     MutationPlan, MutationReceipt, MutationStage, MutationTarget,
 };
 use nessa_sdk::application::agent_execution::providers::ProviderSessionState;
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
+use nessa_sdk::domain::agent_execution::executions::{
+    AgentSource, ExecutionId, Initiation, Initiator, InvocationStage,
+};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
@@ -97,7 +99,11 @@ impl ConversationService {
         mode: SubmissionMode,
         selection: Option<Arc<SubmissionPermit>>,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
-        let binding = submit_binding(&id, &caller, &execution_id, &message, mode)
+        let agent_source = match initiation.initiator() {
+            Initiator::Agent(source) => Some(source),
+            _ => None,
+        };
+        let binding = submit_binding(&id, &caller, &execution_id, &message, mode, agent_source)
             .map_err(MutationFailure::Target)?;
         // Shape is refused before any stage. A deleted target is named before a
         // conflicting receipt, so the surface lets the conversation go.
@@ -355,7 +361,10 @@ impl MutationTarget for SubmitTarget {
                     execution_id,
                     message.map_err(CreationInitializationFailure::Target)?,
                     mode,
-                    Writer::Person(initiation, offers_remember),
+                    match initiation.initiator() {
+                        Initiator::Agent(source) => Writer::Agent(source.clone()),
+                        _ => Writer::Person(initiation, offers_remember),
+                    },
                     true,
                     selection,
                 )
@@ -645,13 +654,27 @@ fn submit_binding(
     execution_id: &str,
     message: &SubmittedMessage,
     mode: SubmissionMode,
+    agent_source: Option<&AgentSource>,
 ) -> Result<MutationBinding, ConversationError> {
+    let fingerprint = submission_fingerprint(execution_id, message, mode)?;
+    let fingerprint = match agent_source {
+        None => fingerprint,
+        Some(source) => {
+            let origin = serde_json::to_vec(&(source.conversation(), source.execution().as_str()))
+                .map_err(|_| ConversationError::InvalidInput)?;
+            let mut digest = Sha256::new();
+            digest.update(b"nessa.conversation.agent-submit\0");
+            digest.update(fingerprint);
+            digest.update(origin);
+            digest.finalize().into()
+        }
+    };
     MutationBinding::new(
         caller.actor()?,
         MutationOperation::Submit,
         conversation_session(id),
         execution_id,
-        submission_fingerprint(execution_id, message, mode)?,
+        fingerprint,
     )
     .map_err(|_| ConversationError::InvalidInput)
 }
@@ -747,7 +770,7 @@ pub(crate) fn submit_lookup_binding(
     message: &SubmittedMessage,
     mode: SubmissionMode,
 ) -> Result<MutationBinding, ConversationError> {
-    submit_binding(id, caller, execution_id, message, mode)
+    submit_binding(id, caller, execution_id, message, mode, None)
 }
 
 #[cfg(test)]

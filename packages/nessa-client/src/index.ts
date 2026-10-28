@@ -341,6 +341,7 @@ export type {
   ImageAttachment,
   LinkedFile,
   ConversationMessage,
+  ConversationAgentSource,
   ConversationMessageApp,
   ConversationPart,
   ConversationRuntime,

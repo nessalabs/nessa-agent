@@ -150,6 +150,18 @@ function messageAppKey(value: unknown, what: string): string {
   return JSON.stringify([app.executionId, app.toolId, app.server, app.tool])
 }
 
+/** Agent origin has one source conversation and turn, separate from its words. */
+function agentSourceKey(value: unknown, what: string): string {
+  if (value === undefined) return ""
+  const source = record(value)
+  exact(source, ["conversationId", "executionId"])
+  const conversation = identity(source, "conversationId")
+  const execution = identity(source, "executionId")
+  if (!conversationIdPattern.test(conversation) || !execution)
+    throw new Error(`Invalid ${what}`)
+  return JSON.stringify([conversation, execution])
+}
+
 /** The same, for the paths a turn points at: the paths, in order. */
 function filesKey(files: readonly LinkedFile[]) {
   return JSON.stringify(files.map((file) => file.path))
@@ -528,6 +540,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageFiles = new Map<string, string>()
   const messageUploads = new Map<string, string>()
   const messageApps = new Map<string, string>()
+  const messageAgents = new Map<string, string>()
   const toolPartIds = new Set<string>()
   const noticePartIds = new Set<string>()
   for (const message of messages) {
@@ -538,6 +551,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "uploads",
       "files",
       "app",
+      "agent",
       "status",
       "error",
       "steeringTarget",
@@ -702,6 +716,10 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
     messageFiles.set(executionId, filesKey(linked))
     messageApps.set(executionId, messageAppKey(message.app, "message app"))
+    const agent = agentSourceKey(message.agent, "message agent")
+    if (agent && message.app !== undefined)
+      throw new Error("Conversation message names both an app and an agent")
+    messageAgents.set(executionId, agent)
   }
   const pendingIds = new Set<string>()
   for (const pending of items(item, "pending", 128)) {
@@ -712,6 +730,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "files",
       "uploads",
       "app",
+      "agent",
       "mode",
     ])
     const executionId = identity(pending, "executionId")
@@ -738,6 +757,9 @@ export function conversationView(value: unknown, expected: string): Conversation
       uploaded.map((file) => [file.digest, file.mimeType, file.size, file.name]),
     )
     const pendingApp = messageAppKey(pending.app, "pending app")
+    const pendingAgent = agentSourceKey(pending.agent, "pending agent")
+    if (pendingAgent && pending.app !== undefined)
+      throw new Error("Conversation pending input names both an app and an agent")
     oneOf(text(pending, "mode"), ["queued", "steering"])
     // The waiting input and its queued message are one submission seen twice;
     // the same text over different images is as contradictory as different text.
@@ -748,6 +770,7 @@ export function conversationView(value: unknown, expected: string): Conversation
         messageImages.get(executionId) !== pendingImages ||
         messageFiles.get(executionId) !== pendingFiles ||
         messageApps.get(executionId) !== pendingApp ||
+        messageAgents.get(executionId) !== pendingAgent ||
         messageUploads.get(executionId) !== pendingUploads)
     )
       throw new Error("Pending execution contradicts its queued message")
@@ -1278,9 +1301,13 @@ function conversationNote(item: Record<string, unknown>) {
   noteState(item)
   if (item.afterExecutionId !== undefined) identity(item, "afterExecutionId")
   const author = record(item.author)
-  exact(author, ["kind", "surface"])
-  oneOf(text(author, "kind"), ["owner", "grant"])
+  exact(author, ["kind", "surface", "agent"])
+  const kind = text(author, "kind")
+  oneOf(kind, ["owner", "grant", "agent"])
   text(author, "surface", 256, false)
+  if (kind === "agent" ? author.agent === undefined : author.agent !== undefined)
+    throw new Error("Conversation note author and agent origin disagree")
+  agentSourceKey(author.agent, "note agent")
 }
 
 /** Confirm a note's receipt answers the request that left it. */

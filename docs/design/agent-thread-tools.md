@@ -155,6 +155,30 @@ settlement replaced it; the settlement events follow after the cursor.
 
 ## Source authority
 
+### Authorship carried into the target
+
+The source turn admitted by `admit_agent_tool` is the only authority for a
+`send_message` author. The target's normal access check still decides whether
+the verified principal may write there. A successful agent send records the
+source conversation and execution in both the message sender and turn
+initiation. A report records the child conversation and watched execution as
+its author. Those identities describe origin; they do not confer owner
+initiation or a share grant. The target's tool policy sees an agent turn, not a
+person turn. A passive send records that origin on its note without starting a
+turn. The model receives the same author label as structured context ahead of
+the message text.
+
+| Event and prior state | Saved author and effect | Retry or later authority |
+| --- | --- | --- |
+| Verified source sends queued or steering text to an accessible target | Agent(source conversation, source execution); submit once | The exact same request retains that origin; changed origin or text conflicts |
+| Agent steering arrives while a person-initiated target turn runs | The agent input waits for its own turn, even when native steering is available | It cannot inject calls into a turn with the person's authority |
+| Verified source leaves a passive note | Agent(source conversation, source execution); record only | Same request and text returns the same note; no turn or report begins |
+| An accepted agent note is waiting when a person starts the next turn | The note retains its agent author and can be carried into the turn | No grant read or owner attribution is needed for this admitted note |
+| Watched child turn settles and its report is delivered | Agent(child conversation, watched execution); queue once in parent | A restored delivery reads the parent's saved execution before retrying |
+| Target access is refused before submission | No target turn or note | An earlier saved target receipt remains the authority for an exact retry |
+| An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
+
+
 The relay supplies source session identity; tool arguments supply no owner,
 source identity, credential or approval override. The conversation application
 captures the source's live lease and running invocation, including its original

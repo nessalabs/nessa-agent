@@ -5,13 +5,70 @@
 
 use crate::domain::agent_execution::ExecutionError;
 
-/// Who started a turn: the conversation's owner, or someone holding a share grant.
+use super::ExecutionId;
+
+/// Who started a turn: the owner, a grant holder, or an agent in another turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Initiator {
     /// The conversation's owner started the turn.
     Owner,
     /// Someone holding a share grant started the turn.
     Grant(GrantInitiator),
+    /// An agent's message, under the source turn the host verified.
+    Agent(AgentSource),
+}
+
+/// The verified turn whose agent wrote to this conversation. This is origin,
+/// not permission to act as the person who started that turn.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentSource {
+    conversation: Box<str>,
+    execution: ExecutionId,
+}
+impl AgentSource {
+    /// Maximum UTF-8 byte length of a source conversation identity.
+    pub const MAX_CONVERSATION_BYTES: usize = 36;
+
+    /// Retain the source conversation and turn identities supplied by the host.
+    /// A blank or oversized conversation is refused. The execution uses
+    /// [`ExecutionId`]'s value rules.
+    pub fn new(
+        conversation: impl Into<String>,
+        execution: ExecutionId,
+    ) -> Result<Self, ExecutionError> {
+        let conversation = conversation.into();
+        if conversation.trim().is_empty() {
+            return Err(ExecutionError::EmptyValue("source conversation"));
+        }
+        if conversation.len() > Self::MAX_CONVERSATION_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "source conversation",
+                max_bytes: Self::MAX_CONVERSATION_BYTES,
+            });
+        }
+        if uuid::Uuid::parse_str(&conversation).map_or(true, |id| id.to_string() != conversation) {
+            return Err(ExecutionError::InvalidAgentSource);
+        }
+        Ok(Self {
+            conversation: conversation.into_boxed_str(),
+            execution,
+        })
+    }
+
+    /// The conversation the sending agent was running in.
+    pub fn conversation(&self) -> &str {
+        &self.conversation
+    }
+    /// The source turn the agent was running in, or the child turn a report concerns.
+    pub fn execution(&self) -> &ExecutionId {
+        &self.execution
+    }
+    /// Variable bytes retained with a message or invocation.
+    pub fn payload_bytes(&self) -> usize {
+        self.conversation
+            .len()
+            .saturating_add(self.execution.as_str().len())
+    }
 }
 
 /// The share grant a turn was started under, as the host admitted it: which
@@ -108,6 +165,14 @@ impl Initiation {
         Self {
             initiator: Initiator::Grant(grant),
             tools: ToolChecking::Checked,
+        }
+    }
+    /// A turn written by the agent of `source`; it does not inherit owner
+    /// authority from the source turn.
+    pub fn agent(source: AgentSource) -> Self {
+        Self {
+            initiator: Initiator::Agent(source),
+            tools: ToolChecking::NotChecked,
         }
     }
     /// Who started the turn.

@@ -925,6 +925,46 @@ async fn definitely_rejected_admission_does_not_leak_into_the_next_record_batch(
         ));
     }
 }
+
+#[tokio::test]
+async fn agent_origin_must_agree_with_the_saved_message_before_admission_and_on_restore() {
+    use crate::domain::agent_execution::{executions::AgentSource, prompts::MessageSender};
+    let (manager, lease, _) = manager(0).await;
+    let origin = AgentSource::new(
+        "8b547a4b-6974-49a4-b878-d13a9c031f16",
+        ExecutionId::new("source-turn").unwrap(),
+    )
+    .unwrap();
+    let request = ExecutionRequest {
+        execution_id: ExecutionId::new("agent-input").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("agent words").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let actor = ActionContext::new("user", "test", "agent-input").unwrap();
+    assert!(manager
+        .begin(
+            request.clone(),
+            Submitter::new(actor.clone(), Initiation::agent(origin.clone()))
+        )
+        .await
+        .is_err());
+    assert!(lease.changes.lock().unwrap().is_empty());
+    let mut sent = request;
+    sent.user_message = sent
+        .user_message
+        .sent_by(MessageSender::Agent(origin.clone()));
+    assert_eq!(
+        manager
+            .begin(sent, Submitter::new(actor, Initiation::agent(origin)))
+            .await
+            .unwrap(),
+        1
+    );
+    let mut restored = manager.snapshot().await.unwrap();
+    restored.invocations[1].initiation = Initiation::owner();
+    assert!(Continuation::restore(Some(restored)).is_err());
+}
 /// Admission asks the app rule of the turns saved before the message ("The
 /// app a message names", A1, A2, A5, A6): an app of the running turn's tool
 /// call is refused until that call is observed as an MCP call, and then

@@ -37,6 +37,7 @@ fn blank(text: &str) -> ConversationView {
             attachments: Vec::new(),
             files: Vec::new(),
             app: None,
+            agent: None,
             status: ConversationMessageStatus::Completed,
             error: None,
             authentication_required: None,

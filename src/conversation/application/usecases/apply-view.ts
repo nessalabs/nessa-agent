@@ -21,6 +21,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     projected.push({
       id: local?.id ?? `${message.executionId}:user`,
       from: "user",
+      agent: message.agent,
       // Local content keeps its previews. Without it — another surface's turn,
       // or this one after a reload — the images are known only by reference and
       // the files only by the path the turn named.

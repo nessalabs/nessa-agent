@@ -236,6 +236,11 @@ pub(super) fn continuation(
     // against those before it, through each one's observation index.
     let mut positions = HashMap::with_capacity(snapshot.invocations.len());
     for invocation in &snapshot.invocations {
+        super::authorship::validate_message_author(
+            &invocation.initiation,
+            &invocation.request.user_message,
+        )
+        .map_err(corrupt)?;
         // The snapshot holds a steered message's target whole, so the offset
         // bounds which of its calls came before the message.
         let steered = SteeringPosition::saved(invocation)?;

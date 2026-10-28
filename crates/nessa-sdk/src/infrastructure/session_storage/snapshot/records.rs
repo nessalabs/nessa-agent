@@ -20,7 +20,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::{
     agent_execution::{
-        executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
+        executions::{ExecutionId, Initiator, MessageChunk, MessageId, MessageKind},
         permissions::{
             PermissionEffect, PermissionId, PermissionReviewDeadline, PermissionToolClass,
             RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
@@ -454,6 +454,7 @@ impl From<&InvocationRecord> for Metadata {
             user_app: match value.request.user_message.sender() {
                 MessageSender::Person => None,
                 MessageSender::App(app) => Some(app.into()),
+                MessageSender::Agent(_) => None,
             },
             user_app_model_context: value
                 .request
@@ -632,6 +633,17 @@ impl Provider {
 }
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
+        let initiation = self.initiation.decode()?;
+        // Agent sender origin has one stored owner: the initiation. An app
+        // cannot write the same message as an agent.
+        let sender = match (initiation.initiator(), self.user_app) {
+            (Initiator::Agent(source), None) => MessageSender::Agent(source.clone()),
+            (Initiator::Agent(_), Some(_)) => {
+                return Err(corrupt("an agent's message also names an app"))
+            }
+            (_, None) => MessageSender::Person,
+            (_, Some(app)) => MessageSender::App(app.decode()?),
+        };
         Ok(InvocationRecord {
             target_event_offset: self.target_event_offset,
             submission: self.submission.into(),
@@ -659,10 +671,7 @@ impl Metadata {
                         .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?
-                .sent_by(match self.user_app {
-                    None => MessageSender::Person,
-                    Some(app) => MessageSender::App(app.decode()?),
-                })
+                .sent_by(sender)
                 .with_app_model_context(
                     self.user_app_model_context
                         .into_iter()
@@ -674,7 +683,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
-            initiation: self.initiation.decode()?,
+            initiation,
             notes: self
                 .notes
                 .into_iter()

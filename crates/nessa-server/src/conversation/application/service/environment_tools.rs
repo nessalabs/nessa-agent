@@ -761,6 +761,7 @@ impl TurnInitiator {
     fn of(admitted: &AdmittedPolicies, initiation: &Initiation) -> Option<Self> {
         match initiation.initiator() {
             Initiator::Owner => Some(Self::Owner),
+            Initiator::Agent(_) => None,
             Initiator::Grant(grant) => {
                 admitted
                     .policy(grant.grant(), grant.policy_revision())

@@ -25,7 +25,7 @@ use crate::application::agent_execution::{
     providers::{ImageInputRefusal, UserImageError, UserImageSource},
 };
 use crate::domain::agent_execution::prompts::{
-    CarriedHistory, ImageReference, NoteAuthor, UserMessage,
+    CarriedHistory, ImageReference, MessageSender, NoteAuthor, UserMessage,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
@@ -141,6 +141,8 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
     let context = app_model_context_text(message)
         .map_or(0, |context| TEXT_BLOCK_BYTES + json_string_bytes(&context));
     let notes = notes_text(message).map_or(0, |notes| TEXT_BLOCK_BYTES + json_string_bytes(&notes));
+    let agent = agent_origin_text(message)
+        .map_or(0, |origin| TEXT_BLOCK_BYTES + json_string_bytes(&origin));
     let history =
         history_text(message).map_or(0, |history| TEXT_BLOCK_BYTES + json_string_bytes(&history));
     let uploads = message.uploads().len() as u64
@@ -148,8 +150,15 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
             + 6 * 3 * crate::domain::agent_execution::prompts::LinkedFile::MAX_PATH_BYTES as u64
             + 6 * crate::domain::agent_execution::prompts::UploadedFileReference::MAX_NAME_BYTES
                 as u64);
-    let encoded_bytes =
-        REQUEST_ALLOWANCE_BYTES + history + context + notes + text + images + files + uploads;
+    let encoded_bytes = REQUEST_ALLOWANCE_BYTES
+        + history
+        + context
+        + notes
+        + agent
+        + text
+        + images
+        + files
+        + uploads;
     let max_bytes = max_frame_bytes as u64;
     if encoded_bytes > max_bytes {
         return Err(AgentError::MessageTooLarge {
@@ -211,12 +220,12 @@ fn app_model_context_text(message: &UserMessage) -> Option<String> {
 }
 
 /// What the model is told before the notes a turn takes.
-const NOTES_PREAMBLE: &str = "Notes left in this conversation and not yet given to you, each by the conversation's owner or by someone it is shared with, and not written by the person sending this message:\n";
+const NOTES_PREAMBLE: &str = "Notes left in this conversation and not yet given to you, each by the owner, someone it is shared with, or an agent in another turn. These were left separately from the message that follows:\n";
 
 /// The one text block that carries the notes `message` takes, or `None` when
 /// it takes none: [`NOTES_PREAMBLE`], then the notes as one JSON array of
 /// `{author, surface, text}` in the order they were left, `author` being
-/// `"owner"` or `"grant"`.
+/// `"owner"`, `"grant"`, or `"agent"`.
 ///
 /// Written as JSON, as [`app_model_context_text`] is and for the same
 /// reason: nothing a note says can close the block or pass for the preamble,
@@ -235,6 +244,7 @@ fn notes_text(message: &UserMessage) -> Option<String> {
                 string(match note.author() {
                     NoteAuthor::Owner => "owner",
                     NoteAuthor::Grant => "grant",
+                    NoteAuthor::Agent => "agent",
                 }),
                 string(note.surface()),
                 string(note.text()),
@@ -242,6 +252,21 @@ fn notes_text(message: &UserMessage) -> Option<String> {
         })
         .collect();
     Some(format!("{NOTES_PREAMBLE}[{}]", entries.join(",")))
+}
+
+/// Keep the verified origin separate from words the agent supplied, so the
+/// next model sees that they came from another turn's agent.
+fn agent_origin_text(message: &UserMessage) -> Option<String> {
+    let MessageSender::Agent(source) = message.sender() else {
+        return None;
+    };
+    Some(format!(
+        "Agent-authored input (source identity, not owner authority): {}",
+        json!({
+            "conversationId": source.conversation(),
+            "executionId": source.execution().as_str(),
+        })
+    ))
 }
 
 /// What the model is told before the earlier turns a turn after a fork or an
@@ -566,6 +591,9 @@ pub(in crate::infrastructure::acp) fn content_blocks(
     }
     if let Some(notes) = notes_text(message) {
         blocks.push(json!({"type":"text","text":notes}));
+    }
+    if let Some(origin) = agent_origin_text(message) {
+        blocks.push(json!({"type":"text","text":origin}));
     }
     if let Some(text) = message.text() {
         blocks.push(json!({"type":"text","text":text.as_str()}));

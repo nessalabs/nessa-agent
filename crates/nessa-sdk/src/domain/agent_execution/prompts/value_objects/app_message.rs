@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 
 use crate::domain::agent_execution::{
-    executions::ExecutionId,
+    executions::{AgentSource, ExecutionId},
     tools::{value_objects::json::is_json, McpTool, ToolCallId},
     ExecutionError,
 };
@@ -88,9 +88,8 @@ impl McpAppSource {
     }
 }
 
-/// Who wrote a user message: the person, or an MCP App on their behalf
-/// (MCP Apps' `ui/message`). Either way it is the person's turn, under their
-/// credential; this says whose words they are.
+/// Who wrote a user message: a person, an MCP App on their behalf, or an
+/// agent in a verified source turn. This says whose words they are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageSender {
     /// The person wrote it.
@@ -98,6 +97,9 @@ pub enum MessageSender {
     /// An app sent it on the person's behalf. Whether the person allowed it
     /// is the host's to decide before it says so.
     App(McpAppSource),
+    /// Another turn's agent wrote it. Origin does not grant the owner's
+    /// authority in the receiving conversation.
+    Agent(AgentSource),
 }
 
 /// What one MCP App gave the model to know (MCP Apps'

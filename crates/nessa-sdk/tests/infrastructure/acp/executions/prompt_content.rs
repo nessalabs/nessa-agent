@@ -4,7 +4,7 @@ use super::*;
 use crate::application::agent_execution::providers::UserImageFuture;
 use crate::domain::{
     agent_execution::{
-        executions::ExecutionId,
+        executions::{AgentSource, ExecutionId},
         prompts::{
             AppModelContext, CarriedHistory, CarriedTurn, LinkedFile, McpAppSource, MessageSender,
             NoteContext, PromptText,
@@ -427,6 +427,25 @@ fn apps_contexts_go_first_as_one_text_block_of_json() {
         content_blocks(&plain, ImageBlocks::none()).unwrap(),
         vec![json!({"type":"text","text":"what now?"})]
     );
+}
+
+#[test]
+fn agent_origin_is_a_separate_model_block_and_is_counted_in_the_frame() {
+    let origin = AgentSource::new(
+        "8b547a4b-6974-49a4-b878-d13a9c031f16",
+        ExecutionId::new("source-turn").unwrap(),
+    )
+    .unwrap();
+    let plain = UserMessage::text_only(PromptText::new("Please do this").unwrap());
+    let authored = plain.clone().sent_by(MessageSender::Agent(origin));
+    let blocks = content_blocks(&authored, ImageBlocks::none()).unwrap();
+    assert_eq!(blocks.len(), 2);
+    let preamble = blocks[0]["text"].as_str().unwrap();
+    assert!(preamble.starts_with("Agent-authored input"));
+    assert!(preamble.contains("8b547a4b-6974-49a4-b878-d13a9c031f16"));
+    assert!(preamble.contains("source-turn"));
+    assert_eq!(blocks[1], json!({"type":"text","text":"Please do this"}));
+    assert!(figure(&authored) > figure(&plain));
 }
 
 #[test]

@@ -7,7 +7,7 @@
 //! which runs no invocation, asks for a look too. The look reads the child's
 //! saved invocations: a watched execution whose settlement is saved, or that
 //! was injected into a turn (its scheduling `target`) whose settlement is
-//! saved, is finished, and its report is queued into the parent as an owner
+//! saved, is finished, and its report is queued into the parent as an agent
 //! turn under the caller the parent's own send was admitted with. Each look
 //! checks every waiting caller may still view the thread; one refused, or a
 //! thread gone, drops that caller's reports. A report leaves the store once
@@ -38,7 +38,7 @@ use nessa_sdk::application::agent_execution::{
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionOutcome, Initiation, InvocationStage, MessageKind,
+    AgentSource, ExecutionId, ExecutionOutcome, InvocationStage, MessageKind,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -202,6 +202,7 @@ impl Drop for Delivering {
 /// left the registry. Its saved copy stays until it is delivered.
 struct Taken {
     child: ConversationId,
+    watched_execution: String,
     report: ThreadReport,
     text: String,
     delivering: Delivering,
@@ -422,6 +423,7 @@ impl ThreadReports {
                 );
             taken.push(Taken {
                 child: child.clone(),
+                watched_execution: watch.execution.clone(),
                 report: watch.report.clone(),
                 text,
                 delivering: Delivering {
@@ -916,6 +918,16 @@ impl ConversationService {
     /// go.
     async fn deliver_report(&self, taken: Taken) {
         let Taken { report, text, .. } = &taken;
+        let author = match ExecutionId::new(taken.watched_execution.clone())
+            .and_then(|execution| AgentSource::new(taken.child.to_string(), execution))
+        {
+            Ok(author) => author,
+            Err(error) => {
+                tracing::warn!(%error, "a thread report has invalid author identity");
+                self.settle_saved(&taken.child, &report.execution).await;
+                return;
+            }
+        };
         let mut delay = DELIVERY_RETRY_FIRST;
         loop {
             if self.inner.retirement.get().is_some() {
@@ -944,7 +956,7 @@ impl ConversationService {
                             ..Default::default()
                         },
                         SubmissionMode::Queue,
-                        Writer::Person(Initiation::owner(), false),
+                        Writer::Agent(author.clone()),
                     )
                     .await;
                 match answer.map_err(super::SubmitFailure::into_error) {

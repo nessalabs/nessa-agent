@@ -1093,6 +1093,8 @@ impl SessionManager {
             initiation,
             ..
         } = submitter;
+        super::authorship::validate_message_author(&initiation, &request.user_message)
+            .map_err(|reason| AgentError::InvalidInput(reason.into()))?;
         // Notes reach the model only from the conversation's own records,
         // joined at dispatch: a caller cannot hand a turn notes of its own.
         if !request.user_message.notes().is_empty() {

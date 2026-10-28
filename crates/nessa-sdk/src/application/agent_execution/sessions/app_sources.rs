@@ -90,6 +90,7 @@ pub(crate) fn validate_app_sources<'a>(
     let writer = match message.sender() {
         MessageSender::Person => None,
         MessageSender::App(app) => Some(app),
+        MessageSender::Agent(_) => None,
     };
     writer
         .into_iter()

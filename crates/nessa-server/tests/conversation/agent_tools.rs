@@ -22,7 +22,8 @@ use nessa_sdk::{
         ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
     },
     domain::agent_execution::{
-        executions::MessageChunk,
+        executions::{Initiator, MessageChunk},
+        prompts::{MessageSender, NoteAuthor},
         sessions::SessionId,
         tools::{McpTool, ToolCallId, ToolCallUpdate, ToolStatus},
     },
@@ -494,6 +495,27 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
         .unwrap()
         .to_owned();
     let worker_id = ConversationId::new(&worker).unwrap();
+    let worker_live = service
+        .resolve(&worker_id, &caller("author-check"))
+        .await
+        .unwrap();
+    let worker_snapshot = worker_live
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    let note = worker_snapshot
+        .notes
+        .iter()
+        .find(|note| note.text.as_str() == "context only")
+        .unwrap();
+    assert!(matches!(&note.author, Initiator::Agent(origin)
+        if origin.conversation() == source.to_string() && origin.execution().as_str() == "source-turn"));
+    assert!(matches!(
+        note.context().unwrap().author(),
+        NoteAuthor::Agent
+    ));
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let submission = service
@@ -508,6 +530,25 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     })
     .await
     .unwrap();
+    let worker_snapshot = worker_live
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    let sent_record = worker_snapshot
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == execution)
+        .unwrap();
+    assert!(
+        matches!(sent_record.initiation.initiator(), Initiator::Agent(origin)
+        if origin.conversation() == source.to_string() && origin.execution().as_str() == "source-turn")
+    );
+    assert!(
+        matches!(sent_record.request.user_message.sender(), MessageSender::Agent(origin)
+        if origin.conversation() == source.to_string() && origin.execution().as_str() == "source-turn")
+    );
     let mut after: Option<String> = None;
     let mut kinds = Vec::new();
     let mut observed_tool = false;
@@ -622,6 +663,27 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     })
     .await
     .unwrap();
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    assert!(matches!(
+        service
+            .admit_agent_tool(
+                worker_id.clone(),
+                "agent-tool-call".into(),
+                "create_thread".into(),
+                Some(id()),
+                AgentToolRequest {
+                    logical: "agent-attempt".into(),
+                    command: "agent-attempt".into()
+                },
+                stopped,
+            )
+            .await,
+        Err(ConversationError::NotFound)
+    ));
+    drop(stop);
+    let denied = audit.records.lock().unwrap().last().unwrap().clone();
+    assert_eq!(denied.execution, active_execution);
+    assert!(!denied.owner_initiated && !denied.allowed);
     let before_null_stop = audit.records.lock().unwrap().len();
     let before_null_cancel = provider.cancel_calls.load(Ordering::SeqCst);
     let null_stop = client
@@ -774,6 +836,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
         let records = audit.records.lock().unwrap();
         assert!(records
             .iter()
+            .filter(|record| record.request != "agent-attempt")
             .all(|record| record.source == source && record.execution == "source-turn"));
         for (request, tool) in [
             ("worker-create", "create_thread"),
@@ -972,6 +1035,7 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
+    provider.native_steering.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
     service.bind_commands(storage.clone());
     service.bind_agent_tool_audit(Arc::new(Audit::default()));
@@ -1025,6 +1089,24 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         .to_owned();
     let reports = reports_in(&service, &source, 1).await;
     assert_eq!(reports.len(), 1, "{reports:?}");
+    let parent = service
+        .resolve(&source, &caller("report-author"))
+        .await
+        .unwrap();
+    let parent_snapshot = parent.agent.session_manager().snapshot().await.unwrap();
+    let report_turn = parent_snapshot
+        .invocations
+        .iter()
+        .find(|record| record.request.user_message.text_str() == reports[0])
+        .unwrap();
+    assert!(
+        matches!(report_turn.initiation.initiator(), Initiator::Agent(origin)
+        if origin.conversation() == worker && origin.execution().as_str() == execution)
+    );
+    assert!(
+        matches!(report_turn.request.user_message.sender(), MessageSender::Agent(origin)
+        if origin.conversation() == worker && origin.execution().as_str() == execution)
+    );
     assert!(reports[0].contains(&worker), "{}", reports[0]);
     assert!(reports[0].contains(&execution), "{}", reports[0]);
     assert!(reports[0].contains(": completed."), "{}", reports[0]);
@@ -1057,10 +1139,9 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     assert_eq!(conflict["structuredContent"]["error"], "request_conflict");
     assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
 
-    // A steer taken into a running turn reports that turn's outcome and
-    // reply once it settles, though a queued turn admitted in between is
-    // still waiting.
-    provider.native_steering.store(true, Ordering::SeqCst);
+    // An agent's steer cannot enter a person-initiated running turn, even
+    // when the provider supports native steering. It runs as its own turn
+    // and reports its own outcome and reply.
     provider.inject_steers.store(true, Ordering::SeqCst);
     let release_worker = hold_turn(&service, &provider, &worker_id, "worker-active").await;
     send(&service, &worker_id, "worker-queued", "after").await;
@@ -1077,19 +1158,14 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         .unwrap()
         .to_owned();
     assert_eq!(service.inner.thread_reports.waiting(), 1);
-    provider
-        .execution_updates
-        .lock()
-        .unwrap()
-        .push(ExecutionUpdate::Message(MessageChunk::text("Host answer.")));
     drop(release_worker);
     let reports = reports_in(&service, &source, 2).await;
     assert_eq!(reports.len(), 2, "{reports:?}");
     assert!(reports[1].contains(&steer), "{}", reports[1]);
     assert!(reports[1].contains(": completed."), "{}", reports[1]);
     assert!(
-        reports[1].contains("Its reply:\nHost answer."),
-        "the host turn's reply is the steer's: {}",
+        reports[1].contains("Its reply:\nResponse: also this"),
+        "the agent's own turn supplies the reply: {}",
         reports[1]
     );
     let worker_turns = service
@@ -1106,10 +1182,13 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         .iter()
         .find(|record| record.request.execution_id.as_str() == steer)
         .unwrap();
+    assert!(steer_record
+        .scheduling
+        .iter()
+        .all(|event| event.stage != InvocationStage::Injected));
     assert_eq!(
         steer_record.scheduling.last().map(|event| event.stage),
-        Some(InvocationStage::Injected),
-        "the steer was taken into the running turn"
+        Some(InvocationStage::Settled)
     );
     // The queued turn after it runs and adds no second report.
     tokio::time::timeout(TURN_HOLD_HANG, async {

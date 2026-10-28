@@ -101,16 +101,22 @@ export const Message = memo(function Message({
     // thread, and what it did (`model/thread-report.ts`).
     const first = message.parts[0]
     const report = first?.kind === "text" ? threadReportOf(first.text) : null
-    if (report)
+    if (
+      report &&
+      message.agent?.conversationId === report.thread &&
+      message.agent.executionId === report.execution
+    )
       return (
         <div
           className="workspace-message"
           data-role="thread-report"
+          data-message-agent={message.agent.conversationId}
           data-new={isNew || undefined}
         >
           <p className="workspace-thread-report" data-outcome={report.outcome}>
+            <span>Agent report from </span>
             <ChatPill sessionId={report.thread} />
-            <span>{reportVerb(report.outcome)}</span>
+            <span> {reportVerb(report.outcome)}</span>
           </p>
         </div>
       )
@@ -121,7 +127,14 @@ export const Message = memo(function Message({
         data-new={isNew || undefined}
         data-sending={message.delivery?.state === "sending" || undefined}
       >
-        {message.app ? (
+        {message.agent ? (
+          <p
+            className="workspace-message-author"
+            data-message-agent={message.agent.conversationId}
+          >
+            Sent by an agent in <ChatPill sessionId={message.agent.conversationId} />
+          </p>
+        ) : message.app ? (
           <p
             className="workspace-message-author"
             data-message-app={`${message.app.server}/${message.app.tool}`}

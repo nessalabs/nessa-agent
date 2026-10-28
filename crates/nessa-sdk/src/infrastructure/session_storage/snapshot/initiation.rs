@@ -5,8 +5,8 @@
 use super::tools::corrupt;
 use crate::application::agent_execution::sessions::StorageError;
 use crate::domain::agent_execution::executions::{
-    GrantInitiator, Initiation as DomainInitiation, Initiator as DomainInitiator,
-    ToolChecking as DomainToolChecking,
+    AgentSource, ExecutionId, GrantInitiator, Initiation as DomainInitiation,
+    Initiator as DomainInitiator, ToolChecking as DomainToolChecking,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,14 @@ pub(super) struct Initiation {
 #[serde(deny_unknown_fields)]
 pub(super) enum Initiator {
     Owner,
-    Grant { grant: String, policy_revision: u64 },
+    Grant {
+        grant: String,
+        policy_revision: u64,
+    },
+    Agent {
+        conversation: String,
+        execution: String,
+    },
 }
 #[derive(Serialize, Deserialize)]
 enum ToolChecking {
@@ -53,6 +60,12 @@ impl Initiation {
             (DomainInitiator::Grant(grant), ToolChecking::Checked) => {
                 DomainInitiation::checked_grant(grant)
             }
+            (DomainInitiator::Agent(source), ToolChecking::NotChecked) => {
+                DomainInitiation::agent(source)
+            }
+            (DomainInitiator::Agent(_), ToolChecking::Checked) => {
+                return Err(corrupt("an agent's turn saved as tool-checked"))
+            }
         })
     }
 }
@@ -63,6 +76,10 @@ impl From<&DomainInitiator> for Initiator {
             DomainInitiator::Grant(grant) => Self::Grant {
                 grant: grant.grant().into(),
                 policy_revision: grant.policy_revision(),
+            },
+            DomainInitiator::Agent(source) => Self::Agent {
+                conversation: source.conversation().into(),
+                execution: source.execution().as_str().into(),
             },
         }
     }
@@ -76,6 +93,13 @@ impl Initiator {
                 policy_revision,
             } => DomainInitiator::Grant(
                 GrantInitiator::new(grant, policy_revision).map_err(corrupt)?,
+            ),
+            Self::Agent {
+                conversation,
+                execution,
+            } => DomainInitiator::Agent(
+                AgentSource::new(conversation, ExecutionId::new(execution).map_err(corrupt)?)
+                    .map_err(corrupt)?,
             ),
         })
     }

@@ -3155,18 +3155,21 @@ const steps = {
     if (!turn) return
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
     const found = new RegExp(`${SAYS.awaited}([0-9a-f-]+): (.*)`, "s").exec(said)
-    const reply = `${SAYS.echo}${STRESS.reply} awaited by the parent`
     if (!found) {
       failures.push(
         `the await turn did not say what it waited for: ${said.slice(0, 160)}`,
       )
       return
     }
-    if (!found[2].startsWith(reply))
+    const agentReply = `${SAYS.echo}Agent-authored input`
+    if (
+      !found[2].startsWith(agentReply) ||
+      !found[2].includes(`${STRESS.reply} awaited by the parent`)
+    )
       failures.push(
         `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
       )
-    await expectShown(run.page, `${SAYS.awaited}${found[1]}: ${reply}`, failures)
+    await expectShown(run.page, agentReply, failures)
     // The reply came back in the call, so no report wakes the conversation.
     // A report would be queued as soon as the thread's turn settled, which
     // was before the call returned.
@@ -4406,6 +4409,13 @@ async function reportLine(run, report, failures) {
     failures.push(`the report did not name its thread: ${report.userText.slice(0, 120)}`)
     return
   }
+  const watchedTurn = /\(execution ([^)]+)\):/.exec(report.userText)?.[1]
+  if (
+    !watchedTurn ||
+    report.agent?.conversationId !== thread ||
+    report.agent.executionId !== watchedTurn
+  )
+    failures.push("the thread report did not retain its child agent as the author")
   const line = run.page.locator('[data-role="thread-report"]').filter({
     has: run.page.locator(`[data-chat-pill="${thread}"]`),
   })
@@ -4420,8 +4430,16 @@ async function reportLine(run, report, failures) {
   }
   const title = await titleOf(run, thread)
   const said = (await line.first().innerText()).replace(/\s+/g, " ").trim()
-  if (!said.includes(title) || !said.endsWith("responded"))
-    failures.push(`the report line reads "${said}", not "${title} responded"`)
+  if (
+    !said.startsWith("Agent report from ") ||
+    !said.includes(title) ||
+    !said.endsWith("responded")
+  )
+    failures.push(`the report line does not name its agent: "${said}"`)
+  if (run.evidence)
+    await line.first().screenshot({
+      path: join(run.evidence, `thread-report-${run.engine}.png`),
+    })
   if (
     /finished the turn you sent it|execution /.test(
       await run.page.locator(css.pane).first().innerText(),
