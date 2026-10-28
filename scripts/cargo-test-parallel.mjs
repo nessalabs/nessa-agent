@@ -275,12 +275,17 @@ export async function runParallelCargoTests({
     }
     const plan = serverCasePlan(testRegistry(await list([])))
     for (const part of ["server-lib", "remaining"])
-      validateFilteredRegistry(await list(plan[part].args), plan[part].names)
-    const serverTask = { ...server, args: plan[partition].args }
+      for (const task of plan[part].tasks)
+        validateFilteredRegistry(await list(task.args), task.names)
+    const serverTasks = plan[partition].tasks.map((task) => ({
+      ...server,
+      label: `${server.label} ${task.label}`,
+      args: task.args,
+    }))
     selected =
-      partition === "server-lib" ? [serverTask] : [serverTask, ...partitions.remaining]
+      partition === "server-lib" ? serverTasks : [...serverTasks, ...partitions.remaining]
     stderr.write(
-      `partition ${partition}: ${plan[partition].names.length} server cases, ${selected.length - 1} other binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
+      `partition ${partition}: ${plan[partition].names.length} server cases in ${serverTasks.length} executables, ${selected.length - serverTasks.length} other binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
     )
   }
 

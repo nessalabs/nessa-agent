@@ -4,6 +4,7 @@ export const cataloguePrefix =
 export const catalogueCases = ["seed_1", "seed_7", "seed_41", "under_load"].map(
   (suffix) => `${cataloguePrefix}${suffix}`,
 )
+export const conversationFilter = "conversation::"
 
 /** Parse libtest's complete --list output, including ignored tests as cases. */
 export function testRegistry(output) {
@@ -29,9 +30,26 @@ export function serverCasePlan(registry) {
     throw new Error("expected exactly four seeded paired-catalogue cases")
   const ordinary = registry.filter((name) => !name.includes(cataloguePrefix))
   if (ordinary.length === 0) throw new Error("server library has no ordinary cases")
+  const conversation = ordinary.filter((name) => name.includes(conversationFilter))
+  const other = ordinary.filter((name) => !name.includes(conversationFilter))
+  if (conversation.length === 0 || other.length === 0)
+    throw new Error("server library must have both conversation and other cases")
   return {
-    "server-lib": { args: ["--skip", cataloguePrefix], names: ordinary },
-    remaining: { args: [cataloguePrefix], names: seeded },
+    "server-lib": {
+      names: ordinary,
+      tasks: [
+        { label: "conversation", args: [conversationFilter], names: conversation },
+        {
+          label: "other",
+          args: ["--skip", conversationFilter, "--skip", cataloguePrefix],
+          names: other,
+        },
+      ],
+    },
+    remaining: {
+      names: seeded,
+      tasks: [{ label: "seeded catalogue", args: [cataloguePrefix], names: seeded }],
+    },
   }
 }
 
