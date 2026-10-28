@@ -340,6 +340,7 @@ pub(super) async fn product_state(
                         command_policy: settings.command_policy()?,
                         serving,
                         access_policy: access_policy.clone(),
+                        #[cfg(unix)]
                         github: github.as_ref().map(|github| github.connections.clone()),
                     },
                 )
@@ -682,6 +683,7 @@ struct ConversationSettings {
     /// Who may locate, act on, read and share a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     /// The gateway-owned GitHub sign-in used only by source-authorized reads.
+    #[cfg(unix)]
     github: Option<Arc<crate::github::application::GithubConnections>>,
 }
 
