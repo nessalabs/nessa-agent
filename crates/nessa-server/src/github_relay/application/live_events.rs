@@ -16,9 +16,18 @@ pub trait LiveEventStore: RelayStore {
     /// the authenticated caller, never a token.
     async fn select(
         &self,
+        generation: u64,
         bindings: &[Binding],
         initiator: &str,
         accept_gaps: bool,
+    ) -> Result<(), Failure>;
+}
+/// Owns the last commit boundary when an unlock may change during selection IO.
+pub trait LiveSelectionAdmission: Send + Sync {
+    fn commit_in_generation(
+        &self,
+        generation: u64,
+        commit: &mut dyn FnMut() -> Result<(), Failure>,
     ) -> Result<(), Failure>;
 }
 pub struct LiveEvents {
@@ -54,13 +63,14 @@ impl LiveEvents {
     }
     pub async fn set(
         &self,
+        generation: u64,
         enabled: bool,
         initiator: &str,
         accept_gaps: bool,
     ) -> Result<(), Failure> {
         let _change = self.changes.lock().await;
         if !enabled {
-            return self.store.select(&[], initiator, false).await;
+            return self.store.select(generation, &[], initiator, false).await;
         }
         let user = self
             .credentials
@@ -78,6 +88,8 @@ impl LiveEvents {
         {
             return Err(Failure::IdentityChanged);
         }
-        self.store.select(&bindings, initiator, accept_gaps).await
+        self.store
+            .select(generation, &bindings, initiator, accept_gaps)
+            .await
     }
 }

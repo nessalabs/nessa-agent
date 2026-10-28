@@ -10,6 +10,7 @@ use nessa_local_database::rusqlite::{params, OptionalExtension, TransactionBehav
 impl LiveEventStore for SqliteRelayStore {
     async fn select(
         &self,
+        generation: u64,
         bindings: &[Binding],
         initiator: &str,
         accept_gaps: bool,
@@ -19,6 +20,7 @@ impl LiveEventStore for SqliteRelayStore {
         }
         let bindings = bindings.to_vec();
         let initiator = initiator.to_owned();
+        let selection = self.selection.clone();
         self.run(move|db,now|{
             let tx=db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(failure)?;
             let existing=tx.prepare("SELECT user_id,repository_id,generation FROM bindings").map_err(failure)?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(failure)?.collect::<Result<Vec<_>,_>>().map_err(failure)?;
@@ -43,7 +45,18 @@ impl LiveEventStore for SqliteRelayStore {
                 tx.execute("INSERT INTO bindings(user_id,repository_id,repository_name,generation) VALUES(?,?,?,?)",params![b.user_id(),b.repository_id(),b.repository_name(),b.generation().to_string()]).map_err(failure)?;
             }
             for table in ["audit","binding_audit"] {tx.execute(&format!("DELETE FROM {table} WHERE id IN (SELECT id FROM {table} ORDER BY id DESC LIMIT -1 OFFSET ?)"),[crate::github_relay::domain::contract::AUDIT_ROWS]).map_err(failure)?;}
-            tx.commit().map_err(failure)
+            let mut pending = Some(tx);
+            selection.commit_in_generation(generation, &mut || {
+                pending
+                    .take()
+                    .expect("selection commits once")
+                    .commit()
+                    .map_err(failure)
+            })?;
+            if pending.is_some() {
+                return Err(Failure::Storage);
+            }
+            Ok(())
         }).await
     }
 }

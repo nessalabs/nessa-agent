@@ -104,6 +104,10 @@ sign-in owner. The owner independently captures its generation before its own
 provider and storage work. A stale queued command therefore cannot borrow the
 new unlock. `a_queued_disconnect_cannot_delete_a_sign_in_restored_by_a_new_unlock`
 exercises G22 through the product dispatcher and encrypted token store.
+For G23, the SQLite selection owner checks the admitted generation while it
+commits, under the vault's unlock guard. If a lock or unlock intervened, the
+transaction rolls back with `vault_locked`. Store and product tests pause an
+old selection, restore a new binding, then resume both disable and disconnect.
 
 Every change takes `changes` first (a tokio mutex), so each sees the state
 the last one left. A read (`status`, `token`) takes only the state and never
@@ -137,6 +141,7 @@ waiting.
 | G20 | (start) | the gateway starts | no secret is loaded while the vault is locked; after unlock, restore the saved sign-in or signed out; unreadable saved data reports `last: store_unavailable` | — |
 | G21 | connecting | the gateway stops | the code attempt is gone; an approved credential durably saved before the stop can be restored after unlocking the vault | — |
 | G22 | a product GitHub command queued for an old vault unlock | the vault locks and unlocks before the command gate opens | refuse `vault_locked` before changing live bindings or the newer sign-in; the new generation owns any later command | — |
+| G23 | live-event selection from an old unlock is waiting to commit | the vault locks and unlocks before the inbox transaction commits | the selection owner refuses the old generation at commit, rolls back the whole selection and audit, and preserves the new selection | — |
 
 Disconnect forgets the token on this gateway. Revoking it at GitHub needs the
 app's client secret, which a desktop app cannot keep, so the row says to use

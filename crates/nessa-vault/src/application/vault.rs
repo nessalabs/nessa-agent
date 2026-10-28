@@ -378,6 +378,15 @@ impl Vault {
         let unlocked = state.unlocked.as_ref().ok_or(Failure::Locked)?;
         work(&unlocked.key)
     }
+    /// Run a short synchronous commit while the admitted unlock cannot change.
+    /// A stale consumer's transaction can roll back before any effect is durable.
+    pub fn within_generation<T>(
+        &self,
+        generation: u64,
+        commit: impl FnOnce() -> T,
+    ) -> Result<T, Failure> {
+        self.access(Some(generation), |_| Ok(commit()))
+    }
     /// Blocking internal entry read. The caller owns the returned zeroizing value;
     /// no caller authorization is implied by cryptographic availability.
     pub fn read(&self, name: &EntryName) -> Result<Option<Secret>, Failure> {

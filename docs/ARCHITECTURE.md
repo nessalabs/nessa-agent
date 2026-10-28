@@ -1127,8 +1127,11 @@ SQLCipher-encrypted inbox, keyed from the session-unlocked local vault. `GithubC
 credential adapter discovers the App-selected repositories. `LiveEvents` owns
 selection changes through one private SQLite transaction, including deletion
 evidence, cursor preservation and gap acknowledgement. Its application coordinates
-credentials, source and store. The credential port preserves GitHub's redacted,
-zeroizing `AccessToken`; each page obtains a fresh request-scoped copy, released
+credentials, source and store. An injected selection admission holds the vault
+unlock generation through the transaction commit, so a selection begun before
+a lock cannot erase bindings restored after the next unlock. The credential
+port preserves GitHub's redacted, zeroizing `AccessToken`; each page obtains a
+fresh request-scoped copy, released
 before persistence or idle watching. Success and body-bearing refusals share one
 streamed response bound; watch frame/message limits fit the changed notification
 and RFC control frames. Composition starts the optional follower under the serving gateway and exposes

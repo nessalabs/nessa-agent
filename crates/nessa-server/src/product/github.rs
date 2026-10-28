@@ -58,8 +58,12 @@ pub(super) async fn dispatch(
         let Some(live) = &github.live else {
             return failure(&frame.id, "github_live_unavailable");
         };
+        let Some(generation) = admitted_generation.flatten() else {
+            return failure(&frame.id, "vault_locked");
+        };
         if let Err(error) = live
             .set(
+                generation,
                 params.enabled,
                 &initiator,
                 params.accept_gaps.unwrap_or(false),
@@ -74,7 +78,10 @@ pub(super) async fn dispatch(
     }
     if frame.method == "github.disconnect" {
         if let Some(live) = &github.live {
-            if let Err(error) = live.set(false, &initiator, false).await {
+            let Some(generation) = admitted_generation.flatten() else {
+                return failure(&frame.id, "vault_locked");
+            };
+            if let Err(error) = live.set(generation, false, &initiator, false).await {
                 return failure(&frame.id, relay_code(&error));
             }
             if !still_admitted() {

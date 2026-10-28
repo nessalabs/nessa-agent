@@ -13,4 +13,4 @@ pub use connected_store::ConnectedRelayStore;
 mod selection;
 
 mod vault;
-pub use vault::VaultInboxKey;
+pub use vault::{VaultInboxKey, VaultSelectionAdmission};

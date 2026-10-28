@@ -75,6 +75,16 @@ async fn server(status: StatusCode, body: Value) -> Server {
         calls,
     }
 }
+struct TestSelection;
+impl crate::github_relay::application::LiveSelectionAdmission for TestSelection {
+    fn commit_in_generation(
+        &self,
+        _: u64,
+        commit: &mut dyn FnMut() -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        commit()
+    }
+}
 struct TestKey;
 impl InboxKeySource for TestKey {
     fn load(&self) -> Result<Arc<DatabaseKey>, Failure> {
@@ -86,6 +96,7 @@ fn store(directory: &TempDir) -> SqliteRelayStore {
         directory.path().join("private/inbox.sqlite"),
         Arc::new(|| 1_000_000),
         Arc::new(TestKey),
+        Arc::new(TestSelection),
     )
 }
 fn binding() -> Binding {
