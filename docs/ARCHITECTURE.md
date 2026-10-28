@@ -1127,8 +1127,11 @@ SQLCipher-encrypted inbox, keyed from the session-unlocked local vault. `GithubC
 credential adapter discovers the App-selected repositories. `LiveEvents` owns
 selection changes through one private SQLite transaction, including deletion
 evidence, cursor preservation and gap acknowledgement. Its application coordinates
-credentials, source and store;
-composition starts the optional follower under the serving gateway and exposes
+credentials, source and store. The credential port preserves GitHub's redacted,
+zeroizing `AccessToken`; each page obtains a fresh request-scoped copy, released
+before persistence or idle watching. Success and body-bearing refusals share one
+streamed response bound; watch frame/message limits fit the changed notification
+and RFC control frames. Composition starts the optional follower under the serving gateway and exposes
 the existing GitHub sign-in and Settings live-events opt-in, alongside local
 connect/events/disconnect CLI commands. The packaged host's existing baked
 stage selects the compiled table in `protocol/defaults/github-relays.json`.
@@ -1170,9 +1173,24 @@ MCP relay forwarding and SFTP artifact channels. Authorization remains in the
 existing conversation, credential and MCP policies. The gateway never treats a
 missing VM as permission to allocate a replacement or fall back to Local.
 Receipt-publication failure, including a port panic, enters a target-bearing
-recovery path that records evidence independently and attempts rollback even if
-audit delivery fails. Provider-side thread correlation survives local persistence
+recovery path that records evidence independently. A pending new allocation
+attempts rollback even if audit delivery fails; existing, replayed or
+unrecognized receipt targets are retained. Provider-side thread correlation survives local persistence
 failure; unconfirmed cleanup stays uncertain.
+
+Boat admission checks the complete supported agent-credential posture and binds
+the immutable provider environment/version identity to the received VM before
+workspace authority. Creation rechecks after the provider's name-based create;
+reconnect checks before resume and again before SDK open. Private receipt
+histories admit only Provisioning then Assigned or Refused, with one further
+Assigned-to-Refused transition for later drift. A durably Refused receipt cannot
+reconnect or create a replacement; old receipts without proof are retained as
+Unverified and cannot execute. Refusal records retain expected/observed identity
+and cause independently of the UI. Only an acknowledged pending allocation may
+roll back automatically; reconnect and idempotent replay preserve existing VM
+data. Storage, audit and cleanup failures remain
+separately observable. Provider-side mutation during name-based create remains a
+trust boundary; these checks do not attest physical erasure.
 
 The main agent runs when messaged or notified by workers. Cloud wake endpoints,
 VM parking, live migration and local-folder mounts are outside this alpha. See

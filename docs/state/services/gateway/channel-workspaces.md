@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: "a162d7ef7cc7abbe5f714f74737b34421ec15e6b"
+sourceRevision: "05bb0383823d28e37f563ba28cea72fa9c6de9a3"
 summary: A channel independently places its main agent and new threads on Local or Boat.
 parent: gateway
 sources:
@@ -18,7 +18,13 @@ sources:
   - crates/nessa-server/src/conversation/application/input_files.rs
   - crates/nessa-server/src/workspaces/infrastructure/settings.rs
   - crates/nessa-server/src/workspaces/infrastructure/release.rs
-  - crates/nessa-server/src/workspaces/application/mod.rs
+  - crates/nessa-server/src/workspaces/application/workspaces.rs
+  - crates/nessa-server/src/workspaces/domain/workspace.rs
+  - crates/nessa-server/src/workspaces/domain/environment.rs
+  - crates/nessa-server/src/workspaces/infrastructure/assignments.rs
+  - crates/nessa-server/src/workspaces/infrastructure/boat_admission.rs
+  - crates/nessa-server/tests/workspaces/boat_admission.rs
+  - crates/nessa-server/tests/workspaces/environment.rs
   - crates/nessa-server/src/workspaces/infrastructure/boat.rs
   - crates/nessa-server/src/workspaces/infrastructure/ssh.rs
   - crates/nessa-server/src/conversation/infrastructure/workspaces.rs
@@ -40,17 +46,37 @@ stateDiagram-v2
     [*] --> Local: Local placement
     [*] --> NeedsConnection: Boat placement
     NeedsConnection --> Intent: unlocked saved token and new thread
-    NeedsConnection --> Refused: locked or unavailable configuration
-    Intent --> Assigned: persist returned VM identity
+    Intent --> Assigned: full admission and matched VM receipt
+    Intent --> AdmissionRefused: persist actual target and refusal
     Intent --> Uncertain: response lost or receipt not saved
-    Assigned --> Ready: SDK workspace and pinned SSH lease
-    Assigned --> Refused: preparation fails or VM missing
+    Assigned --> Verifying: open same saved VM
+    Verifying --> Ready: verify before resume and SDK authority
+    Verifying --> AdmissionRefused: persist configuration or receipt mismatch
+    Verifying --> Unavailable: provider IO or missing VM
+    Unavailable --> Verifying: retry the same target
     Ready --> Assigned: close harness or gateway restart
-    Assigned --> Ready: resume same archived VM and workspace
-    Uncertain --> Refused: automatic replacement forbidden
+    [*] --> Unverified: old receipt lacks admission proof
 ```
 
-A durable receipt holds the thread, original image, environment and VM identity.
+A durable receipt holds the thread, original image, VM and immutable provider
+environment/version identity. Complete admission permits only the explicit
+agent-credential posture, with the owner's default profile and no additional
+GitHub, general/sandbox credentials, contents, secret files or repository/setup
+injection. Unknown credential/access configuration refuses. Current settings are
+checked at creation and reconnection, with a concrete VM receipt check before
+any workspace SDK, harness, SSH or MCP authority.
+
+Creation checks again after Boat's name-based create; the provider does not offer
+a version selector, so provider/privileged mutation during that operation remains
+a trust boundary. A mismatch durably records Refused with the actual target and
+bounded expected/observed evidence. Only an acknowledged pending new allocation
+requests rollback. Reconnect, ready/idempotent replay and unrecognized creation
+acknowledgements retain the target and existing data. Durably Refused
+and old Unverified receipts cannot reconnect, upgrade themselves or allocate a
+replacement. Refusal storage, audit and cleanup failures are reported separately;
+if persistence fails, no durable refusal or confirmed deletion is claimed.
+Future openings must still verify the same saved identity; they never select a
+new target.
 A create intent is written first; uncertainty is retained rather than creating a
 second resource. An observer disappearing does not cancel the allocation task's
 receipt publication. Closing or deleting chat history preserves workspace files
