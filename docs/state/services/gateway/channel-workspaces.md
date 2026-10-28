@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: "ee77f0d9c1ccdfb89e9d1465a87336ef8aeea964"
+sourceRevision: "72f9ac1c986d7abebda55a4ae6a9603c960a377d"
 summary: A channel independently places its main agent and new threads on Local or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
@@ -29,11 +29,12 @@ sources:
   - crates/nessa-server/tests/workspaces/boat_admission.rs
   - crates/nessa-server/tests/workspaces/environment.rs
   - crates/nessa-server/src/workspaces/infrastructure/boat.rs
-  - crates/nessa-server/src/workspaces/infrastructure/runtime_settings.rs
+  - crates/nessa-server/src/workspaces/infrastructure/boat_runtime_settings.rs
   - crates/nessa-server/src/workspaces/infrastructure/runtime_settings_audit.rs
   - crates/nessa-server/src/workspaces/infrastructure/ssh.rs
   - crates/nessa-server/src/conversation/infrastructure/workspaces.rs
   - crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs
+  - crates/nessa-server/src/settings/inheritance.rs
   - crates/nessa-server/src/conversation/infrastructure/workspace_runtime_config.rs
   - crates/nessa-server/src/conversation/infrastructure/channels.rs
   - src/desktop/workspace/ui/channel-creation/new-channel.tsx
@@ -107,7 +108,10 @@ active VM does not compare its original deadline with a newly edited setting.
 Ordinary preferences live in the gateway's existing `config.json`, separate
 from the encrypted Boat token. Missing channel overrides inherit; explicit
 null requests no automatic stop. The default and override are read together for
-the requested scope before allocation. A settings snapshot for another scope
+the requested scope before allocation. The typed inheritance rule applies any
+present choices from broadest to most specific; the current channel model supplies
+only the Nessa default and one channel choice. A future parent level must be
+resolved by the feature that owns its identity. A settings snapshot for another scope
 refuses before provider effects. Channel membership is resolved by the shared
 channel store; a failed or mismatched lookup refuses rather than falling back
 to the global default. Channel edits require Cedar authorization.

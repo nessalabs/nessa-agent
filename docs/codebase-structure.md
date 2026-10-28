@@ -2678,17 +2678,25 @@ existing durable EnvironmentAudit store; failed receipt publication retains its
 VM target independently of the assignment writer and initiating observer.
 
 Ordinary VM lifetime preferences use the existing gateway `config.json`, through
-the `RuntimeSettings` port and `ConfigRuntimeSettings` adapter. The adapter shares
+the `RuntimeSettings` port and the Boat-specific `ConfigBoatRuntimeSettings` adapter
+in `boat_runtime_settings.rs`. The adapter shares
 `ConfigJson` publication and locking with other settings editors; only Boat
 credentials use the vault. Requested/outcome records in `boat-runtime-audit`
 retain the scoped choice and publication result. Runtime settings and their
 audits participate in the existing configuration and environment-audit backup cuts.
+The pure `crates/nessa-server/src/settings/inheritance.rs` rule resolves typed
+choices from broadest to most specific: an absent choice inherits its parent,
+while a present choice wins
+even when its value is explicitly nullable. Storage schema, scope identity,
+authorization and publication remain with each setting's owning feature.
 
 Conversation placement and main-agent identity remain in `conversation`.
 Its platform-neutral placement contract owns the workspace retention bound;
 the operational catalogue and Unix cache consume that same definition.
-Its lifetime values identify the global or channel target and resolve an explicit
-override against the default. `workspace_runtime_config.rs` reads that pair from
+Its lifetime values identify the global or channel target and use the shared
+inheritance rule for the current default and channel override. A future parent
+scope supplies another ordered choice when its identity exists; the resolver
+does not invent a project hierarchy. `workspace_runtime_config.rs` reads the pair from
 one document. The shared channel store resolves membership before allocation;
 the Boat adapter applies the selected lifetime on VM creation and archived resume.
 `conversation/infrastructure/workspaces.rs` adapts a workspace stream into the
