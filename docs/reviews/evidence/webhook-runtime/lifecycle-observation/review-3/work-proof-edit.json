@@ -1,0 +1,6 @@
+{
+  "before": "SELECT EXISTS(SELECT 1 FROM cursors WHERE registration=?1) OR EXISTS(SELECT 1 FROM deliveries WHERE registration=?1)",
+  "after": "SELECT 0",
+  "originalSHA256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+  "changedSHA256": "fe1c8bd5c6d6425a3580cc27ed73d6278c5b0e3b380170f291d347e0849284f0"
+}

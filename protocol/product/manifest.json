@@ -409,6 +409,14 @@
     "boat.setRuntimeSettings": {
       "params": "BoatRuntimeSetParams",
       "grant": "credential.manage"
+    },
+    "conversation.webhook.cursor": {
+      "params": "ConversationWebhookCursorParams",
+      "grant": "credential.manage"
+    },
+    "conversation.webhook.reset": {
+      "params": "ConversationWebhookResetParams",
+      "grant": "credential.manage"
     }
   },
   "events": {

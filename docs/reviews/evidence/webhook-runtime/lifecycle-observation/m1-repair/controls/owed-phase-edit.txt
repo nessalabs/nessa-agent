@@ -1,0 +1,7 @@
+                    if owed
+                        && !matches!(&live, Some(live) if live.lifecycle.phase() == RegistrationPhase::ExpiryObserved)
+                    {
+                        return Err(OutboxError::Invalid);
+                    }
+
+=>

@@ -1,0 +1,24 @@
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-webhook-runtime/crates/nessa-auth)
+    Finished `test` profile [unoptimized] target(s) in 3.53s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_auth-d8c2b69b9ce32e17)
+
+running 1 test
+test adapters::cedar::evaluator::tests::webhook_path_holds_only_an_integration_conversation_read_grant ... FAILED
+
+failures:
+
+---- adapters::cedar::evaluator::tests::webhook_path_holds_only_an_integration_conversation_read_grant stdout ----
+
+thread 'adapters::cedar::evaluator::tests::webhook_path_holds_only_an_integration_conversation_read_grant' (67750) panicked at crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs:403:13:
+assertion `left == right` failed: Human conversation.read
+  left: Ok(Allow)
+ right: Ok(Deny)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    adapters::cedar::evaluator::tests::webhook_path_holds_only_an_integration_conversation_read_grant
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-auth --lib`

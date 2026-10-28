@@ -1,0 +1,7 @@
+
+running 3 tests
+test webhooks::infrastructure::outbox::tests::source_reset_tests::independent_later_retry_cleanup_preserves_original_fact_after_cursor_gone ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::independent_cross_chat_existing_reset_reference_is_rejected_before_publication ... ok
+test webhooks::infrastructure::outbox::tests::source_reset_tests::independent_source_membership_survives_complete_physical_source_cycle ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 0.04s

@@ -71,7 +71,7 @@ when {
 // environment; a peer gateway may only read what it is granted and serve as an
 // environment, never the conversation authority's actions. `context.path` is
 // the way the credential comes in: "bootstrap", "product", "provision",
-// "recovery", or "stored" for one already in the registry.
+// "recovery", "webhook", or "stored" for one already in the registry.
 @id("hold.person")
 permit (
     principal is Nessa::Holder,
@@ -107,8 +107,8 @@ when { context.action == "credential.manage" && context.path == "product" };
 // Who a new credential may be issued to (`GrantPolicyEvaluator::may_issue`).
 // A peer gateway is never issued one: it is enrolled only by pairing, which
 // binds its credential to the key it pinned, and an issued bearer secret
-// would be a second way in. A member may be issued a credential on any
-// issuing path; an admin only on the local operator's (bootstrap, surface
+// would be a second way in. The webhook path further restricts members to
+// integrations. An admin requires the local operator's path (bootstrap, surface
 // provisioning and owner recovery), never over the product protocol.
 @id("issue.member")
 permit (
@@ -131,4 +131,38 @@ when {
     ["human", "agent", "integration"].contains(principal.kind) &&
     principal.role == "admin" &&
     ["bootstrap", "provision", "recovery"].contains(context.path)
+};
+
+// Outbound registration asks the same credential owner with its issuing path.
+// It cannot turn a person, agent or paired peer into a webhook principal, or
+// give that credential administration, catalogue, write or serving authority.
+@id("hold.webhook_read_only")
+forbid (
+    principal is Nessa::Holder,
+    action == Nessa::Action::"credential.hold",
+    resource is Nessa::Resource
+)
+when {
+    context.path == "webhook" &&
+    (principal.kind != "integration" || context.action != "conversation.read")
+};
+
+@id("issue.webhook_integration")
+forbid (
+    principal is Nessa::Recipient,
+    action == Nessa::Action::"credential.issue",
+    resource is Nessa::Resource
+)
+when { context.path == "webhook" && principal.kind != "integration" };
+
+// Issuance purpose is the original journal fact, not current registration presence.
+@id("session.product_origin")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"session.enter",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    ["bootstrap", "admin_issue", "device_pairing", "surface_provision", "owner_recovery"].contains(principal.issuance)
 };

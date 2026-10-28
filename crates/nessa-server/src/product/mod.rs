@@ -40,6 +40,7 @@ mod refusal_causes;
 mod socket;
 mod state;
 mod subscription;
+mod webhook_reset;
 pub(crate) mod wire;
 mod workspace;
 

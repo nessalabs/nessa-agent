@@ -359,6 +359,7 @@ async fn device_at_gateway(gateway: &Gateway, device: DeviceCredential) -> Devic
     connect.join().unwrap().unwrap();
     let verifier = registry.device_verifier(accepted.device_proof());
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &verifier,
         access: &registry,
         clock: &RuntimeClock,

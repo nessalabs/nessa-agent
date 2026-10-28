@@ -3738,6 +3738,41 @@ pub struct BoatRuntimeSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_source_head: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorResult {
+    pub scope: RecordScope,
+    pub position: String,
+    pub reset_required: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_source_head: Option<ConversationRecordsHeadResult>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetResult {
+    pub request_id: String,
+    pub receipt_id: String,
+    pub scope: RecordScope,
+    pub position: String,
+    pub applied_at_ms: u64,
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -3918,6 +3953,8 @@ pub mod product_method {
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
     pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
     pub const BOAT_SET_RUNTIME_SETTINGS: &str = "boat.setRuntimeSettings";
+    pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
+    pub const CONVERSATION_WEBHOOK_RESET: &str = "conversation.webhook.reset";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -4108,7 +4145,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 101
+                items.len() <= 103
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4234,6 +4271,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "boat.disconnect",
     "boat.runtimeSettings",
     "boat.setRuntimeSettings",
+    "conversation.webhook.cursor",
+    "conversation.webhook.reset",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -4295,7 +4334,9 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "boat.save"
         | "boat.disconnect"
         | "boat.runtimeSettings"
-        | "boat.setRuntimeSettings" => Some("credential.manage"),
+        | "boat.setRuntimeSettings"
+        | "conversation.webhook.cursor"
+        | "conversation.webhook.reset" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"

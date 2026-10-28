@@ -383,6 +383,10 @@ export type {
   ConversationShareResult,
   ConversationSharesCursor,
   ConversationSharesResult,
+  ConversationWebhookCursorParams,
+  ConversationWebhookCursorResult,
+  ConversationWebhookResetParams,
+  ConversationWebhookResetResult,
   ConversationToolPolicy,
 } from "./generated/product.js"
 export {

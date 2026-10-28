@@ -3378,6 +3378,50 @@ export interface BoatRuntimeSettings {
   /** The stored channel whose settings were read or saved. Omitted only for the global default; an override requires this identity. */
   channelId?: string
 }
+/** Read the owner-only registered webhook checkpoint. Performs no canonical record I/O or delivery control. */
+export interface ConversationWebhookCursorParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
+  credentialId: string
+  /** Explicitly request a separately observed canonical Head under current owner read authority. Omitted/false performs no canonical admission or physical Head I/O. This does not reconcile or mutate the native checkpoint. */
+  includeSourceHead?: boolean
+}
+/** Reset only a frozen webhook checkpoint. requestId is its server-issued frozen capture UUID. Fresh owner authorization applies on replay; no caller-supplied scope or offset is accepted. */
+export interface ConversationWebhookResetParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
+  credentialId: string
+  /** The frozen capture UUID returned by the owner cursor query. Explicit retries retain this exact identity. */
+  requestId: string
+}
+/** Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority. */
+export interface ConversationWebhookCursorResult {
+  /** Complete scope/incarnation bound to the native checkpoint; its presence grants no read or delivery authority. */
+  scope: RecordScope
+  /** Canonical unsigned decimal position committed in this native scope. */
+  position: string
+  /** Whether fresh source capture requires an explicit owner reset for this frozen generation. */
+  resetRequired: boolean
+  /** Frozen capture UUID when resetRequired is true; null otherwise. Not a caller-selected rewind identity. */
+  requestId: string | null
+  /** Present only when explicitly requested and successfully read. Observed after the native checkpoint; these are separate non-atomic observations. Not a delivery, reset, publication or current-at-commit acknowledgement. */
+  observedSourceHead?: ConversationRecordsHeadResult
+}
+/** Immutable result: reset applied for this explicitly observed scope at position zero. Does not promise current-at-commit, resumed delivery or current resetRequired status. Same request replays this result without another rewind. */
+export interface ConversationWebhookResetResult {
+  /** Original frozen capture request UUID; matching replay returns the same selection without another rewind. */
+  requestId: string
+  /** Immutable native selection and audit receipt UUID for this applied reset. */
+  receiptId: string
+  /** Complete server-observed incarnation selected by this reset. It need not remain current when the native commit completes. */
+  scope: RecordScope
+  /** Scoped checkpoint selected by the reset, always zero in the returned observed incarnation. */
+  position: "0"
+  /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
+  appliedAtMs: number
+}
 export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
@@ -3439,7 +3483,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 101,
+  maxReadyMethods: 103,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3762,6 +3806,8 @@ export const ProductMethod = {
   BoatDisconnect: "boat.disconnect",
   BoatRuntimeSettings: "boat.runtimeSettings",
   BoatSetRuntimeSettings: "boat.setRuntimeSettings",
+  ConversationWebhookCursor: "conversation.webhook.cursor",
+  ConversationWebhookReset: "conversation.webhook.reset",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3876,6 +3922,8 @@ export const productReadyMethods = [
   "boat.disconnect",
   "boat.runtimeSettings",
   "boat.setRuntimeSettings",
+  "conversation.webhook.cursor",
+  "conversation.webhook.reset",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3981,6 +4029,8 @@ export const productMethodGrants = {
   "boat.disconnect": "credential.manage",
   "boat.runtimeSettings": "credential.manage",
   "boat.setRuntimeSettings": "credential.manage",
+  "conversation.webhook.cursor": "credential.manage",
+  "conversation.webhook.reset": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

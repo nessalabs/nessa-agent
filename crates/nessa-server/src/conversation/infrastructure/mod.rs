@@ -124,6 +124,8 @@ mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
+#[cfg(test)]
+pub(crate) use store::GrantWritePause;
 mod thread_reports;
 pub use background_tasks::LocalBackgroundTasks;
 #[cfg(unix)]

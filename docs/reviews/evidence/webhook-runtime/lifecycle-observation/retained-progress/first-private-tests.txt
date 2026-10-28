@@ -1,0 +1,23 @@
+
+running 10 tests
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::all_erased_proof_leaves_initial_acknowledgement_undetermined' (166328) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:399:14:
+called `Result::unwrap()` on an `Err` value: QueryReturnedNoRows
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::all_erased_proof_leaves_initial_acknowledgement_undetermined ... FAILED
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::initial_rejection_with_only_retained_source_history ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_initial_identity_excludes_a_second_pending_identity ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::retained_audit_summary_reads_only_its_registration_at_real_limit ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::two_pending_initial_identities_are_not_lost_ack_recovery ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::two_published_initial_identities_are_also_contradictory ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::retained_progress_uses_registration_keys_at_retained_capacity ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_original_issue_remains_valid_with_later_history ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work ... ok
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::all_erased_proof_leaves_initial_acknowledgement_undetermined
+
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 119 filtered out; finished in 0.68s

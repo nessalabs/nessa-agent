@@ -320,8 +320,9 @@ pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
 pub use record_read::{
-    ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
-    RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
+    PrincipalRecordReadSource, PrincipalRecordScope, ReadRecords, RecordHead, RecordReadError,
+    RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
+    RecordReadValue,
 };
 pub use service::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,

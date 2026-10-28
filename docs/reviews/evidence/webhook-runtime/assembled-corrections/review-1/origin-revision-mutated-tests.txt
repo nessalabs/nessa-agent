@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::matching_reply_cannot_turn_a_future_origin_into_current_committed_authority' (141694) panicked at /tmp/nessa-assembled-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_failures.rs:613:5:
+assertion `left == right` failed
+  left: Ok(RegisteredWebhook { registration_id: 8c7495c0-3fde-4995-a9cf-dbb07cad82fb, credential: CredentialMetadataDto { id: "credential-fc293d4d-76c0-412f-b6fc-43c401402d7f", principal_id: "hook", organization_id: "org", audience_id: "gateway", issued_at: 10, expires_at: Some(100), revoked_at: None, grants: [CredentialGrantDto { action: "conversation.read", resource: ResourceDto { organization_id: "org", id: "gateway" } }] } })
+ right: Err(Inconsistent)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::matching_reply_cannot_turn_a_future_origin_into_current_committed_authority ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::matching_reply_cannot_turn_a_future_origin_into_current_committed_authority
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.01s

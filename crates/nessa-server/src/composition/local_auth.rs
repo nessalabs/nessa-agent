@@ -48,7 +48,6 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
-            LocalConversationStore,
         },
     },
 };
@@ -62,19 +61,20 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationAccessPolicyEvaluator, ConversationRepository, ConversationService,
-            FenceCapture, McpAppAudit, ReceiverAuthority, ReviewNoticeAuditor, ShareGrants,
-            WatchCatalogue, WatchRecords,
+            ConversationAccessPolicyEvaluator, ConversationService, FenceCapture, McpAppAudit,
+            ReceiverAuthority, ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
         },
         infrastructure::{
-            CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalReceiverAuthority,
-            MonotonicReviewNoticeClock, NessaCatalogueReadSource, NessaRecordReadSource,
+            CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalConversationStore,
+            LocalReceiverAuthority, MonotonicReviewNoticeClock, NessaCatalogueReadSource,
+            NessaRecordReadSource,
         },
     },
     core::RunError,
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
     product::{ProductDependencies, ProductRouteState},
+    webhooks::infrastructure::{DeliveryDependencies, HttpsWebhook, SystemResolver},
 };
 use nessa_agent_credentials::CredentialNamespace;
 use nessa_auth::{
@@ -147,6 +147,8 @@ impl Clock for SystemClock {
 /// cannot be started here.
 pub(super) struct LocalProduct {
     pub(super) routes: ProductRouteState,
+    /// Prepared only; the root starts delivery after fallible startup settles.
+    pub(super) webhook_delivery: Option<DeliveryDependencies>,
     pub(super) record_reader: Option<Arc<NessaRecordReadSource>>,
     pub(super) catalogue_reader: Option<Arc<NessaCatalogueReadSource>>,
     /// Startup preparations for fixed providers plus the current OpenCode
@@ -485,6 +487,14 @@ pub(super) async fn product_state(
         store: store.clone(),
         inventory: Some(inventory.clone()),
     });
+    let webhooks = super::webhooks::prepare(
+        &settings,
+        directory,
+        store.clone(),
+        admin.clone(),
+        Arc::new(SystemClock),
+    )
+    .await?;
     let caller_kinds = store.clone();
     let mut product = ProductRouteState::new(
         gateway,
@@ -516,6 +526,9 @@ pub(super) async fn product_state(
         PersistentSessions::open(&path, SystemClock.unix_seconds())
             .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
     }));
+    if let Some(runtime) = &webhooks {
+        product = product.with_webhooks(runtime.clone());
+    }
     if bundle.is_some() {
         product =
             product.with_agent_installations(Arc::new(super::install_command::GatewayInstaller {
@@ -594,6 +607,7 @@ pub(super) async fn product_state(
         }
         None => None,
     };
+    let mut webhook_delivery = None;
     let mut record_reader = None;
     let mut catalogue_reader = None;
     if let Some((
@@ -620,6 +634,16 @@ pub(super) async fn product_state(
             Uuid::new_v4(),
         )
         .map_err(|error| RunError::Agent(format!("review-notice audit unavailable: {error:?}")))?;
+        if product.webhooks.is_some() {
+            webhook_delivery = Some(DeliveryDependencies {
+                metadata: metadata.clone(),
+                source: reader.clone(),
+                policy: access_policy.clone(),
+                capacity: product.record_reads.clone(),
+                gateway: product.gateway.clone(),
+                http: Arc::new(HttpsWebhook::new(Arc::new(SystemResolver::new()))),
+            });
+        }
         record_reader = Some(reader.clone());
         catalogue_reader = Some(catalogue.clone());
         product = product
@@ -652,6 +676,7 @@ pub(super) async fn product_state(
     }
     Ok(LocalProduct {
         routes: product,
+        webhook_delivery,
         record_reader,
         catalogue_reader,
         warm_ups,
@@ -716,7 +741,7 @@ struct BuiltConversations {
     record_watches: Arc<dyn WatchRecords>,
     catalogue_watches: Arc<dyn WatchCatalogue>,
     receivers: Arc<dyn ReceiverAuthority>,
-    metadata: Arc<dyn ConversationRepository>,
+    metadata: Arc<LocalConversationStore>,
     share_grants: Arc<dyn ShareGrants>,
     attachments: (AttachmentService, HeldReads),
     agents_catalog: AgentsListResult,
@@ -1877,10 +1902,14 @@ impl CredentialAdmin for LocalAdmin {
         let store = self.store.clone();
         let inventory = self.inventory.clone();
         Box::pin(async move {
-            let outcome = tokio::task::spawn_blocking(move || store.revoke_sync(request))
-                .await
-                .map_err(|_| CredentialAdminError::Unavailable)?
-                .map_err(CredentialAdminError::from)?;
+            let runtime = tokio::runtime::Handle::current();
+            // The detached physical owner waits for current effects and then
+            // commits. A socket disappearing must not cancel a revocation
+            // already handed to this owner, or occupy a socket runtime thread.
+            let outcome =
+                tokio::task::spawn_blocking(move || runtime.block_on(store.revoke(request)))
+                    .await
+                    .map_err(|_| CredentialAdminError::Unavailable)??;
             if let Some(inventory) = inventory {
                 if let Err(error) = inventory.capture().await {
                     tracing::warn!(

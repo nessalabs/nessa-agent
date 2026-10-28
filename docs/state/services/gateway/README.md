@@ -56,6 +56,10 @@ flowchart TB
 - [Attachments and content](attachments/README.md)
 - [Conversation identity and deletion](conversation.md)
 - [Bounded physical history reads](record-reads.md)
+- [Outbound webhook foundation and remaining integration](webhook-foundation.md)
+- [Outbound webhook credential and principal admission](webhook-admission.md)
+- [Webhook credential issuance and receipt identity](webhook-issuance.md)
+- [Durable outbound webhook state and audit](webhook-outbox.md)
 
 [Channel workspaces](channel-workspaces.md) describes independent Local/Boat
 placement, durable VM assignments, approved local access and main-chat replacement.

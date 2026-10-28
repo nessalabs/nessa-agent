@@ -1,0 +1,15 @@
+2026-10-23T23:52:25.0888673Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::first_reset_survives_later_cursor_deletion_replacement_and_restart ... ok
+2026-10-23T23:52:28.4428915Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::history_cannot_claim_reset_before_the_original_capture_state ... ok
+2026-10-23T23:52:52.0737600Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::immediate_source_refusal_uses_original_reset_actor_time_and_identity ... ok
+2026-10-23T23:52:54.2608896Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::retirement_evidence_uses_retained_original_facts_after_private_row_deletion ... ok
+2026-10-23T23:53:10.1340450Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::missing_or_replaced_immutable_guards_are_not_the_current_schema ... ok
+2026-10-23T23:53:11.6911523Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::oversized_fact_is_not_materialized_before_typed_decoding ... ok
+2026-10-23T23:53:11.8777990Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::owed_selection_work_does_not_grow_with_published_history ... ok
+2026-10-23T23:53:15.1935433Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::reset_fact_decoder_rejects_noncanonical_or_invalid_original_values ... ok
+2026-10-23T23:53:16.8382995Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::reset_factory_count_capacity_does_not_insert_a_partial_fact ... ok
+2026-10-23T23:53:33.5753795Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::missing_references_and_reference_accounting_refuse_restore_before_effects ... ok
+2026-10-23T23:53:40.2988856Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::reset_references_release_with_retirement_and_lost_ack_recovery ... ok
+2026-10-23T23:53:44.4283933Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::sending_and_cursor_share_original_immutable_reset_and_membership ... ok
+2026-10-23T23:53:48.9907195Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::stop_preserves_inflight_observation_and_cause ... ok
+2026-10-23T23:53:49.7436066Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::source_reset_tests::reset_metadata_substitutions_reject_before_recovery_publication ... ok
+2026-10-23T23:53:57.5355247Z ##[error]The action 'Run node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk' has timed out after 45 minutes.

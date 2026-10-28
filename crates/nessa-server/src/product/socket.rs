@@ -20,8 +20,8 @@ use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nessa_auth::application::authorization::AuthorizeAction;
 use nessa_auth::application::credential_admin::{
-    CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
-    RevokeCredentialOutcome, RevokeCredentialRequest,
+    CredentialAdminError, CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
+    ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
 };
 use nessa_auth::application::dto::{CredentialGrantDto, MembershipStateDto, ResourceDto};
 use nessa_auth::application::ports::{
@@ -371,6 +371,7 @@ where
             now: state.clock.unix_seconds(),
         };
         let identity = (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -402,6 +403,7 @@ where
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
     let verifier = proof.verifier(socket, state);
     let session = AuthenticateSession {
+        policy: state.policy.as_ref(),
         verifier: verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
@@ -427,6 +429,7 @@ where
 fn credential_admin_code(error: CredentialAdminError) -> &'static str {
     match error {
         CredentialAdminError::Conflict => "credential_conflict",
+        CredentialAdminError::OriginRecoveryRequired => "credential_conflict",
         CredentialAdminError::Capacity => "credential_capacity",
         CredentialAdminError::NotFound => "credential_not_found",
         CredentialAdminError::Unavailable => "credential_store_unavailable",
@@ -1957,6 +1960,9 @@ async fn dispatch_authorized(
         "agents.installOptions" | "agents.install" => {
             super::agent_install::dispatch(state, session, frame).await
         }
+        "conversation.webhook.cursor" | "conversation.webhook.reset" => {
+            super::webhook_reset::dispatch(state, session, frame).await
+        }
         "conversation.share" | "conversation.unshare" | "conversation.shares" => {
             super::read_access::dispatch_share(state, session, frame).await
         }
@@ -2007,8 +2013,12 @@ async fn dispatch_authorized(
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            health_check_message(&frame.id, state.uptime_clock.elapsed_ms())
-                .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
+            health_check_message(
+                &frame.id,
+                state.uptime_clock.elapsed_ms(),
+                state.webhooks.as_ref().map(|runtime| runtime.status()),
+            )
+            .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
         }
         "credential.issue" => {
             let Some(admin) = state.admin.as_ref() else {
@@ -2039,6 +2049,7 @@ async fn dispatch_authorized(
             let credential_id = format!("credential-{}", Uuid::new_v4());
             let outcome = admin
                 .issue(IssueCredentialRequest {
+                    purpose: CredentialIssuePurpose::Product,
                     request_id: params.request_id,
                     issuer_principal_id: context.principal_id().as_str().to_owned(),
                     credential_id,
@@ -2262,6 +2273,7 @@ async fn current_identity_inner(
             now: state.clock.unix_seconds(),
         };
         match (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -3941,7 +3953,11 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .clone();
-            assert_eq!(asked, vec![grant.to_owned()], "{method}");
+            assert_eq!(
+                asked,
+                vec!["session.enter".to_owned(), grant.to_owned()],
+                "{method}"
+            );
         }
     }
 
@@ -4143,6 +4159,23 @@ mod tests {
         }
     }
 
+    /// Original issuance of a newly constructed synthetic product credential.
+    fn test_product_origin(
+        credential: &Credential,
+    ) -> nessa_auth::application::origin::CredentialOrigin {
+        let original = credential
+            .issued(
+                nessa_auth::domain::IssuanceCause::AdminIssue,
+                nessa_auth::domain::Initiator::LocalOperator,
+            )
+            .unwrap();
+        nessa_auth::application::origin::CredentialOrigin::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            credential,
+        )
+        .unwrap()
+    }
+
     fn snapshot(role: MembershipRole, status: MembershipStatus) -> AccessSnapshot {
         snapshot_with(role, status, &["server.read", "credential.manage"])
     }
@@ -4157,8 +4190,8 @@ mod tests {
             organization.clone(),
             ResourceId::new("gateway-resource").unwrap(),
         );
-        AccessSnapshot {
-            credential: Credential::new(
+        {
+            let credential = Credential::new(
                 CredentialId::new("credential").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization.clone(),
@@ -4170,15 +4203,23 @@ mod tests {
                     .map(|action| Grant::new(Action::new(*action).unwrap(), resource.clone()))
                     .collect(),
             )
-            .unwrap(),
-            membership: Membership::new(
+            .unwrap();
+            let membership = Membership::new(
                 MembershipId::new("membership").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization,
                 role,
                 status,
-            ),
-            revision: 1,
+            );
+            let revision = 1;
+            let origin = test_product_origin(&credential);
+            AccessSnapshot {
+                revocation: None,
+                credential,
+                membership,
+                revision,
+                origin,
+            }
         }
     }
 
@@ -4231,6 +4272,7 @@ mod tests {
 
     async fn authenticate(state: &ProductRouteState) -> AuthenticatedSession {
         AuthenticateSession {
+            policy: state.policy.as_ref(),
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -4289,6 +4331,10 @@ mod tests {
     async fn administration_reports_typed_rejections_from_a_substitute_adapter() {
         for (error, code) in [
             (CredentialAdminError::Conflict, "credential_conflict"),
+            (
+                CredentialAdminError::OriginRecoveryRequired,
+                "credential_conflict",
+            ),
             (CredentialAdminError::Capacity, "credential_capacity"),
             (CredentialAdminError::NotFound, "credential_not_found"),
             (
@@ -5497,15 +5543,18 @@ mod tests {
     impl PolicyEvaluator for RecordingGrantPolicy {
         fn evaluate(
             &self,
-            _: &AuthContext,
+            context: &AuthContext,
             action: &Action,
-            _: &Resource,
-            _: &AccessSnapshot,
+            resource: &Resource,
+            snapshot: &AccessSnapshot,
         ) -> Result<Decision, AccessError> {
             self.asked
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(action.as_str().to_owned());
+            if action.as_str() == "session.enter" {
+                return CedarPolicyEvaluator::new()?.evaluate(context, action, resource, snapshot);
+            }
             Ok(Decision::Deny)
         }
     }

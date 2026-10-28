@@ -1,0 +1,19 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installation_requires_the_retained_original_intent_before_any_effect ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::installation_requires_the_retained_original_intent_before_any_effect stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::installation_requires_the_retained_original_intent_before_any_effect' (82327) panicked at /tmp/nessa-registration-probes/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration.rs:557:9:
+assertion `left == right` failed: key
+  left: Ok(())
+ right: Err(Conflict)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::installation_requires_the_retained_original_intent_before_any_effect
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.01s

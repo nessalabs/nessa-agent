@@ -167,7 +167,7 @@ async function bounded(promise, ms, expire) {
  * Call after the UI intent that requests unlock, not after an arbitrary restart. */
 export async function unlockRequestedVault(client, page) {
   if ((await client.vault.status()).state !== "locked") return
-  await page.locator('[data-vault-dialog="unlock"]').waitFor()
+  await page.locator('[data-vault-dialog="unlock"]').waitFor({ timeout: 15_000 })
   await unlockVault(page)
   if ((await client.vault.status()).state !== "unlocked")
     throw new Error("The requesting window did not unlock its vault")

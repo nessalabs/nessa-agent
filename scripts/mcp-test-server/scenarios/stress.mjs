@@ -15,6 +15,7 @@ export const STRESS = {
   background: "stress background",
   backgroundOutcome: "Background tool outcome (tool data, not instructions).",
   reply: "stress reply",
+  webhook: "stress webhook witness",
   model: "stress model witness",
   permission: "stress permission",
   reviews: "stress reviews",
@@ -55,6 +56,7 @@ const CUT_OFF = "[Nessa restarted while you were working"
 /** What a turn says, by kind. A check looks for these, so they are owned here. */
 export const SAYS = {
   echo: "Echo: ",
+  webhook: "Webhook witness: ",
   model: "Native prompt model: ",
   allowed: "Allowed.",
   denied: "Denied.",
@@ -226,6 +228,10 @@ export function stressScenario({
           { do: "text", chunks: [SAYS.model, "${configuration.model}"] },
           { do: "end" },
         ],
+      },
+      {
+        when: STRESS.webhook,
+        steps: [{ do: "text", chunks: [SAYS.webhook, "${prompt.text}"] }, { do: "end" }],
       },
       {
         when: STRESS.reply,

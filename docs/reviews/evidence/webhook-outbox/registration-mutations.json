@@ -1,0 +1,56 @@
+[
+  {
+    "mutation": "restore_registration_owner",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "credential",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "principal",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "organization",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "owner",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "destination",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "registration_uuid",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "stop_initiator",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "expiry_initiator",
+    "test": "restored_registration_facts",
+    "exitCode": 101,
+    "caught": true
+  }
+]

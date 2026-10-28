@@ -1,0 +1,35 @@
+{
+  "base": "919079a7b13f3e4e8600cc7584b097641f8992c7",
+  "upstream": "2026c2becebec94ec69f849fa529143ad4625995",
+  "firstParent": "25a6e33fe21d9e6d3deb093e310c9707a437021f",
+  "head": "3e7e965d6b5edbcf29ff6926d736d21090268bdb",
+  "precisionSource": "69351af72cbd73179f7f8765424251ecf4a20b99",
+  "upstreamChangedFiles": 129,
+  "exactUpstreamBlobs": 125,
+  "sharedMechanicalUnions": {
+    ".github/workflows/local-auth.yml": {
+      "cleanThreeWayOutputMatchesHead": true,
+      "headSha256": "a78cc5777c6f29f58694af23c98e194bfc5832763e44a16a255fff69638a0fa1"
+    },
+    "docs/codebase-structure.md": {
+      "cleanThreeWayOutputMatchesHead": true,
+      "headSha256": "55813367e9595ae7592f813d631ffe2f0baec0693645474f02de0adfe1bed2a0"
+    },
+    "verification/desktop/scripts/conversation-stress.mjs": {
+      "cleanThreeWayOutputMatchesHead": true,
+      "headSha256": "7981424e3c5895c77bbadf216c65e93b93b0b7750e9fcdc69784c332d2c529ce"
+    },
+    "verification/desktop/scripts/lib/stress-plan.mjs": {
+      "cleanThreeWayOutputMatchesHead": true,
+      "headSha256": "2f2bd597dabe4dc7a0c2e6e7a0d53fbf25eaa7b5c568a32f485a15c81b349dff"
+    }
+  },
+  "cratesCargoTomlLockExactlyMatchPrecision": true,
+  "webhookStepUnchangedSha256": "e43efe5a3afcc3597cac0e2d94223ca3f2b2ba952801ddefad82dd8b748cf8e5",
+  "strictHelperFullFileSha256": {
+    "verification/desktop/scripts/lib/stress-conversation.mjs": "ac9a6c959c767582c33bd26643c6239cb41f72d7f58a5c275084934ca2ecd3f2",
+    "verification/desktop/scripts/lib/stress-conversation.test.mjs": "f7055412b7d6cb175b890f241cca01c4550cb731a55b0915187fbce8ca0c8fdf"
+  },
+  "mergeChangedPathSetExactlyUpstream129": true,
+  "strictHelperBlobsAlsoMatchReviewed942e66bf": true
+}

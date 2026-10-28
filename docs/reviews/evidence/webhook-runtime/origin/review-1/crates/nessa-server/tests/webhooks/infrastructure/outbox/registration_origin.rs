@@ -1,0 +1,369 @@
+//! Secret-free acknowledgement and actual retained issuance purpose.
+use super::*;
+use nessa_auth::application::{
+    credential_admin::{CredentialAdmin, RevokeCredentialOutcome},
+    dto::CredentialMetadataDto,
+    ports::{
+        AccessError, AccessReader, CredentialEvidence, CredentialVerifier, PortFuture,
+        SessionEvidence, SessionVerifier, VerifiedSessionCredential,
+    },
+    session::{AuthenticateSession, ResumeSession},
+};
+use nessa_auth::domain::AudienceId;
+
+struct OpaqueSession(CredentialId);
+impl SessionVerifier for OpaqueSession {
+    fn verify_session<'a>(
+        &'a self,
+        _: &'a SessionEvidence,
+        _: &'a AudienceId,
+    ) -> PortFuture<'a, VerifiedSessionCredential> {
+        Box::pin(async move {
+            Ok(VerifiedSessionCredential {
+                credential_id: self.0.clone(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn actual_webhook_origin_refuses_bearer_and_resumed_product_entry_after_restart() {
+    for webhook in [true, false] {
+        let f = Registered::new();
+        let mut issue = f.proposed().issue;
+        if !webhook {
+            issue.purpose = CredentialIssuePurpose::Product;
+        }
+        let IssueCredentialOutcome::Issued {
+            evidence, metadata, ..
+        } = f.auth.issue_sync(issue).unwrap()
+        else {
+            panic!("fresh synthetic issuance")
+        };
+        let private = f._root.path().join("private");
+        drop(f.auth);
+        let auth = LocalCredentialStore::open(
+            &private,
+            "auth.json",
+            Arc::new(CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway").unwrap();
+        let id = CredentialId::new(metadata.id).unwrap();
+        // Proof verification is deliberately separate from session permission.
+        assert_eq!(
+            auth.verify(&evidence, &audience)
+                .await
+                .unwrap()
+                .credential_id,
+            id
+        );
+        let session = AuthenticateSession {
+            verifier: &auth,
+            access: &auth,
+            clock: f.clock.as_ref(),
+            policy: &policy,
+        }
+        .execute(&evidence, &audience)
+        .await;
+        let opaque = OpaqueSession(id.clone());
+        let resumed = ResumeSession {
+            verifier: &opaque,
+            access: &auth,
+            clock: f.clock.as_ref(),
+            policy: &policy,
+        }
+        .execute(
+            &SessionEvidence::new(b"isolated-session".to_vec()).unwrap(),
+            &audience,
+        )
+        .await;
+        if webhook {
+            assert_eq!(session.unwrap_err(), AccessError::Denied);
+            assert_eq!(resumed.unwrap_err(), AccessError::Denied);
+        } else {
+            assert!(session.is_ok());
+            assert!(resumed.is_ok());
+        }
+        let before = auth.read(&id).await.unwrap().origin;
+        auth.revoke_sync(RevokeCredentialRequest {
+            request_id: "stop".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: id.as_str().into(),
+            revoked_at: 11,
+        })
+        .unwrap();
+        let after = auth.read(&id).await.unwrap();
+        assert_eq!(after.origin, before);
+        assert!(after.credential.revoked_at().is_some());
+    }
+}
+
+struct SecretReply<'a>(&'a LocalCredentialStore);
+impl CredentialAdmin for SecretReply<'_> {
+    fn issue<'a>(
+        &'a self,
+        request: IssueCredentialRequest,
+    ) -> PortFuture<'a, IssueCredentialOutcome, CredentialAdminError> {
+        Box::pin(async move {
+            let issued = self.0.issue(request).await?;
+            Ok(match issued {
+                IssueCredentialOutcome::Issued {
+                    metadata,
+                    transitions,
+                    ..
+                } => IssueCredentialOutcome::Issued {
+                    metadata,
+                    transitions,
+                    evidence: CredentialEvidence::new(b"isolated-unneeded-bearer-marker".to_vec())
+                        .unwrap(),
+                },
+                other => other,
+            })
+        })
+    }
+    fn list<'a>(
+        &'a self,
+        request: ListCredentialsRequest,
+    ) -> PortFuture<'a, Vec<CredentialMetadataDto>, CredentialAdminError> {
+        self.0.list(request)
+    }
+    fn revoke<'a>(
+        &'a self,
+        request: RevokeCredentialRequest,
+    ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
+        self.0.revoke(request)
+    }
+}
+
+#[tokio::test]
+async fn bearer_never_enters_registration_result_database_or_audit_and_replay_is_identical() {
+    let mut f = Registered::new();
+    let reply = SecretReply(&f.auth);
+    let mut command = f.command(&f.store);
+    command.credentials = &reply;
+    let initial = command.execute(f.proposed()).await.unwrap();
+    assert!(!format!("{initial:?}").contains("isolated-unneeded-bearer-marker"));
+    f.reopen();
+    let retry = f.command(&f.store).execute(f.proposed()).await.unwrap();
+    assert_eq!(initial, retry);
+    for entry in std::fs::read_dir(&f.audit).unwrap() {
+        assert!(!std::fs::read_to_string(entry.unwrap().path())
+            .unwrap()
+            .contains("isolated-unneeded-bearer-marker"));
+    }
+    let database = std::fs::read(&f.path).unwrap();
+    assert!(!database
+        .windows(b"isolated-unneeded-bearer-marker".len())
+        .any(|bytes| bytes == b"isolated-unneeded-bearer-marker"));
+}
+
+#[tokio::test]
+async fn ambiguous_historical_admin_origin_is_preserved_and_requires_recovery() {
+    let f = Registered::new();
+    let proposed = f.proposed();
+    let intent = f.store.reserve(proposed.clone()).await.unwrap();
+    let _issued = f.auth.issue_sync(intent.issue).unwrap();
+    let private = f._root.path().join("private");
+    drop(f.auth);
+    let path = private.join("auth.json");
+    let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    saved["transitions"][1]["cause"]["cause"] = json!("admin_issue");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let auth = LocalCredentialStore::open(
+        &private,
+        "auth.json",
+        Arc::new(CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
+    let command = RegisterWebhook {
+        credentials: &auth,
+        admission: &auth,
+        intents: &f.store,
+        clock: f.clock.as_ref(),
+    };
+    assert_eq!(
+        command.execute(proposed).await,
+        Err(RegistrationFailure::OriginRecoveryRequired)
+    );
+    assert_eq!(
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM registrations", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn retiring_private_configuration_cannot_restore_product_session_authority() {
+    let f = Registered::new();
+    let registered = f.command(&f.store).execute(f.proposed()).await.unwrap();
+    let id = CredentialId::new(registered.credential.id).unwrap();
+    let original = f.auth.read(&id).await.unwrap().origin;
+    f.store
+        .stop(
+            id.clone(),
+            StopReason::Revoked {
+                initiator: PrincipalId::new("owner").unwrap(),
+            },
+            11_000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.count("registrations"), 0);
+    assert_eq!(f.count("registration_intents"), 0);
+    assert_eq!(f.auth.read(&id).await.unwrap().origin, original);
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let verifier = OpaqueSession(id);
+    let result = ResumeSession {
+        verifier: &verifier,
+        access: &f.auth,
+        clock: f.clock.as_ref(),
+        policy: &policy,
+    }
+    .execute(
+        &SessionEvidence::new(b"test-only-session".to_vec()).unwrap(),
+        &AudienceId::new("gateway").unwrap(),
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), AccessError::Denied);
+}
+
+#[test]
+fn restored_webhook_origin_cannot_carry_product_write_or_malformed_history() {
+    let changes: [fn(&mut Value); 10] = [
+        |v| v["credentials"][1]["metadata"]["grants"][0]["action"] = json!("conversation.write"),
+        |v| v["principals"][1]["kind"] = json!("human"),
+        |v| v["transitions"][1]["credentialId"] = json!("dangling"),
+        |v| v["transitions"][1]["after"]["issuedAt"] = json!(9),
+        |v| v["transitions"][1]["sequence"] = json!(1),
+        |v| v["transitions"][1]["initiator"]["id"] = json!("absent-owner"),
+        |v| v["transitions"][1]["correlation"] = json!("substituted"),
+        |v| v["transitions"][1]["initiator"]["id"] = json!("hook"),
+        |v| {
+            v["issueReceipts"].as_array_mut().unwrap().clear();
+        },
+        |v| {
+            v["transitions"].as_array_mut().unwrap().pop();
+        },
+    ];
+    for (index, change) in changes.into_iter().enumerate() {
+        let f = Registered::new();
+        let _issued = f.auth.issue_sync(f.proposed().issue).unwrap();
+        let private = f._root.path().join("private");
+        drop(f.auth);
+        let path = private.join("auth.json");
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        change(&mut saved);
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        assert!(
+            LocalCredentialStore::open(
+                &private,
+                "auth.json",
+                Arc::new(CedarPolicyEvaluator::new().unwrap())
+            )
+            .is_err(),
+            "case {index}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+}
+
+#[tokio::test]
+async fn historical_product_actor_and_absent_command_correlation_are_not_rewritten() {
+    let f = Registered::new();
+    let mut issue = f.proposed().issue;
+    issue.purpose = CredentialIssuePurpose::Product;
+    let id = CredentialId::new(issue.credential_id.clone()).unwrap();
+    drop(f.auth.issue_sync(issue).unwrap());
+    let private = f._root.path().join("private");
+    drop(f.auth);
+    let path = private.join("auth.json");
+    let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    saved["transitions"][1]["initiator"] = json!({"kind":"local_operator"});
+    saved["transitions"][1]["correlation"] = Value::Null;
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let original = saved["transitions"][1].clone();
+    let auth = LocalCredentialStore::open(
+        &private,
+        "auth.json",
+        Arc::new(CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
+    let before = auth.read(&id).await.unwrap().origin;
+    assert_eq!(
+        before.transition().initiator(),
+        &nessa_auth::domain::Initiator::LocalOperator
+    );
+    assert_eq!(before.correlation(), None);
+    auth.revoke_sync(RevokeCredentialRequest {
+        request_id: "revoke-historical".into(),
+        issuer_principal_id: "owner".into(),
+        credential_id: id.as_str().into(),
+        revoked_at: 11,
+    })
+    .unwrap();
+    assert_eq!(auth.read(&id).await.unwrap().origin, before);
+    let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after["transitions"][1], original);
+}
+#[tokio::test]
+async fn independent_revoked_webhook_cold_restore_retains_original_and_refuses_both_entries() {
+    let f = Registered::new();
+    let issue = f.proposed().issue;
+    let id = CredentialId::new(&issue.credential_id).unwrap();
+    let IssueCredentialOutcome::Issued { evidence, .. } = f.auth.issue_sync(issue).unwrap() else { panic!() };
+    let original = f.auth.read(&id).await.unwrap().origin;
+    f.auth.revoke_sync(RevokeCredentialRequest { request_id:"independent-stop".into(),issuer_principal_id:"owner".into(),credential_id:id.as_str().into(),revoked_at:11 }).unwrap();
+    let private = f._root.path().join("private"); drop(f.auth);
+    let auth=LocalCredentialStore::open(&private,"auth.json",Arc::new(CedarPolicyEvaluator::new().unwrap())).unwrap();
+    let snap=auth.read(&id).await.unwrap(); assert_eq!(snap.origin,original);assert_eq!(snap.credential.revoked_at(),Some(11));
+    let policy=CedarPolicyEvaluator::new().unwrap();let audience=AudienceId::new("gateway").unwrap();
+    assert!(AuthenticateSession{verifier:&auth,access:&auth,clock:f.clock.as_ref(),policy:&policy}.execute(&evidence,&audience).await.is_err());
+    assert_eq!(ResumeSession{verifier:&OpaqueSession(id),access:&auth,clock:f.clock.as_ref(),policy:&policy}.execute(&SessionEvidence::new(b"private-test".to_vec()).unwrap(),&audience).await.unwrap_err(),AccessError::CredentialRevoked);
+}
+#[tokio::test]
+async fn independent_historical_different_existing_actor_and_nonreceipt_correlation_remain_valid() {
+    let f=Registered::new();let mut issue=f.proposed().issue;issue.purpose=CredentialIssuePurpose::Product;let id=CredentialId::new(&issue.credential_id).unwrap();
+    let IssueCredentialOutcome::Issued{evidence,..}=f.auth.issue_sync(issue).unwrap()else{panic!()};let private=f._root.path().join("private");drop(f.auth);
+    let path=private.join("auth.json");let mut saved:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    saved["transitions"][1]["initiator"]=json!({"kind":"principal","id":"hook"});saved["transitions"][1]["correlation"]=json!("legacy-original-command");
+    let bytes=serde_json::to_vec(&saved).unwrap();std::fs::write(&path,&bytes).unwrap();let auth=LocalCredentialStore::open(&private,"auth.json",Arc::new(CedarPolicyEvaluator::new().unwrap())).unwrap();
+    let origin=auth.read(&id).await.unwrap().origin;assert_eq!(origin.correlation(),Some("legacy-original-command"));assert_eq!(origin.transition().initiator(),&nessa_auth::domain::Initiator::Principal(PrincipalId::new("hook").unwrap()));
+    let policy=CedarPolicyEvaluator::new().unwrap();assert!(AuthenticateSession{verifier:&auth,access:&auth,clock:f.clock.as_ref(),policy:&policy}.execute(&evidence,&AudienceId::new("gateway").unwrap()).await.is_ok());assert_eq!(std::fs::read(path).unwrap(),bytes);
+}
+#[test]
+fn independent_additional_invalid_restored_relationships_fail_without_rewrite() {
+    let changes:[fn(&mut Value);6]=[
+        |v|v["transitions"][1]["revision"]=json!(100),
+        |v|v["transitions"][1]["revision"]=json!(0),
+        |v|v["transitions"][1]["after"]["expiresAt"]=json!(99),
+        |v|v["transitions"][1]["correlation"]=json!(""),
+        |v|v["transitions"][1]["initiator"]=json!({"kind":"local_operator"}),
+        |v|{let mut r=v["issueReceipts"][0].clone();r["requestId"]=json!("another-command");v["issueReceipts"].as_array_mut().unwrap().push(r);},
+    ];
+    for (i,change) in changes.into_iter().enumerate(){let f=Registered::new();drop(f.auth.issue_sync(f.proposed().issue).unwrap());let private=f._root.path().join("private");drop(f.auth);let path=private.join("auth.json");let mut v:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();change(&mut v);let bytes=serde_json::to_vec(&v).unwrap();std::fs::write(&path,&bytes).unwrap();assert!(LocalCredentialStore::open(&private,"auth.json",Arc::new(CedarPolicyEvaluator::new().unwrap())).is_err(),"case {i}");assert_eq!(std::fs::read(path).unwrap(),bytes);assert_eq!(f.store.owner.connection.lock().unwrap().query_row("SELECT COUNT(*) FROM registrations",[],|r|r.get::<_,i64>(0)).unwrap(),0);}
+}
+#[tokio::test]
+async fn independent_ambiguous_admin_origin_without_command_has_typed_recovery() {
+    let f=Registered::new();let proposed=f.proposed();let intent=f.store.reserve(proposed.clone()).await.unwrap();drop(f.auth.issue_sync(intent.issue).unwrap());let private=f._root.path().join("private");drop(f.auth);let path=private.join("auth.json");let mut saved:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();saved["transitions"][1]["cause"]["cause"]=json!("admin_issue");saved["transitions"][1]["initiator"]=json!({"kind":"local_operator"});saved["transitions"][1]["correlation"]=Value::Null;std::fs::write(&path,serde_json::to_vec(&saved).unwrap()).unwrap();let auth=LocalCredentialStore::open(&private,"auth.json",Arc::new(CedarPolicyEvaluator::new().unwrap())).unwrap();
+    let command=RegisterWebhook{credentials:&auth,admission:&auth,intents:&f.store,clock:f.clock.as_ref()};let result=command.execute(proposed).await;assert_eq!(result,Err(RegistrationFailure::OriginRecoveryRequired));
+}
+#[tokio::test]
+async fn independent_recovery_gap_preserves_state_for_both_accepted_historical_shapes() {
+    for absent_command in [true,false] {
+        let f=Registered::new();let proposed=f.proposed();let intent=f.store.reserve(proposed.clone()).await.unwrap();let id=CredentialId::new(&intent.issue.credential_id).unwrap();drop(f.auth.issue_sync(intent.issue).unwrap());let private=f._root.path().join("private");drop(f.auth);let path=private.join("auth.json");let mut saved:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();saved["transitions"][1]["cause"]["cause"]=json!("admin_issue");
+        if absent_command{saved["transitions"][1]["correlation"]=Value::Null;}else{saved["transitions"][1]["initiator"]=json!({"kind":"principal","id":"hook"});}
+        let bytes=serde_json::to_vec(&saved).unwrap();std::fs::write(&path,&bytes).unwrap();let auth=LocalCredentialStore::open(&private,"auth.json",Arc::new(CedarPolicyEvaluator::new().unwrap())).unwrap();assert_eq!(auth.read(&id).await.unwrap().origin.cause(),nessa_auth::domain::IssuanceCause::AdminIssue);
+        let command=RegisterWebhook{credentials:&auth,admission:&auth,intents:&f.store,clock:f.clock.as_ref()};assert_eq!(command.execute(proposed).await,Err(RegistrationFailure::Auth(CredentialAdminError::Unavailable)));assert_eq!(std::fs::read(&path).unwrap(),bytes);assert_eq!(f.store.owner.connection.lock().unwrap().query_row("SELECT COUNT(*) FROM registrations",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(f.store.owner.connection.lock().unwrap().query_row("SELECT COUNT(*) FROM registration_intents",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+}

@@ -35,6 +35,8 @@ pub(super) const MAX_CONFIG_BYTES: usize = 65_536;
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct RuntimeConfig {
+    /// Private endpoint/MAC seeds selected by the existing credential.issue principal.
+    pub webhooks: Vec<super::webhooks::WebhookConfig>,
     pub registry: LocalStoreConfig,
     pub session: SessionConfig,
     /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.

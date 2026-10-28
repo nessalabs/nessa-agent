@@ -105,6 +105,10 @@ mod peer_reading_tests;
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
 
+mod webhooks;
+
+#[cfg(test)]
+pub(crate) use root::cleanup_product;
 mod vault;
 
 mod vault_session;

@@ -30,6 +30,9 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *   await       the agent messages a thread and waits for it with one
  *               subscribe call naming the sent turn: the thread's reply comes
  *               back in that call, and no report follows
+ *   webhook     one granted conversation advances to a fixed source Head after
+ *               a browser turn; independent native rows prove zero attempts
+ *               under the unchanged loopback destination refusal policy
  *   aside       another conversation is opened in the window and talked to
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
@@ -251,6 +254,7 @@ import {
   panelTarget,
   scriptedLaunch,
   startGatewayStack,
+  webhookNoAttempt,
   waitFor,
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
@@ -3439,6 +3443,136 @@ const steps = {
     )
   },
 
+  async webhook(run, step, failures) {
+    // The panel creates this conversation and holds the default owner grants,
+    // including credential.manage. Sharing must use that same conversation owner.
+    const owner = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    const conversationId = randomUUID()
+    let shared = false
+    try {
+      if (!run.stack.webhookCredential) {
+        const { organizationId, gatewayId } = await owner.auth.session()
+        const principalId = "stress-webhook"
+        const issued = await owner.credentials.issue({
+          principal: { id: principalId, kind: "integration" },
+          membership: {
+            id: "stress-webhook-membership",
+            principalId,
+            organizationId,
+            role: "member",
+            state: "active",
+          },
+          expiresAt: null,
+          grants: [
+            { action: "conversation.read", resource: { organizationId, id: gatewayId } },
+          ],
+        })
+        if (!("secretUnavailable" in issued) || issued.secretUnavailable !== true)
+          throw new Error("webhook issue must withhold its synthetic credential secret")
+        run.stack.webhookCredential = issued.credential.id
+      }
+      const credential = run.stack.webhookCredential
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      run.checked.push(conversationId)
+      const setup = prompt(run, STRESS.reply, step, " webhook setup")
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, setup),
+      )
+      await settled(run, conversationId, new Set(), setup, "completed", failures)
+      if (failures.length) return
+      await owner.conversation.share(conversationId, credential, ["read"])
+      shared = true
+      const sameScope = (a, b) =>
+        ["receiver", "origin", "stream", "incarnation", "schema", "accessEpoch"].every(
+          (key) => a[key] === b[key],
+        )
+      const catchUp = async (fixed, deadline = Date.now() + 15_000) => {
+        if (
+          !(await waitFor(
+            async () => {
+              const native = await owner.conversation.webhookCursor(
+                conversationId,
+                credential,
+              )
+              if (native.resetRequired || !sameScope(native.scope, fixed.scope))
+                throw new Error(
+                  "webhook capture changed incarnation or requires explicit reset",
+                )
+              return BigInt(native.position) >= BigInt(fixed.head)
+            },
+            Math.max(0, deadline - Date.now()),
+          ))
+        )
+          throw new Error("webhook native cursor did not reach the fixed source Head")
+      }
+      // The first source cycle may not yet have installed a cursor. Poll the
+      // native diagnostic only; a bounded refusal is not treated as caught up.
+      let lastRefusal
+      if (
+        !(await waitFor(async () => {
+          try {
+            await owner.conversation.webhookCursor(conversationId, credential)
+            return true
+          } catch (error) {
+            if (error.code !== "invalid_request") throw error
+            lastRefusal = error
+            return false
+          }
+        }, 15_000))
+      )
+        throw new Error("webhook cursor was never installed", { cause: lastRefusal })
+      const baseline = (
+        await owner.conversation.webhookCursor(conversationId, credential, {
+          includeSourceHead: true,
+        })
+      ).observedSourceHead
+      await catchUp(baseline)
+      const title = await titleOf(run, conversationId)
+      await openStressConversation(run.page, conversationId, title)
+      const text = prompt(run, STRESS.webhook, step)
+      const seen = await send(run, conversationId, text, failures)
+      await settled(run, conversationId, seen, text, "completed", failures)
+      await expectShown(run.page, `${SAYS.webhook}${text}`, failures)
+      if (failures.length) return
+      // Capture once after this turn commits. Poll only the native cursor;
+      // observing newer Heads on each iteration would chase a moving target.
+      const fixed = (
+        await owner.conversation.webhookCursor(conversationId, credential, {
+          includeSourceHead: true,
+        })
+      ).observedSourceHead
+      if (
+        !sameScope(baseline.scope, fixed.scope) ||
+        BigInt(fixed.head) <= BigInt(baseline.head)
+      )
+        throw new Error(
+          "browser webhook witness did not advance the same source incarnation",
+        )
+      const deadline = Date.now() + 15_000
+      await catchUp(fixed, deadline)
+      const proof = webhookNoAttempt(
+        run.stack.gateway,
+        INSTANCE,
+        credential,
+        fixed,
+        deadline,
+      )
+      log(
+        `webhook captured fixed Head ${fixed.head}; ${proof.queued} queued, ${proof.attempted} attempted; loopback policy unchanged`,
+      )
+    } finally {
+      try {
+        if (shared)
+          await owner.conversation.unshare(conversationId, run.stack.webhookCredential)
+      } catch (error) {
+        failures.push(`webhook grant cleanup failed: ${error.message}`)
+      } finally {
+        owner.close()
+        await openStressConversation(run.page, run.main.id, run.main.title)
+      }
+    }
+  },
+
   async aside(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " aside")
@@ -4819,7 +4953,7 @@ async function setupWindow(run, prepare) {
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
   await page.locator(".nessa-setup-window").waitFor()
-  await unlockVault(page)
+  await unlockRequestedVault(run.client, page)
   return page
 }
 
@@ -5998,6 +6132,16 @@ async function startStack(options) {
       vault: true,
       environment,
       servers,
+      webhooks:
+        knobs.webhooks > 0
+          ? [
+              {
+                principalId: "stress-webhook",
+                url: "https://localhost/synthetic",
+                macKey: Buffer.alloc(32, 7).toString("base64"),
+              },
+            ]
+          : undefined,
       as: "panel",
       scenario,
       evidence: options.evidence,

@@ -1,0 +1,23 @@
+2026-10-23T20:53:30.0875340Z 2026-10-23T20:53:30.063431Z  WARN nessa.window: This window could not load http://localhost:1498/missing.html. The dev server is not serving that page. label="existing"
+2026-10-23T20:53:30.1085570Z page_load_acceptance: control HTTP fixture: request headers
+2026-10-23T20:53:30.6381000Z page_load_acceptance: real diagnostic finished after 4.765465166s
+2026-10-23T20:53:33.6966300Z ##[error]waiting for real native callbacks: timed out waiting on channel
+2026-10-23T20:53:33.7118810Z ##[error]Process completed with exit code 1.
+2026-10-23T20:53:34.0406520Z Post job cleanup.
+2026-10-23T20:53:36.2032080Z Post job cleanup.
+2026-10-23T20:53:36.7191430Z [command]/opt/homebrew/bin/git version
+2026-10-23T20:53:36.8152750Z git version 2.56.0
+2026-10-23T20:53:36.8710190Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/03e84308-8d92-4cf7-98fb-c5dcd7068316/.gitconfig'
+2026-10-23T20:53:36.8802090Z Temporarily overriding HOME='/Users/runner/work/_temp/03e84308-8d92-4cf7-98fb-c5dcd7068316' before making global git config changes
+2026-10-23T20:53:36.8961500Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-23T20:53:36.9077930Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/nessa-agent/nessa-agent
+2026-10-23T20:53:36.9412130Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-23T20:53:36.9741580Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-23T20:53:37.5089830Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-23T20:53:37.5298030Z http.https://github.com/.extraheader
+2026-10-23T20:53:37.5464730Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-23T20:53:37.5643060Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-23T20:53:38.0128330Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-23T20:53:38.1094190Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-23T20:53:38.7568510Z Cleaning up orphan processes
+2026-10-23T20:53:47.4132070Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

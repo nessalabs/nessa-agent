@@ -1,9 +1,8 @@
 //! One SDK physical operation executes outside Tokio enter and joins its source on drop.
-use crate::conversation::{
-    application::{RecordHead, RecordReadError, RecordReadOperation, RecordReadValue},
-    infrastructure::exact_record_scope,
+use super::source::ReadSelection;
+use crate::conversation::application::{
+    RecordHead, RecordReadError, RecordReadOperation, RecordReadValue,
 };
-use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_sdk::{
     application::agent_execution::sessions::StorageError,
     domain::agent_execution::sessions::SessionId,
@@ -37,14 +36,16 @@ pub(super) fn execute(
     runtime: Handle,
     session: SessionId,
     identity: RecordStreamIdentity,
-    admitted: ReceiverReadScope,
+    admitted: ReadSelection,
     observed: Scope,
     work: ReadWork,
 ) -> Result<RecordReadValue, RecordReadError> {
     let mut source = runtime
         .block_on(storage.record_source_expected(&session, &identity))
         .map_err(storage_error)?;
-    exact_record_scope(&admitted, &source, &observed).map_err(RecordReadError::Admission)?;
+    admitted
+        .check_opened(&source, &observed)
+        .map_err(RecordReadError::Admission)?;
     let ReadWork {
         operation,
         steps,

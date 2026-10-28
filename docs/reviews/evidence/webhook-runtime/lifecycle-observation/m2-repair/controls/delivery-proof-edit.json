@@ -1,0 +1,6 @@
+{
+  "before": "EXISTS(SELECT 1 FROM deliveries WHERE registration=?1)",
+  "after": "0",
+  "originalSHA256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+  "mutatedSHA256": "aec3c64585bc88ea573dc28d5d36f2f1355eaa48825de99deae29f3c5dacea97"
+}

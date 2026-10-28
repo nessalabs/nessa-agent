@@ -1,0 +1,271 @@
+{
+  "head": "911bdf74e4abf7526d50b8a53c858c950be8c677",
+  "base": "434843c502deb642378a6369ca86cc2ddd3f41b8",
+  "paths": [
+    {
+      "path": "crates/nessa-auth/src/adapters/cedar/attributes.rs",
+      "sha256": "6b499b4d89b7dbab8f6cccb279aad80029fc096dedbf424bcc1b05e7f2e1ddf3",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs",
+      "sha256": "425e6445b26b1df258625d358760cac4da684072b0e5cd8a8c81adaa74d11eb2",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-auth/src/adapters/cedar/policies.cedar",
+      "sha256": "cba96cd7ea57e4d01b0aaa975e035b1bc57e80bb4e736d1daab11cca1b2cc3b8",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-auth/src/adapters/local/registry.rs",
+      "sha256": "8e4bef3bc26890e4d8dbd2b9160af665128381728130d822acb228f3b48fd96c",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-auth/src/adapters/local/registry/pairing/tests.rs",
+      "sha256": "01f3b767dac3a822c9a275aa8d388a451927c05a519a10e17535a20682047444",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-auth/src/application/credential_admin.rs",
+      "sha256": "098628cc0a6b350d70dfb33607503e85530b2491b00ff36deb75fac3ad4e9230",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-auth/src/application/ports.rs",
+      "sha256": "4b7d3ada5fd24880da8efad5614e6990412be72a405bbb31276207d0baeec27e",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-auth/tests/adapters/local/webhook_issue.rs",
+      "sha256": "9f26de366b5045c7d8bacd608f6860bcb67e8df4935091a3fb3a0b569b44a7e8",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-server/src/product/socket.rs",
+      "sha256": "6e3136626f1596803dc972532bfacd19330de7856877f80843512e3731c1e825",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-server/tests/device_pairing/owner_routes.rs",
+      "sha256": "33f3c9f5d2202ecd85d9fc493aeedfe6bc98105d3863e64a46f78bbcb686f354",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-server/tests/peer_gateways/enroll.rs",
+      "sha256": "1ee6ac805d489aed37704bb6d13da87e2784499f0d05dc8c40a0c2a8654a79fc",
+      "matches_exact_head": true
+    },
+    {
+      "path": "crates/nessa-server/tests/webhooks/infrastructure/admission.rs",
+      "sha256": "144ac89f7a5f8119be08c3b431c1aafc6f9f8e748f186f0a21c16a5aa8d81e1b",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/design/webhook-delivery-implementation.md",
+      "sha256": "775c19d6cd475b67089dc90df6c1aa8184676bf8903dca8b365c9759645777f2",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/README.md",
+      "sha256": "d88f8d5e6a55182ae44a419370fa42598b86b4ba2dd1835e650b5cb9bba17bab",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/architecture.txt",
+      "sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/auth-tests.txt",
+      "sha256": "ed91e6e457f1c6fe0858319c8ce0e87c45fb94672d75430937cdbacdc9e48ca0",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/clippy.txt",
+      "sha256": "6b2654b6c4b4908126909160d98da787d9860747b2849cf31acecb0cac6c50d8",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/diagram-1.png",
+      "sha256": "4208fbcaf60d47c23450cee9c9f16b355b8db180f2cf33ef7ae1353f947c0535",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/docs-validation.txt",
+      "sha256": "e875d773c1e3172571773393cade7cc3463f58989dad67adb6531c69b124a0b9",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/hold_action-mutated.txt",
+      "sha256": "bd8748e13204ab6d4007f1d9f33acfb5528b242b0f71f53c91409c00e1deec82",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/hold_action-restored.txt",
+      "sha256": "b07ef750b6aabefc44b44e7507fdd566ac6dca2496a3441683bb7e3d3621e7fc",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/hold_kind-mutated.txt",
+      "sha256": "5bd7b7182690da377014b931eacd86930635c4ce112d2c8f81626a2aafbf2808",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/hold_kind-restored.txt",
+      "sha256": "a7c35a0503d15aff1d0804e9946fbffa970a5e6d2e2940a0215e4830812c3800",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/issue_kind-mutated.txt",
+      "sha256": "ad671f8f79b6ad4d3db359642326d53a0134b1fdc91f1016807efa1136a5b398",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/issue_kind-restored.txt",
+      "sha256": "b4b1e532164f294164490e5858b31a982504f1fe66aefc2404fc0bcf484de11a",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/path_mapping-mutated.txt",
+      "sha256": "1968f4389ac4c3d0780ddcec74cc22682afbda3b0f324c52753f4e041c27161a",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/path_mapping-restored.txt",
+      "sha256": "c1d88fdc43930fd8336e402702e07353361f48359e20db3cd93347c77338f363",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/path_use-mutated.txt",
+      "sha256": "2d4eff69af38beb8d0a6ce7be94aaf034ba6b3c7d673a72cb02a476bb57b344d",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/path_use-restored.txt",
+      "sha256": "e5f741b3d16ebb33a44f01cb14befb5376cb549316a6c1591258d63cfbd8c9b3",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/receipt_purpose-mutated.txt",
+      "sha256": "76abece5ff59ce29dae8378be9df7b83315d6d97a1ddc22c44dc97175dafb500",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/receipt_purpose-restored.txt",
+      "sha256": "02a7556f6d71173440f706c08bcabe901ccdfcdbe90e0dd8b092d3fed5d140a0",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/render.json",
+      "sha256": "1f288c6fa9d719e89b8e8bad934a8f1c57f8e2d53cba03871f34803d7faf13d3",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/results.json",
+      "sha256": "57bc66aeaa35d88ca3273e6abce70e6012164cc8306f6247c85c3cf069c50ac6",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/auth-tests.txt",
+      "sha256": "0a374d8174d6aa4a688607c88643534fdc1a237885cb88fa128303e8f29f73cb",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/combined.txt",
+      "sha256": "d4bcb7e4506785c09e6ddff0b917348ee47202cb9a98d91bd1d607927941832a",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/committed-range.txt",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/committed-ranges.json",
+      "sha256": "e94703665c9ba7c6f36e9a4dcae96a85e811f27d210d2704f242a2cae5c7502f",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/concurrency-corrected.rs",
+      "sha256": "53583b4e2b7dae37206a9b106a26d961349907b182673b3340fc61e7e92c3cea",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/concurrency-final.rs",
+      "sha256": "fcd3544068dda139ac7e8ac1f244376d01f9503f1354dee547cba4ebffa6fd32",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/concurrency.rs",
+      "sha256": "da5425db3c3d733b99027f90fa32d275880f9f5aa90665aa4c6d47e855e9b88e",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/focused-corrected.txt",
+      "sha256": "d510889f6b30cb55ae123d55c90baca2ce96b43835e3f5e0fee1aec2164c0b4d",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/focused-final.txt",
+      "sha256": "a18068a3d0402cd2b027a9b79d9ff58589de43975fc267dc0f4017a6dd0a6485",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/focused.txt",
+      "sha256": "b05d6cee0bfec4b6748f70ac25ed4d8183a24988911d629f45fd47e16fdc1abf",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/identity.json",
+      "sha256": "a0fe39a2eed6dbb8512b4a470b0d620aada746bbeaebf55bf2ed71f5390ceb91",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/probes.rs",
+      "sha256": "f256ce38431c6042c2d45606c11fbb6721a567d7ead48fb63df7f57abf2c129c",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/probes.txt",
+      "sha256": "a17c685faaf821928e896386278357329832e0604706c5e2ab83e61c4d5e35ed",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/report.md",
+      "sha256": "cc78e37e00cf80153d494328367fef78668160b8fb6c16875818d72b10ea872a",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/review-1/review-checkpoint.json",
+      "sha256": "10ad72659eebd8f99cd0a2902215d46e1a8a6082bb66602d05a6a5d4653251de",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/run.py",
+      "sha256": "112cea8f90bd93fb1a1b383d620976b4fa6aa4c7bc67a87ac4bb86306e1d57b4",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/server-check.txt",
+      "sha256": "6686e544de0665fd0039a2858e49f9d8c74fddb12abe3423c790de94f2b5834e",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/reviews/evidence/webhook-runtime/issuance/webhooks.txt",
+      "sha256": "546c4ed82fe55803e35d0ea5ebed7e3b42bf8559342b5f585202243c010e5f74",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/state/services/gateway/README.md",
+      "sha256": "c0d27c3e3cb6072f434fe54258f6e85bb1edc6ece75bb9f3270afab7d1e95341",
+      "matches_exact_head": true
+    },
+    {
+      "path": "docs/state/services/gateway/webhook-issuance.md",
+      "sha256": "7207beaa76d3b210f39fc000536535cbd01937edb90b005018020ab8b567ee94",
+      "matches_exact_head": true
+    }
+  ]
+}

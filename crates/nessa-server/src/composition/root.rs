@@ -11,6 +11,7 @@ use crate::env::Environment;
 use crate::mcp_servers::application::Unfinished;
 use crate::product::ProductRouteState;
 use crate::server::entrypoint::http;
+use crate::webhooks::infrastructure::WebhookRuntime;
 use crate::{
     app::dependencies::RuntimeDependencies,
     core::{
@@ -257,6 +258,7 @@ impl CompositionRoot {
         let dependencies = runtime_dependencies(&config);
         let super::local_auth::LocalProduct {
             routes: product,
+            webhook_delivery,
             record_reader,
             catalogue_reader,
             warm_ups,
@@ -558,6 +560,19 @@ impl CompositionRoot {
                 restart.stop_unless_restarting();
             }
         };
+        // Construction and every fallible bind/signal preparation have ended.
+        // Start immediately before entering the existing retained serve/cleanup
+        // owner, with no intervening await or fallible startup operation.
+        if let Some(delivery) = webhook_delivery {
+            shutdown_product
+                .webhooks
+                .as_ref()
+                .ok_or_else(|| RunError::Agent("missing webhook owner".into()))?
+                .start_delivery(delivery)
+                .map_err(|error| {
+                    RunError::Agent(format!("webhook delivery unavailable: {error:?}"))
+                })?;
+        }
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
             // Native peers are woken before anything else is waited on;
             // their drain is joined last, into the same report (row S12).
@@ -772,7 +787,7 @@ enum ShutdownRead {
 // conversations, MCP, native) or the shared deadline; the report orders them,
 // so they stay separate parameters.
 #[allow(clippy::too_many_arguments)]
-async fn cleanup_product(
+pub(crate) async fn cleanup_product(
     slot: &ReportSlot,
     product: &ProductRouteState,
     record: impl Future<Output = Result<(), RecordReadError>>,
@@ -792,6 +807,7 @@ async fn cleanup_product(
     // (`x_early_admission_closes_and_inspections_are_cut_while_conversations_drain`).
     product.close_mcp_server_admission();
     passive_cleanup(
+        product.webhooks.as_deref(),
         slot,
         product.review_auditor.as_deref(),
         record,
@@ -813,6 +829,7 @@ async fn cleanup_product(
 // so they stay separate parameters.
 #[allow(clippy::too_many_arguments)]
 async fn passive_cleanup(
+    webhooks: Option<&WebhookRuntime>,
     slot: &ReportSlot,
     review_auditor: Option<&ReviewNoticeAuditor>,
     record: impl Future<Output = Result<(), RecordReadError>>,
@@ -823,34 +840,44 @@ async fn passive_cleanup(
     deadline: Duration,
 ) {
     *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(ShutdownReport::default());
+    let webhook_drain = async {
+        match webhooks {
+            Some(runtime) => runtime.shutdown().await,
+            None => Ok(()),
+        }
+    };
     let review_audit = async {
         match review_auditor {
             Some(auditor) => auditor.drain().await,
             None => Ok(()),
         }
     };
-    tokio::pin!(record, catalogue, review_audit);
+    tokio::pin!(record, catalogue, review_audit, webhook_drain);
     let timeout = tokio::time::sleep(deadline);
     tokio::pin!(timeout);
     // One deadline covers every drain: it stays armed while any is pending and
     // fires once, recording evidence only against the drains still pending.
     let mut deadline_passed = false;
     loop {
-        let (record_pending, catalogue_pending, audit_pending) = read_report(slot, |report| {
-            (
-                !report.readers().record().is_known(),
-                !report.readers().catalogue().is_known(),
-                !report.review_audit().is_known(),
-            )
-        });
+        let (record_pending, catalogue_pending, audit_pending, webhook_pending) =
+            read_report(slot, |report| {
+                (
+                    !report.readers().record().is_known(),
+                    !report.readers().catalogue().is_known(),
+                    !report.review_audit().is_known(),
+                    !report.webhooks().is_known(),
+                )
+            });
         let deadline_pending = !deadline_passed;
-        if !record_pending && !catalogue_pending && !audit_pending {
+        if !record_pending && !catalogue_pending && !audit_pending && !webhook_pending {
             break;
         }
         // Ready completions win over a simultaneous deadline, including zero.
         // Each observed result is published synchronously before another await.
         tokio::select! {
             biased;
+            // Poll first: retained command admission seals before reader drains.
+            result = &mut webhook_drain, if webhook_pending => update_report(slot, |report| report.observe_webhooks(result)),
             result = &mut record, if record_pending => update_report(slot, |report| report.observe_record(result)),
             result = &mut catalogue, if catalogue_pending => update_report(slot, |report| report.observe_catalogue(result)),
             result = &mut review_audit, if audit_pending => update_report(slot, |report| report.observe_review_audit(result)),
@@ -992,6 +1019,7 @@ mod tests {
         let report = failure.report();
         assert_eq!(report.stage(), ShutdownStage::Complete);
         assert!(report.readers().confirmed());
+        assert!(report.webhooks().is_ok());
         assert!(report.servers().is_ok() && report.native().is_ok());
         report
             .conversations()
@@ -1005,6 +1033,7 @@ mod tests {
         let mut report = ShutdownReport::default();
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
+        report.observe_webhooks(Ok(()));
         report.observe_review_audit(Ok(()));
         report.observe_conversations(conversations);
         report.observe_servers(Ok(()));
@@ -1030,6 +1059,7 @@ mod tests {
                 None::<Ready<Result<(), ConversationError>>>
             };
             passive_cleanup(
+                None,
                 &task_report,
                 None,
                 async { Ok(()) },
@@ -1134,6 +1164,7 @@ mod tests {
                 let task_report = report.clone();
                 let task = tokio::spawn(async move {
                     passive_cleanup(
+                        None,
                         &task_report,
                         None,
                         async {
@@ -1170,6 +1201,7 @@ mod tests {
                 let report = Mutex::new(None);
                 {
                     let stop = passive_cleanup(
+                        None,
                         &report,
                         None,
                         async {
@@ -1248,6 +1280,7 @@ mod tests {
             },
             async move {
                 passive_cleanup(
+                    None,
                     &slot,
                     None,
                     async {
@@ -1304,6 +1337,7 @@ mod tests {
             Duration::from_secs(2),
             serve_with_cleanup(listener, Router::new(), async {}, async move {
                 passive_cleanup(
+                    None,
                     &slot,
                     None,
                     async { Ok(()) },
@@ -1418,6 +1452,7 @@ mod tests {
                     };
                     let cleaned = AtomicBool::new(false);
                     passive_cleanup(
+                        None,
                         &report,
                         None,
                         std::future::ready(record),
@@ -1476,6 +1511,7 @@ mod tests {
         let cleanup = cleaned.clone();
         let task = tokio::spawn(async move {
             passive_cleanup(
+                None,
                 &output,
                 None,
                 std::future::ready(Err(RecordReadError::WorkerPanicked)),
@@ -1526,6 +1562,7 @@ mod tests {
                 let cleaned = AtomicBool::new(false);
                 {
                     let stop = passive_cleanup(
+                        None,
                         &report,
                         None,
                         std::future::ready(result),
@@ -1574,6 +1611,7 @@ mod tests {
             let report = confirmed_slot();
             {
                 let stop = passive_cleanup(
+                    None,
                     &report,
                     None,
                     std::future::pending(),
@@ -1614,6 +1652,7 @@ mod tests {
             let report = confirmed_slot();
             {
                 let stop = passive_cleanup(
+                    None,
                     &report,
                     None,
                     std::future::ready(result),
@@ -1646,6 +1685,7 @@ mod tests {
     async fn reader_deadline_retains_eventual_successful_drain() {
         let report = confirmed_slot();
         passive_cleanup(
+            None,
             &report,
             None,
             async {
@@ -1674,6 +1714,7 @@ mod tests {
         let (release, waiting) = oneshot::channel();
         {
             let stop = passive_cleanup(
+                None,
                 &report,
                 None,
                 std::future::ready(Ok(())),
@@ -1719,6 +1760,7 @@ mod tests {
     async fn ready_readers_at_zero_deadline_are_not_labeled_timeout() {
         let report = confirmed_slot();
         passive_cleanup(
+            None,
             &report,
             None,
             std::future::ready(Ok(())),
@@ -1850,6 +1892,7 @@ mod tests {
         let mut native_report = ShutdownReport::default();
         native_report.observe_record(Ok(()));
         native_report.observe_catalogue(Ok(()));
+        native_report.observe_webhooks(Ok(()));
         native_report.observe_review_audit(Ok(()));
         native_report.observe_conversations(Ok(()));
         native_report.observe_servers(Ok(()));
@@ -1898,6 +1941,7 @@ mod tests {
     async fn a_shutdown_that_finishes_records_which_way_it_went() {
         let confirmed = Mutex::new(None);
         passive_cleanup(
+            None,
             &confirmed,
             None,
             std::future::ready(Ok(())),
@@ -1912,6 +1956,7 @@ mod tests {
 
         let failed = confirmed_slot();
         passive_cleanup(
+            None,
             &failed,
             None,
             std::future::ready(Ok(())),
@@ -1959,6 +2004,7 @@ mod tests {
             let report = Mutex::new(None);
             let servers_stopped = AtomicBool::new(false);
             passive_cleanup(
+                None,
                 &report,
                 None,
                 std::future::ready(Ok(())),
@@ -1994,6 +2040,7 @@ mod tests {
         // A confirmed native join leaves an otherwise clean report confirmed.
         let report = Mutex::new(None);
         passive_cleanup(
+            None,
             &report,
             None,
             std::future::ready(Ok(())),
@@ -2014,6 +2061,7 @@ mod tests {
         let report = Mutex::new(None);
         {
             let stop = passive_cleanup(
+                None,
                 &report,
                 None,
                 std::future::ready(Ok(())),
@@ -2047,6 +2095,7 @@ mod tests {
         let fault = NativeShutdownFailure::ListenerFault(PairingWorkerFault::Panic);
         let report = Mutex::new(None);
         passive_cleanup(
+            None,
             &report,
             None,
             std::future::ready(Err(RecordReadError::WorkerPanicked)),

@@ -315,6 +315,7 @@ export async function startLocalGateway(o) {
         },
         ...(o.limits ? { limits: o.limits } : {}),
         ...(o.native ? { native: o.native } : {}),
+        ...(o.webhooks ? { webhooks: o.webhooks } : {}),
       }),
     )
     chmodSync(configPath, 0o600)
