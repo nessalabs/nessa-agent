@@ -10,7 +10,7 @@
 //!   ──▶ CommandEnvironment::grant ── refused ──▶ CommandRefused
 //!   ──▶ the terms granted within those asked? ── no ──▶ the hold dropped,
 //!       CommandRefused(environment not granted)
-//!   ──▶ CommandIssued with the terms granted (the turn's person, this call)
+//!   ──▶ CommandIssued with the terms granted (the turn's actor, this call)
 //!       ── unsaved ──▶ the hold dropped
 //!   ──▶ files it publishes, collected under the command lease
 //!   ──▶ CommandHold::run(stop) ──▶ CommandEnded{exit, output, cleanup}
@@ -18,8 +18,8 @@
 //!
 //! Arrows are steps, in order; every refusal and every end is a record in the
 //! conversation's stream, under its Live agent lease, naming who asked. The
-//! command runs for the person whose turn asked for it: that turn's actor,
-//! with the tool call as its request. A command is bounded by its tool call:
+//! granted command runs for the actor whose turn asked for it, with the tool
+//! call as its request. A command is bounded by its tool call:
 //! the caller going away, or the agent's lease ending, stops it (row L15),
 //! and what it printed is kept as evidence under its record's bound.
 //!
@@ -27,8 +27,8 @@
 //! policy's (`CommandPolicyEvaluator`, ADR 803 step 4), asked for the turn's
 //! initiator: the owner uses every host the gateway grants commands on, a
 //! Drive grant's turn only those its policy at the turn's revision names, and
-//! none when it names none. `environments_list` asks the same policy, so a
-//! grant's turn is shown only the hosts it may use.
+//! an agent-authored turn is refused by Cedar. `environments_list` asks the
+//! same policy, so it does not offer command hosts to an agent-authored turn.
 //!
 //! What is recorded issued is what the environment granted, never what was
 //! asked (row L1): its timeout may be shorter than asked, under the
@@ -748,10 +748,11 @@ fn running_invocation(snapshot: &SessionSnapshot) -> Option<&InvocationRecord> {
 }
 
 /// Who a turn's commands run for, as the command policy is asked about
-/// them: the owner, or the Drive grant that started it with its policy at
-/// the revision the turn was admitted under.
+/// them: the owner, an agent, or the Drive grant that started it with its
+/// policy at the revision the turn was admitted under.
 enum TurnInitiator {
     Owner,
+    Agent,
     Grant { grant: String, policy: ToolPolicy },
 }
 
@@ -761,7 +762,7 @@ impl TurnInitiator {
     fn of(admitted: &AdmittedPolicies, initiation: &Initiation) -> Option<Self> {
         match initiation.initiator() {
             Initiator::Owner => Some(Self::Owner),
-            Initiator::Agent(_) => None,
+            Initiator::Agent(_) => Some(Self::Agent),
             Initiator::Grant(grant) => {
                 admitted
                     .policy(grant.grant(), grant.policy_revision())
@@ -776,6 +777,7 @@ impl TurnInitiator {
     fn ask(&self) -> CommandInitiator<'_> {
         match self {
             Self::Owner => CommandInitiator::Owner,
+            Self::Agent => CommandInitiator::Agent,
             Self::Grant { grant, policy } => CommandInitiator::Grant { grant, policy },
         }
     }
@@ -868,4 +870,23 @@ fn has_room(current: Option<&CurrentLease>, parent: &LeaseId) -> bool {
                 && lease.phase() == LeasePhase::Live
                 && lease.commands().len() < Lease::MAX_LIVE_COMMANDS
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AdmittedPolicies, CommandInitiator, TurnInitiator};
+    use nessa_sdk::domain::agent_execution::executions::{AgentSource, ExecutionId, Initiation};
+
+    #[test]
+    fn an_agent_authored_turn_reaches_the_command_policy_as_an_agent() {
+        let source = AgentSource::new(
+            "00000000-0000-4000-8000-000000000002",
+            ExecutionId::new("source-turn").unwrap(),
+        )
+        .unwrap();
+        let initiation = Initiation::agent(source);
+        let initiator = TurnInitiator::of(&AdmittedPolicies::default(), &initiation)
+            .expect("agent initiation is not a missing grant policy");
+        assert_eq!(initiator.ask(), CommandInitiator::Agent);
+    }
 }

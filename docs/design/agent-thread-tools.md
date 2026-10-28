@@ -37,8 +37,8 @@ means a new command on each call.
 ## Reports back
 
 A queued or steering `send_message` reports back when its turn ends
-(`reportsBack: true`). The report is a new queued owner turn in the sending
-conversation, admitted under the same caller its send was, that names the
+(`reportsBack: true`). The report is a new queued agent-authored turn in the sending
+conversation, attributed to the child and watched execution, that names the
 thread and execution, the outcome, and the thread's final visible reply: the
 text after its last tool step, thinking left out, cut so the whole report fits
 the conversation's input limit. It queues behind whatever the sender is doing,
@@ -177,6 +177,7 @@ the message text.
 | Watched child turn settles and its report is delivered | Agent(child conversation, watched execution); queue once in parent | A restored delivery reads the parent's saved execution before retrying |
 | Target access is refused before submission | No target turn or note | An earlier saved target receipt remains the authority for an exact retry |
 | An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
+| An agent-authored target turn lists command hosts or calls `run` | The command policy receives an Agent principal; Cedar refuses host and run questions with `command.agent_host` | No command lease starts; an unpermitted host is not offered, and the policy refusal is logged |
 
 
 The relay supplies source session identity; tool arguments supply no owner,
