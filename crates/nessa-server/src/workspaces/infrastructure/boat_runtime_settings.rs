@@ -23,7 +23,7 @@ use std::{
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub(crate) struct ConfigRuntimeSettings {
+pub(crate) struct ConfigBoatRuntimeSettings {
     pub(crate) config: Arc<ConfigJson>,
     pub(crate) audit: Arc<dyn RuntimeAudit>,
     pub(crate) next_id: Arc<dyn Fn() -> Uuid + Send + Sync>,
@@ -76,7 +76,7 @@ fn edit(
     }
     Ok(())
 }
-impl ConfigRuntimeSettings {
+impl ConfigBoatRuntimeSettings {
     async fn apply(
         &self,
         scope: VmLifetimeScope,
@@ -145,7 +145,7 @@ impl ConfigRuntimeSettings {
     }
 }
 #[async_trait]
-impl RuntimeSettings for ConfigRuntimeSettings {
+impl RuntimeSettings for ConfigBoatRuntimeSettings {
     async fn read(&self, scope: &VmLifetimeScope) -> Result<VmLifetimeSettings, Failure> {
         let config = self.config.clone();
         let scope = scope.clone();

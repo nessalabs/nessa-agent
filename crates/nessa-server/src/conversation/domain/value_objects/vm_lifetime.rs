@@ -103,10 +103,7 @@ impl VmLifetimeSettings {
         self.channel
     }
     /// The channel override, or the default when it inherits.
-    pub const fn effective(&self) -> VmLifetime {
-        match self.channel {
-            Some(lifetime) => lifetime,
-            None => self.default,
-        }
+    pub fn effective(&self) -> VmLifetime {
+        crate::settings::resolve_inherited(self.default, [self.channel])
     }
 }

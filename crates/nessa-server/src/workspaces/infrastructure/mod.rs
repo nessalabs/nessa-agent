@@ -13,8 +13,8 @@ pub(crate) use settings::VaultSettings;
 mod release;
 pub(crate) use release::worker_image;
 
-mod runtime_settings;
-pub(crate) use runtime_settings::ConfigRuntimeSettings;
+mod boat_runtime_settings;
+pub(crate) use boat_runtime_settings::ConfigBoatRuntimeSettings;
 
 mod runtime_settings_audit;
 pub(crate) use runtime_settings_audit::RuntimeSettingsAudit;

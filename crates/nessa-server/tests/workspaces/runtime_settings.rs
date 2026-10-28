@@ -9,7 +9,7 @@ use crate::{
     workspaces::{
         application::*,
         domain::Failure,
-        infrastructure::{ConfigRuntimeSettings, RuntimeSettingsAudit},
+        infrastructure::{ConfigBoatRuntimeSettings, RuntimeSettingsAudit},
     },
 };
 use nessa_auth::{
@@ -53,7 +53,7 @@ fn config(path: PathBuf) -> Arc<ConfigJson> {
         Arc::new(RuntimeClock::new()),
     ))
 }
-fn fixture() -> (TempDir, ConfigRuntimeSettings) {
+fn fixture() -> (TempDir, ConfigBoatRuntimeSettings) {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
         directory.path().join("config.json"),
@@ -67,7 +67,7 @@ fn fixture() -> (TempDir, ConfigRuntimeSettings) {
     )
     .unwrap();
     let next = AtomicUsize::new(1);
-    let settings = ConfigRuntimeSettings {
+    let settings = ConfigBoatRuntimeSettings {
         config: config(directory.path().join("config.json")),
         audit: Arc::new(
             RuntimeSettingsAudit::new(directory.path().join("audit"), Arc::new(Time)).unwrap(),
@@ -121,7 +121,7 @@ async fn global_and_channel_choices_preserve_unrelated_config_and_explicit_unlim
         finite(28_800)
     );
     // A fresh adapter reads the same choices, without a token or vault access.
-    let reopened = ConfigRuntimeSettings {
+    let reopened = ConfigBoatRuntimeSettings {
         config: config(directory.path().join("config.json")),
         ..settings.clone()
     };
