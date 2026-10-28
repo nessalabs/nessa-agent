@@ -265,6 +265,9 @@
  */
 .workspace-window:is([data-rail="open"], [data-rail="closed"]) .workspace-identity {
   padding-left: calc(var(--rail-column) - var(--desktop-gutter));
+  /* Keep the 52px footer row while centring its mark on the fixed toggle. */
+  padding-top: 14px;
+  padding-bottom: 10px;
 }
 
 .workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
@@ -280,7 +283,7 @@
 .side-rail-studio {
   position: absolute;
   z-index: 42;
-  bottom: calc(var(--desktop-gutter) + 13px);
+  bottom: var(--rail-column);
   left: calc(var(--rail-column) + var(--desktop-control-size));
   display: flex;
   font-size: var(--desktop-text-body);

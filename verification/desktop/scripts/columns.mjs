@@ -305,6 +305,19 @@ async function arrange(page, size, { rail, sidebar }) {
   await rest(page, size)
 }
 
+/** The short gateway request fixture lives behind a sidebar folded at 760px. */
+async function selectGateway(page) {
+  if (!(await page.locator(css.sidebar).isVisible())) {
+    await page.keyboard.press(keys.toggleSidebar)
+    await settled(page)
+  }
+  await page
+    .locator(css.sidebar)
+    .getByRole("button", { name: /^gateway\b/ })
+    .first()
+    .click()
+}
+
 const body = {
   "pane-clipping": async ({ page }) => {
     await openPanes(page, 2)
@@ -420,6 +433,9 @@ const body = {
     await page.keyboard.press(keys.overview)
     await need(page, css.overview, "Agents overview opened above the document tabs")
     await settled(page)
+    // The overview moves focus on a later frame. Let that ownership settle
+    // before deliberately moving focus back into the toolbar.
+    await page.waitForFunction(() => document.activeElement?.closest(".agents-overview"))
     await page
       .locator(".workspace-titlebar-navigation button:not(:disabled)")
       .last()
@@ -443,6 +459,8 @@ const body = {
       await page.keyboard.press("ArrowLeft")
       if ((await selected().innerText()) !== firstTitle)
         failures.push("a keyboard tab choice did not leave Agents for its document")
+      await page.locator(css.overview).waitFor({ state: "hidden" })
+      await frames(page, 2)
     }
     const geometry = await page.locator(css.titlebar).evaluate((header) => {
       const list = header.querySelector('[role="tablist"]')
@@ -498,9 +516,21 @@ const body = {
         .focus()
       await page.keyboard.press("Tab")
       await page.keyboard.press("ArrowRight")
-      await settled(page)
-      if ((await selected().locator("..").getAttribute("data-session-tab")) !== draft)
-        failures.push("keyboard could not reselect the draft document")
+      const reselected = await page
+        .waitForFunction(
+          (draft) =>
+            document
+              .querySelector('.workspace-window-tabs [role="tab"][aria-selected="true"]')
+              ?.closest("[data-session-tab]")
+              ?.getAttribute("data-session-tab") === draft,
+          draft,
+          { timeout: 5_000 },
+        )
+        .then(
+          () => true,
+          () => false,
+        )
+      if (!reselected) failures.push("keyboard could not reselect the draft document")
       await page
         .locator(".workspace-titlebar-navigation button:not(:disabled)")
         .last()
@@ -518,9 +548,14 @@ const body = {
         )
       else {
         await page.keyboard.press("Enter")
-        await settled(page)
-        if (await tabs.locator(`[data-session-tab="${draft}"]`).count())
-          failures.push("keyboard Close Tab left the draft document open")
+        const closed = await tabs
+          .locator(`[data-session-tab="${draft}"]`)
+          .waitFor({ state: "detached", timeout: 5_000 })
+          .then(
+            () => true,
+            () => false,
+          )
+        if (!closed) failures.push("keyboard Close Tab left the draft document open")
         const focusKept = await page.evaluate(
           () => document.activeElement?.getAttribute("role") === "tab",
         )
@@ -844,6 +879,9 @@ const body = {
   "list-request": async ({ page, layout }) => {
     if (layout !== "columns") throw new CannotRun("only three columns has a session list")
     const failures = []
+    // The default desktop-app channel's signing request is too long to allow
+    // from the list. The gateway channel has the short reconnect request.
+    await selectGateway(page)
     // The first card the list may allow from (`allowableFromList`).
     const allowable = page
       .locator('[data-list-group="needs-you"] .workspace-request-card')
@@ -881,12 +919,7 @@ const body = {
   "list-request-narrow": async ({ page, layout }) => {
     if (layout !== "columns") throw new CannotRun("only three columns has a session list")
     const failures = []
-    await page
-      .locator(".workspace-sidebar button, .workspace-sidebar [role='button']", {
-        hasText: /^gateway/,
-      })
-      .first()
-      .click()
+    await selectGateway(page)
     const edge = page.getByRole("separator", { name: "Resize Session List" })
     await edge.focus()
     for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowLeft")
@@ -966,12 +999,7 @@ const body = {
   "list-request-claude": async ({ page, layout }) => {
     if (layout !== "columns") throw new CannotRun("only three columns has a session list")
     const failures = []
-    await page
-      .locator(".workspace-sidebar button, .workspace-sidebar [role='button']", {
-        hasText: /^gateway/,
-      })
-      .first()
-      .click()
+    await selectGateway(page)
     // The list at its narrowest: its edge moved left until it holds.
     const edge = page.getByRole("separator", { name: "Resize Session List" })
     await edge.focus()
@@ -1069,14 +1097,22 @@ const body = {
             ? sidebar.right
             : null,
         cover: cover?.left ?? null,
+        gutter: parseFloat(
+          getComputedStyle(document.querySelector(".workspace")).getPropertyValue(
+            "--desktop-gutter",
+          ),
+        ),
         fadeEnd: top + fade,
         cards,
         scrolled: scroll?.scrollTop ?? 0,
       }
     })
-    if (at.sidebar !== null && Math.abs(at.sidebar - at.cover) > 1)
+    if (
+      at.sidebar !== null &&
+      (!Number.isFinite(at.gutter) || Math.abs(at.sidebar - at.cover - at.gutter) > 1)
+    )
       failures.push(
-        `the overview's cover starts at ${at.cover}, the sidebar ends at ${at.sidebar}`,
+        `the overview covers ${at.sidebar - at.cover}px of the sidebar, expected its ${at.gutter}px gutter`,
       )
     if (at.scrolled === 0)
       for (const y of at.cards)
@@ -1848,7 +1884,13 @@ const body = {
       const hit = document.elementFromPoint(bounds.x + bounds.width / 2, 12)
       return {
         top: bounds.top,
-        coversHeader: view === hit || view.contains(hit),
+        // The shared toolbar's drag strip is the one intentional hit above a
+        // full plugin view; workspace cards and document controls stay away.
+        coversHeader:
+          view === hit ||
+          view.contains(hit) ||
+          Boolean(hit?.closest(".workspace-titlebar-space")),
+        hit: hit?.className,
         navigation: [...document.querySelectorAll(".workspace-titlebar button")].map(
           (e) => e.getAttribute("aria-controls"),
         ),
@@ -1885,7 +1927,7 @@ const body = {
       if (after[name] !== value)
         failures.push(`back in Agents, ${name} is ${after[name]} (was ${value})`)
     }
-    return { before, under, after, failures }
+    return { before, under, after, pluginChrome, failures }
   },
 
   "rail-loading": async ({ page, size }) => {
