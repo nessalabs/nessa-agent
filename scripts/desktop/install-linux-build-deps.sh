@@ -59,7 +59,9 @@ done
 resolved=()
 for package in "${packages[@]}"; do
   if [ "$package" = webkit2gtk-driver ]; then
-    candidate="$(LC_ALL=C apt-cache policy webkit2gtk-driver | awk '/^  Candidate:/ { print $2; exit }')"
+    # Consume all policy output. Exiting awk at Candidate closes the pipe
+    # early; apt-cache can then receive SIGPIPE, and pipefail reports 141.
+    candidate="$(LC_ALL=C apt-cache policy webkit2gtk-driver | awk '/^  Candidate:/ { candidate=$2 } END { if (candidate != "") print candidate }')"
     if [ -z "$candidate" ] || [ "$candidate" = "(none)" ]; then
       resolved+=(webkitgtk-webdriver)
       continue
