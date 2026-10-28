@@ -184,3 +184,44 @@ impl Initiation {
         self.tools
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_source_requires_a_canonical_conversation_identity() {
+        let execution = ExecutionId::new("turn-1").unwrap();
+        assert_eq!(
+            AgentSource::new("   ", execution.clone()),
+            Err(ExecutionError::EmptyValue("source conversation"))
+        );
+        assert_eq!(
+            AgentSource::new(
+                "x".repeat(AgentSource::MAX_CONVERSATION_BYTES + 1),
+                execution.clone()
+            ),
+            Err(ExecutionError::ValueTooLong {
+                field: "source conversation",
+                max_bytes: AgentSource::MAX_CONVERSATION_BYTES,
+            })
+        );
+        for conversation in [
+            "not-a-conversation-id",
+            "4C8B99B9-93E2-4E71-A131-83C8EA3EB7FA",
+            "4c8b99b9-93e2-4e71-a131-83c8ea3eb7f",
+        ] {
+            assert_eq!(
+                AgentSource::new(conversation, execution.clone()),
+                Err(ExecutionError::InvalidAgentSource)
+            );
+        }
+        let source =
+            AgentSource::new("4c8b99b9-93e2-4e71-a131-83c8ea3eb7fa", execution.clone()).unwrap();
+        assert_eq!(
+            source.conversation(),
+            "4c8b99b9-93e2-4e71-a131-83c8ea3eb7fa"
+        );
+        assert_eq!(source.execution(), &execution);
+    }
+}
