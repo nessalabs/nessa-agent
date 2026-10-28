@@ -67,11 +67,24 @@ function deliver(
   initiator: Initiator,
 ): WorkspaceCommand<Promise<SendOutcome>> {
   return async (dispatch, getState, { workspace }) => {
-    const session = sessionOf(getState().workspace, sessionId)
+    const state = getState().workspace
+    const session = sessionOf(state, sessionId)
     if (!session) return "not-asked"
-    const access = knownToSource(session)
-      ? undefined
-      : accessToStart(getState().workspace, sessionId)
+    // The index may have removed a local session's channel while the model
+    // step yielded. Check at the effect boundary, not only at command entry.
+    if (!hasCurrentHome(state, sessionId)) {
+      dispatch(
+        sendFailed({
+          sessionId,
+          messageId: message.id,
+          reason: "unavailable",
+          model,
+          diagnostic: { message: "This channel is no longer available." },
+        }),
+      )
+      return "not-asked"
+    }
+    const access = knownToSource(session) ? undefined : accessToStart(state, sessionId)
     // Captured by this message: a pick after it is the newer word, not this one.
     if (access) dispatch(accessCaptured({ sessionId, mode: access }))
     try {
