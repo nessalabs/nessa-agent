@@ -548,3 +548,19 @@ it.each(["pane", "widget", "overview-before"])(
     expect(caretIn()).toBe(destination)
   },
 )
+
+it("keeps keyboard focus in document tabs when selecting a different visible pane", async () => {
+  const store = await page()
+  await act(async () => void store.dispatch(newSession({ beside: "right" })))
+  await frames()
+  const tabs = document.createElement("div")
+  tabs.setAttribute("role", "tablist")
+  const tab = document.createElement("button")
+  tab.setAttribute("role", "tab")
+  tabs.append(tab)
+  host.firstElementChild?.append(tabs)
+  tab.focus()
+  await act(async () => void store.dispatch(focusPane({ pane: 1 })))
+  await frames()
+  expect(document.activeElement).toBe(tab)
+})

@@ -3,7 +3,7 @@
  * and does not read the store or dispatch. A view that shows one fact —
  * the content mark, the switcher — keeps that subscription itself.
  */
-import { memo, useMemo, type CSSProperties, type ReactNode } from "react"
+import { memo, type CSSProperties } from "react"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
 import { ResizeEdge } from "../../../ui/resize-edge"
@@ -12,13 +12,9 @@ import { EscapeScopesProvider } from "../../adapters/dom/widget-escape"
 import { sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import type { WindowArrangement } from "../../model/shown-window"
 import { IconButton } from "../../../ui/icon-button"
-import {
-  SideRail,
-  SideRailButton,
-  RailView,
-  holdsWindowControls,
-} from "../chrome/side-rail"
+import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
+import { WindowTabs } from "../chrome/window-tabs"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { SessionList } from "../session-list/session-list"
@@ -74,14 +70,11 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     railItem,
     shownRailItem,
     sidebarOpen,
-    sidebarChosenOpen,
     listOpen,
     listedChannel,
     sidebarWidth,
     listWidth,
     switcher,
-    compose,
-    composeShortcut,
     onPickRail,
     onToggleRail,
     onToggleSidebar,
@@ -94,20 +87,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     onListDragStart,
     onListDragMove,
   } = model
-  // In a sidebar that lists sessions, compose sits at its head; with the
-  // sidebar away it waits in the titlebar, by the toggle.
-  const top = useMemo(
-    () =>
-      region.sidebar.variant === "tree" ? (
-        <IconButton
-          icon="newSession"
-          label="New Session"
-          shortcut={composeShortcut}
-          onClick={compose}
-        />
-      ) : undefined,
-    [region.sidebar.variant, compose, composeShortcut],
-  )
   return (
     <OverviewQuietProvider store={store} root={root}>
       <WorkspaceFrameProvider value={frame}>
@@ -119,16 +98,10 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   className="workspace-window"
                   data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
                   data-rail-view={shownRailItem?.id}
-                  data-rail-holds={
-                    holdsWindowControls(hostKind) ? "window-controls" : undefined
-                  }
                   data-host={hostKind}
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
                   data-sidebar={sidebarOpen ? "open" : "closed"}
-                  // The person's own choice, apart from a fold for room: the
-                  // rail's toggle hides only with a sidebar they closed.
-                  data-sidebar-chosen={sidebarChosenOpen ? "open" : "closed"}
                   style={{ "--rail-width": `${railWidth}px` } as CSSProperties}
                 >
                   {/* The light behind the window spans the rail too, so the
@@ -136,6 +109,45 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   <div className="desktop-ambient" aria-hidden="true">
                     <span className="desktop-grain" />
                   </div>
+                  <WorkspaceTitlebar>
+                    {shownRailItem ? (
+                      <div className="workspace-titlebar-navigation">
+                        <IconButton
+                          icon="sidebar"
+                          label={`${railDrawn ? "Hide" : "Show"} Side Rail`}
+                          aria-expanded={railDrawn}
+                          aria-controls="side-rail"
+                          onClick={onToggleRail}
+                        />
+                      </div>
+                    ) : (
+                      <div className="workspace-titlebar-navigation">
+                        <IconButton
+                          icon="sidebar"
+                          label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
+                          shortcut={frame.shortcut("toggleSidebar")}
+                          aria-expanded={sidebarOpen}
+                          aria-controls="workspace-sidebar"
+                          onClick={onToggleSidebar}
+                        />
+                        {region.sessionList ? (
+                          <IconButton
+                            icon="sessionList"
+                            label={`${listOpen ? "Hide" : "Show"} Session List`}
+                            shortcut={frame.shortcut("toggleSessionList")}
+                            aria-expanded={listOpen}
+                            onClick={onToggleSessionList}
+                          />
+                        ) : null}
+                        <HistoryButtons />
+                      </div>
+                    )}
+                    {shownRailItem ? (
+                      <div className="workspace-titlebar-space" data-tauri-drag-region />
+                    ) : (
+                      <WindowTabs />
+                    )}
+                  </WorkspaceTitlebar>
                   {railOffered ? (
                     <>
                       <SideRail open={railDrawn} active={railItem} onPick={onPickRail} />
@@ -173,36 +185,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                     {sidebarOpen ? null : (
                       <EdgePeekStrip peek={peek} onDragOut={onRevealSidebar} />
                     )}
-                    <WorkspaceTitlebar>
-                      <IconButton
-                        icon="sidebar"
-                        label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
-                        shortcut={frame.shortcut("toggleSidebar")}
-                        aria-expanded={sidebarOpen}
-                        aria-controls="workspace-sidebar"
-                        onClick={onToggleSidebar}
-                      />
-                      <HistoryButtons />
-                      {region.sessionList ? (
-                        <IconButton
-                          icon="sessionList"
-                          label={`${listOpen ? "Hide" : "Show"} Session List`}
-                          shortcut={frame.shortcut("toggleSessionList")}
-                          aria-expanded={listOpen}
-                          onClick={onToggleSessionList}
-                        />
-                      ) : (
-                        <IconButton
-                          className="workspace-titlebar-compose"
-                          icon="newSession"
-                          label="New Session"
-                          shortcut={composeShortcut}
-                          tabIndex={sidebarOpen ? -1 : 0}
-                          aria-hidden={sidebarOpen || undefined}
-                          onClick={compose}
-                        />
-                      )}
-                    </WorkspaceTitlebar>
                     <ContentMark root={root} />
                     <Columns
                       region={region}
@@ -210,7 +192,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       listOpen={listOpen}
                       sidebarWidth={sidebarWidth}
                       listWidth={listWidth}
-                      top={top}
                       splitPanes={splitPanes}
                       onSidebarDragStart={onSidebarDragStart}
                       onSidebarDragMove={onSidebarDragMove}
@@ -250,7 +231,6 @@ const Columns = memo(function Columns({
   listOpen,
   sidebarWidth,
   listWidth,
-  top,
   splitPanes,
   onSidebarDragStart,
   onSidebarDragMove,
@@ -262,7 +242,6 @@ const Columns = memo(function Columns({
   listOpen: boolean
   sidebarWidth: number
   listWidth: number
-  top: ReactNode
   /** The panes' source, which the chat area's grid and the window's drag share. */
   splitPanes: SplitPanesSource
   onSidebarDragStart: () => void
@@ -273,7 +252,7 @@ const Columns = memo(function Columns({
   const limits = region.sidebar.limits
   return (
     <>
-      <SourceList variant={region.sidebar.variant} top={top} />
+      <SourceList variant={region.sidebar.variant} />
       {sidebarOpen ? (
         <ResizeEdge
           label="Resize Sidebar"

@@ -337,7 +337,10 @@ export function createDraft(
 /** The channel a new session starts in: the one being looked at, else the focused session's. */
 function draftChannel(state: WorkspaceState): string | undefined {
   if (channelOf(state, state.view.channelId)) return state.view.channelId
-  return focusedChannel(state) ?? state.channels[0]?.id
+  const focused = focusedChannel(state)
+  return (
+    (focused && channelOf(state, focused) ? focused : undefined) ?? state.channels[0]?.id
+  )
 }
 
 /**
@@ -346,7 +349,7 @@ function draftChannel(state: WorkspaceState): string | undefined {
  * None when there is no channel or no model to start on — a new session
  * runs on a model, and with none, none starts.
  */
-function draftHome(
+export function draftHome(
   state: WorkspaceState,
   { channelId, model }: { channelId?: string; model?: ModelRef },
 ): { channelId: string; model: ModelRef } | undefined {

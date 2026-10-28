@@ -21,7 +21,9 @@
   min-height: 0;
   padding-top: 0;
   /* The room the pane's title row takes above the home, and the picture's own height. */
-  --workspace-home-reach: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  --workspace-home-reach: calc(
+    var(--desktop-control-size) + 2 * var(--desktop-control-inset)
+  );
   --workspace-home-picture: clamp(120px, 32cqh, 290px);
 }
 
@@ -31,20 +33,7 @@
  * under the row and leaving a strip of the pane empty above it. It keeps its
  * own height below the row; its Customize control moves down with it, clear
  * of the row's controls. The scene, faint line work, stays where it was.
- * In the window's corner, with nothing beside it, the row is where the
- * window's own controls are, and nothing is drawn beneath them (ADR 238, the
- * titlebar's safe area): there the picture stays under the row.
  */
-.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .workspace-pane-home
-  > .desktop-home {
-  --workspace-home-reach: 0px;
-}
-
 .workspace-pane-home
   > .desktop-home:not([data-page])
   .desktop-header:has(> .desktop-header-image) {

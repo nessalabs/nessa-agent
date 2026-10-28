@@ -58,9 +58,8 @@
  *               list nor the window holds it
  *   rail        the side rail is turned on in Settings › Advanced ›
  *               Experimental and opened: the window's traffic lights stay
- *               where the host puts them and the rail holds them in its top
- *               row, its controls centred under them, the first card past
- *               them by the gap they keep from the window's edge; a message
+ *               where the host puts them above a compact rail; the top bar
+ *               keeps its controls clear of them in every rail state; a message
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
@@ -403,42 +402,30 @@ async function setSideRail(page, on, failures) {
   if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
 }
 
-/**
- * The macOS traffic lights, where `traffic_lights.rs` puts them and keeps
- * them: the close button 16px from the window's edge, the three 23px apart,
- * so they end 76px in and their middle is 46px in. The page never moves them.
- */
-const LIGHTS = { left: 16, middle: 46, end: 76 }
-// The page's rail is tied to the host's and the stylesheet's copies in
-// `side-rail.test.tsx`; this copy is the harness's own model of the host.
+/** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
+const LIGHTS_END = 76
 
-/**
- * Waits until the rail is `rail` (open, closed, or off) and laid out around
- * the traffic lights: open, the rail holds them in its top row, its items
- * centred under them, and the first card starts past them by the gap they
- * keep from the window's edge; open or closed, the rail's toggle stays
- * centred under them; open or not, the titlebar's first control starts
- * where they end, never under them. False, with the last measurement
- * said, when that never holds.
- */
+/** The compact rail and the window bar keep separate geometry. */
 async function aroundTheLights(page, rail, failures) {
   const near = (a, b) => Math.abs(a - b) <= 0.5
   const holds = (now) =>
     now.rail === rail &&
     [now.at.workspace, now.at.inset, now.at.control].every(Number.isFinite) &&
-    near(now.at.control, now.at.workspace + now.at.inset) &&
-    now.at.control >= LIGHTS.end &&
+    near(now.at.control, now.at.inset) &&
+    now.at.control >= LIGHTS_END &&
     (rail === "open"
       ? near(now.at.workspace, now.at.railWidth) &&
-        near(now.at.card, LIGHTS.end + LIGHTS.left) &&
-        near(now.at.item, LIGHTS.middle)
+        near(now.at.railTop, now.at.barBottom) &&
+        near(now.at.railWidth, 48) &&
+        near(now.at.item, now.at.railWidth / 2)
       : near(now.at.workspace, 0)) &&
-    (rail === "off" || near(now.at.toggle, LIGHTS.middle))
+    (rail === "off" ||
+      (near(now.at.toggle, now.at.itemColumn) &&
+        near(now.at.toggleBottom, now.at.windowBottom - now.at.itemColumn)))
   if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
   const now = await railLayout(page)
   failures.push(
-    `rail ${rail} (now ${now.rail}) around lights ending at ${LIGHTS.end}, middle ${LIGHTS.middle}: ` +
-      JSON.stringify(now.at),
+    `rail ${rail} (now ${now.rail}) below window bar: ` + JSON.stringify(now.at),
   )
   return false
 }
@@ -451,7 +438,7 @@ async function aroundTheLights(page, rail, failures) {
  */
 function railLayout(page) {
   return page.evaluate(
-    ({ frame, workspace, control, rail, item, toggle }) => {
+    ({ frame, workspace, control, rail, item, toggle, titlebar }) => {
       const box = (selector) => document.querySelector(selector)?.getBoundingClientRect()
       const middle = (selector) => {
         const at = box(selector)
@@ -486,10 +473,18 @@ function railLayout(page) {
         at: {
           railWidth: box(rail)?.width ?? NaN,
           item: middle(item),
-          toggle: middle(toggle),
+          toggle: box(toggle)?.left ?? NaN,
+          toggleBottom: box(toggle)?.bottom ?? NaN,
+          windowBottom: innerHeight,
+          itemColumn: length(document.querySelector(frame), "--desktop-control-edge"),
+          railTop: box(rail)
+            ? box(rail).top +
+              parseFloat(getComputedStyle(document.querySelector(rail)).paddingTop)
+            : NaN,
+          barBottom: box(titlebar)?.bottom ?? NaN,
           workspace: at.getBoundingClientRect().left,
           card: card(at),
-          inset: length(at, "--desktop-window-controls-inset"),
+          inset: length(document.querySelector(frame), "--desktop-window-controls-inset"),
           control: box(control)?.left ?? NaN,
         },
       }
@@ -497,7 +492,8 @@ function railLayout(page) {
     {
       frame: css.workspaceWindow,
       workspace: css.workspace,
-      control: css.titlebarSidebarToggle,
+      control: `${css.titlebar} button`,
+      titlebar: css.titlebar,
       rail: css.sideRail,
       item: `${css.sideRail} [data-rail-item]`,
       toggle: css.sideRailToggle,
@@ -1121,12 +1117,12 @@ const steps = {
         failures.push("the window had no room for the side rail")
         return
       }
-      for (const open of [true, false, true]) {
+      for (const [index, open] of [true, false, true].entries()) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
           await toggle.click()
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
         // The workspace still takes a message with the rail beside it.
-        if (open && failures.length === 0) await steps.reply(run, step, failures)
+        if (index === 0 && failures.length === 0) await steps.reply(run, step, failures)
       }
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.
@@ -1526,10 +1522,27 @@ const steps = {
         clients.push(await connectClient(run.stack.gateway, INSTANCE, "panel"))
       for (let n = 0; n < FRESH_BURST; n += 1)
         burst.push(startedBeside(run, clients[n % FRESH_CLIENTS], step, n, failures))
-      await run.page.keyboard.press(keys.newSession)
+      const tabs = run.page.getByRole("tablist", { name: "Open views" })
+      const previous = await tabs
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")
+      await run.page.getByRole("button", { name: /^New Tab/ }).click()
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
       await home.locator(css.field).fill(text)
+      const draft = await tabs
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")
+      if (previous) {
+        await tabs.locator(`[data-session-tab="${previous}"] [role="tab"]`).click()
+        await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
+        if ((await home.locator(css.field).inputValue()) !== text)
+          failures.push(
+            "switching workspace tabs lost the new conversation's first message",
+          )
+      }
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
         () => selectedStressConversation(run.page, text),

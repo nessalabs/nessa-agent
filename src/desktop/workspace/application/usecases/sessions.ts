@@ -20,7 +20,6 @@ import {
   entry,
   forgetSession,
   modelForNextTurn,
-  paneShowingSession,
   sessionOf,
   without,
   withSession,
@@ -188,9 +187,9 @@ function mayBegin(state: WorkspaceState, sessionId: string): boolean {
 
 /**
  * The person let a message the source refused go. A session the source never
- * began, left with nothing to begin it, was never a session: its pane goes
- * back to the new session's home it came from, under the same id, and it
- * leaves the lists.
+ * began, left with nothing to begin it, was never a session: an open document
+ * returns to its draft home under the same id, visible or hidden. With no
+ * document tab, it leaves the window.
  */
 export function unsentDiscarded(
   state: WorkspaceState,
@@ -210,14 +209,20 @@ export function unsentDiscarded(
   const model = modelForNextTurn(discarded, sessionId) ?? session.model
   // The access chosen for it goes back with the home, as its model does.
   const access = entry(discarded.accessChoices, sessionId)
+  const text = entry(discarded.composerText, sessionId)
   const unlisted = forgetSession(discarded, sessionId)
-  return discarded.panes && paneShowingSession(discarded.panes, sessionId)
+  return discarded.sessionTabs.includes(sessionId)
     ? {
         ...unlisted,
+        sessionTabs: discarded.sessionTabs,
         drafts: {
           ...unlisted.drafts,
           [sessionId]: { id: sessionId, channelId: session.channelId, model },
         },
+        composerText:
+          text === undefined
+            ? unlisted.composerText
+            : { ...unlisted.composerText, [sessionId]: text },
         accessChoices:
           access?.state === "chosen"
             ? { ...unlisted.accessChoices, [sessionId]: access }

@@ -4,6 +4,9 @@ import type { HostKind } from "../../host/features"
  * Where the window's workspace comes from, by the host it runs in and what
  * the page was opened with:
  *
+ * An explicit sample configuration (validated by the environment adapter)
+ * selects the sample on native hosts too. Otherwise:
+ *
  * - `host`: the desktop app. The host serves the window the local gateway's
  *   endpoint and the panel's surface credential once its startup of the
  *   gateway is ready, as a reader that never starts one (`GatewayReader`,
@@ -21,7 +24,12 @@ import type { HostKind } from "../../host/features"
  */
 export type WorkspaceBackend = "host" | "browser" | "sample" | "seeded"
 
-export function workspaceBackend(host: HostKind, search: string): WorkspaceBackend {
+export function workspaceBackend(
+  host: HostKind,
+  search: string,
+  sample = false,
+): WorkspaceBackend {
+  if (sample) return "sample"
   if (host !== "browser") return "host"
   const params = new URLSearchParams(search)
   if (params.has("gateway")) return "browser"

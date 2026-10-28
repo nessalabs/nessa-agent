@@ -11,6 +11,7 @@ import {
   ChevronUp,
   Columns2,
   CornerDownLeft,
+  Copy,
   Cpu,
   Ellipsis,
   FileText,
@@ -64,6 +65,7 @@ function lucide(Icon: LucideIcon): DesktopIconComponent {
 }
 
 export const lucideIcons: DesktopIconFamily = {
+  copy: lucide(Copy),
   check: lucide(Check),
   close: lucide(X),
   chevronDown: lucide(ChevronDown),

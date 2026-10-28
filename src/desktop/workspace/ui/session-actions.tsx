@@ -124,6 +124,7 @@ export function SessionMenuItems({
         </MenuItem>
       ) : null}
       <MenuItem
+        data-close-immediately=""
         disabled={!begun}
         onSelect={() =>
           void dispatch(pinSession({ sessionId, pinned: !pinned, initiator: "person" }))
@@ -143,6 +144,7 @@ export function SessionMenuItems({
       ) : null}
       <MenuSeparator />
       <MenuItem
+        data-close-immediately=""
         disabled={!begun}
         onSelect={() => void dispatch(archiveSession({ sessionId, initiator: "person" }))}
       >

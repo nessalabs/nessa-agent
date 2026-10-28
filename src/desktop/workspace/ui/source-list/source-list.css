@@ -1,5 +1,5 @@
 /*
- * The source list: the sidebar's glass pane of sections and channels. Two
+ * The source list: the sidebar's gradient wash behind sections and channels. Two
  * variants share it — `channels`, where a channel is chosen for the session
  * list beside it, and `tree`, where a channel discloses its sessions inline.
  */
@@ -17,28 +17,21 @@
   width: var(--workspace-sidebar-width);
   flex: none;
   flex-direction: column;
-  margin: var(--desktop-gutter) 0 var(--desktop-gutter) var(--desktop-gutter);
-  border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  /* The ambient light is already soft. Sampling the whole changing window
-     through another blur made unrelated pane transitions miss their budget. */
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent),
-    0 12px 40px -12px rgb(0 0 0 / 55%);
+  /* A wash rather than a framed pane, continuous with the window's light. */
+  --sidebar-wash: radial-gradient(
+    ellipse 70% 70% at 50% 20%,
+    color-mix(in oklab, var(--desktop-light-high) 30%, transparent),
+    transparent 70%
+  );
+  padding-top: var(--desktop-titlebar-height);
+  margin: 0 0 var(--desktop-gutter) var(--desktop-gutter);
+  background: var(--sidebar-wash);
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
   transition:
     transform var(--desktop-slow) var(--desktop-out),
     visibility 0s;
-}
-
-html:not(.dark) .workspace-sidebar {
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 rgb(255 255 255 / 60%),
-    0 12px 32px -16px rgb(0 0 0 / 22%);
 }
 
 .workspace[data-sidebar="closed"] .workspace-sidebar {
@@ -63,27 +56,12 @@ html:not(.dark) .workspace-sidebar {
   z-index: 30;
   visibility: visible;
   transform: translate3d(0, 0, 0);
-  background: color-mix(in oklab, var(--background) 94%, var(--foreground));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent),
-    0 24px 60px -12px rgb(0 0 0 / 60%);
+  background:
+    var(--sidebar-wash), color-mix(in oklab, var(--background) 94%, var(--foreground));
+  box-shadow: 12px 0 32px -16px rgb(0 0 0 / 40%);
   transition:
     transform 360ms var(--desktop-ease),
     visibility 0s;
-}
-
-/*
- * The sidebar's titlebar row: its own action, in the glass's top corner, and
- * never under the window's controls, which stand over the sidebar — at its
- * narrowest the action is pushed past its edge and clipped, rather than drawn
- * beneath them.
- */
-.workspace-sidebar > .desktop-column-bar {
-  height: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
-  align-items: flex-start;
-  padding: var(--desktop-control-inset);
-  padding-left: calc(var(--desktop-titlebar-safe-start) - var(--desktop-gutter));
 }
 
 .workspace-sidebar-scroll {

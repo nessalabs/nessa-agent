@@ -2,6 +2,7 @@ import { gatewayOrigin, type Stage } from "./gateway-ports"
 
 export type EnvSource = Readonly<Record<string, string | undefined>>
 export type Environment = {
+  readonly sampleWorkspace: boolean
   readonly stage: Stage
   /**
    * Where the local gateway answers, as an origin with no trailing slash.
@@ -52,6 +53,12 @@ export function loadEnvironment(
   if (stage !== "dev" && stage !== "ci" && stage !== "alpha" && stage !== "prod") {
     throw new Error("VITE_NESSA_STAGE must be dev, ci, alpha, or prod")
   }
+  const sampleSetting = source.VITE_NESSA_SAMPLE_WORKSPACE
+  if (sampleSetting !== undefined && sampleSetting !== "1")
+    throw new Error("VITE_NESSA_SAMPLE_WORKSPACE must be 1 when set")
+  const sampleWorkspace = sampleSetting === "1"
+  if (sampleWorkspace && (!developmentBuild || (stage !== "dev" && stage !== "ci")))
+    throw new Error("Sample workspace requires a development build in dev or ci stage")
   const gateway = gatewayBaseUrl(source, developmentBuild, stage)
   const gatewayBaseUrlOverride =
     source.VITE_NESSA_GATEWAY_URL === undefined || source.VITE_NESSA_GATEWAY_URL === ""
@@ -63,6 +70,7 @@ export function loadEnvironment(
     if (scenario !== undefined)
       throw new Error("Conversation scenario requires scenario backend")
     return {
+      sampleWorkspace,
       stage,
       gatewayBaseUrl: gateway,
       gatewayBaseUrlOverride,
@@ -77,6 +85,7 @@ export function loadEnvironment(
     throw new Error("VITE_NESSA_CONVERSATION_SCENARIO must be echo or offline")
   }
   return {
+    sampleWorkspace,
     stage,
     gatewayBaseUrl: gateway,
     gatewayBaseUrlOverride,

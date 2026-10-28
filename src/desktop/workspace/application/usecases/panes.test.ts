@@ -187,13 +187,13 @@ describe("new sessions", () => {
     expect(drawn(state)).toEqual([["a"], ["new"]])
   })
 
-  it("lets a draft go once no pane shows it", () => {
+  it("keeps a draft document when its pane changes or closes", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const replaced = openSession(drafted, { sessionId: "c" })
-    expect(replaced.drafts).toEqual({})
+    expect(replaced.drafts.new).toBeDefined()
     const beside = createDraft(loaded(), { draftId: "new", beside: "right", room: roomy })
     const closed = closePane(beside, { pane: keyOf(beside, "new") })
-    expect(closed.drafts).toEqual({})
+    expect(closed.drafts.new).toBeDefined()
   })
 
   it("does not reuse an id already in use", () => {

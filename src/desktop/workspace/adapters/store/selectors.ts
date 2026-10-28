@@ -82,6 +82,7 @@ export const selectSessionListChosen = (state: Root) =>
 /** How many columns of panes there are; the side columns are fitted around them. */
 export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
+export const selectSessionTabs = (state: Root) => state.workspace.sessionTabs
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
 export const selectOverviewOpen = (state: Root) =>

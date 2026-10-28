@@ -12,11 +12,8 @@
  *                    the window's edges. A column placed from the window's edge
  *                    without counting a column beside it (the overview that
  *                    slid under the sidebar once the rail opened) breaks it.
- *   rail-corner      the rail's toggle is at the same pixels in every state; it
- *                    is hidden exactly when the rail and the sidebar are both
- *                    closed; "nessa Studio" is at the same pixels in Agents and
- *                    in an item's full view, rail open and closed, and never
- *                    under the toggle.
+ *   rail-corner      the toggle holds its bottom-left slot; the sidebar
+ *                    reserves space beside it when the rail is folded.
  *   rail-view-inert  under an item's full view the workspace takes no keys:
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left.
@@ -36,10 +33,12 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
+import { css, keys, names, selectorFor, storage } from "./lib/selectors.mjs"
 import { frames, settled, openPanes } from "./lib/workspace.mjs"
 
 const checks = [
+  "window-tabs",
+  "shell-chrome",
   "no-overlap",
   "content-visible",
   "pane-level",
@@ -73,9 +72,8 @@ Checks, per engine, layout and size:
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
-  rail-corner      the toggle never moves and hides only with rail and sidebar
-                   both closed; "nessa Studio" holds its place between Agents
-                   and a full view and is never under the toggle
+  rail-corner      the bottom-left toggle holds its slot; "nessa Studio"
+                   stays clear in Agents and a full view
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
   rail-loading     an item's view opens empty; still loading at 3 s it shows
                    only the kit's sweeping text, with no panel or border
@@ -188,7 +186,7 @@ async function rest(page, size) {
   await page.waitForTimeout(450)
 }
 
-/** Sets the rail and the sidebar; the rail first, as its toggle hides with the sidebar. */
+/** Sets the rail and the sidebar; the rail first, then the sidebar. */
 async function arrange(page, size, { rail, sidebar }) {
   if (!(await page.locator(css.sidebar).isVisible()))
     await page.keyboard.press(keys.toggleSidebar)
@@ -199,6 +197,262 @@ async function arrange(page, size, { rail, sidebar }) {
 }
 
 const body = {
+  "window-tabs": async ({ page, size }) => {
+    const failures = []
+    const tabs = page.getByRole("tablist", { name: "Open views" })
+    const selected = () => tabs.locator('[role="tab"][aria-selected="true"]')
+    const visible = () =>
+      page.locator(css.pane).evaluateAll((panes) =>
+        panes.map((e) => {
+          const b = e.getBoundingClientRect()
+          return {
+            key: e.dataset.paneKey,
+            x: b.x,
+            y: b.y,
+            width: b.width,
+            height: b.height,
+          }
+        }),
+      )
+    // Fold side columns so the same explicit split can fit at each test size.
+    if (await page.locator(css.sidebar).isVisible())
+      await page.keyboard.press(keys.toggleSidebar)
+    if (await page.locator(css.sessionList).isVisible())
+      await page.keyboard.press(keys.toggleSessionList)
+    await settled(page)
+    const firstTitle = await selected().innerText()
+    await page.getByRole("button", { name: /^New Tab/ }).click()
+    const draft = await selected().locator("..").getAttribute("data-session-tab")
+    await page.locator(css.composer).fill("A thought kept between tabs")
+    await tabs.getByRole("tab", { name: firstTitle, exact: true }).click()
+    await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
+    if ((await page.locator(css.composer).inputValue()) !== "A thought kept between tabs")
+      failures.push("tab switching lost an unsent draft")
+    await page.getByRole("button", { name: /^Split Right/ }).click()
+    await settled(page)
+    const split = await visible()
+    if (split.length !== 2)
+      failures.push(`Split Right made ${split.length} panes, expected two`)
+    const secondDraft = await selected().locator("..").getAttribute("data-session-tab")
+    await tabs.getByRole("tab", { name: firstTitle, exact: true }).click()
+    await settled(page)
+    const switched = await visible()
+    if (JSON.stringify(split) !== JSON.stringify(switched))
+      failures.push("switching a document changed the split arrangement")
+    await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
+    await settled(page)
+    if ((await page.locator(css.pane).count()) !== 2)
+      failures.push("selecting a visible document duplicated or closed a pane")
+    await tabs
+      .locator(`[data-session-tab="${secondDraft}"]`)
+      .getByRole("button", { name: /^Close Tab/ })
+      .click()
+    await settled(page)
+    if (await tabs.locator(`[data-session-tab="${secondDraft}"]`).count())
+      failures.push("closed document still has a tab")
+    // Roving keyboard selection must reach each document and bring it into view.
+    await selected().focus()
+    await page.keyboard.press("Home")
+    const firstDocument = await tabs.getByRole("tab").first().innerText()
+    if ((await selected().innerText()) !== firstDocument)
+      failures.push("Home did not select the first document")
+    if (await tabs.getByRole("tab", { name: "Agents", exact: true }).count())
+      failures.push("Agents still occupies a permanent document tab")
+    await page.keyboard.press("End")
+    if (
+      (await selected().innerText()) !== (await tabs.getByRole("tab").last().innerText())
+    )
+      failures.push("End did not select the last document")
+    await page.keyboard.press(keys.overview)
+    await need(page, css.overview, "Agents overview opened above the document tabs")
+    await page
+      .locator(".workspace-titlebar-navigation button:not(:disabled)")
+      .last()
+      .focus()
+    await page.keyboard.press("Tab")
+    const keyboardTab = await page.evaluate(
+      () =>
+        document.activeElement?.getAttribute("role") === "tab" &&
+        !!document.activeElement?.closest('[role="tablist"]'),
+    )
+    if (!keyboardTab) failures.push("document tabs cannot be reached from Agents by Tab")
+    else {
+      await page.keyboard.press("ArrowLeft")
+      if ((await selected().innerText()) !== firstTitle)
+        failures.push("a keyboard tab choice did not leave Agents for its document")
+    }
+    const geometry = await page.locator(css.titlebar).evaluate((header) => {
+      const list = header.querySelector('[role="tablist"]')
+      const tab = list.querySelector('[aria-selected="true"]')
+      const rect = (e) => {
+        if (!e) return null
+        const b = e.getBoundingClientRect()
+        return { left: b.left, right: b.right }
+      }
+      return {
+        list: rect(list),
+        selected: rect(tab),
+        tabs: [...list.querySelectorAll(".workspace-window-tab")].map((e) => ({
+          width: e.getBoundingClientRect().width,
+          overflow: getComputedStyle(e.querySelector('[role="tab"] > span:last-child'))
+            .textOverflow,
+        })),
+        controls: [...header.querySelectorAll(".workspace-window-tabs > button")].map(
+          (e) => {
+            const b = e.getBoundingClientRect()
+            return {
+              ...rect(e),
+              hit:
+                document
+                  .elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+                  ?.closest("button") === e,
+            }
+          },
+        ),
+      }
+    })
+    if (new Set(geometry.tabs.map((tab) => tab.width)).size !== 1)
+      failures.push("document tabs have different widths")
+    if (geometry.tabs.some((tab) => tab.overflow !== "ellipsis"))
+      failures.push("long document titles do not truncate with an ellipsis")
+    if (
+      !geometry.selected ||
+      geometry.selected.left < geometry.list.left - 1 ||
+      geometry.selected.right > geometry.list.right + 1
+    )
+      failures.push("selected tab is clipped by horizontal overflow")
+    if (
+      geometry.controls.some(
+        (b) => !b.hit || b.right > size.width || b.left < geometry.list.right - 1,
+      )
+    )
+      failures.push("tab overflow covers New Tab or Split Right")
+    if (keyboardTab) {
+      await page
+        .locator(".workspace-titlebar-navigation button:not(:disabled)")
+        .last()
+        .focus()
+      await page.keyboard.press("Tab")
+      await page.keyboard.press("ArrowRight")
+      await settled(page)
+      if ((await selected().locator("..").getAttribute("data-session-tab")) !== draft)
+        failures.push("keyboard could not reselect the draft document")
+      await page
+        .locator(".workspace-titlebar-navigation button:not(:disabled)")
+        .last()
+        .focus()
+      await page.keyboard.press("Tab")
+      await page.keyboard.press("Tab")
+      const closeFocus = await page.evaluate(() => ({
+        role: document.activeElement?.getAttribute("role"),
+        label: document.activeElement?.getAttribute("aria-label"),
+      }))
+      const closeByKeyboard = closeFocus.label?.startsWith("Close Tab:")
+      if (!closeByKeyboard)
+        failures.push(
+          `Close Tab cannot be reached by keyboard: ${JSON.stringify(closeFocus)}`,
+        )
+      else {
+        await page.keyboard.press("Enter")
+        await settled(page)
+        if (await tabs.locator(`[data-session-tab="${draft}"]`).count())
+          failures.push("keyboard Close Tab left the draft document open")
+        const focusKept = await page.evaluate(
+          () => document.activeElement?.getAttribute("role") === "tab",
+        )
+        if (!focusKept) failures.push("keyboard Close Tab lost toolbar focus")
+      }
+    }
+    return { split, switched, keyboardTab, geometry, failures }
+  },
+
+  "shell-chrome": async ({ page, size }) => {
+    const failures = []
+    const states = []
+    for (const rail of [false, true])
+      for (const sidebar of [true, false]) {
+        await arrange(page, size, { rail, sidebar })
+        const state = await page.evaluate((sel) => {
+          const rect = (e) => {
+            const b = e?.getBoundingClientRect()
+            return b
+              ? {
+                  x: b.x,
+                  y: b.y,
+                  right: b.right,
+                  bottom: b.bottom,
+                  width: b.width,
+                  height: b.height,
+                }
+              : null
+          }
+          const titlebar = document.querySelector(sel.titlebar)
+          const toggle = document.querySelector(sel.sideRailToggle)
+          const sidebar = document.querySelector(sel.sidebar)
+          const identity = sidebar?.querySelector(".workspace-identity")
+          return {
+            titlebar: rect(titlebar),
+            pane: rect(document.querySelector(sel.pane)),
+            toggle: rect(toggle),
+            newSessionControl:
+              titlebar.querySelector('[aria-label^="New Session"]') !== null,
+            sidebar:
+              sidebar?.getAttribute("aria-hidden") === "true" ? null : rect(sidebar),
+            footerInset: identity
+              ? parseFloat(getComputedStyle(identity).paddingLeft)
+              : null,
+
+            controlInset: parseFloat(
+              getComputedStyle(
+                document.querySelector(sel.workspaceWindow),
+              ).getPropertyValue("--desktop-control-inset"),
+            ),
+            rail: rect(document.querySelector(sel.sideRail)),
+            drawnRail:
+              document.querySelector(sel.workspaceWindow).dataset.rail === "open",
+          }
+        }, css)
+        states.push({ requestedRail: rail, requestedSidebar: sidebar, ...state })
+        const label = `rail ${rail}, sidebar ${sidebar}`
+        if (state.newSessionControl)
+          failures.push(`${label}: New Session remains in the window toolbar`)
+        if (state.titlebar?.x !== 0 || state.titlebar?.right !== size.width)
+          failures.push(`${label}: titlebar does not span the window`)
+        if (state.sidebar && state.sidebar.y !== 0)
+          failures.push(`${label}: sidebar has an extra top row (${state.sidebar.y}px)`)
+        if (state.pane && state.pane.y < state.titlebar.bottom)
+          failures.push(`${label}: conversation card overlaps the window toolbar`)
+        if (
+          state.toggle &&
+          (state.toggle.x !== 10 || state.toggle.bottom !== size.height - 10)
+        )
+          failures.push(`${label}: rail toggle left its bottom-left control slot`)
+        const expectedInset =
+          state.drawnRail || !state.sidebar
+            ? state.controlInset
+            : state.toggle.right - state.sidebar.x + state.controlInset
+        if (state.sidebar && state.footerInset !== expectedInset)
+          failures.push(
+            `${label}: footer inset ${state.footerInset}, expected ${expectedInset} for its toggle slot`,
+          )
+        if (state.rail?.width && state.rail.width !== 48)
+          failures.push(`${label}: rail width ${state.rail.width}, expected 48`)
+      }
+    if (failures.length) return { states, failures }
+    await arrange(page, size, { rail: false, sidebar: true })
+    // The window can fold the sidebar for room; only a drawn footer can be clicked.
+    const footerDrawn = await page.locator(css.studio).isVisible()
+    if (footerDrawn) {
+      await page.locator(css.studio).click()
+      await need(page, css.settings, "Settings opened from the footer")
+      await page.getByRole("button", { name: names.leaveSettings }).first().click()
+      await page.locator(css.settings).waitFor({ state: "hidden" })
+    }
+    await page.keyboard.press(keys.newSession)
+    await need(page, css.paneHome, "New Session opened with its keyboard shortcut")
+    return { states, footerDrawn, failures }
+  },
+
   "no-overlap": async ({ page, layout, size }) => {
     const failures = []
     const states = []
@@ -245,8 +499,6 @@ const body = {
         return {
           rail: window?.dataset.rail === "open",
           sidebar: window?.dataset.sidebar === "open",
-          // Closed by the person, not folded by the window for room.
-          sidebarChosen: window?.dataset.sidebarChosen === "open",
         }
       }, css.workspaceWindow)
     for (const rail of [true, false])
@@ -258,10 +510,7 @@ const body = {
         const at = await boxOf(page, css.sideRailToggle)
         const studio = await boxOf(page, css.studio)
         seen.push({ label, toggle: at, studio })
-        const hidden = !now.rail && !now.sidebarChosen
-        if (hidden && at)
-          failures.push(`${label}: the toggle is drawn with nothing to sit in`)
-        if (!hidden && !at) failures.push(`${label}: the toggle is not drawn`)
+        if (!at) failures.push(`${label}: the toggle is not drawn`)
         if (!at) continue
         toggle ??= at
         if (at.join() !== toggle.join())
@@ -587,7 +836,10 @@ const body = {
             }
             requestAnimationFrame(tick)
           },
-          { titlebar: css.titlebar, controls: `${css.titlebar} .desktop-icon-button` },
+          {
+            titlebar: css.titlebar,
+            controls: `${css.titlebar} .workspace-titlebar-navigation .desktop-icon-button, ${css.titlebar} .workspace-window-tabs > .desktop-icon-button`,
+          },
         )
         await page.keyboard.press(keys.toggleSidebar)
         await rest(page, size)
@@ -662,12 +914,17 @@ const body = {
         ),
       [css.sessionList, css.pane],
     )
-    return {
-      reachable,
-      failures: reachable.length
-        ? [`under the overview, not inert: ${[...new Set(reachable)].join(", ")}`]
-        : [],
-    }
+    const cardTop = await page
+      .locator(".agents-overview-surface")
+      .evaluate((e) => e.getBoundingClientRect().top)
+    const toolbarBottom = await page
+      .locator(css.titlebar)
+      .evaluate((e) => e.getBoundingClientRect().bottom)
+    const failures = reachable.length
+      ? [`under the overview, not inert: ${[...new Set(reachable)].join(", ")}`]
+      : []
+    if (cardTop < toolbarBottom) failures.push("Agents card overlaps the window toolbar")
+    return { reachable, cardTop, toolbarBottom, failures }
   },
 
   "rail-fold-focus": async ({ page, size }) => {
@@ -733,10 +990,53 @@ const body = {
       await page.keyboard.press(key)
     await rest(page, size)
     const under = await state()
+    const pluginChrome = await page.evaluate(() => {
+      const view = document.querySelector(".rail-view")
+      const bounds = view.getBoundingClientRect()
+      const hit = document.elementFromPoint(bounds.x + bounds.width / 2, 12)
+      const dragSpace = document.querySelector(".workspace-titlebar-space")
+      const dragBounds = dragSpace.getBoundingClientRect()
+      const dragHit = document.elementFromPoint(
+        dragBounds.x + dragBounds.width / 2,
+        dragBounds.y + dragBounds.height / 2,
+      )
+      return {
+        top: bounds.top,
+        coversHeader:
+          view === hit || view.contains(hit) || !!hit?.closest(".workspace-titlebar"),
+        draggableHeader: dragHit?.hasAttribute("data-tauri-drag-region") ?? false,
+        navigation: [...document.querySelectorAll(".workspace-titlebar button")].map(
+          (e) => e.getAttribute("aria-controls"),
+        ),
+      }
+    })
+    const pluginToggles = []
+    for (const id of ["notes", "calendar", "browser", "files"]) {
+      await page.locator(selectorFor.railItem(id)).click()
+      const topToggle = page.locator(".workspace-titlebar button")
+      await topToggle.click()
+      const closed = await expanded(page, css.sideRailToggle)
+      await topToggle.click()
+      const reopened = await expanded(page, css.sideRailToggle)
+      pluginToggles.push({ id, closed, reopened })
+    }
     await page.locator(selectorFor.railItem("agents")).click()
     await rest(page, size)
     const after = await state()
     const failures = []
+    for (const toggle of pluginToggles)
+      if (toggle.closed || !toggle.reopened)
+        failures.push(
+          `${toggle.id}: top sidebar toggle does not fold and reopen the rail`,
+        )
+    if (
+      pluginChrome.top !== 0 ||
+      !pluginChrome.coversHeader ||
+      pluginChrome.navigation.join() !== "side-rail"
+    )
+      failures.push("plugin view exposes the workspace cards or controls above it")
+    if (!pluginChrome.draggableHeader)
+      failures.push("plugin titlebar has no window drag surface")
     for (const [name, value] of Object.entries(before)) {
       if (under[name] !== value)
         failures.push(`under Notes, ${name} became ${under[name]} (was ${value})`)

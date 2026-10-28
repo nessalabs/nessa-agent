@@ -209,8 +209,12 @@ NESSA_STAGE=ci cargo build -p nessa-app
 NESSA_STAGE=ci target/debug/nessa-app
 ```
 
-`pnpm app` remains the hot-reload path and points the webview at Vite. For a
-focused Rust host test, disable the embedded production feature so a test does
+`pnpm app` remains the hot-reload path and points the webview at Vite.
+To preview the native desktop with the browser's sample conversations and approvals,
+run `VITE_NESSA_SAMPLE_WORKSPACE=1 pnpm app`. This uses an in-memory workspace;
+the option is accepted only by development builds in the dev or ci stage.
+
+For a focused Rust host test, disable the embedded production feature so a test does
 not require `dist/` and pass test-harness flags after `--`:
 
 ```bash

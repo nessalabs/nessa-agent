@@ -11,12 +11,7 @@
   display: flex;
   flex: 1;
   min-width: 0;
-  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
-}
-
-/* With nothing to its left, the chat area keeps a gutter from the window's edge. */
-.workspace[data-panes-alone] .workspace-chat {
-  padding-left: var(--desktop-gutter);
+  padding: var(--desktop-titlebar-height) 0 0;
 }
 
 .workspace-pane {
@@ -24,38 +19,10 @@
   min-width: 0;
   flex-direction: column;
   container: workspace-pane / size;
-  border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
-    0 12px 40px -18px rgb(0 0 0 / 45%);
+  background: transparent;
+  border-left: calc(min(1, var(--ci)) * 1px) solid var(--desktop-rim);
+  border-top: calc(min(1, var(--ri)) * 1px) solid var(--desktop-rim);
   overflow: hidden;
-  transition:
-    box-shadow var(--desktop-base) ease,
-    opacity var(--desktop-base) ease,
-    background-color var(--desktop-base) ease;
-}
-
-html:not(.dark) .workspace-pane {
-  background: color-mix(in oklab, var(--background) 60%, white);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    0 12px 32px -18px rgb(0 0 0 / 18%);
-}
-
-/* With two or more panes, the one you're in carries a slightly brighter rim. */
-.workspace-pane[data-focused] {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 13%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
-    0 12px 40px -18px rgb(0 0 0 / 45%);
-}
-
-html:not(.dark) .workspace-pane[data-focused] {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 16%, transparent),
-    0 12px 32px -18px rgb(0 0 0 / 18%);
 }
 
 /*
@@ -118,16 +85,7 @@ html:not(.dark) .workspace-pane[data-focused] {
 
 /* ——— The pane's header ——— */
 
-/*
- * The session's mark, title and state, and nothing else until the pointer is
- * in the pane. Its row lines up with the window controls.
- */
-/*
- * The header is the pane's titlebar row, level with the window's controls;
- * what follows it begins below the titlebar's height, wherever the pane is
- * and wherever it is sliding — so a transcript scrolled, a narrow pane's
- * heading, or a home's scene never passes under the window's controls.
- */
+/* Pane controls sit inside the card, below the window's navigation row. */
 /* Above the body, whose home header picture reaches up behind it. */
 .workspace-pane-header {
   position: relative;
@@ -135,10 +93,6 @@ html:not(.dark) .workspace-pane[data-focused] {
   display: flex;
   height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
-  margin-bottom: calc(
-    var(--desktop-titlebar-height) - var(--desktop-gutter) - var(--desktop-control-size) -
-      2 * var(--desktop-control-inset)
-  );
   align-items: center;
   gap: 8px;
   padding: var(--desktop-control-inset) var(--desktop-control-inset)
@@ -157,21 +111,6 @@ html:not(.dark) .workspace-pane[data-focused] {
 
 .split-panes-grid[data-split-multi] .workspace-pane-header:active {
   cursor: grabbing;
-}
-
-/*
- * In the window's corner, with nothing beside it, the header steps past the
- * window controls — and so it does where a drag's preview would put it
- * (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not where it
- * would leave.
- */
-.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .workspace-pane-header {
-  padding-left: var(--desktop-titlebar-safe-start);
 }
 
 .split-panes-grid[data-split-multi]
@@ -280,32 +219,19 @@ html:not(.dark) .workspace-pane[data-focused] {
 .workspace-widget-window {
   position: absolute;
   z-index: 2;
-  top: var(--desktop-gutter);
-  right: var(--desktop-gutter);
-  bottom: var(--desktop-gutter);
+  top: var(--desktop-titlebar-height);
+  right: 0;
+  bottom: 0;
   left: 0;
   display: flex;
   min-width: 0;
   flex-direction: column;
-  border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    0 16px 48px -18px rgb(0 0 0 / 55%);
+  background: var(--background);
   overflow: hidden;
 }
 
-html:not(.dark) .workspace-widget-window {
-  background: color-mix(in oklab, var(--background) 60%, white);
-}
-
 .workspace[data-panes-alone] .workspace-widget-window {
-  left: var(--desktop-gutter);
-}
-
-/* With nothing to its left, its header steps past the window's controls, as a corner pane's does. */
-.workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {
-  padding-left: var(--desktop-titlebar-safe-start);
+  left: 0;
 }
 
 .workspace-widget-window:hover .workspace-pane-actions {

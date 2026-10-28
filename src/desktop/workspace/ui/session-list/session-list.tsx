@@ -122,14 +122,6 @@ export const SessionList = memo(function SessionList() {
           title={title}
           flipId="column-title"
           icon={<DesktopIcon name={channel?.private ? "privateChannel" : "channel"} />}
-          action={
-            <IconButton
-              icon="newSession"
-              label="New Session"
-              shortcut={frame.shortcut("newSession")}
-              onClick={() => dispatch(newSession())}
-            />
-          }
         >
           <SearchField
             className="workspace-search"

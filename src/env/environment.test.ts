@@ -91,3 +91,24 @@ describe("frontend environment", () => {
     expect(dependencies.session.get()).toBeNull()
   })
 })
+
+it("allows the sample workspace only in development builds of dev and ci", () => {
+  expect(
+    loadEnvironment({ VITE_NESSA_SAMPLE_WORKSPACE: "1" }, true).sampleWorkspace,
+  ).toBe(true)
+  expect(loadEnvironment({}, true).sampleWorkspace).toBe(false)
+  expect(() => loadEnvironment({ VITE_NESSA_SAMPLE_WORKSPACE: "true" }, true)).toThrow(
+    "VITE_NESSA_SAMPLE_WORKSPACE must be 1",
+  )
+  for (const stage of ["dev", "ci", "alpha", "prod"]) {
+    expect(() =>
+      loadEnvironment(
+        { VITE_NESSA_STAGE: stage, VITE_NESSA_SAMPLE_WORKSPACE: "1" },
+        false,
+      ),
+    ).toThrow("Sample workspace requires")
+  }
+  expect(() =>
+    loadEnvironment({ VITE_NESSA_STAGE: "prod", VITE_NESSA_SAMPLE_WORKSPACE: "1" }, true),
+  ).toThrow("Sample workspace requires")
+})

@@ -1,9 +1,4 @@
-import {
-  memo,
-  useRef,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-} from "react"
+import { memo, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Kbd } from "@nessa-ui/react/kbd"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
@@ -22,7 +17,6 @@ import {
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
-import { ColumnHeader } from "../../../ui/column-header"
 import { IdentityFooter } from "../chrome/identity-footer"
 import { useSidebarPeek, useWorkspaceFrame } from "../workspace-frame"
 import { ChannelBranch } from "./channel-branch"
@@ -37,15 +31,12 @@ import { useRowFocusKept } from "../row-focus"
  * window's identity at its foot. `channels` is the sidebar beside a session
  * list — the Agents overview's entry, then channels to choose from. `tree`
  * stands alone — search, the Agents overview's entry, then channels that
- * disclose their sessions inline. `top` fills the window's row inside
- * the glass.
+ * disclose their sessions inline. Window actions live in the shared top bar.
  */
 export const SourceList = memo(function SourceList({
   variant,
-  top,
 }: {
   variant: "channels" | "tree"
-  top?: ReactNode
 }) {
   const open = useWorkspaceSelector(selectSidebarOpen)
   const sections = useWorkspaceSelector(selectSections)
@@ -109,7 +100,6 @@ export const SourceList = memo(function SourceList({
       aria-hidden={(!open && !revealed) || undefined}
       {...(open ? {} : peek?.holders)}
     >
-      <ColumnHeader action={top} />
       <div className="workspace-sidebar-scroll">
         {variant === "channels" ? <ChannelsTop /> : <TreeTop />}
         <nav

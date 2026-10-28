@@ -64,7 +64,7 @@ import {
 } from "../../../split-panes/model/pane-layout"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, railFits, sessionListLimits } from "../../model/window-fit"
-import { railItems, railWidth, type RailItem } from "../chrome/side-rail"
+import { railItems, SIDE_RAIL_WIDTH, type RailItem } from "../chrome/side-rail"
 import type { SwitcherMode } from "../quick-switcher/quick-switcher"
 import { type ShortcutCommand, type WorkspaceFrame } from "../workspace-frame"
 import { workspaceShortcuts } from "./shortcuts"
@@ -241,7 +241,7 @@ function useShownArrangement(region: SidebarRegion) {
   }, [dispatch, region.arrangement])
 }
 
-function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
+function useWorkspaceChrome(region: SidebarRegion) {
   const dispatch = useWorkspaceDispatch()
   const chrome = useWorkspaceSelector(selectChrome)
   const sidebarOpen = useWorkspaceSelector(selectSidebarOpen)
@@ -269,9 +269,8 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
   const listWidth = region.sessionList
     ? columnWidth(chrome.sessionListWidth, sessionListLimits, fullWidth)
     : 0
-  // The rail is wider where it holds the window's own controls. One width
-  // for the fit and for the column the layout draws.
-  const rail = railWidth(hostKind)
+  // One width for fitting and drawing the compact rail below the top bar.
+  const rail = SIDE_RAIL_WIDTH
   // The rail is the first column to give way for room (`railFits`): it is drawn
   // only where it folds nothing the person has open. A full view has no columns.
   const railRoom =
@@ -290,7 +289,7 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
   const railDrawn = railOffered && railOpen && railRoom
   // The rail stands beside the workspace, not in it: the columns fit what is left.
   const windowWidth = fullWidth - (railDrawn ? rail : 0)
-  useFitOnResize(windowWidth, columns, (width) =>
+  useFitOnResize(windowWidth, columns, shownRailItem === undefined, (width) =>
     dispatch(
       fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
     ),
@@ -300,7 +299,6 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
     sidebarOpen,
     listOpen,
     listedChannel: listOpen ? view.channelId : null,
-    sidebarChosenOpen: chrome.sidebar.open,
     sidebarWidth,
     listWidth,
     railOffered,
@@ -436,14 +434,11 @@ export interface WorkspaceWindowModel {
   railItem: string
   shownRailItem: RailItem | undefined
   sidebarOpen: boolean
-  sidebarChosenOpen: boolean
   listOpen: boolean
   listedChannel: string | null
   sidebarWidth: number
   listWidth: number
   switcher: SwitcherMode | null
-  compose: () => void
-  composeShortcut: string | undefined
   onPickRail: (id: string) => void
   onToggleRail: () => void
   onToggleSidebar: () => void
@@ -471,7 +466,7 @@ export function useWorkspaceWindow({
   const root = useRef<HTMLDivElement>(null)
   const [theme] = useThemePreference()
   const store = useWorkspaceStore()
-  const chrome = useWorkspaceChrome(region, hostKind)
+  const chrome = useWorkspaceChrome(region)
   const dragging = useColumnDrag(region, root, chrome.listOpen)
   const switching = useWorkspaceSwitcher(region, root, chrome.shownRailItem)
   useFocusFollowsPane(store, root)
@@ -485,7 +480,6 @@ export function useWorkspaceWindow({
   useWidgetEscape({ store, root, scopes: escapeScopes })
   const shape = useMotionShape(chrome.sidebarOpen, chrome.listOpen, chrome.railDrawn)
   const dispatch = useWorkspaceDispatch()
-  const compose = useCallback(() => dispatch(newSession()), [dispatch])
   const onToggleSidebar = useCallback(() => dispatch(toggleSidebar()), [dispatch])
   const onToggleSessionList = useCallback(() => dispatch(toggleSessionList()), [dispatch])
   const onRevealSidebar = useCallback(
@@ -522,14 +516,11 @@ export function useWorkspaceWindow({
     railItem: chrome.railItem,
     shownRailItem: chrome.shownRailItem,
     sidebarOpen: chrome.sidebarOpen,
-    sidebarChosenOpen: chrome.sidebarChosenOpen,
     listOpen: chrome.listOpen,
     listedChannel: chrome.listedChannel,
     sidebarWidth: chrome.sidebarWidth,
     listWidth: chrome.listWidth,
     switcher: switching.switcher,
-    compose,
-    composeShortcut: switching.frame.shortcut("newSession"),
     onPickRail,
     onToggleRail: chrome.toggleRail,
     onToggleSidebar,

@@ -12,9 +12,9 @@
  * | the answers' width | arrangement                                              |
  * | ------------------ | -------------------------------------------------------- |
  * | 380px or more      | Deny at the left; Always Allow and Allow Once at the right |
- * | 280–380px          | one row at the right; "Always Allow" says its first word  |
+ * | 280–380px          | Deny left, allows right; "Always Allow" says its first word  |
  * | under 280px        | Allow Once across the width, Always Allow in its menu;    |
- * |                    | Deny, quiet, across the width beneath                     |
+ * |                    | Deny, quiet, at the left beneath                     |
  *
  * A review that does not offer always has no such button and no menu.
  *

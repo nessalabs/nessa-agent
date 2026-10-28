@@ -82,18 +82,22 @@
 
 /* ——— Titlebar and icon buttons ——— */
 
-/* Above the sidebar even when it is revealed from the edge, so its toggle is always where it was. */
+/* Window controls and drag surfaces share the columns' top row. */
 .workspace-titlebar {
   position: absolute;
   z-index: 40;
   top: 0;
   left: 0;
+  right: 0;
   display: flex;
   height: var(--desktop-titlebar-height);
   align-items: center;
   gap: 2px;
   padding-left: var(--desktop-window-controls-inset);
   padding-right: 8px;
+  background: color-mix(in oklab, var(--background) 90%, transparent);
+  box-shadow: inset 0 -1px 0 var(--desktop-rim);
+  pointer-events: none;
   /* Chrome is read, not selected: a double-click on a label selects nothing. */
   -webkit-user-select: none;
   user-select: none;
@@ -102,8 +106,26 @@
 .workspace-titlebar-controls {
   display: flex;
   height: 100%;
+  width: 100%;
+  min-width: 0;
   align-items: center;
   gap: inherit;
+}
+
+.workspace-titlebar-navigation {
+  pointer-events: auto;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: inherit;
+}
+
+/* Reserved for window tabs and labels as those capabilities arrive. */
+.workspace-titlebar-space {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  pointer-events: auto;
 }
 
 /* ——— Agent tiles and status glyphs ——— */

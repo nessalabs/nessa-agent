@@ -30,3 +30,8 @@ it("a browser page with ?seeded is the seeded workspace, and ?gateway wins (C4)"
   ).toBe("sample")
   expect(workspaceBackend("macos", "?seeded=590")).toBe("host")
 })
+
+it("an explicitly configured development preview uses the sample on a native host", () => {
+  expect(workspaceBackend("macos", "", true)).toBe("sample")
+  expect(workspaceBackend("macos", "", false)).toBe("host")
+})

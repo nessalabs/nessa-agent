@@ -63,6 +63,7 @@ export {
   canOpenBeside,
   closeInFront,
   closePane,
+  closeSessionTab,
   commitDrop,
   dropSession,
   fitPanes,

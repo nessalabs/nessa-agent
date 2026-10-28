@@ -93,8 +93,8 @@ function summaryHeard(state: WorkspaceState, session: SessionSummary): Workspace
 /**
  * Takes a session out of the lists, with everything the window held of it —
  * listed again, it is read afresh. A pane showing it closes; the last pane
- * turns into a new session's home in the same channel, under `draftId`, so
- * no pane is left showing a session that is not there.
+ * turns into a new session's home under `draftId` when one can start; with
+ * no valid home, it clears. No pane is left showing a session that is gone.
  */
 function removeSession(
   state: WorkspaceState,
@@ -114,8 +114,9 @@ function removeSession(
     model: modelForNextTurn(state, sessionId) ?? session.model,
     target: showing.key,
   })
+  const next = restarted === removed ? withPanes(removed, null) : restarted
   // Nobody asked for a new session here: what the person was looking at stays.
-  return { ...restarted, view: state.view }
+  return { ...next, view: state.view }
 }
 
 /**
@@ -316,7 +317,7 @@ export function updateReceived(
  * The source removed a session, at this revision of its summary (the port
  * counts a removal with the summary, not the conversation). The pane showing
  * it closes; the last pane starts over as a new session's home under
- * `draftId`. A removal older than the summary held says nothing about it
+ * `draftId` when one can start. A removal older than the summary held says nothing about it
  * now; one of a session not held is remembered, in case an older read lists
  * it.
  */

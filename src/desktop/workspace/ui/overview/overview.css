@@ -22,11 +22,7 @@
   min-width: 0;
   grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
-  border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent);
+  background: transparent;
 }
 
 /* Wide enough, the peek sits beside the list, on a hairline. */
@@ -86,14 +82,9 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  padding: 64px 32px 20px;
+  padding: 24px 32px 20px;
   background: color-mix(in oklab, var(--foreground) 1.5%, transparent);
   box-shadow: inset 1px 0 0 color-mix(in oklab, var(--foreground) 6%, transparent);
-}
-
-html:not(.dark) .agents-overview-surface {
-  background: color-mix(in oklab, var(--background) 60%, white);
-  box-shadow: inset 0 0 0 1px var(--desktop-rim);
 }
 
 /* The title's frame, before the filter and the list. No fill yet: painting
@@ -150,12 +141,12 @@ html:not(.dark) .agents-overview-surface {
   max-width: 640px;
   flex: none;
   margin: 0 auto;
-  padding: 64px 28px 12px;
+  padding: 24px 28px 12px;
 }
 
 .agents-overview[data-split] .agents-overview-header {
   max-width: 560px;
-  padding: 64px 20px 12px 28px;
+  padding: 24px 20px 12px 28px;
 }
 
 .agents-overview-header h1 {

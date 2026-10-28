@@ -159,10 +159,14 @@ describe("both layouts are the one shell", () => {
           </Provider>,
         ),
       )
-      const titlebar = [...host.querySelectorAll(".workspace-titlebar button")].map(
-        (button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""),
+      const titlebar = [
+        ...host.querySelectorAll(".workspace-titlebar-navigation button"),
+      ].map((button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""))
+      expect(titlebar).toEqual(
+        name === "three columns"
+          ? ["Hide Sidebar", "Hide Session List", "Go Back", "Go Forward"]
+          : ["Hide Sidebar", "Go Back", "Go Forward"],
       )
-      expect(titlebar.slice(0, 3)).toEqual(["Hide Sidebar", "Go Back", "Go Forward"])
       await act(async () => press("switcher"))
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
         "Jump to",
