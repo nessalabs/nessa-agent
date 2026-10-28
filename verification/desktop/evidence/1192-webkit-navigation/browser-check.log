@@ -1,0 +1,28 @@
+using the running dev server at http://127.0.0.1:1438/desktop.html
+warmed 1294 modules in 273 ms
+ok    escape-navigate [chromium columns]
+ok    console [chromium columns]
+ok    escape-refresh [chromium columns]
+ok    console [chromium columns]
+ok    escape-rewrite [chromium columns]
+ok    console [chromium columns]
+ok    escape-navigate [chromium sidebar]
+ok    console [chromium sidebar]
+ok    escape-refresh [chromium sidebar]
+ok    console [chromium sidebar]
+ok    escape-rewrite [chromium sidebar]
+ok    console [chromium sidebar]
+ok    escape-navigate [webkit columns]
+ok    console [webkit columns]
+ok    escape-refresh [webkit columns]
+ok    console [webkit columns]
+ok    escape-rewrite [webkit columns]
+ok    console [webkit columns]
+ok    escape-navigate [webkit sidebar]
+ok    console [webkit sidebar]
+ok    escape-refresh [webkit sidebar]
+ok    console [webkit sidebar]
+ok    escape-rewrite [webkit sidebar]
+ok    console [webkit sidebar]
+wrote /tmp/nessa-1192-browser.json
+mcp-apps: 24/24 held

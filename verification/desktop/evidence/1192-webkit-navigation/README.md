@@ -28,3 +28,9 @@ because it searched for a release `Nessa.app` while this test requested a debug
 `Nessa Navigation Probe.app`. The host log confirms `app_bundle=true` and
 `profile="debug"`. This measures the listed navigation attempts on this
 WKWebView build; it does not cover every new-window, download or renderer path.
+
+The existing browser escape fixtures were also run on this branch with
+`node verification/desktop/scripts/mcp-apps.mjs --only escape-navigate,escape-refresh,escape-rewrite --engine chromium,webkit`.
+They held 24/24 checks across both engines and layouts; the
+[browser check log](browser-check.log) records the exact scenarios. This browser
+run supplements the native result; it is not a substitute for WKWebView.
