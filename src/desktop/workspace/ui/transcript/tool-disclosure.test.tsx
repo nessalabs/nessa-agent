@@ -88,17 +88,26 @@ describe("watchToolDisclosure", () => {
     },
   )
 
-  it("keeps the hold for the trace's motion, and through the frame after it", () => {
+  it("keeps the hold for the trace's motion and for a running animation, then one frame", () => {
     const { scroller, label } = scrollerWith("tool-trace-line")
+    scroller.setAttribute("data-slot", "tool-trace")
     scroller.style.setProperty("--nessa-motion-duration-normal", "200ms")
+    let now = 0
+    vi.spyOn(performance, "now").mockImplementation(() => now)
+    const animation = { playState: "finished" }
+    scroller.getAnimations = () => [animation]
     const { released } = watch(scroller)
     label.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-    expect(frames.size).toBe(0)
-    expect(timeout).not.toBeNull()
-    const fire = timeout
-    timeout = null
-    if (typeof fire === "function") fire()
+    flushFrames()
     expect(scroller.hasAttribute("data-disclosure-hold")).toBe(true)
+    expect(released).not.toHaveBeenCalled()
+    now = 200
+    animation.playState = "running"
+    flushFrames()
+    expect(scroller.hasAttribute("data-disclosure-hold")).toBe(true)
+    expect(released).not.toHaveBeenCalled()
+    animation.playState = "finished"
+    flushFrames()
     expect(released).not.toHaveBeenCalled()
     flushFrames()
     expect(scroller.hasAttribute("data-disclosure-hold")).toBe(false)

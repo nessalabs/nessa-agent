@@ -8,6 +8,21 @@ import { durationToken } from "../../../adapters/motion"
 const disclosureControl =
   '[data-slot="tool-trace-line"], [data-slot="tool-trace-step"], [data-slot="tool-trace-earlier"]'
 
+/** A transition or animation on the trace, including its open and its rows. */
+function traceMoving(trace: Element): boolean {
+  const animated = trace as Element & {
+    getAnimations?: (options?: { subtree?: boolean }) => { playState: string }[]
+  }
+  if (!animated.getAnimations) return false
+  let animations: { playState: string }[]
+  try {
+    animations = animated.getAnimations({ subtree: true })
+  } catch {
+    animations = animated.getAnimations()
+  }
+  return animations.some((animation) => animation.playState === "running")
+}
+
 /**
  * Move to the end while the reader is there and no tool disclosure is holding
  * the scroll (`tool-disclosure.test.tsx`). A hold leaves `scrollTop` alone so
@@ -47,23 +62,32 @@ export function watchToolDisclosure(
     scroller.removeAttribute("data-disclosure-hold")
     onRelease()
   }
-  const arm = () => {
+  const arm = (control: Element) => {
     cancelPending()
     holding = true
     // Before the control's own handler opens it, so the layout that grows
     // the details already has anchoring off (`transcript.css`).
     scroller.setAttribute("data-disclosure-hold", "")
     const current = view()
+    const trace = control.closest("[data-slot='tool-trace']") ?? control
     const motion = durationToken(scroller, "--nessa-motion-duration-normal")
-    // One frame after the motion, so its last layout is still held.
-    if (motion === 0)
-      frame = current.requestAnimationFrame(() => {
-        frame = current.requestAnimationFrame(release)
-      })
-    else
-      timer = current.setTimeout(() => {
-        frame = current.requestAnimationFrame(release)
-      }, motion)
+    const started = current.performance.now()
+    // Past the token and after the trace's own motion, then one frame, so
+    // the last layout is still held. A stuck animation cannot hold follow shut.
+    const watch = () => {
+      if (disposed || !holding) return
+      const elapsed = current.performance.now() - started
+      if (elapsed >= 1000) {
+        release()
+        return
+      }
+      if (elapsed < motion || traceMoving(trace)) {
+        frame = current.requestAnimationFrame(watch)
+        return
+      }
+      frame = current.requestAnimationFrame(release)
+    }
+    frame = current.requestAnimationFrame(watch)
   }
   const onClick = (event: Event) => {
     if (disposed) return
@@ -71,7 +95,7 @@ export function watchToolDisclosure(
     if (!(target instanceof Element)) return
     const control = target.closest(disclosureControl)
     if (!control || !scroller.contains(control)) return
-    arm()
+    arm(control)
   }
   scroller.addEventListener("click", onClick, true)
   return () => {

@@ -43,10 +43,11 @@ has the same anchoring, so it uses the same hold.
 | either | free | the reader scrolls | Recompute follow from the distance |
 
 A disclosure press enters `held` before that control's own handler. The hold
-lasts the tool trace's motion (`--nessa-motion-duration-normal`, zero when
-reduced) and one frame after, so the last layout of the open is still held.
-Another press restarts that wait. The hold ends without a move, so an open
-that pushed the end away leaves the reader `reading`.
+lasts until the trace's animations have finished and at least
+`--nessa-motion-duration-normal` has passed, then one frame, and never longer
+than a second. Another press restarts that wait. The hold ends without a move,
+so an open that pushed the end away leaves the reader `reading`. Closing at
+the end can move the header down only by the browser's clamp.
 
 ## Invariants
 
