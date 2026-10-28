@@ -51,6 +51,26 @@ Two verified counterfactuals failed as intended: restoring Metadata for overflow
 blocked the sibling and shared commands (12.90 seconds); swallowing malformed
 metadata failed the supervisor-stop assertion. Both production files were restored
 byte-for-byte with fresh modification times. Fresh logs are retained in the saved
-workspace. Final source identity, main integration and affected independent review
-remain pending at this checkpoint. No merge or external review
+workspace. Main was integrated at `4b33de21f7fd68df83e308de4134ef1dda82f01f`,
+preserving `1558188dd489aad18fb1807134340092ec107d3a`. The combined webhook
+selection passed 297/297, including all retention and recipient cases. The merged
+native-session lifecycle control passed 1/1.
+
+Independent affected review found no implementation defect, with one minor
+evidence request: individually break registration-local progression. The verified
+`continue` to `return Ok(())` mutation failed the sibling regression after 13.05
+seconds while commands, unshare, revoke and cleanup still succeeded. Runtime
+bytes were restored to SHA256
+`3b0e938590a069bbad0b148dc8e7033dd3ec24832eaf71366f245b33125641c4`.
+The positive fixture now also asserts zero cursor rows before recovery.
+Restored qualification, finding closure and final CI remain pending. No merge or external review
 publication is established by this document.
+
+The restored-environment frontend run passed formatting, lint, types, architecture
+and protocol controls, then reported 5,467 Vitest passes and two private-file
+failures. Both failing test files and their adapter match upstream main. This
+user namespace reports `/` owner UID65534 instead of trusted root UID0 or current
+UID1000; an isolated synthetic probe confirmed the refusal at that acquisition
+ancestor. No privacy check or namespace/security setting was changed. The separate
+production build passed in15.61seconds. Full frontend acceptance is pending the
+normal exact-head CI host; this local gate is not recorded as green.

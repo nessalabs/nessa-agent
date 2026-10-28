@@ -111,6 +111,15 @@ async fn discovery_overflow_keeps_shared_commands_and_healthy_sibling_available(
         count, 0,
         "overflow refuses capture before queueing or sending"
     );
+    let cursors: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM cursors WHERE registration=?1",
+            [registration.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cursors, 0, "overflow cannot advance a capture checkpoint");
+    assert!(recipient.requests.try_recv().is_err());
     drop(connection);
     assert!(matches!(
         f.grants

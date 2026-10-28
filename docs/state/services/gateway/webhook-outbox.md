@@ -4,9 +4,11 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, canonical cursors and causal delivery outcomes compose with owned product commands and signed sending; acknowledgement and retained cleanup stay distinct.
-sourceRevision: "69351af72cbd73179f7f8765424251ecf4a20b99"
+sourceRevision: "4b33de21f7fd68df83e308de4134ef1dda82f01f"
 parent: gateway
 sources:
+  - crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/discovery.rs
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
   - crates/nessa-server/tests/webhooks/domain/registration_lifecycle.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle_context.rs
@@ -351,6 +353,17 @@ unshare independently commit and prevent later unauthorized dispatch. Read-only
 the last operation-local refusal without database I/O or target/secret disclosure.
 Preparation refusal creates no pin, Sending, POST or attempt increment; paced
 registration rotation prevents a permanently refused target starving a sibling.
+
+A principal can legitimately have more conversations than one bounded discovery
+pass accepts. An overflowing registration pauses fresh capture for that pass;
+its grants remain removable, sibling registrations continue and the next paced
+pass reads current grants again. Discovery takes at most 1,025 rows and refuses
+the complete candidate set when more than 1,024 validated matches are present.
+It reports the existing source-unavailable observation without sealing shared
+command admission. Existing queued work still requires its own fresh admission.
+Malformed returned metadata remains a fatal supervisor refusal. The
+[discovery correction](../../../reviews/evidence/webhook-runtime/owner-reset-composition/discovery-overflow.md)
+records the distinction, recovery contract and qualification scope.
 
 ## Source replacement and stopping
 
