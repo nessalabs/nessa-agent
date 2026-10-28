@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Keyboard actions follow the current focus."
 parent: "desktop-workspace"
-sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
+sourceRevision: "6ff93e6a2012ab5a46a95beb8b177146e1868646"
 sources:
   - "src/desktop/workspace/ui/layouts/shortcuts.ts"
   - "src/desktop/workspace/adapters/dom/shortcuts.ts"
@@ -29,6 +29,9 @@ The window's document strip is reachable from the toolbar. Arrow keys and
 Home/End select tabs; choosing a document focuses its existing pane or shows
 it in the focused pane. Closing a tab by keyboard moves focus to another tab
 or the next toolbar control.
+Arrow selection keeps the caret on the selected document tab. When New Session
+or Split Right deselects that tab, the caret follows the new focused pane into
+its composer.
 
 A widget opened in the chat's right panel takes the caret into its body. When focus falls out of the panel, for example because its last tab closed, it goes to the panel's tab in front, else to the focused chat's composer. ⌘1 to ⌘9 on the pane that is already focused brings the caret back to it from the panel, and from the overview or a widget over the window goes back to the panes.
 
