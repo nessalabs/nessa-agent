@@ -175,23 +175,34 @@ const checks = {
     if (!opened.visible)
       failures.push(`the run's header is off screen at the end (${opened.before})`)
     moved(opened, failures, "opening the run")
+    const waterfall = await page.evaluate(() => {
+      const trace = document.querySelector(".workspace-work")
+      return {
+        axis: trace?.querySelector("[data-slot='tool-trace-axis']")?.textContent ?? "",
+        bars: trace?.querySelectorAll("[data-slot='tool-trace-bar']").length ?? 0,
+        mini: trace?.querySelector("[data-slot='tool-trace-mini-bar']") != null,
+      }
+    })
+    if (!waterfall.mini) failures.push("the run's header has no bar")
+    if (waterfall.bars < 3)
+      failures.push(`the run draws ${waterfall.bars} duration bars, not one per call`)
+    if (!waterfall.axis.includes("0s") || !waterfall.axis.includes("30s"))
+      failures.push(`the time axis is ${JSON.stringify(waterfall.axis)}`)
     if (!(opened.distance > opened.distanceBefore + 8))
       failures.push(
         `opening the run left the end ${opened.distance}px away, from ${opened.distanceBefore}`,
       )
-    const closed = await press(page, '[data-slot="tool-trace-line"]')
-    moved(closed, failures, "closing the run")
     if (options.shots && engine) {
-      await pin(page, true)
-      await press(page, '[data-slot="tool-trace-line"]')
       mkdirSync(options.shots, { recursive: true })
       await page
         .locator(`${css.message}[data-role="agent"]`)
         .first()
         .screenshot({
-          path: join(options.shots, `group-end-${engine}-${layout}.png`),
+          path: join(options.shots, `waterfall-open-${engine}-${layout}.png`),
         })
     }
+    const closed = await press(page, '[data-slot="tool-trace-line"]')
+    moved(closed, failures, "closing the run")
     return {
       failures,
       opened: opened.up,
@@ -213,7 +224,7 @@ const checks = {
     moved(opened, failures, "opening the run away from the end")
     return { failures, moved: opened.up }
   },
-  async "step-end"({ page }) {
+  async "step-end"({ page, engine, layout, options }) {
     await openSession(page, "split-panes", "desktop-app")
     const line = page.locator(css.transcriptWorkToggle).first()
     if ((await line.getAttribute("aria-expanded")) !== "true") {
@@ -226,6 +237,26 @@ const checks = {
     if (!opened.visible)
       failures.push(`the call's row is off screen at the end (${opened.before})`)
     moved(opened, failures, "opening the call")
+    const card = await page.evaluate(() => {
+      const row = document.querySelector("[data-slot='tool-trace-step']")
+      const details = row?.getAttribute("aria-controls")
+      const open = document.getElementById(details ?? "")
+      return {
+        expanded: row?.getAttribute("aria-expanded") === "true",
+        hasDetails: open != null && open.getBoundingClientRect().height > 20,
+      }
+    })
+    if (!card.expanded || !card.hasDetails)
+      failures.push("the call's details did not open under its row")
+    if (options.shots && engine && layout === "columns") {
+      mkdirSync(options.shots, { recursive: true })
+      await page
+        .locator(`${css.message}[data-role="agent"]`)
+        .first()
+        .screenshot({
+          path: join(options.shots, `waterfall-call-${engine}.png`),
+        })
+    }
     if (!(opened.distance > opened.distanceBefore + 8))
       failures.push(
         `opening the call left the end ${opened.distance}px away, from ${opened.distanceBefore}`,

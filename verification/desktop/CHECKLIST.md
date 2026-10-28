@@ -2050,8 +2050,10 @@ conversation overflows while its tool header is still on screen at the end.
   that header's top within 1px and grows the distance from the end.**
   The same header stays within 1px when the reader is at the top.
   _Check:_ `tool-disclosure.mjs --only group-end,group-away`. Anchoring is
-  off during the motion. The shot `group-end-<engine>-<layout>.png` is the
-  open run with its header still in view. Closing may move the header down
+  off during the motion. The shot `waterfall-open-<engine>-<layout>.png`
+  is that open run: the header's bar, each call's duration bar, and the
+  0s–30s axis, with the header still in view. `waterfall-call-<engine>.png`
+  is a call's details open under its row. Closing may move the header down
   only by the browser's clamp, and only as far as `scrollTop` decreases.
 - [ ] **Opening a call's row at the end keeps that row's top within 1px.**
   _Check:_ `--only step-end`.

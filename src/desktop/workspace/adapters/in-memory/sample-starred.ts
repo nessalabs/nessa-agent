@@ -38,9 +38,25 @@ export const starredSamples: readonly SampleSession[] = [
         "agent",
         18,
         [
-          read("src/desktop/workspace/ui/layouts/workspace-layout.tsx"),
-          read("split-view/split-view-math.ts"),
-          searched("SplitView · 6 results"),
+          // Times, so this run is the waterfall the gateway sends: a bar on the
+          // header and each call on a shared axis. A step with no start is the
+          // same trace with the axis left out (`ToolTrace`).
+          {
+            ...read("src/desktop/workspace/ui/layouts/workspace-layout.tsx"),
+            startedAtMs: Date.UTC(2026, 9, 27, 18, 0, 0),
+            endedAtMs: Date.UTC(2026, 9, 27, 18, 0, 4),
+          },
+          {
+            ...read("split-view/split-view-math.ts"),
+            startedAtMs: Date.UTC(2026, 9, 27, 18, 0, 6),
+            endedAtMs: Date.UTC(2026, 9, 27, 18, 0, 14),
+          },
+          {
+            ...searched("SplitView · 6 results"),
+            status: "failed",
+            startedAtMs: Date.UTC(2026, 9, 27, 18, 0, 16),
+            endedAtMs: Date.UTC(2026, 9, 27, 18, 0, 30),
+          },
           text(
             "The shell already owns one `SplitView` for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a **fraction** of the chat area rather than a pixel width, which means:",
           ),

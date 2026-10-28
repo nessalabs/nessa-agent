@@ -13,6 +13,13 @@ where it was. Blocking only the resize follow, or only anchoring, each still
 moved the header by the full growth. Scrolled away from the end, neither
 moved it. WebKit is checked by `verification/desktop/scripts/tool-disclosure.mjs`.
 
+The waterfall and the untimed list are the same `ToolTrace`. A call with no
+`startedAtMs` has no bar, and a run with none drops the time column
+(`spanOf` in the kit's `tool-trace.tsx`). The sample run used for the
+evidence omitted those times, so it drew the untimed list. The hold listens
+for that trace's header, call row, and folded-earlier row. The sample run
+now has times, and the check requires the axis and the bars.
+
 The resize follow is the `ResizeObserver` in
 `src/desktop/workspace/ui/transcript/transcript.tsx`: while the reader is
 within 24px of the end it sets `scrollTop` to `scrollHeight`. The browser's
