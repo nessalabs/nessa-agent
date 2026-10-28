@@ -8,20 +8,16 @@
 //! only reads it.
 use std::{path::Path, sync::Arc};
 
-use nessa_sdk::infrastructure::acp::sessions::OpenCredentials;
-
 use super::local_auth::{conversation_root, SystemClock};
 use crate::github::application::GithubConnections;
-use crate::github::infrastructure::{
-    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenFile,
-};
+use crate::github::infrastructure::{DurableGithubAudit, GithubApp, GithubHttps, GithubTokenFile};
 use crate::product::GithubRoutes;
 use crate::timer::TokioTimer;
 
-/// The routes the github methods answer from, and what agents read.
+/// The routes the GitHub methods answer from.
 pub(super) struct GithubComposition {
     pub(super) routes: Arc<GithubRoutes>,
-    pub(super) credentials: OpenCredentials,
+    pub(super) connections: Arc<GithubConnections>,
 }
 
 /// The sign-in kept under `namespace`, or `None` — logged — when the app
@@ -64,12 +60,10 @@ pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
         .await,
     );
     Some(GithubComposition {
-        credentials: OpenCredentials::read_from(Arc::new(GithubLaunchCredentials::new(
-            connections.clone(),
-        ))),
         routes: Arc::new(GithubRoutes {
-            connections,
+            connections: connections.clone(),
             install_url,
         }),
+        connections,
     })
 }

@@ -47,6 +47,8 @@ mod env_grant_command;
 mod env_serve_command;
 #[cfg(unix)]
 mod github;
+#[cfg(unix)]
+mod github_tools;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;

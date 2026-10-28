@@ -1,8 +1,8 @@
 # GitHub connect
 
 A person signs Nessa in to GitHub once, in Settings › Connections ›
-Accounts, and every agent the gateway starts after that can clone, push, and
-open pull requests as them. The sign-in goes through the **Nessa GitHub App**
+Accounts, and agents can request bounded repository reads through the gateway.
+The sign-in goes through the **Nessa GitHub App**
 (`protocol/defaults/github-app.json`: client id `Iv23linAB5VSgOF5PvKi`, slug
 `nessa-agent`) and GitHub's device flow, so nothing needs a client secret and
 no browser has to come back to the gateway.
@@ -19,7 +19,7 @@ phone or a second window sees the same one. The owner is
 | Signed out, waiting for a code, or signed in | `GithubConnections` | memory, and the token file when signed in |
 | The token and whose it is | `GithubTokenFile` | `<namespace>/github/sign-in.json`, a private file in a private directory, replaced whole and synced |
 | Each step, for the owner to look back on | `DurableGithubAudit` | `<namespace>/conversations/audit/github`, one private file per record, never a token or a code; a `connect-ended` record names what decided it (`github_answered`, `deadline_passed`, `github_unreachable`, `store_failed`) |
-| What an agent is started with | `GithubLaunchCredentials` (an SDK `OpenCredentialSource`) | read again at every agent open, never saved with the conversation |
+| What an agent can read through Nessa's sign-in | `GithubConnections` and the built-in `nessa-github` tool | a gateway-side request using the current sign-in, never an agent environment variable |
 | What the person sees | `src/desktop/settings/ui/github-row.tsx` | nothing: it reads `github.status` |
 
 ## The flow
@@ -51,8 +51,11 @@ sequenceDiagram
     G->>G: audit connected, save sign-in.json, then Connected
     S->>G: github.status
     G-->>S: connected {account}
-    A->>G: opens (new conversation, or a parked one woken)
-    G-->>A: GH_TOKEN and a git credential helper for https://github.com
+    A->>G: read_repository(owner, repository)
+    G->>G: verify source turn and current sign-in
+    G->>H: GET /repos/owner/repository with Bearer token
+    H-->>G: bounded repository answer
+    G-->>A: repository answer, without token
 ```
 
 The person then picks which repositories the app may reach from **Choose
@@ -62,37 +65,32 @@ reach, so that choice is GitHub's, not Nessa's.
 
 ## What an agent gets
 
-Each provider open (Claude, Codex, OpenCode) asks `AcpConfig.open_credentials`
-for variables and adds them to the agent's environment for that process only
-(`AcpConfig::with_open_credentials`):
+The Nessa GitHub sign-in remains in the gateway. Neither provider opens nor
+the managed shell receive its token or a git credential helper. The built-in
+`nessa-github` tools admit a live source turn through Cedar, bind the operation
+to GitHub's API host and a validated repository identity, and read the current
+sign-in at the call. The first operations are `read_repository`, `read_issue`,
+and `read_pull_request`; their arguments select only the owner, repository, and
+an optional issue or pull request number. An API redirect is never followed,
+and the returned body is bounded. The gateway returns the answer, never the
+authorization header.
 
-- `GH_TOKEN`: the token, for `gh`.
-- `GIT_CONFIG_COUNT=2` with two `credential.https://github.com.helper`
-  entries: the first, empty, clears any helper the machine has for GitHub;
-  the second answers `username=x-access-token` and `password=$GH_TOKEN`. So
-  `git clone https://github.com/...` and `git push` use the sign-in, and a
-  person's own helper is not asked first. SSH remotes are left to the
-  person's own keys.
+The Nessa sign-in no longer authenticates raw `gh`, `git clone`, or `git push`
+commands. Those commands can still use a person's separately configured
+machine credentials, which Nessa does not inspect or supply. Repository writes
+need a broker with durable retry and effect audit semantics; the read tools do
+not imply that a write was authorized or completed.
 
-Nessa's own shell tool (the managed `nessa` MCP server, `nessa-mcp`) is
-where an agent's commands actually run, so each of its sessions opened for a
-harness is given the same variables (`McpServers::give_open_credentials`),
-read as that session opens, and it passes `GH_TOKEN` and `GIT_CONFIG_*` on
-to the commands it runs, and no other credential. The shell's session is
-read on its own: when a harness restarts its MCP servers, the new shell has
-the sign-in as it stands then, which may differ from what the harness itself
-was started with (a Disconnect reaches the restarted shell at once; the
-harness keeps its token until it stops). A server
-the person configured is never given them. A variable configured for the
-agent or the server under one of these names wins, and the sign-in is left
-out whole, logged. The helper answers nothing when `GH_TOKEN` has been
-taken away, rather than an empty password.
-
-They are read at each open and are not part of the restoration identity, so
-signing in or out never makes an existing conversation "changed": the next
-agent opened, including a parked one waking, gets what holds then. An agent
-already running keeps what it was started with until it stops; its shell,
-as above, until that restarts.
+| Prior state and event | Effect | Later order or retry |
+| --- | --- | --- |
+| No connected sign-in; agent requests a read | Refuse before network access | A later sign-in may enable a new call |
+| Agent source or operation arguments are invalid | Refuse before token access or network | Corrected arguments require a new call |
+| Connected; Cedar refuses the source turn | No token access or network | A later owner-initiated turn is checked anew |
+| Connected; Cedar allows a read | Gateway uses the current token for one fixed-host, repository-scoped GET and returns bounded data | Repeating the GET reads current GitHub state |
+| Read in flight, then Disconnect | Disconnect waits for the bounded read to settle before deleting the token | No read that starts after Disconnect returns can use that sign-in |
+| Disconnect completes, then read | Refuse before network access | A newly connected sign-in is a different authorization |
+| GitHub refuses, redirects, times out, or returns an oversized answer | Return a typed failure without the token | No local GitHub state is inferred from the failure |
+| Agent or shell process opens before or after Connect or Disconnect | No Nessa token or helper is placed in its environment | Process restart cannot resurrect an earlier Nessa sign-in |
 
 ## Orderings
 
@@ -143,18 +141,15 @@ read its app. See the [protocol table](../../protocol/README.md).
 
 - Owner orderings: `crates/nessa-server/tests/github/mod.rs`, with a scripted
   GitHub, a memory store and a recording audit on a manual clock.
-- The HTTP answers, the app file, the token file, the audit and the git
-  helper (a real `git credential fill`): unit tests beside each in
-  `github/infrastructure`.
-- Open credentials reach each agent at each open, and never print:
-  `crates/nessa-sdk/tests/infrastructure/acp/contracts/stand_ins.rs`; they
-  reach the shell tool's harness sessions and never a look
-  (`crates/nessa-sdk/tests/infrastructure/mcp/sessions.rs`), and the shell
-  tool passes on only these (`crates/nessa-mcp/src/main.rs`).
+- The HTTP answers, fixed repository path, app file, token file and audit:
+  tests beside each in `github/infrastructure` and `github/domain`.
+- The broker's fixed tool schemas and argument rejection:
+  `composition/github_tools.rs`; the shell command environment drops the
+  Nessa sign-in (`crates/nessa-mcp/src/main.rs`).
 - The row: `src/desktop/settings/ui/github-row.test.tsx`.
 - End to end: the stress check's `github` step (`pnpm test:e2e:stress`) runs
   a fake GitHub on this machine, connects in Settings, has a new agent report
-  fingerprints of `GH_TOKEN` and of what `git credential fill` gives, both
-  in its own environment and through Nessa's shell tool, then disconnects
-  and checks a new agent has neither, the file is gone, the gateway log
-  never held the token, and the audit holds each step.
+  that no Nessa GitHub token or helper reaches its own environment or Nessa's
+  shell, and reads a repository through `nessa-github`. It then disconnects
+  and checks a new agent still has neither, the file is gone, the gateway log
+  never held the token, and the audit holds each sign-in step.

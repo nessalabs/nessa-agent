@@ -6,14 +6,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde_json::Value;
 use tokio::sync::Notify;
 
 use crate::github::application::{
     ApiFailure, AuditUnavailable, DeviceAuthorization, DeviceCode, EndCause, GithubApi,
     GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubConnections, GithubError,
-    GithubTokenStore, PollAnswer, StoreUnavailable,
+    GithubReadFailure, GithubTokenStore, PollAnswer, StoreUnavailable,
 };
-use crate::github::domain::{AccessToken, ConnectEnd, GithubAccount, GithubSignIn, GithubStatus};
+use crate::github::domain::{
+    AccessToken, ConnectEnd, GithubAccount, GithubReadKind, GithubRepository, GithubSignIn,
+    GithubStatus,
+};
 use crate::timer::{manual::ManualTimer, Moment, Timer};
 
 const INTERVAL: Duration = Duration::from_secs(5);
@@ -47,6 +51,10 @@ struct ScriptedGithub {
     /// Held polls wait here until the test lets them answer.
     hold_polls: Mutex<Option<Arc<Notify>>>,
     accounts: Mutex<VecDeque<Result<GithubAccount, ApiFailure>>>,
+    reads: Mutex<Vec<(AccessToken, GithubRepository, GithubReadKind)>>,
+    read_answer: Mutex<Result<Value, GithubReadFailure>>,
+    read_started: Notify,
+    hold_reads: Mutex<Option<Arc<Notify>>>,
 }
 
 impl Default for ScriptedGithub {
@@ -64,6 +72,10 @@ impl Default for ScriptedGithub {
             polled: Mutex::new(0),
             hold_polls: Mutex::default(),
             accounts: Mutex::default(),
+            reads: Mutex::default(),
+            read_answer: Mutex::new(Err(GithubReadFailure::NotFound)),
+            read_started: Notify::new(),
+            hold_reads: Mutex::new(None),
         }
     }
 }
@@ -99,6 +111,23 @@ impl GithubApi for ScriptedGithub {
             .unwrap()
             .pop_front()
             .unwrap_or(Ok(octo()))
+    }
+    async fn read_repository(
+        &self,
+        token: &AccessToken,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+    ) -> Result<Value, GithubReadFailure> {
+        self.reads
+            .lock()
+            .unwrap()
+            .push((token.clone(), repository.clone(), kind));
+        self.read_started.notify_one();
+        let hold = self.hold_reads.lock().unwrap().clone();
+        if let Some(hold) = hold {
+            hold.notified().await;
+        }
+        self.read_answer.lock().unwrap().clone()
     }
 }
 
@@ -707,6 +736,90 @@ async fn signed_in(fixture: &Fixture) -> GithubConnections {
         token: token("ghu_kept"),
     });
     fixture.connections().await
+}
+
+#[tokio::test]
+async fn repository_reads_use_only_the_current_connected_sign_in() {
+    use crate::github::application::GithubReadError;
+
+    let fixture = Fixture::new();
+    let repository = GithubRepository::new("nessalabs", "nessa-agent").unwrap();
+    let connections = fixture.connections().await;
+    assert_eq!(
+        connections
+            .read_repository(&repository, GithubReadKind::Repository)
+            .await,
+        Err(GithubReadError::NotConnected)
+    );
+    assert!(fixture.github.reads.lock().unwrap().is_empty());
+
+    let connections = signed_in(&fixture).await;
+    *fixture.github.read_answer.lock().unwrap() =
+        Ok(serde_json::json!({"full_name":"nessalabs/nessa-agent"}));
+    assert_eq!(
+        connections
+            .read_repository(&repository, GithubReadKind::Repository)
+            .await,
+        Ok(serde_json::json!({"full_name":"nessalabs/nessa-agent"}))
+    );
+    assert_eq!(
+        *fixture.github.reads.lock().unwrap(),
+        [(
+            token("ghu_kept"),
+            repository.clone(),
+            GithubReadKind::Repository
+        )]
+    );
+
+    connections.disconnect(caller("panel")).await.unwrap();
+    assert_eq!(
+        connections
+            .read_repository(&repository, GithubReadKind::Repository)
+            .await,
+        Err(GithubReadError::NotConnected)
+    );
+    assert_eq!(fixture.github.reads.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn disconnect_waits_for_a_read_and_later_reads_see_signed_out() {
+    use crate::github::application::GithubReadError;
+
+    let fixture = Fixture::new();
+    let connections = Arc::new(signed_in(&fixture).await);
+    let repository = GithubRepository::new("nessalabs", "nessa-agent").unwrap();
+    let release = Arc::new(Notify::new());
+    *fixture.github.hold_reads.lock().unwrap() = Some(release.clone());
+    *fixture.github.read_answer.lock().unwrap() = Ok(serde_json::json!({"id":1}));
+
+    let reader = {
+        let connections = connections.clone();
+        let repository = repository.clone();
+        tokio::spawn(async move {
+            connections
+                .read_repository(&repository, GithubReadKind::Repository)
+                .await
+        })
+    };
+    fixture.github.read_started.notified().await;
+    let disconnect = {
+        let connections = connections.clone();
+        tokio::spawn(async move { connections.disconnect(caller("panel")).await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!disconnect.is_finished());
+    assert!(fixture.store.held.lock().unwrap().is_some());
+
+    release.notify_one();
+    assert_eq!(reader.await.unwrap(), Ok(serde_json::json!({"id":1})));
+    assert_eq!(disconnect.await.unwrap(), Ok(signed_out(None)));
+    assert_eq!(
+        connections
+            .read_repository(&repository, GithubReadKind::Repository)
+            .await,
+        Err(GithubReadError::NotConnected)
+    );
+    assert_eq!(fixture.github.reads.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

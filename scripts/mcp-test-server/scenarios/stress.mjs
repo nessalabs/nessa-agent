@@ -30,6 +30,7 @@ export const STRESS = {
   table: "stress table",
   trace: "stress trace",
   github: "stress github",
+  githubRead: "stress repository read",
   githubShell: "stress shell github",
   channel: "stress channel",
 }
@@ -71,6 +72,7 @@ export const SAYS = {
   table: "Tables: ",
   trace: "Traced: ",
   github: "GitHub: ",
+  githubRead: "GitHub repository: ",
   githubShell: "GitHub in the shell: ",
   carried: "Carried on by ",
   channel: "Working in: ",
@@ -255,7 +257,7 @@ export function stressScenario({
         ],
       },
       {
-        // What GitHub sign-in the agent was started with, as fingerprints.
+        // No Nessa GitHub credential is placed in an agent's environment.
         when: STRESS.github,
         steps: [
           {
@@ -265,6 +267,20 @@ export function stressScenario({
               "token=${credentials.githubToken} git=${credentials.gitPassword}",
             ],
           },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.githubRead,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-github",
+            tool: "read_repository",
+            arguments: { owner: "nessalabs", repository: "nessa-agent" },
+            save: "repository",
+          },
+          { do: "text", chunks: [SAYS.githubRead, "${repository.full_name}"] },
           { do: "end" },
         ],
       },

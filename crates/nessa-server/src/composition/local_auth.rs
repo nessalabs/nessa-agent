@@ -321,14 +321,6 @@ pub(super) async fn product_state(
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
         match (&settings.agents, receivers.clone()) {
             (Some(agents), Some(receivers)) => {
-                #[cfg(unix)]
-                let agents = &{
-                    let mut agents = agents.clone();
-                    if let Some(github) = &github {
-                        agents.open_credentials = github.credentials.clone();
-                    }
-                    agents
-                };
                 let mut built = conversations(
                     agents,
                     directory,
@@ -348,6 +340,7 @@ pub(super) async fn product_state(
                         command_policy: settings.command_policy()?,
                         serving,
                         access_policy: access_policy.clone(),
+                        github: github.as_ref().map(|github| github.connections.clone()),
                     },
                 )
                 .await?;
@@ -688,6 +681,8 @@ struct ConversationSettings {
     serving: Option<ServingAuth>,
     /// Who may locate, act on, read and share a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    /// The gateway-owned GitHub sign-in used only by source-authorized reads.
+    github: Option<Arc<crate::github::application::GithubConnections>>,
 }
 
 /// The registry, policy and identity a paired environment's key is asked
@@ -1024,6 +1019,7 @@ async fn conversations(
         command_policy,
         serving,
         access_policy,
+        github,
     } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -1039,6 +1035,10 @@ async fn conversations(
         .map(super::environment_tools::EnvironmentTools::new);
     let conversation_tools = super::conversation_tools::ConversationTools::new();
     let mut built_in: Vec<Arc<dyn BuiltInServer>> = vec![conversation_tools.clone()];
+    let github_tools = github.map(super::github_tools::GithubTools::new);
+    if let Some(tools) = &github_tools {
+        built_in.push(tools.clone());
+    }
     if let Some(tools) = &environment_tools {
         built_in.push(tools.clone());
     }
@@ -1453,6 +1453,9 @@ async fn conversations(
         )?,
     ));
     conversation_tools.attach(service.clone());
+    if let Some(tools) = github_tools {
+        tools.attach(service.clone());
+    }
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
     service.bind_note_authors(metadata.clone());

@@ -1130,10 +1130,18 @@ phone's scanner is not this screen.
   composed `GithubAvatar`; without one, or when it fails, the login's initial.
   Choose repositories and Disconnect are icon buttons that take "Connected"'s
   place under the pointer or keyboard focus, and take no pointer while hidden;
-  Shift+Tab and Tab move between them. They show at all times while an action
-  is in flight or after one failed, and on touch-capable screens.
+  Reverse and forward Tab move between them (Option+Tab in macOS WebKit to
+  include links). They show at all times while an action is in flight or after
+  one failed, and on touch-capable screens.
   _Check:_ `conversation-stress.mjs` (`github`); unit tests
   `github-row.test.tsx`, `github-avatar.test.tsx`.
+- [ ] **The GitHub sign-in stays out of agent and managed-shell environments.**
+  After Connect, both report no Nessa `GH_TOKEN` or git credential helper,
+  while a source-authorized `nessa-github.read_repository` returns the requested
+  repository. Disconnect removes the saved sign-in; a later agent still has no
+  Nessa credential. _Check:_ `conversation-stress.mjs` (`github`, default and
+  raised count), `crates/nessa-mcp/src/main.rs`'s command environment test, and
+  `crates/nessa-server/tests/github/mod.rs`'s read/disconnect tests.
 
 ### Integrations: the gateway's MCP servers
 

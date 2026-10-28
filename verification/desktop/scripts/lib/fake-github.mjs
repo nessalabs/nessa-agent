@@ -41,7 +41,7 @@ export async function startFakeGithub() {
   const token = `ghu_${randomBytes(18).toString("hex")}`
   const codes = new Map()
   let latest = null
-  const calls = { device: 0, poll: 0, user: 0 }
+  const calls = { device: 0, poll: 0, user: 0, repository: 0 }
   const json = (response, status, body) => {
     response.writeHead(status, { "content-type": "application/json" })
     response.end(JSON.stringify(body))
@@ -91,6 +91,12 @@ export async function startFakeGithub() {
         if (request.headers.authorization !== `Bearer ${token}`)
           return json(response, 401, { message: "Bad credentials" })
         return json(response, 200, FAKE_ACCOUNT)
+      }
+      if (request.method === "GET" && url.pathname === "/repos/nessalabs/nessa-agent") {
+        calls.repository += 1
+        if (request.headers.authorization !== `Bearer ${token}`)
+          return json(response, 401, { message: "Bad credentials" })
+        return json(response, 200, { full_name: "nessalabs/nessa-agent" })
       }
       json(response, 404, { message: "Not Found" })
     })

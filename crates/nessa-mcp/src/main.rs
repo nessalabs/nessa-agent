@@ -59,32 +59,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// What every command is started with, of this server's own environment.
-/// Credentials used by the provider are not implicitly inherited by shell
-/// commands; the GitHub sign-in the gateway gives this server for its agent
-/// (`GH_TOKEN` and git's `GIT_CONFIG_*` credential helper) is meant for them,
-/// so `git` and `gh` act as the person.
+/// Provider credentials are not implicitly inherited by shell commands.
+/// Nessa's GitHub sign-in stays in the gateway; a command gets neither its
+/// token nor a git credential helper.
 #[cfg(any(unix, test))]
 fn command_environment(
     variables: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
 ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-    const KEPT: [&str; 8] = [
-        "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "GH_TOKEN",
+    const KEPT: [&str; 7] = [
+        "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL",
     ];
     variables
-        .filter(|(key, _)| {
-            key.to_str().is_some_and(|key| {
-                KEPT.contains(&key)
-                    || key == "GIT_CONFIG_COUNT"
-                    || key.strip_prefix("GIT_CONFIG_KEY_").is_some_and(numbered)
-                    || key.strip_prefix("GIT_CONFIG_VALUE_").is_some_and(numbered)
-            })
-        })
+        .filter(|(key, _)| key.to_str().is_some_and(|key| KEPT.contains(&key)))
         .collect()
-}
-
-#[cfg(any(unix, test))]
-fn numbered(suffix: &str) -> bool {
-    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(not(unix))]
@@ -97,7 +84,7 @@ mod tests {
     use super::command_environment;
 
     #[test]
-    fn commands_keep_the_github_sign_in_and_no_other_credential() {
+    fn commands_drop_the_github_sign_in_and_other_credentials() {
         let given = [
             ("PATH", "/bin"),
             ("GH_TOKEN", "ghu_x"),
@@ -114,15 +101,6 @@ mod tests {
             .into_iter()
             .map(|(key, _)| key.into_string().unwrap())
             .collect();
-        assert_eq!(
-            kept,
-            [
-                "PATH",
-                "GH_TOKEN",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_KEY_0",
-                "GIT_CONFIG_VALUE_1"
-            ]
-        );
+        assert_eq!(kept, ["PATH"]);
     }
 }

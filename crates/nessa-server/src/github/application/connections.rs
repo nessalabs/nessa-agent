@@ -10,14 +10,17 @@
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+use serde_json::Value;
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use super::ports::{
     ApiFailure, DeviceCode, EndCause, GithubApi, GithubAudit, GithubAuditEvent, GithubAuditRecord,
-    GithubCaller, GithubTokenStore, PollAnswer,
+    GithubCaller, GithubReadFailure, GithubTokenStore, PollAnswer,
 };
-use crate::github::domain::{AccessToken, ConnectEnd, GithubSignIn, GithubStatus};
+use crate::github::domain::{
+    AccessToken, ConnectEnd, GithubReadKind, GithubRepository, GithubSignIn, GithubStatus,
+};
 use crate::timer::{within, Moment, Timer};
 
 /// Why a change was not made as asked.
@@ -32,6 +35,15 @@ pub enum GithubError {
     /// A record could not be kept. Before a change, nothing changed; after a
     /// sign-out's token was deleted, it is deleted (read the status again).
     AuditUnavailable,
+}
+
+/// A repository read could not return a GitHub answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubReadError {
+    /// Nessa holds no connected GitHub sign-in at this call.
+    NotConnected,
+    /// GitHub or its response refused the bounded read.
+    Api(GithubReadFailure),
 }
 
 /// The sign-in, and what changes it.
@@ -120,12 +132,33 @@ impl GithubConnections {
         self.inner.status()
     }
 
-    /// The token agents are given now, when signed in.
+    /// Inspect the retained token in sign-in state tests only.
+    #[cfg(test)]
     pub fn token(&self) -> Option<AccessToken> {
         match &*self.inner.state.lock().unwrap() {
             State::Connected { sign_in, .. } => Some(sign_in.token.clone()),
             _ => None,
         }
+    }
+
+    /// Read one repository resource with the current sign-in. The change lock
+    /// orders this bounded HTTP request before a concurrent Disconnect, so a
+    /// returned Disconnect leaves no request using the old token in flight.
+    pub async fn read_repository(
+        &self,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+    ) -> Result<Value, GithubReadError> {
+        let _change = self.inner.changes.lock().await;
+        let token = match &*self.inner.state.lock().unwrap() {
+            State::Connected { sign_in, .. } => sign_in.token.clone(),
+            _ => return Err(GithubReadError::NotConnected),
+        };
+        self.inner
+            .api
+            .read_repository(&token, repository, kind)
+            .await
+            .map_err(GithubReadError::Api)
     }
 
     /// Start a sign-in, or answer the one already waiting or held: asking

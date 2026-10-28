@@ -2611,3 +2611,12 @@ windows `product/workspace.rs` holds for each connection in
 `domain/value_objects/workspace_window.rs`), through
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
+
+`nessa-server/src/composition/github_tools.rs` serves fixed repository, issue
+and pull request GETs as a separate built-in MCP server. It uses the same live
+source-turn admission before `github/application/connections.rs` reads the
+current sign-in. `github/domain/repository.rs` owns validated path segments
+and operations; `github/infrastructure/api.rs` fixes the GitHub host, request
+deadline, redirect policy and body bound. Provider opens and managed shell
+commands receive no Nessa GitHub credentials. See the [GitHub sign-in and
+broker contract](design/github-connect.md).
