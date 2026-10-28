@@ -760,6 +760,10 @@ const body = {
           )
         if (studio && studio[0] < at[0] + at[2])
           failures.push(`${label}: "nessa Studio" at x ${studio[0]} is under the toggle`)
+        if (studio && Math.abs(studio[1] + studio[3] / 2 - at[1] - at[3] / 2) > 1)
+          failures.push(
+            `${label}: "nessa Studio" is centred at y ${studio[1] + studio[3] / 2}, the toggle at ${at[1] + at[3] / 2}`,
+          )
         if (await squareShown(page))
           failures.push(`${label}: Studio's square is drawn beside the toggle`)
         // An item's full view puts "nessa Studio" where the sidebar's foot does.

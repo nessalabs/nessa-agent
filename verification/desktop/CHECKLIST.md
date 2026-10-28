@@ -369,7 +369,7 @@ Experimental turns it on; the rail stands beside the workspace in
   Sidebar and session-list toggles are adjacent, followed by Back and Forward.
   The 48px rail starts its icons
   below the controls on every host. The toggle keeps its bottom-left mark slot, including when both side
-  columns are closed, with "nessa Studio" beside it. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
+  columns are closed, with "nessa Studio" beside it and centred on the same row. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
   ⌥⌘S change nothing behind it. Its opaque view covers the workspace cards and
