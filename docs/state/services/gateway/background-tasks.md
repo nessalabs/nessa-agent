@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: A local command can outlive its calling agent turn and resume that conversation with its outcome.
 parent: gateway
-sourceRevision: "051e813e01d396269aef7732fe8ee2bb613a93c3"
+sourceRevision: "138755acfbc78c58c00fa6feaeefe38d170d5f85"
 sources:
   - crates/nessa-server/src/conversation/application/service/background_tasks.rs
   - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
