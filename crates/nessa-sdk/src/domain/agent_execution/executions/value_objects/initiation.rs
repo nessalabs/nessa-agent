@@ -223,5 +223,6 @@ mod tests {
             "4c8b99b9-93e2-4e71-a131-83c8ea3eb7fa"
         );
         assert_eq!(source.execution(), &execution);
+        assert_eq!(source.payload_bytes(), 36 + execution.as_str().len());
     }
 }
