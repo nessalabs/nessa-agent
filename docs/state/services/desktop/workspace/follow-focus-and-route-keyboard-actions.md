@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Keyboard actions follow the current focus."
 parent: "desktop-workspace"
-sourceRevision: "6ff93e6a2012ab5a46a95beb8b177146e1868646"
+sourceRevision: "cf768948c65c8a7a8371a5767c261ed472c34ffe"
 sources:
   - "src/desktop/workspace/ui/layouts/shortcuts.ts"
   - "src/desktop/workspace/adapters/dom/shortcuts.ts"
