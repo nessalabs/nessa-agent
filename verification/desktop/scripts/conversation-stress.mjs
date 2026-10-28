@@ -4019,7 +4019,46 @@ const steps = {
       )
       return
     }
-    await line.click()
+    // The line stays where it was clicked, including when the reader is at the
+    // end (`tool-disclosure.ts`). It must not move up. A close at the end may
+    // move it down only as far as the browser clamps scrollTop.
+    const place = (locator) =>
+      locator.evaluate((element) => {
+        const scroller = element.closest(".workspace-transcript")
+        return {
+          top: element.getBoundingClientRect().top,
+          scroll: scroller instanceof HTMLElement ? scroller.scrollTop : 0,
+        }
+      })
+    const stayed = (before, after, what) => {
+      const up = before.top - after.top
+      const down = after.top - before.top
+      const scrollDelta = after.scroll - before.scroll
+      if (up > 1) failures.push(`${what} moved up ${up.toFixed(1)}px`)
+      if (down > 1 && scrollDelta > -down + 1)
+        failures.push(
+          `${what} moved down ${down.toFixed(1)}px while scroll moved ${scrollDelta.toFixed(1)}px`,
+        )
+    }
+    const disclosureSettled = () =>
+      run.page.waitForFunction(() => {
+        const scroller = document.querySelector(".workspace-transcript")
+        const moving = [
+          ...(scroller?.querySelectorAll("[data-slot='tool-trace']") ?? []),
+        ].some((trace) => {
+          const animations =
+            trace.getAnimations?.({ subtree: true }) ?? trace.getAnimations?.() ?? []
+          return animations.some((animation) => animation.playState === "running")
+        })
+        return (
+          Boolean(scroller) && !scroller.hasAttribute("data-disclosure-hold") && !moving
+        )
+      })
+    await line.scrollIntoViewIfNeeded()
+    const lineAt = await place(line)
+    await line.evaluate((element) => element.click())
+    await disclosureSettled()
+    stayed(lineAt, await place(line), "opening the run")
     const rows = message.locator('[data-slot="tool-trace-step"]')
     const opened = await waitFor(
       async () =>
@@ -4078,7 +4117,10 @@ const steps = {
     // A call's card shows the input it was made with.
     const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
     const row = rows.nth(asked)
-    await row.click()
+    const rowAt = await place(row)
+    await row.evaluate((element) => element.click())
+    await disclosureSettled()
+    stayed(rowAt, await place(row), "opening the call")
     const card = message.locator(`[id="${await row.getAttribute("aria-controls")}"]`)
     await card.getByRole("tab", { name: "Input" }).click()
     const value = String(Object.values(TRACE_CALLS[asked].arguments)[0])
@@ -4094,8 +4136,11 @@ const steps = {
       await message.screenshot({
         path: join(run.evidence, `trace-${run.engine ?? "window"}-opened.png`),
       })
-    // Folded again, as the person left it.
-    await line.click()
+    // Folded again, as the person left it. The line does not jump up.
+    const foldAt = await place(line)
+    await line.evaluate((element) => element.click())
+    await disclosureSettled()
+    stayed(foldAt, await place(line), "closing the run")
     if (
       !(await waitFor(
         async () => (await line.getAttribute("aria-expanded")) === "false",
