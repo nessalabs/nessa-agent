@@ -20,6 +20,7 @@ fn connection() -> BoatConnection {
 struct Store {
     records: Mutex<std::collections::BTreeMap<String, Assignment>>,
     fail_receipt: std::sync::atomic::AtomicBool,
+    fail_refusal: AtomicBool,
     panic_receipt: AtomicBool,
 }
 #[async_trait]
@@ -35,6 +36,9 @@ impl Assignments for Store {
         );
         if matches!(value, Assignment::Assigned { .. }) && self.fail_receipt.load(Ordering::SeqCst)
         {
+            return Err(Failure::Storage);
+        }
+        if matches!(value, Assignment::Refused { .. }) && self.fail_refusal.load(Ordering::SeqCst) {
             return Err(Failure::Storage);
         }
         self.records
@@ -92,7 +96,9 @@ impl RecoveryAudit for Audit {
             "injected receipt audit panic"
         );
         let fail = match event {
-            RecoveryEvent::ReceiptSaveFailed { .. } => &self.fail_receipt,
+            RecoveryEvent::ReceiptSaveFailed { .. } | RecoveryEvent::AdmissionRefused { .. } => {
+                &self.fail_receipt
+            }
             RecoveryEvent::RollbackObserved { .. } => &self.fail_cleanup,
         };
         if fail.load(Ordering::SeqCst) {
@@ -109,6 +115,7 @@ fn recovery_events(thread: &ConversationId, confirmed: bool) -> Vec<RecoveryEven
         RecoveryEvent::ReceiptSaveFailed {
             thread: thread.clone(),
             vm: vm.clone(),
+            disposition: RefusalDisposition::RollbackNewVm,
         },
         RecoveryEvent::RollbackObserved {
             thread,
@@ -118,6 +125,9 @@ fn recovery_events(thread: &ConversationId, confirmed: bool) -> Vec<RecoveryEven
     ]
 }
 struct FakeProvider {
+    refusal_on_create: Mutex<Option<AdmissionRejection>>,
+    created_disposition: Mutex<RefusalDisposition>,
+    refusal_on_connect: Mutex<Option<AdmissionRejection>>,
     creates: AtomicUsize,
     connects: Mutex<Vec<String>>,
     deletes: AtomicUsize,
@@ -130,6 +140,9 @@ struct FakeProvider {
 impl FakeProvider {
     fn new(recovery_steps: Arc<Mutex<Vec<RecoveryStep>>>) -> Self {
         Self {
+            refusal_on_create: Mutex::new(None),
+            created_disposition: Mutex::new(RefusalDisposition::RollbackNewVm),
+            refusal_on_connect: Mutex::new(None),
             confirm_remove: AtomicBool::new(false),
             panic_remove: AtomicBool::new(false),
             recovery_steps,
@@ -146,18 +159,27 @@ impl Provider for FakeProvider {
     async fn validate(&self, _: &BoatConnection) -> Result<(), Failure> {
         Ok(())
     }
-    async fn create(&self, _: &BoatConnection, thread: &str) -> Result<String, Failure> {
+    async fn create(&self, _: &BoatConnection, thread: &str) -> Result<WorkspaceReceipt, Failure> {
         self.creates.fetch_add(1, Ordering::SeqCst);
         self.entered.add_permits(1);
         self.proceed.acquire().await.unwrap().forget();
-        Ok(format!("vm-{thread}"))
+        Ok(WorkspaceReceipt {
+            vm: format!("vm-{thread}"),
+            admission: admission(),
+            refusal: self.refusal_on_create.lock().unwrap().clone(),
+            disposition: *self.created_disposition.lock().unwrap(),
+        })
     }
     async fn connect(
         &self,
         _: &BoatConnection,
         _: &str,
         vm: &str,
+        _: &EnvironmentIdentity,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        if let Some(rejection) = self.refusal_on_connect.lock().unwrap().clone() {
+            return Err(Failure::AdmissionRejected(rejection));
+        }
         self.connects.lock().unwrap().push(vm.into());
         Ok(Arc::new(Runtime))
     }
@@ -290,7 +312,7 @@ async fn failed_receipt_storage_attempts_cleanup_and_preserves_uncertainty() {
         Some(Failure::ReceiptRecovery {
             vm: format!("vm-{}", id(1)),
             receipt_audit_failed: false,
-            cleanup_unconfirmed: true,
+            cleanup: CleanupOutcome::Unconfirmed,
             cleanup_audit_failed: false,
         })
     );
@@ -334,7 +356,11 @@ async fn receipt_recovery_keeps_target_and_attempts_cleanup_across_all_audit_fai
                     Some(Failure::ReceiptRecovery {
                         vm: format!("vm-{}", id(2)),
                         receipt_audit_failed,
-                        cleanup_unconfirmed: !cleanup_confirmed,
+                        cleanup: if cleanup_confirmed {
+                            CleanupOutcome::Confirmed
+                        } else {
+                            CleanupOutcome::Unconfirmed
+                        },
                         cleanup_audit_failed,
                     })
                 );
@@ -481,7 +507,7 @@ async fn recovery_port_panics_keep_cleanup_and_target_evidence_owned() {
         Some(Failure::ReceiptRecovery {
             vm: format!("vm-{}", id(3)),
             receipt_audit_failed: true,
-            cleanup_unconfirmed: true,
+            cleanup: CleanupOutcome::Unconfirmed,
             cleanup_audit_failed: false,
         })
     );
@@ -507,7 +533,7 @@ async fn receipt_publication_panic_keeps_external_target_in_the_recovery_owner()
         Some(Failure::ReceiptRecovery {
             vm: format!("vm-{}", id(4)),
             receipt_audit_failed: false,
-            cleanup_unconfirmed: true,
+            cleanup: CleanupOutcome::Unconfirmed,
             cleanup_audit_failed: false,
         })
     );
@@ -521,4 +547,245 @@ async fn receipt_publication_panic_keeps_external_target_in_the_recovery_owner()
         Some(Failure::ProvisioningUncertain)
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+}
+
+pub(super) fn admission() -> EnvironmentIdentity {
+    EnvironmentIdentity::new(
+        "11111111-1111-4111-8111-111111111111".into(),
+        "nessa".into(),
+        "22222222-2222-4222-8222-222222222222".into(),
+        2,
+    )
+    .unwrap()
+}
+
+fn rejection() -> AdmissionRejection {
+    AdmissionRejection::new(
+        AdmissionRefusal::WrongVersion,
+        Some(ObservedEnvironment {
+            name: Some("nessa".into()),
+            version: Some(3),
+        }),
+    )
+}
+#[tokio::test]
+async fn refused_creations_keep_the_target_and_cleanup_outcome_across_storage_and_audit_failure() {
+    for receipt_failed in [false, true] {
+        for audit_failed in [false, true] {
+            for cleanup_unconfirmed in [false, true] {
+                for cleanup_audit_failed in [false, true] {
+                    let (service, store, provider, audit) = fixture_with_audit();
+                    *provider.refusal_on_create.lock().unwrap() = Some(rejection());
+                    store.fail_refusal.store(receipt_failed, Ordering::SeqCst);
+                    audit.fail_receipt.store(audit_failed, Ordering::SeqCst);
+                    audit
+                        .fail_cleanup
+                        .store(cleanup_audit_failed, Ordering::SeqCst);
+                    provider
+                        .confirm_remove
+                        .store(!cleanup_unconfirmed, Ordering::SeqCst);
+                    provider.proceed.add_permits(1);
+                    let vm = format!("vm-{}", id(4));
+                    assert_eq!(
+                        service.open(id(4), true).await.err(),
+                        Some(Failure::AdmissionRecovery {
+                            vm: vm.clone(),
+                            rejection: rejection(),
+                            receipt_failed,
+                            audit_failed,
+                            cleanup: if cleanup_unconfirmed {
+                                CleanupOutcome::Unconfirmed
+                            } else {
+                                CleanupOutcome::Confirmed
+                            },
+                            cleanup_audit_failed
+                        })
+                    );
+                    let admission_event = RecoveryEvent::AdmissionRefused {
+                        thread: id(4).to_string(),
+                        vm: vm.clone(),
+                        admission: admission(),
+                        rejection: rejection(),
+                        disposition: RefusalDisposition::RollbackNewVm,
+                    };
+                    assert_eq!(
+                        *audit.steps.lock().unwrap(),
+                        vec![
+                            RecoveryStep::Audit(admission_event),
+                            RecoveryStep::Remove(vm.clone()),
+                            RecoveryStep::Audit(RecoveryEvent::RollbackObserved {
+                                thread: id(4).to_string(),
+                                vm,
+                                confirmed: !cleanup_unconfirmed
+                            })
+                        ]
+                    );
+                    assert!(provider.connects.lock().unwrap().is_empty());
+                    let retry = service.open(id(4), true).await.err();
+                    assert_eq!(
+                        retry,
+                        Some(if receipt_failed {
+                            Failure::ProvisioningUncertain
+                        } else {
+                            Failure::RefusedWorkspace {
+                                vm: format!("vm-{}", id(4)),
+                                rejection: rejection(),
+                                disposition: RefusalDisposition::RollbackNewVm,
+                            }
+                        })
+                    );
+                    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+                }
+            }
+        }
+    }
+}
+#[tokio::test]
+async fn a_reconnect_refusal_is_durable_and_never_reactivates_after_provider_repair() {
+    let (service, store, provider, _) = fixture_with_audit();
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(5), true).await.is_ok());
+    *provider.refusal_on_connect.lock().unwrap() = Some(rejection());
+    assert!(matches!(
+        service.open(id(5), false).await,
+        Err(Failure::AdmissionRecovery { .. })
+    ));
+    assert!(matches!(
+        store.read(&id(5).to_string()).await.unwrap(),
+        Some(Assignment::Refused { .. })
+    ));
+    *provider.refusal_on_connect.lock().unwrap() = None;
+    assert_eq!(
+        service.open(id(5), true).await.err(),
+        Some(Failure::RefusedWorkspace {
+            vm: format!("vm-{}", id(5)),
+            rejection: rejection(),
+            disposition: RefusalDisposition::RetainTarget
+        })
+    );
+    assert_eq!(
+        provider.deletes.load(Ordering::SeqCst),
+        0,
+        "a reconnect refusal must preserve existing workspace data"
+    );
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.connects.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn a_dropped_waiter_keeps_the_durable_refusal_and_cleanup_evidence() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    *provider.refusal_on_create.lock().unwrap() = Some(rejection());
+    let task = {
+        let service = service.clone();
+        tokio::spawn(async move { service.open(id(6), true).await })
+    };
+    provider.entered.acquire().await.unwrap().forget();
+    task.abort();
+    match task.await {
+        Err(error) => assert!(error.is_cancelled()),
+        Ok(_) => panic!("waiter must be cancelled"),
+    }
+    provider.proceed.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while audit.events.lock().unwrap().len() != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        store.read(&id(6).to_string()).await.unwrap(),
+        Some(Assignment::Refused { .. })
+    ));
+    assert_eq!(
+        service.open(id(6), true).await.err(),
+        Some(Failure::RefusedWorkspace {
+            vm: format!("vm-{}", id(6)),
+            rejection: rejection(),
+            disposition: RefusalDisposition::RollbackNewVm
+        })
+    );
+    assert!(provider.connects.lock().unwrap().is_empty());
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn replayed_or_unverified_receipt_targets_are_retained_when_publication_fails() {
+    let (service, store, provider, audit) = fixture_with_audit();
+    *provider.created_disposition.lock().unwrap() = RefusalDisposition::RetainTarget;
+    store.fail_receipt.store(true, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert_eq!(
+        service.open(id(7), true).await.err(),
+        Some(Failure::ReceiptRecovery {
+            vm: format!("vm-{}", id(7)),
+            receipt_audit_failed: false,
+            cleanup: CleanupOutcome::Retained,
+            cleanup_audit_failed: false
+        })
+    );
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        *audit.events.lock().unwrap(),
+        vec![RecoveryEvent::ReceiptSaveFailed {
+            thread: id(7).to_string(),
+            vm: format!("vm-{}", id(7)),
+            disposition: RefusalDisposition::RetainTarget
+        }]
+    );
+    assert_eq!(
+        service.open(id(7), true).await.err(),
+        Some(Failure::ProvisioningUncertain)
+    );
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn an_initial_connection_refusal_cannot_delete_a_replayed_workspace() {
+    let (service, _, provider, _) = fixture_with_audit();
+    *provider.created_disposition.lock().unwrap() = RefusalDisposition::RetainTarget;
+    *provider.refusal_on_connect.lock().unwrap() = Some(rejection());
+    provider.proceed.add_permits(1);
+    assert!(matches!(
+        service.open(id(8), true).await,
+        Err(Failure::AdmissionRecovery {
+            cleanup: CleanupOutcome::Retained,
+            ..
+        })
+    ));
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        service.open(id(8), true).await.err(),
+        Some(Failure::RefusedWorkspace {
+            vm: format!("vm-{}", id(8)),
+            rejection: rejection(),
+            disposition: RefusalDisposition::RetainTarget
+        })
+    );
+}
+#[tokio::test]
+async fn failed_refusal_storage_or_audit_never_deletes_existing_workspace_data() {
+    for receipt_failed in [false, true] {
+        for audit_failed in [false, true] {
+            let (service, store, provider, audit) = fixture_with_audit();
+            provider.proceed.add_permits(1);
+            assert!(service.open(id(9), true).await.is_ok());
+            store.fail_refusal.store(receipt_failed, Ordering::SeqCst);
+            audit.fail_receipt.store(audit_failed, Ordering::SeqCst);
+            *provider.refusal_on_connect.lock().unwrap() = Some(rejection());
+            assert_eq!(
+                service.open(id(9), false).await.err(),
+                Some(Failure::AdmissionRecovery {
+                    vm: format!("vm-{}", id(9)),
+                    rejection: rejection(),
+                    receipt_failed,
+                    audit_failed,
+                    cleanup: CleanupOutcome::Retained,
+                    cleanup_audit_failed: false
+                })
+            );
+            assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
+            assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+            assert_eq!(provider.connects.lock().unwrap().len(), 1);
+        }
+    }
 }

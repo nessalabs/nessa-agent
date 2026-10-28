@@ -17,7 +17,7 @@ fn receipt() -> Assignment {
         thread: THREAD.into(),
         vm: "bx_fixture".into(),
         image: "fixture-image".into(),
-        environment: "nessa".into(),
+        admission: super::allocation_tests::admission(),
     }
 }
 
@@ -130,5 +130,63 @@ async fn receipt_publication_obeys_the_same_byte_bound_as_reopening() {
             8192
         );
         assert_eq!(exact.read(THREAD).await.unwrap(), Some(boundary));
+    }
+}
+
+#[tokio::test]
+async fn old_unverified_receipts_keep_the_target_without_an_upgrade_or_rewrite() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("receipts");
+    let store = FileAssignments(root.clone());
+    store.save(intent()).await.unwrap();
+    let path = root.join(format!("{THREAD}.json"));
+    let old = serde_json::json!({"cause":"thread_lease_requested", "transitions":[{"state":"provisioning","thread":THREAD},{"state":"assigned","thread":THREAD,"vm":"bx_fixture","image":"fixture-image","environment":"nessa"}]});
+    let bytes = serde_json::to_vec(&old).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let retained = store.read(THREAD).await.unwrap().unwrap();
+    assert!(matches!(&retained, Assignment::Unverified {vm,..} if vm=="bx_fixture"));
+    assert!(store.save(retained).await.is_err());
+    assert_eq!(store.save(receipt()).await, Err(Failure::Storage));
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn refusal_is_terminal_and_a_restored_history_cannot_switch_vm_or_admission() {
+    use crate::workspaces::domain::{AdmissionRefusal, RefusalDisposition};
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("receipts");
+    let store = FileAssignments(root.clone());
+    store.save(intent()).await.unwrap();
+    store.save(receipt()).await.unwrap();
+    let refused = Assignment::Refused {
+        thread: THREAD.into(),
+        vm: "bx_fixture".into(),
+        image: "fixture-image".into(),
+        admission: super::allocation_tests::admission(),
+        disposition: RefusalDisposition::RollbackNewVm,
+        rejection: crate::workspaces::domain::AdmissionRejection::new(
+            AdmissionRefusal::WrongVersion,
+            None,
+        ),
+    };
+    store.save(refused.clone()).await.unwrap();
+    let reopened = FileAssignments(root.clone());
+    assert_eq!(reopened.read(THREAD).await.unwrap(), Some(refused.clone()));
+    assert_eq!(reopened.save(receipt()).await, Err(Failure::Storage));
+    let mut revised = refused;
+    if let Assignment::Refused { rejection, .. } = &mut revised {
+        *rejection = crate::workspaces::domain::AdmissionRejection::new(
+            AdmissionRefusal::EnvironmentChanged,
+            None,
+        );
+    }
+    assert_eq!(reopened.save(revised).await, Err(Failure::Storage));
+    let path = root.join(format!("{THREAD}.json"));
+    let original = std::fs::read(&path).unwrap();
+    for field in ["vm", "image", "environment"] {
+        let mut history: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        history["transitions"][2][field] = serde_json::json!("other");
+        std::fs::write(&path, serde_json::to_vec(&history).unwrap()).unwrap();
+        assert_eq!(reopened.read(THREAD).await, Err(Failure::Storage));
     }
 }
