@@ -5,10 +5,11 @@ kind: "statechart"
 status: "implemented"
 summary: "The right panel belongs to the chat in front and docks when another view opens."
 parent: "desktop-workspace"
-sourceRevision: "c5432f75638030f8dfa3941db7a3c8626522be1a"
+sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
 sources:
   - "src/desktop/workspace/ui/chrome/right-panel.tsx"
   - "src/desktop/workspace/ui/chrome/right-panel.css"
+  - "src/desktop/workspace/ui/chrome/window-tabs.tsx"
   - "src/desktop/workspace/ui/layouts/use-workspace-window.ts"
   - "src/desktop/workspace/ui/layouts/workspace-layout.tsx"
   - "src/desktop/workspace/ui/chrome/panel-content.tsx"
@@ -32,9 +33,9 @@ its width are remembered between launches; the panes and side columns fit
 the room left beside it.
 
 Each chat has its own panel contents: widgets open as tabs inside the panel,
-or a note says that nothing is open. Chats themselves have no tabs, and a
-widget never replaces a chat pane. Changing a panel tab keeps the same chat
-in front.
+or a note says that nothing is open. Conversation documents have separate tabs
+in the window toolbar; a widget never replaces a chat pane. Changing a panel
+tab keeps the same chat in front.
 
 Expanding the panel covers the workspace for that chat. The workspace stays
 laid out and inert beneath, while the panel keeps its own tabs or empty note.
@@ -47,11 +48,11 @@ remembered. A side rail item's full view hides the panel.
 
 ## Source review scope
 
-The recorded source checkpoint preserves the incoming per-chat widget tabs and
-window-command behavior alongside the paired-reader integration. The owning
-layout and widget tests and maintained browser checks cover expansion, new
-sessions, docking, Escape and restoration. Test execution is reported separately;
-this page does not claim native material or performance qualification.
+This review covers the combined window document tabs and each chat's widget
+tabs in the right panel. The owning layout and widget tests and browser checks
+cover expansion, new sessions, docking, Escape and restoration. Test execution
+is reported separately; this page does not claim native material or
+performance qualification.
 
 ```mermaid
 stateDiagram-v2

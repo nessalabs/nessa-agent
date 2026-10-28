@@ -5,8 +5,11 @@ kind: "statechart"
 status: "mixed"
 summary: "A new desktop session begins as a local draft."
 parent: "desktop-workspace"
+sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
 sources:
   - "src/desktop/workspace/application/usecases/sessions.ts"
+  - "src/desktop/workspace/application/usecases/session-tabs.ts"
+  - "src/desktop/workspace/application/usecases/panes.ts"
   - "src/desktop/workspace/model/session-lifecycle.ts"
   - "src/desktop/workspace/adapters/store/commands.ts"
   - "src/desktop/workspace/adapters/store/session-commands.ts"
@@ -22,23 +25,31 @@ diagramLinks: {}
 
 A new desktop session begins as a local draft. Sending keeps a stable input ID so a retry can refer to the same message.
 
+A draft keeps its text while its document tab is open, even when another
+document occupies its pane. Sending or retrying a local session requires its
+channel to remain in the current index. If the source refused its first send,
+discarding that message restores the draft in a current channel when one is
+available. With no current channel, it removes the local session and any pane
+showing it.
+
 The selected [connection mode](README.md#connection-modes) decides where the message goes. Gateway mode sends through the workspace client; sample mode produces scripted replies. A sample reply does not prove a provider ran.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Draft: New session identity
-    Draft --> Sending: First nonempty send / provisional summary and outbox
+    Draft --> Sending: First nonempty send [channel current] / provisional summary and outbox
     Sending --> AwaitingReplacement: Source accepted / clear sending mark
     Sending --> Failed: Typed refusal or unknown outcome
-    Failed --> Sending: Retry / same message identity
-    Failed --> Draft: Discard last failed message [source never began and still shown]
-    Failed --> Forgotten: Discard last failed message [never began and unshown]
+    Failed --> Sending: Retry [channel current] / same message identity
+    Failed --> Draft: Discard last failed [source never began, current home available]
+    Failed --> Forgotten: Discard last failed [source never began, no current home]
     Sending --> Confirmed: Replacement includes message identity
     AwaitingReplacement --> Confirmed: Replacement includes message identity
     Failed --> Confirmed: Replacement includes message identity
-    Draft --> Forgotten: No pane shows draft [nothing typed] or its pane closed
-    Draft --> Kept: No pane shows draft [typed in]
-    Kept --> Draft: New session asked for in its channel
+    Draft --> Kept: Another document takes its pane / retain tab and text
+    Draft --> Forgotten: Close its document tab
+    Kept --> Draft: Select its tab or ask for a new session in its channel
+    Kept --> Forgotten: Close its document tab
     note right of Sending
         One message's delivery projection.
         Source replacement removes its outbox entry.
