@@ -2,6 +2,93 @@
 use super::*;
 
 #[tokio::test]
+async fn a_model_request_stays_pending_until_usage_limit_invalidation_commits() {
+    use crate::conversation::infrastructure::LocalScheduledMessages;
+    use nessa_local_database::rusqlite::Connection;
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let metadata = Arc::new(
+        LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(access_policy()),
+    );
+    let (mut service, _, _, _, _) = mode_fixture();
+    Arc::get_mut(&mut service.inner).unwrap().metadata = metadata.clone();
+    let path = private.join("scheduled-chat-messages.sqlite3");
+    service.bind_scheduled_messages(Arc::new(LocalScheduledMessages::open(&path).unwrap()));
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_invalidation BEFORE INSERT ON usage_limit_invalidation \
+        BEGIN SELECT RAISE(ABORT, 'invalidation failed'); END;",
+        )
+        .unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    let actor = caller();
+    assert!(service
+        .set_model(
+            id.clone(),
+            actor.clone(),
+            ConversationModelId::new("second-model").unwrap()
+        )
+        .await
+        .is_err());
+    let pending = metadata.pending_model_change(&id).await.unwrap().unwrap();
+    assert_eq!(pending.request_id, actor.action_id);
+    assert_eq!(pending.state, ConversationModelRequestState::Pending);
+    connection
+        .execute_batch("DROP TRIGGER reject_invalidation;")
+        .unwrap();
+    let mut recovery_caller = caller();
+    recovery_caller.surface_id = "recovery-window".into();
+    let recovered = service.read(id.clone(), recovery_caller).await.unwrap();
+    assert_eq!(recovered.selection.unwrap().model, "second-model");
+    assert!(metadata.pending_model_change(&id).await.unwrap().is_none());
+    let causal: String = connection
+        .query_row(
+            "SELECT causal_execution FROM usage_limit_invalidation WHERE request_id = ?1",
+            [&actor.action_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        causal.is_empty(),
+        "absence is retained for retries of this model request"
+    );
+    let attribution: (String, String, String, String, String) = connection
+        .query_row(
+            "SELECT initiator_kind, organization_id, principal_id, surface_id, action_id \
+         FROM audit WHERE after_status = 'no_limit'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        attribution,
+        (
+            "person".into(),
+            "org".into(),
+            "person".into(),
+            actor.surface_id,
+            actor.action_id
+        )
+    );
+}
+
+#[tokio::test]
 async fn a_submission_retry_keeps_its_original_budget_after_a_model_change() {
     for mode in [SubmissionMode::Queue, SubmissionMode::Steer] {
         let directory = tempfile::tempdir().unwrap();
@@ -21,6 +108,7 @@ async fn a_submission_retry_keeps_its_original_budget_after_a_model_change() {
             .unwrap();
         let actor = caller();
         let message = SubmittedMessage {
+            uploads: Vec::new(),
             text: "recover my delivery".into(),
             ..SubmittedMessage::default()
         };
@@ -84,6 +172,7 @@ async fn a_submission_retry_keeps_its_original_budget_after_a_model_change() {
             (
                 actor.clone(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "different".into(),
                     ..SubmittedMessage::default()
                 },

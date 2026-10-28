@@ -10,6 +10,7 @@ import type {
   AgentsApi,
   AttachmentApi,
   AuthApi,
+  GithubApi,
   CredentialApi,
   McpAppsApi,
   McpServersApi,
@@ -35,6 +36,9 @@ const settingsParts = {
   pairing: {} as PairingApi,
   credentials: {} as CredentialApi,
   auth: {} as AuthApi,
+  github: {} as GithubApi,
+  vault: {} as import("@nessa/client").VaultApi,
+  boat: {} as import("@nessa/client").BoatApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
   agents: {} as AgentsApi,
@@ -358,6 +362,7 @@ function gatewayWithApp() {
         on: client.on,
         close: client.close,
         workspace: client.workspace,
+        channels: client.channels,
         mcpApps,
         ...settingsParts,
       })

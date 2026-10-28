@@ -1,22 +1,16 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react"
-import { ModelPicker, type ModelPickerGroup } from "@nessa-ui/react/model-picker"
 import {
   ComposerAccessMode,
   type ComposerAccessModeValue,
 } from "@nessa-ui/react/composer-access-mode"
 import { StatusLabel } from "@nessa-ui/react/status-label"
-import { AgentMark } from "../../onboarding/ui/agent-mark"
 import {
-  agentForProvider,
-  composerModels,
-  composerProviders,
-  contextLabel,
   defaultThinkingLevel,
   shortModelName,
   thinkingLevelsFor,
-  type ComposerModel,
 } from "../model/composer-options"
 import { nextPageMode } from "../model/page-mode"
+import { CatalogueModelPicker, findComposerModel } from "./catalogue-model-picker"
 import { DesktopIcon } from "./icons"
 import {
   DropdownMenu,
@@ -27,47 +21,6 @@ import {
 } from "./menu"
 import { ThinkingControl } from "./thinking-control"
 import { tooltip } from "./tooltip"
-
-/**
- * A provider's mark on a small glass tile, like an app icon: the agent's own
- * mark from onboarding where nessa runs one for that provider, and the
- * capitals of its name otherwise.
- */
-function ProviderMark({ id, label }: { id: string; label: string }) {
-  const agent = agentForProvider(id)
-  return (
-    <span className="desktop-provider-mark">
-      {agent ? (
-        <AgentMark id={agent} name={label} />
-      ) : (
-        label.replace(/[^A-Z]/g, "").slice(0, 2) || label.charAt(0).toUpperCase()
-      )}
-    </span>
-  )
-}
-
-/** The SDK catalog in the picker's shape: each model with its context window. */
-const pickerGroups: ModelPickerGroup[] = composerProviders.map((provider) => ({
-  id: provider.id,
-  label: provider.label,
-  icon: <ProviderMark id={provider.id} label={provider.label} />,
-  models: provider.models.map((model) => ({
-    id: model.modelId,
-    label: model.displayName,
-    // Set per model, not only per provider, so the picker's trigger shows it too.
-    icon: <ProviderMark id={provider.id} label={provider.label} />,
-    description: contextLabel(model.maxContextWindowTokens),
-  })),
-}))
-
-function findComposerModel(
-  providerId: string,
-  modelId: string,
-): ComposerModel | undefined {
-  return composerModels.find(
-    (model) => model.provider === providerId && model.modelId === modelId,
-  )
-}
 
 /** How many lines the draft fills, from the text area's height less its padding. */
 function draftLines(textarea: HTMLTextAreaElement): number {
@@ -100,7 +53,6 @@ export function Composer({
   onPageChange,
   model: shown,
   onModelChange,
-  modelProvider,
   modelDisabled = false,
   modelNotice,
   onSend,
@@ -122,8 +74,6 @@ export function Composer({
   model: { provider: string; modelId: string } | undefined
   /** Told when the person picks another model; the owner decides what is shown. */
   onModelChange?: (model: { provider: string; modelId: string }) => void
-  /** Established chats restrict the existing picker to their source provider. */
-  modelProvider?: string
   modelDisabled?: boolean
   modelNotice?: string
   /** Sends a turn; without it nothing can be sent and the send button says so. */
@@ -179,6 +129,8 @@ export function Composer({
   return (
     <form
       className="desktop-composer"
+      // A turn is running: the composer offers Stop (a quiet pane shows only that).
+      data-running={onStop ? "" : undefined}
       onSubmit={(event) => {
         event.preventDefault()
         send()
@@ -245,25 +197,12 @@ export function Composer({
               { side: "above" },
             )}
           >
-            <ModelPicker
-              disabled={!onModelChange || modelDisabled}
-              groups={
-                modelProvider
-                  ? pickerGroups.filter((group) => group.id === modelProvider)
-                  : pickerGroups
-              }
-              value={shown && { providerId: shown.provider, modelId: shown.modelId }}
-              onValueChange={({ providerId, modelId }) => {
-                const next = findComposerModel(providerId, modelId)
-                if (!next) return
-                onModelChange?.({ provider: next.provider, modelId: next.modelId })
-              }}
+            <CatalogueModelPicker
+              disabled={modelDisabled}
+              value={shown}
+              onChange={onModelChange}
               side="top"
-              align="start"
-              sideOffset={10}
-              placeholder="Choose model"
               className="desktop-chip desktop-chip-model"
-              contentClassName="desktop-popover desktop-model-picker"
             />
           </span>
         </div>

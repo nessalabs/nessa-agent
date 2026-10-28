@@ -94,7 +94,7 @@ impl SchedulingTransition {
             (
                 Some(InvocationStage::Queued | InvocationStage::Running),
                 InvocationStage::Cancelled,
-                SchedulingCause::RunnerStopped,
+                SchedulingCause::RunnerStopped | SchedulingCause::TurnStopped,
                 SchedulingInitiator::Automatic,
             ) => true,
             (

@@ -45,6 +45,8 @@ export {
   type ImageRefusal,
   type LinkedFile,
   type LinkedFileReferencePart,
+  type UploadedFileReference,
+  type UploadedFileReferencePart,
   type StoredImageType,
   type UploadFailure,
   type UploadState,
@@ -95,3 +97,12 @@ export {
   type HistoryExtent,
   type HistoryNotice,
 } from "./history"
+
+export {
+  formatUsageLimitReset,
+  USAGE_LIMIT_TITLE,
+  USAGE_LIMIT_TOGGLE,
+  usageLimitDetail,
+  usageLimitOnClientClock,
+  type UsageLimitNotice,
+} from "./usage-limit"

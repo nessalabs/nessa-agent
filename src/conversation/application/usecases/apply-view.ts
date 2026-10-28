@@ -26,7 +26,12 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       // the files only by the path the turn named.
       content:
         local?.content ??
-        referencedContent(message.userText, message.attachments, message.files),
+        referencedContent(
+          message.userText,
+          message.attachments,
+          message.files,
+          message.uploads,
+        ),
       receipt: waiting.has(message.executionId)
         ? "queued"
         : message.status === "queued"
@@ -69,6 +74,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
           .join(""),
         authenticationRequired: message.authenticationRequired,
         ...(message.requiredWorkFailed === true ? { requiredWorkFailed: true } : {}),
+        ...(message.usageLimit === undefined ? {} : { usageLimit: message.usageLimit }),
         status: message.error ?? message.status,
       })
     }
@@ -82,7 +88,12 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       from: "user",
       content:
         local?.content ??
-        referencedContent(pending.text, pending.attachments, pending.files),
+        referencedContent(
+          pending.text,
+          pending.attachments,
+          pending.files,
+          pending.uploads,
+        ),
       receipt: "queued",
       executionId: pending.executionId,
       actionId: local?.actionId,
@@ -157,6 +168,9 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       unreadable: view.unreadable,
       unreadableTruncated: view.unreadableTruncated,
       approvalMode: view.approvalMode,
+      ...(view.usageLimitAutoContinue === undefined
+        ? {}
+        : { usageLimitAutoContinue: view.usageLimitAutoContinue }),
       approvalModes: view.approvalModes,
       approvalModeChange: view.approvalModeChange,
       running: view.messages.some((message) => message.status === "running"),

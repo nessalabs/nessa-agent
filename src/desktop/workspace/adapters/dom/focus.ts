@@ -15,7 +15,8 @@
  * changes, it moves focus that was lost, or left in another pane: a list
  * walked with the arrow keys, the sidebar, is the person's, and keeps it.
  * Opening a widget in the window moves focus into it, from anywhere but a
- * dialog or a menu.
+ * dialog or a menu; so does opening one in the chat's right panel, into the
+ * panel's tab in front.
  *
  * Coming back from the Agents overview, or from the window, is another pane
  * taking focus, even when the command that brought the panes back changed
@@ -31,7 +32,11 @@ import { inModal } from "../../../adapters/modal"
 import type { DesktopStore } from "../../../store"
 import { widgetBodyAttribute } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
-import { selectContentKind, selectWindowWidget } from "../store/selectors"
+import {
+  selectContentKind,
+  selectFocusedPaneKey,
+  selectWindowWidget,
+} from "../store/selectors"
 import { arrivalWaitingAttribute } from "./arrival"
 
 /** Marks the focused pane, whichever layout draws it, for the caret to find. */
@@ -39,6 +44,12 @@ export const focusedPaneAttribute = "data-pane-focused"
 
 /** Marks the window's widget layer while it shows one (`ui/panes/widget-window.tsx`). */
 export const widgetWindowAttribute = "data-widget-window"
+
+/** Marks the right panel's tab in front (`ui/chrome/panel-content.tsx`). */
+export const panelWidgetAttribute = "data-panel-widget"
+
+/** Marks the right panel itself, its tabs and the tab in front (`ui/chrome/right-panel.tsx`). */
+export const chatPanelAttribute = "data-chat-panel"
 
 /**
  * Let go of a home before its send mutates the page. A command not asked
@@ -95,6 +106,14 @@ function caretTarget(scope: ParentNode): HTMLElement | null {
   )
 }
 
+/** The body of the right panel's tab in front, if it is on the page and not covered. */
+function panelTarget(scope: ParentNode): HTMLElement | null {
+  const body = scope.querySelector<HTMLElement>(
+    `[${panelWidgetAttribute}] [${widgetBodyAttribute}]`,
+  )
+  return body && body.closest("[inert]") === null ? body : null
+}
+
 /**
  * Puts the caret in what is in front (`caretTarget`), trying for a few frames
  * while a new pane fills in; `done` is told once it has landed, or given up.
@@ -146,19 +165,20 @@ export function focusAfterPaint(
 
 /**
  * What moving the caret depends on: which pane is focused, what it shows, how
- * many there are, and what the content region shows — the panes, the
- * overview, or a widget, by its item's key.
+ * many there are, what the content region shows — the panes, the overview,
+ * or a widget, by its item's key — and each widget opened in a panel.
  */
 function signature(store: DesktopStore): {
   pane: string
   rest: string
   shown: string
+  panel: number
 } {
   const state = store.getState()
-  const { panes } = state.workspace
+  const { panes, panelAsked: panel } = state.workspace
   const widget = selectWindowWidget(state)
   const shown = widget ? paneItemKey(widgetItem(widget)) : selectContentKind(state)
-  if (!panes) return { pane: "", rest: "", shown }
+  if (!panes) return { pane: "", rest: "", shown, panel }
   const pane = focusedPane(panes)
   // What it shows by its key alone: two keys are equal exactly when their
   // items are (`model/pane-item.ts`), so nothing here reads what it names.
@@ -166,6 +186,7 @@ function signature(store: DesktopStore): {
     pane: String(pane.key),
     rest: `${pane.item}:${panes.columns.map((column) => column.panes.length).join(",")}`,
     shown,
+    panel,
   }
 }
 
@@ -189,10 +210,19 @@ export function useFocusFollowsPane(
     }
     // Where focus last was in the panes or the window, to tell focus that fell away from focus taken elsewhere.
     let last: Element | null = null
+    let lastInPanel = false
 
     const follow = () => {
       stop()
-      stop = focusInFront(scope)
+      // The focused mark is written on the frame after the click. Until it
+      // names the pane the store focused, there is nothing to land in.
+      stop = focusAfterPaint(() => {
+        const key = selectFocusedPaneKey(store.getState())
+        const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
+        if (key !== null && marked?.getAttribute("data-pane-key") !== String(key))
+          return null
+        return caretTarget(scope)
+      })
     }
     /**
      * `moved`: another pane took focus — a key, a split, an agent — so the
@@ -207,7 +237,12 @@ export function useFocusFollowsPane(
       // Document tabs own keyboard navigation while selecting another pane.
       // Moving that selection must not take the next arrow key into a composer.
       if (active?.closest('[role="tablist"]')) return
-      const inFocused = !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
+      const key = selectFocusedPaneKey(store.getState())
+      const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
+      const markAgrees =
+        key === null || marked?.getAttribute("data-pane-key") === String(key)
+      const inFocused =
+        markAgrees && !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
       const grid = gridOf(scope)
       const inOtherPane = !lost && !inFocused && grid?.contains(active) === true
       if (lost || inOtherPane || (moved && !inFocused)) follow()
@@ -219,11 +254,24 @@ export function useFocusFollowsPane(
       follow()
     }
 
+    /** A widget opened in the panel: the caret goes into its tab, from anywhere but a dialog or a menu. */
+    const intoPanel = () => {
+      if (inModal(document.activeElement)) return
+      stop()
+      stop = focusAfterPaint(() => panelTarget(scope))
+    }
+
     let seen = signature(store)
     const unsubscribe = store.subscribe(() => {
       const next = signature(store)
       const was = seen
       seen = next
+      // Opening it in the panel brought its chat to the front, too: the
+      // caret goes to the widget, not the chat's composer.
+      if (next.panel !== was.panel) {
+        afterPaint(intoPanel)
+        return
+      }
       // The Agents overview over the panes keeps the keyboard itself.
       if (next.shown === "agents") return
       // A widget in the window, opened or replaced by another.
@@ -251,8 +299,15 @@ export function useFocusFollowsPane(
       const active = document.activeElement
       // Hidden, it may still hold focus as this runs (WebKit does), before the browser lets go.
       if (active !== document.body && active !== last) return
+      // Out of the panel — a tab closed, a detail gone — back into its tab
+      // in front while it shows one, as a pane keeps the caret in its own
+      // body; else to the focused pane.
+      // Read as focus came in: taken away, it is in no panel any more.
+      const inPanel = lastInPanel
       last = null
-      follow()
+      if (!inPanel) return follow()
+      stop()
+      stop = focusAfterPaint(() => panelTarget(scope) ?? caretTarget(scope))
     }
     const watcher = new MutationObserver(fellAway((held) => !held.isConnected))
     watcher.observe(scope, { childList: true, subtree: true })
@@ -261,13 +316,15 @@ export function useFocusFollowsPane(
       typeof ResizeObserver === "undefined"
         ? null
         : new ResizeObserver(fellAway((held) => held.getClientRects().length === 0))
-    // Focus held in the panes, or in the window's widget, is watched for falling away.
+    // Focus held in the panes, the window's widget or the panel, is watched for falling away.
     const watched = (target: Element) =>
       gridOf(scope)?.contains(target) === true ||
-      scope.querySelector(`[${widgetWindowAttribute}]`)?.contains(target) === true
+      scope.querySelector(`[${widgetWindowAttribute}]`)?.contains(target) === true ||
+      target.closest(`[${chatPanelAttribute}]`) !== null
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target as Element | null
       last = target && watched(target) ? target : null
+      lastInPanel = last?.closest(`[${chatPanelAttribute}]`) != null
       hiding?.disconnect()
       if (last) hiding?.observe(last)
     }

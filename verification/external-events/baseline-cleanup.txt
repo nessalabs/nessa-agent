@@ -1,0 +1,15 @@
+running 1 test
+
+thread 'agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout' (71623) panicked at crates/nessa-server/src/agents/infrastructure/../../../tests/agents/codex.rs:95:79:
+called `Result::unwrap()` on an `Err` value: CleanupUnconfirmed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout ... FAILED
+
+failures:
+
+failures:
+    agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3747 filtered out; finished in 0.51s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

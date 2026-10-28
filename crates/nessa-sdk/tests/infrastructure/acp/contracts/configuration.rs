@@ -256,6 +256,7 @@ fn cleanup_fault_process(
             .current_dir(&config.workspace)
             .env_clear()
             .envs(&config.environment)
+            .envs(&config.runtime_environment)
             .envs(&config.credential_environment)
             .env("ANTHROPIC_MODEL", "exact-fixture-model")
             .env("ANTHROPIC_CUSTOM_MODEL_OPTION", "exact-fixture-model")
@@ -1022,6 +1023,15 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
     .await
     .unwrap();
     let agent = attached_agent(Arc::new(binding), manager).await.unwrap();
+    assert_eq!(
+        agent
+            .invoke(
+                prompt("initial-context-work"),
+                Submitter::owner(close_action())
+            )
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
     let provider_id = agent
         .session_manager()
         .snapshot()
@@ -1032,6 +1042,7 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
         .expect("attached provider context")
         .clone();
     agent.close(close_action()).await.unwrap();
+    let finishes_before = audit.finishes.lock().unwrap().len();
     let authorization = agent
         .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
         .unwrap();
@@ -1056,7 +1067,7 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
             assert_eq!(record.origin(), &CancellationOrigin::Client(close_action()));
         }
     }
-    assert!(audit.finishes.lock().unwrap().is_empty());
+    assert_eq!(audit.finishes.lock().unwrap().len(), finishes_before);
     drop(agent);
     drop(
         SessionManager::open(

@@ -11,10 +11,11 @@ use crate::application::agent_execution::{
         limits::validate_observation_id, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
         SubmissionMode,
     },
+    permissions::{ApprovalRuleReference, DeclinedReview},
     providers::{ExecutionReport, ProviderIdentity},
     sessions::{
         storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
-        NoteId,
+        HandoffId, NoteId,
     },
 };
 use crate::domain::{
@@ -22,18 +23,18 @@ use crate::domain::{
         executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
         permissions::{
             PermissionEffect, PermissionId, PermissionReviewDeadline, PermissionToolClass,
-            RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
-            ReviewDeclineReason, ReviewDeclineStage,
+            RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
+            ReviewDeclineStage,
         },
         prompts::{
             AppModelContext as DomainAppModelContext, ImageReference, LinkedFile, McpAppSource,
-            MessageSender, PromptText, UserMessage,
+            MessageSender, PromptText, UploadedFileReference, UserMessage,
         },
         questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
         sessions::ExecutionSessionId,
         tools::{McpTool, ToolCallId},
     },
-    common::value_objects::{ImageMediaType, Sha256Digest},
+    common::value_objects::{ImageMediaType, MediaType, Sha256Digest},
 };
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +68,36 @@ impl Image {
             Sha256Digest::parse(&self.digest).map_err(corrupt)?,
             ImageMediaType::parse(&self.media_type).map_err(corrupt)?,
             self.size,
+        )
+        .map_err(corrupt)
+    }
+}
+/// A durable uploaded input, independent of its eventual placement path.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UploadedFile {
+    digest: String,
+    media_type: String,
+    size: u64,
+    name: String,
+}
+impl From<&UploadedFileReference> for UploadedFile {
+    fn from(file: &UploadedFileReference) -> Self {
+        Self {
+            digest: file.digest().to_string(),
+            media_type: file.media_type().as_str().into(),
+            size: file.size(),
+            name: file.name().into(),
+        }
+    }
+}
+impl UploadedFile {
+    fn decode(self) -> Result<UploadedFileReference, StorageError> {
+        UploadedFileReference::new(
+            Sha256Digest::parse(&self.digest).map_err(corrupt)?,
+            MediaType::parse(&self.media_type).map_err(corrupt)?,
+            self.size,
+            self.name,
         )
         .map_err(corrupt)
     }
@@ -178,6 +209,9 @@ pub(super) struct Metadata {
     pub(super) user_images: Vec<Image>,
     /// Empty when a message has no linked files.
     pub(super) user_files: Vec<FileLink>,
+    /// Absent in records written before stored-file input existed means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) user_uploads: Vec<UploadedFile>,
     /// The app that wrote the message on the person's behalf; `null` when
     /// the person did. Required: a record without it is not of this shape
     /// (`deserialize_with` keeps serde from reading its absence as `None`).
@@ -193,6 +227,9 @@ pub(super) struct Metadata {
     /// The notes the turn took, in the order it took them; absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) notes: Vec<String>,
+    /// The handoff the turn took; absent when it took none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) handoff: Option<String>,
     pub(super) acknowledgement: Acknowledgement,
     pub(super) provider_report: Option<Settlement>,
     pub(super) local_cancellation: Option<InvocationCancellation>,
@@ -246,6 +283,10 @@ pub(super) struct Event<T = String> {
     /// for a start without one, and on events saved before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) native_hooks: Option<bool>,
+    /// When the session received the event, in Unix milliseconds. Absent on
+    /// events saved before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) at_ms: Option<u64>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -261,6 +302,9 @@ pub(super) enum Update<T = String> {
         reason: DeclineReason,
         outcome: DeclineOutcome,
         delivery: DeclineDelivery,
+        /// Present exactly when `outcome` stops the turn or closes the session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<StoppingRule>,
     },
     PermissionRequested {
         id: String,
@@ -351,6 +395,15 @@ impl From<SavedEffect> for PermissionEffect {
         }
     }
 }
+/// The configured rule that required a stop, saved with the declined review.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StoppingRule {
+    pub(super) rule_id: String,
+    pub(super) revision: String,
+    pub(super) granted_by: Actor,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(super) enum DeclineReason {
     ToolNotReviewable,
@@ -384,6 +437,13 @@ impl From<&InvocationRecord> for Metadata {
                 .iter()
                 .map(Into::into)
                 .collect(),
+            user_uploads: value
+                .request
+                .user_message
+                .uploads()
+                .iter()
+                .map(UploadedFile::from)
+                .collect(),
             user_files: value
                 .request
                 .user_message
@@ -407,6 +467,7 @@ impl From<&InvocationRecord> for Metadata {
             actor: (&value.actor).into(),
             initiation: (&value.initiation).into(),
             notes: value.notes.iter().map(|id| id.as_str().into()).collect(),
+            handoff: value.handoff.as_ref().map(|id| id.as_str().into()),
             acknowledgement: (&value.acknowledgement).into(),
             provider_report: value.provider_report.clone().map(Into::into),
             local_cancellation: value.local_cancellation.as_ref().map(Into::into),
@@ -466,6 +527,7 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
             },
             execution_id: event.execution_id().as_str().into(),
             native_hooks: event.native_hooks(),
+            at_ms: event.observed_at_ms(),
             update: match event.update() {
                 ExecutionUpdate::Finished(outcome) => Update::Finished((*outcome).into()),
                 ExecutionUpdate::Message(chunk) => match chunk.kind() {
@@ -476,25 +538,30 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
                 ExecutionUpdate::PermissionCancelled(cancellation) => {
                     Update::PermissionCancelled(cancellation.into())
                 }
-                ExecutionUpdate::ReviewDeclined(observation) => Update::ReviewDeclined {
-                    id: observation.id().as_str().into(),
-                    tool: observation.decline().declared().map(str::to_owned),
-                    reason: match observation.decline().reason() {
+                ExecutionUpdate::ReviewDeclined(review) => Update::ReviewDeclined {
+                    id: review.id().as_str().into(),
+                    tool: review.decline().declared().map(str::to_owned),
+                    reason: match review.decline().reason() {
                         ReviewDeclineReason::ToolNotReviewable => DeclineReason::ToolNotReviewable,
                         ReviewDeclineReason::UnreadableRequest => DeclineReason::UnreadableRequest,
                         ReviewDeclineReason::UnusableOptions => DeclineReason::UnusableOptions,
                     },
-                    outcome: match observation.decline().outcome() {
+                    outcome: match review.decline().outcome() {
                         RefusalOutcome::Continue => DeclineOutcome::Continue,
                         RefusalOutcome::EndTurn => DeclineOutcome::EndTurn,
                         RefusalOutcome::CloseSession => DeclineOutcome::CloseSession,
                     },
-                    delivery: match observation.stage() {
+                    delivery: match review.stage() {
                         ReviewDeclineStage::Selected => DeclineDelivery::Selected,
                         ReviewDeclineStage::WriteConfirmed => DeclineDelivery::WriteConfirmed,
                         ReviewDeclineStage::WriteUnconfirmed => DeclineDelivery::WriteUnconfirmed,
                         ReviewDeclineStage::WriteNotAttempted => DeclineDelivery::WriteNotAttempted,
                     },
+                    rule: review.rule().map(|rule| StoppingRule {
+                        rule_id: rule.rule_id().into(),
+                        revision: rule.revision().into(),
+                        granted_by: rule.granted_by().into(),
+                    }),
                 },
                 ExecutionUpdate::PermissionRequested {
                     id,
@@ -586,6 +653,10 @@ impl Metadata {
                         .into_iter()
                         .map(FileLink::decode)
                         .collect::<Result<_, _>>()?,
+                    self.user_uploads
+                        .into_iter()
+                        .map(UploadedFile::decode)
+                        .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?
                 .sent_by(match self.user_app {
@@ -609,6 +680,7 @@ impl Metadata {
                 .into_iter()
                 .map(|id| NoteId::new(id).map_err(corrupt))
                 .collect::<Result<_, _>>()?,
+            handoff: self.handoff.map(HandoffId::new).transpose()?,
             acknowledgement: self.acknowledgement.try_into()?,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -675,29 +747,57 @@ impl Event {
                 reason,
                 outcome,
                 delivery,
-            } => ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::restore(
-                ReviewDeclineId::new(id).map_err(corrupt)?,
-                ReviewDecline::restore(
-                    tool,
-                    match reason {
-                        DeclineReason::ToolNotReviewable => ReviewDeclineReason::ToolNotReviewable,
-                        DeclineReason::UnreadableRequest => ReviewDeclineReason::UnreadableRequest,
-                        DeclineReason::UnusableOptions => ReviewDeclineReason::UnusableOptions,
-                    },
-                    match outcome {
-                        DeclineOutcome::Continue => RefusalOutcome::Continue,
-                        DeclineOutcome::EndTurn => RefusalOutcome::EndTurn,
-                        DeclineOutcome::CloseSession => RefusalOutcome::CloseSession,
-                    },
+                rule,
+            } => {
+                let outcome = match outcome {
+                    DeclineOutcome::Continue => RefusalOutcome::Continue,
+                    DeclineOutcome::EndTurn => RefusalOutcome::EndTurn,
+                    DeclineOutcome::CloseSession => RefusalOutcome::CloseSession,
+                };
+                let rule = rule
+                    .map(|rule| {
+                        ApprovalRuleReference::new(
+                            rule.rule_id,
+                            rule.revision,
+                            rule.granted_by.decode()?,
+                        )
+                        .map_err(corrupt)
+                    })
+                    .transpose()?;
+                ExecutionUpdate::ReviewDeclined(
+                    DeclinedReview::restore(
+                        ReviewDeclineId::new(id).map_err(corrupt)?,
+                        ReviewDecline::restore(
+                            tool,
+                            match reason {
+                                DeclineReason::ToolNotReviewable => {
+                                    ReviewDeclineReason::ToolNotReviewable
+                                }
+                                DeclineReason::UnreadableRequest => {
+                                    ReviewDeclineReason::UnreadableRequest
+                                }
+                                DeclineReason::UnusableOptions => {
+                                    ReviewDeclineReason::UnusableOptions
+                                }
+                            },
+                            outcome,
+                        )
+                        .map_err(corrupt)?,
+                        match delivery {
+                            DeclineDelivery::Selected => ReviewDeclineStage::Selected,
+                            DeclineDelivery::WriteConfirmed => ReviewDeclineStage::WriteConfirmed,
+                            DeclineDelivery::WriteUnconfirmed => {
+                                ReviewDeclineStage::WriteUnconfirmed
+                            }
+                            DeclineDelivery::WriteNotAttempted => {
+                                ReviewDeclineStage::WriteNotAttempted
+                            }
+                        },
+                        rule,
+                    )
+                    .map_err(corrupt)?,
                 )
-                .map_err(corrupt)?,
-                match delivery {
-                    DeclineDelivery::Selected => ReviewDeclineStage::Selected,
-                    DeclineDelivery::WriteConfirmed => ReviewDeclineStage::WriteConfirmed,
-                    DeclineDelivery::WriteUnconfirmed => ReviewDeclineStage::WriteUnconfirmed,
-                    DeclineDelivery::WriteNotAttempted => ReviewDeclineStage::WriteNotAttempted,
-                },
-            )),
+            }
             Update::PermissionRequested {
                 id,
                 tool,
@@ -783,8 +883,12 @@ impl Event {
             (_, Some(_)) => return Err(corrupt("message identity on a non-message observation")),
         };
         let event = ExecutionEvent::new(execution_id.clone(), update);
-        Ok(match self.native_hooks {
+        let event = match self.native_hooks {
             Some(allowed) => event.with_native_hooks(allowed),
+            None => event,
+        };
+        Ok(match self.at_ms {
+            Some(at_ms) => event.with_observed_at_ms(at_ms),
             None => event,
         })
     }
@@ -899,6 +1003,20 @@ mod borrowed_event_tests {
         let (bytes, decoded) = round_trip(&tool_event());
         assert!(!String::from_utf8(bytes).unwrap().contains("native_hooks"));
         assert_eq!(decoded.native_hooks(), None);
+    }
+
+    #[test]
+    fn a_tool_event_keeps_the_time_it_was_received() {
+        let event = tool_event().with_observed_at_ms(1_700_000_000_123);
+        let (bytes, decoded) = round_trip(&event);
+        assert!(String::from_utf8(bytes)
+            .unwrap()
+            .contains(r#""at_ms":1700000000123"#));
+        assert_eq!(decoded.observed_at_ms(), Some(1_700_000_000_123));
+        assert_eq!(decoded, event);
+        let (bytes, decoded) = round_trip(&tool_event());
+        assert!(!String::from_utf8(bytes).unwrap().contains("at_ms"));
+        assert_eq!(decoded.observed_at_ms(), None);
     }
 
     #[test]

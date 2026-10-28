@@ -1,10 +1,10 @@
-use super::domain::{ConversationApprovalMode, ConversationId};
+use super::domain::{ConversationApprovalMode, ConversationId, LATEST_TIME_MS};
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationArtifact,
-    ConversationAsked, ConversationCapabilities, ConversationLeaseCause, ConversationLeaseCleanup,
-    ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
-    ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
+    ConversationAsked, ConversationCapabilities, ConversationHandoff, ConversationLeaseCause,
+    ConversationLeaseCleanup, ConversationLeaseEnvironment, ConversationLeaseRefusal,
+    ConversationLeaseSandbox, ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
     ConversationMessageStatus, ConversationModelChangeEffect, ConversationModelChangeView,
     ConversationNote, ConversationPart, ConversationPending, ConversationPendingMode,
@@ -12,12 +12,16 @@ use super::view::{
     ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
     ConversationQuestion, ConversationQuestionEntry, ConversationReviewEntry,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView, ConversationTool,
-    ConversationTranscriptState, ConversationUnreadable, ConversationView, NativeHooksChoice,
-    MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationToolChange, ConversationTranscriptState, ConversationUnreadable,
+    ConversationUsageLimit, ConversationUsageLimitProvider, ConversationUsageLimitRecovery,
+    ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES, MAX_TOOL_CHANGES,
+    MAX_TOOL_CHANGE_PATH_BYTES, MAX_TOOL_CHANGE_SIDE_BYTES,
 };
-use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
+use nessa_sdk::application::agent_execution::permissions::{
+    ApprovalRuleReference, CancellationOrigin, DeclinedReview, PermissionCancellation,
+};
 use nessa_sdk::application::agent_execution::{
-    agents::AgentError,
+    agents::{AgentError, UsageLimit, UsageLimitProvider, UsageLimitRecovery},
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
     sessions::{
         CommittedSession, CommittedStatus, CurrentLease, CurrentLeaseState, InvocationRecord,
@@ -28,13 +32,16 @@ use nessa_sdk::domain::agent_execution::leases::{
     EnvironmentRef, LeaseCleanup, LeaseEndCause, LeasePhase, LeaseRefusal, LeaseRevision,
     SandboxProfile,
 };
-use nessa_sdk::domain::agent_execution::tools::McpTool;
+// The schema's bound on `ConversationTool.input` is the SDK's bound on the
+// input an agent reports. A review's input past it is left off the tool row;
+// the review still offers all of it.
+use nessa_sdk::domain::agent_execution::tools::{McpTool, MAX_TOOL_INPUT_BYTES};
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PendingQuestion, PendingReview, PermissionEffect, PermissionReviewDeadline,
-        PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
-        ReviewDeclineStage,
+        PendingQuestion, PendingReview, PermissionCancellationReasonView, PermissionEffect,
+        PermissionReviewDeadline, PermissionScope, PermissionStateView, RefusalOutcome,
+        ReviewDecline, ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -53,6 +60,8 @@ const MAX_TOOLS: usize = 16;
 pub const MAX_VIEW_ARTIFACTS: usize = 64;
 /// Most notes the view lists: the newest, in the order they were left.
 pub const MAX_VIEW_NOTES: usize = 64;
+/// Most handoffs the view lists: as many as a conversation keeps.
+pub const MAX_VIEW_HANDOFFS: usize = 256;
 // Application transcript body; product catalog enrichment is serialized afterward.
 pub const MAX_VIEW_BYTES: usize = 60_000;
 pub use crate::product::generated::{MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES};
@@ -73,9 +82,6 @@ pub const MAX_QUESTION_LIST_BYTES: usize = MAX_OPEN_QUESTIONS * MAX_QUESTION_ENT
 /// which it never gives up.
 pub const MAX_INTERACTION_LIST_BYTES: usize = MAX_REVIEW_LIST_BYTES + MAX_QUESTION_LIST_BYTES;
 const _: () = assert!(MAX_INTERACTION_LIST_BYTES <= MAX_VIEW_BYTES * 2 / 5);
-/// The schema's bound on `ConversationTool.input`, in UTF-8 bytes. An input
-/// past it is left off the tool row; its review still offers all of it.
-const MAX_TOOL_INPUT_BYTES: usize = 32_768;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
@@ -169,6 +175,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
     if let Some(terms) = terms {
         view.environment = Some(match &terms.environment {
             EnvironmentRef::Here => ConversationLeaseEnvironment::Here,
+            EnvironmentRef::Boat => ConversationLeaseEnvironment::Boat,
             EnvironmentRef::Ssh(host) => {
                 view.host = Some(host.as_str().to_owned());
                 ConversationLeaseEnvironment::Ssh
@@ -273,16 +280,21 @@ pub struct Projection {
     /// deadline did not settle them, so a later notice is ignored.
     cancelled_otherwise: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
-    /// The calls that have a part in their turn, by execution and clipped tool
-    /// id, so a call's later updates find it without scanning the turn's
-    /// parts. A call goes in only when its part is pushed, and an execution
-    /// leaves when its parts do: cleared for a replayed record, or its message
-    /// let go.
+    /// The calls heard in each turn, by execution and clipped tool id, so a
+    /// call's later updates find its part without scanning the turn's parts,
+    /// and a call whose row was let go is not mistaken for a new one. A call
+    /// goes in on its first report, even when the turn had no room left for
+    /// its part, and an execution leaves when its parts do: cleared for a
+    /// replayed record, or its message let go.
     tool_parts: HashMap<String, HashSet<String>>,
     /// The hooks choice each execution's tool events were saved with. One
     /// execution runs on one process start, so its events agree. `None`
     /// marks saved events that disagree: no choice can be shown for them.
     execution_hooks: HashMap<String, Option<bool>>,
+    /// End-turn hook sentences waiting for the execution to be cancelled.
+    /// A finish that is not a cancel drops them: the provider completed the
+    /// turn, so the sentence must not say the hook stopped it.
+    pending_hook_stops: HashMap<String, Vec<(String, String)>>,
     /// The execution this replacement was told is active. It is who may be
     /// offered an interaction. It does not, by itself, decide that every
     /// other unfinished record was interrupted.
@@ -343,7 +355,45 @@ fn deadline_notice(effect: PermissionEffect, reason: &str) -> String {
     };
     format!("{verb}: {reason}")
 }
-fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> String {
+fn decline_reason(reason: ReviewDeclineReason) -> &'static str {
+    match reason {
+        ReviewDeclineReason::ToolNotReviewable => "That tool is not reviewable here.",
+        ReviewDeclineReason::UnreadableRequest => "The request could not be read safely.",
+        ReviewDeclineReason::UnusableOptions => "The request offered no usable choices.",
+    }
+}
+
+fn stopped_tool(name: Option<&str>) -> &str {
+    name.unwrap_or("the requested tool")
+}
+
+/// The sentence for a configured stop. The rule and the tool come from the
+/// event, not from the audit sink.
+fn stopping_rule_notice(decline: &ReviewDecline, rule: &ApprovalRuleReference) -> String {
+    let verb = match decline.outcome() {
+        RefusalOutcome::EndTurn => "stopped this turn",
+        // The decline requests the close. Cleanup can still be unconfirmed,
+        // and this projection does not see that confirmation. The confirmed
+        // transition is the session_closed audit, not this sentence.
+        RefusalOutcome::CloseSession => "is closing the session",
+        RefusalOutcome::Continue => "declined a tool review",
+    };
+    format!(
+        "Nessa {verb} before {} ran because rule {} (revision {}) refused it. {}",
+        stopped_tool(decline.declared()),
+        rule.rule_id(),
+        rule.revision(),
+        decline_reason(decline.reason()),
+    )
+}
+
+fn decline_notice(review: &DeclinedReview) -> String {
+    if let Some(rule) = review.rule() {
+        // The stop is published once, before the turn finishes. A later
+        // delivery stage stays in the audit. The sentence keeps the rule.
+        return stopping_rule_notice(review.decline(), rule);
+    }
+    let decline = review.decline();
     let target = decline
         .declared()
         .map(|tool| format!(" labeled {tool}"))
@@ -353,36 +403,73 @@ fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> Stri
         ReviewDeclineReason::UnreadableRequest => "the request could not be read safely",
         ReviewDeclineReason::UnusableOptions => "the request offered no usable choices",
     };
-    let delivery = match decline.outcome() {
-        RefusalOutcome::Continue => match delivery {
-            ReviewDeclineStage::Selected => {
-                "Nessa has not confirmed writing the refusal to the agent."
-            }
-            ReviewDeclineStage::WriteConfirmed => "",
-            ReviewDeclineStage::WriteUnconfirmed => {
-                "Nessa could not confirm writing the refusal to the agent."
-            }
-            ReviewDeclineStage::WriteNotAttempted => {
-                "Nessa did not attempt to write the refusal to the agent."
-            }
-        },
-        // The stop is published once, before the turn finishes. A later
-        // delivery stage would be output after that finish, so the write
-        // stays in the audit and the panel keeps the reason.
-        RefusalOutcome::EndTurn | RefusalOutcome::CloseSession => "",
-    };
-    let stopped = match decline.outcome() {
-        RefusalOutcome::Continue => "",
-        RefusalOutcome::EndTurn => " The turn stopped because of that refusal.",
-        RefusalOutcome::CloseSession => " The session closed because of that refusal.",
+    let delivery = match review.stage() {
+        ReviewDeclineStage::Selected => "Nessa has not confirmed writing the refusal to the agent.",
+        ReviewDeclineStage::WriteConfirmed => "",
+        ReviewDeclineStage::WriteUnconfirmed => {
+            "Nessa could not confirm writing the refusal to the agent."
+        }
+        ReviewDeclineStage::WriteNotAttempted => {
+            "Nessa did not attempt to write the refusal to the agent."
+        }
     };
     let mut text = format!("Nessa declined a tool review{target} because {reason}.");
     if !delivery.is_empty() {
         text.push(' ');
         text.push_str(delivery);
     }
-    text.push_str(stopped);
     text
+}
+
+/// A declined review. Its decimal is the decline id.
+const REVIEW_NOTICE: &str = "review";
+/// A hook that stopped the turn. Its decimal is the permission's, which is a
+/// different identity from a review decline even when the text matches.
+const HOOK_NOTICE: &str = "hook";
+/// A deadline that settled its review. Its decimal is the permission's.
+/// A declined review may use the same decimal; this kind keeps that sentence.
+const DEADLINE_NOTICE: &str = "deadline";
+
+fn same_notice(part: &ConversationPart, kind: &str, id: &str) -> bool {
+    part.kind == "local_notice" && part.notice_kind == kind && part.notice_id == id
+}
+
+/// A hook that ended the turn or closed the session. Continue stays quiet
+/// here: the turn is still running. An end-turn sentence is held until that
+/// execution is cancelled, and dropped if it finishes any other way. A
+/// review id that is not a notice id is skipped, because the client rejects
+/// the whole view for one bad notice id. The notice is a hook notice, so a
+/// declined review that already used the same decimal stays beside it.
+fn hook_stop_notice(
+    cancellation: &PermissionCancellation,
+) -> Option<(String, String, RefusalOutcome)> {
+    let PermissionStateView::Cancelled { reason } = cancellation.request().state() else {
+        return None;
+    };
+    let PermissionCancellationReasonView::Custom(custom) = reason.view() else {
+        return None;
+    };
+    let outcome = custom.hook_stop()?;
+    let id = ReviewDeclineId::new(cancellation.request().id().as_str()).ok()?;
+    let verb = match outcome {
+        RefusalOutcome::EndTurn => "stopped this turn",
+        RefusalOutcome::CloseSession => "closed the session",
+        RefusalOutcome::Continue => return None,
+    };
+    let tool = cancellation.input().name.as_str();
+    let tool = if tool.is_empty() {
+        "the requested tool"
+    } else {
+        tool
+    };
+    Some((
+        id.as_str().to_owned(),
+        format!(
+            "Nessa {verb} before {tool} ran because a hook refused it: {}.",
+            custom.explanation()
+        ),
+        outcome,
+    ))
 }
 // A provider report owns dispatched settlement. Before dispatch, the retained
 // terminal result owns automatic-attachment failure, including its primary cause
@@ -428,6 +515,89 @@ fn authentication_independent_failure(record: &InvocationRecord) -> bool {
         .and_then(|report| report.clone().into_result().err());
     report_error.as_ref().is_some_and(|error| error != refusal) || refusal != final_error
 }
+/// The saved usage limit. [`AgentError::usage_limit`] is the only walk of
+/// nested operation failures. A provider report owns the settlement when one
+/// was saved. Without one, that walk reads every position of an aggregate, so
+/// a limit carried only as `subsequent_error` is still the card. A diagnostic
+/// that merely mentions a limit is not one.
+fn usage_limit_refusal(record: &InvocationRecord) -> Option<&UsageLimit> {
+    let error = match record.provider_report.as_ref() {
+        Some(report) => report.provider_result()?.as_ref().err()?,
+        None => record.result.as_ref()?.as_ref().err()?,
+    };
+    error.usage_limit()
+}
+
+/// A typed usage limit kept a separate failure beside it.
+///
+/// The live settlement records the provider error as both the observation and
+/// the execution result. That wrap is still the usage limit. A different
+/// error, a successful execution beside the limit, storage after the turn, or
+/// hook failures after it are a second failure.
+fn usage_limit_independent_failure(record: &InvocationRecord) -> bool {
+    if usage_limit_refusal(record).is_none() {
+        return false;
+    }
+    let saved = record
+        .result
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .is_some_and(distinct_from_usage_limit);
+    let reported = record
+        .provider_report
+        .as_ref()
+        .and_then(|report| report.clone().into_result().err())
+        .as_ref()
+        .is_some_and(distinct_from_usage_limit);
+    saved || reported
+}
+
+/// Whether `error` contains a failure other than a usage limit.
+fn distinct_from_usage_limit(error: &AgentError) -> bool {
+    match error {
+        AgentError::UsageLimitReached(_) => false,
+        AgentError::ExecutionObservation {
+            error,
+            execution_result,
+        } => match execution_result.as_deref() {
+            Some(Ok(_)) => true,
+            Some(Err(failed)) => {
+                distinct_from_usage_limit(error) || distinct_from_usage_limit(failed)
+            }
+            None => distinct_from_usage_limit(error),
+        },
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        } => distinct_from_usage_limit(first_error) || distinct_from_usage_limit(subsequent_error),
+        AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } => distinct_from_usage_limit(operation_error) || distinct_from_usage_limit(cleanup_error),
+        _ => true,
+    }
+}
+
+fn published_usage_limit(record: &InvocationRecord) -> Option<ConversationUsageLimit> {
+    Some(conversation_usage_limit(usage_limit_refusal(record)?))
+}
+
+fn conversation_usage_limit(limit: &UsageLimit) -> ConversationUsageLimit {
+    ConversationUsageLimit {
+        provider: match limit.provider() {
+            UsageLimitProvider::Claude => ConversationUsageLimitProvider::Claude,
+            UsageLimitProvider::Codex => ConversationUsageLimitProvider::Codex,
+        },
+        recovery: match limit.recovery() {
+            UsageLimitRecovery::TimedReset => ConversationUsageLimitRecovery::TimedReset,
+            UsageLimitRecovery::UserAction => ConversationUsageLimitRecovery::UserAction,
+            UsageLimitRecovery::Unknown => ConversationUsageLimitRecovery::Unknown,
+        },
+        resets_at_ms: limit.resets_at_ms(),
+        auto_resuming: None,
+    }
+}
+
 fn failure_notice(record: &InvocationRecord) -> Option<String> {
     let final_error = record.result.as_ref()?.as_ref().err()?;
     let report = record.provider_report.as_ref();
@@ -436,6 +606,9 @@ fn failure_notice(record: &InvocationRecord) -> Option<String> {
         .and_then(|result| result.as_ref().err());
     if authentication_refusal(record).is_some() {
         return authentication_independent_failure(record).then(|| REQUIRED_WORK_FAILURE.into());
+    }
+    if usage_limit_refusal(record).is_some() {
+        return usage_limit_independent_failure(record).then(|| REQUIRED_WORK_FAILURE.into());
     }
     let Some(AgentError::Provider {
         diagnostic: Some(diagnostic),
@@ -535,6 +708,7 @@ impl Projection {
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
             execution_hooks: HashMap::new(),
+            pending_hook_stops: HashMap::new(),
             live_here: live_here.clone(),
             unfinished_at_fold,
             history_accepted,
@@ -578,6 +752,12 @@ impl Projection {
                     snapshot.notes[snapshot.notes.len().saturating_sub(MAX_VIEW_NOTES)..]
                         .iter()
                         .map(|note| ConversationNote::of(snapshot, note))
+                        .collect()
+                }),
+                handoffs: snapshot.map_or_else(Vec::new, |snapshot| {
+                    snapshot.handoffs[snapshot.handoffs.len().saturating_sub(MAX_VIEW_HANDOFFS)..]
+                        .iter()
+                        .map(ConversationHandoff::of)
                         .collect()
                 }),
                 unreadable: Vec::new(),
@@ -737,6 +917,13 @@ impl Projection {
                             .request
                             .user_message
                             .images()
+                            .iter()
+                            .map(Into::into)
+                            .collect(),
+                        uploads: record
+                            .request
+                            .user_message
+                            .uploads()
                             .iter()
                             .map(Into::into)
                             .collect(),
@@ -945,6 +1132,7 @@ impl Projection {
         self.view.messages.push(ConversationMessage {
             authentication_required: None,
             required_work_failed: None,
+            usage_limit: None,
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
@@ -953,6 +1141,7 @@ impl Projection {
             user_text: String::new(),
             attachments: Vec::new(),
             files: Vec::new(),
+            uploads: Vec::new(),
             app: None,
             steering_target: None,
             status: ConversationMessageStatus::Running,
@@ -1013,11 +1202,11 @@ impl Projection {
             .iter_mut()
             .find(|tool| tool.execution_id == execution && tool.tool_id == tool_id.as_str())
         {
-            tool.input = if input.arguments_json.len() <= MAX_TOOL_INPUT_BYTES {
-                input.arguments_json.clone()
-            } else {
-                String::new()
-            };
+            // Past the bound the review's arguments are left out, never cut,
+            // and the input the call already reported stays.
+            if input.arguments_json.len() <= MAX_TOOL_INPUT_BYTES {
+                tool.input = input.arguments_json.clone();
+            }
         }
     }
 
@@ -1082,16 +1271,61 @@ impl Projection {
     }
 
     /// Render one observation from a validated committed SDK record.
+    /// Show held end-turn hook sentences once the execution is cancelled, and
+    /// drop them when it finishes any other way.
+    fn take_hook_stops(&mut self, id: &str, index: usize, cancelled: bool) {
+        let Some(pending) = self.pending_hook_stops.remove(id) else {
+            return;
+        };
+        if !cancelled {
+            return;
+        }
+        for (notice_id, text) in pending {
+            let already = self.view.messages[index]
+                .parts
+                .iter()
+                .any(|part| same_notice(part, HOOK_NOTICE, &notice_id));
+            if already {
+                continue;
+            }
+            let retained = self.view.messages[index].retained_text;
+            let available = (MAX_TEXT * 2).saturating_sub(retained);
+            let bounded = clipped(&text, available);
+            if bounded.len() != text.len() {
+                self.view.truncated = true;
+            }
+            let offset = self.view.messages[index].event_count.saturating_sub(1);
+            let part = ConversationPart {
+                message_id: None,
+                offset,
+                kind: "local_notice".into(),
+                text: bounded,
+                tool_id: String::new(),
+                notice_id,
+                notice_kind: HOOK_NOTICE.into(),
+            };
+            let message = &mut self.view.messages[index];
+            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
+            {
+                message.retained_text += part.text.len();
+                message.parts.push(part);
+            } else {
+                self.view.truncated = true;
+            }
+        }
+    }
+
     fn observe(&mut self, event: &ExecutionEvent) {
         let id = event.execution_id().as_str();
         let index = self.ensure_message(id);
         // Decided once, before this event changes anything: a notice is shown
         // for the deadline that settled its review, and only the first time.
         // The notice part is that record, so a replayed record shows it again.
-        // The review's id becomes the notice's, and a notice id is the decimal
-        // a review decline has; a saved history may hold any permission id, so
-        // one that is not a notice id shows no notice rather than a view the
-        // client refuses whole.
+        // The permission id becomes the notice's. A notice id is a decimal a
+        // review decline can use; a saved history may hold any permission id,
+        // so one that is not a notice id shows no notice rather than a view
+        // the client refuses whole. A hook notice and a declined-review
+        // notice use different kinds, so neither counts as this deadline.
         let deadline_notice_shown = match event.update() {
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
@@ -1102,9 +1336,10 @@ impl Projection {
                     && self.deadline_settled(id, permission.as_str(), |published| {
                         published.effect() == *effect && published.reason() == reason.as_str()
                     })
-                    && !self.view.messages[index].parts.iter().any(|part| {
-                        part.kind == "local_notice" && part.notice_id == permission.as_str()
-                    })
+                    && !self.view.messages[index]
+                        .parts
+                        .iter()
+                        .any(|part| same_notice(part, DEADLINE_NOTICE, permission.as_str()))
             }
             _ => false,
         };
@@ -1119,6 +1354,15 @@ impl Projection {
         {
             self.view.truncated = true;
         }
+        // Whether this turn heard the call before this report: its row may
+        // since have been let go for room, but this is not its first report.
+        let heard = match event.update() {
+            ExecutionUpdate::Tool(update) => self
+                .tool_parts
+                .get(id)
+                .is_some_and(|calls| calls.contains(&clipped(update.id().as_str(), 256))),
+            _ => false,
+        };
         let part = match event.update() {
             ExecutionUpdate::Message(chunk) => Some(ConversationPart {
                 message_id: chunk.message_id().map(str::to_owned),
@@ -1132,24 +1376,19 @@ impl Projection {
                 text: clipped(chunk.as_str(), available),
                 tool_id: String::new(),
                 notice_id: String::new(),
+                notice_kind: String::new(),
             }),
             // One part per tool call, where it was first seen: a call's later
             // updates change its `tools` entry, not the turn's parts.
-            ExecutionUpdate::Tool(update) => {
-                let tool_id = clipped(update.id().as_str(), 256);
-                let seen = self
-                    .tool_parts
-                    .get(id)
-                    .is_some_and(|calls| calls.contains(&tool_id));
-                (!seen).then(|| ConversationPart {
-                    message_id: None,
-                    offset,
-                    kind: "tool".into(),
-                    text: String::new(),
-                    tool_id,
-                    notice_id: String::new(),
-                })
-            }
+            ExecutionUpdate::Tool(update) => (!heard).then(|| ConversationPart {
+                message_id: None,
+                offset,
+                kind: "tool".into(),
+                text: String::new(),
+                tool_id: clipped(update.id().as_str(), 256),
+                notice_id: String::new(),
+                notice_kind: String::new(),
+            }),
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
                 effect,
@@ -1170,16 +1409,17 @@ impl Projection {
                         text: bounded,
                         tool_id: String::new(),
                         notice_id: permission.as_str().into(),
+                        notice_kind: DEADLINE_NOTICE.into(),
                     })
                 }
             }
-            ExecutionUpdate::ReviewDeclined(observation) => {
-                let notice_id = observation.id().as_str();
-                let text = decline_notice(observation.decline(), observation.stage());
+            ExecutionUpdate::ReviewDeclined(review) => {
+                let notice_id = review.id().as_str();
+                let text = decline_notice(review);
                 if let Some(position) = self.view.messages[index]
                     .parts
                     .iter()
-                    .position(|part| part.kind == "local_notice" && part.notice_id == notice_id)
+                    .position(|part| same_notice(part, REVIEW_NOTICE, notice_id))
                 {
                     let previous = self.view.messages[index].parts[position].text.len();
                     let budget =
@@ -1204,22 +1444,58 @@ impl Projection {
                         text: bounded,
                         tool_id: String::new(),
                         notice_id: notice_id.into(),
+                        notice_kind: REVIEW_NOTICE.into(),
                     })
+                }
+            }
+            ExecutionUpdate::PermissionCancelled(cancellation) => {
+                match hook_stop_notice(cancellation) {
+                    Some((notice_id, text, RefusalOutcome::EndTurn)) => {
+                        self.pending_hook_stops
+                            .entry(id.to_owned())
+                            .or_default()
+                            .push((notice_id, text));
+                        None
+                    }
+                    Some((notice_id, text, RefusalOutcome::CloseSession)) => {
+                        let already = self.view.messages[index]
+                            .parts
+                            .iter()
+                            .any(|part| same_notice(part, HOOK_NOTICE, &notice_id));
+                        if already {
+                            None
+                        } else {
+                            let bounded = clipped(&text, available);
+                            if bounded.len() != text.len() {
+                                self.view.truncated = true;
+                            }
+                            Some(ConversationPart {
+                                message_id: None,
+                                offset,
+                                kind: "local_notice".into(),
+                                text: bounded,
+                                tool_id: String::new(),
+                                notice_id,
+                                notice_kind: HOOK_NOTICE.into(),
+                            })
+                        }
+                    }
+                    Some((_, _, RefusalOutcome::Continue)) | None => None,
                 }
             }
             _ => None,
         };
         if let Some(part) = part {
+            if part.kind == "tool" {
+                self.tool_parts
+                    .entry(id.to_owned())
+                    .or_default()
+                    .insert(part.tool_id.clone());
+            }
             let message = &mut self.view.messages[index];
             if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
             {
                 message.retained_text += part.text.len();
-                if part.kind == "tool" {
-                    self.tool_parts
-                        .entry(id.to_owned())
-                        .or_default()
-                        .insert(part.tool_id.clone());
-                }
                 message.parts.push(part);
             } else {
                 self.view.truncated = true;
@@ -1231,7 +1507,9 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::Finished(result) => {
-                self.view.messages[index].status = outcome(*result);
+                let status = outcome(*result);
+                self.view.messages[index].status = status;
+                self.take_hook_stops(id, index, status == ConversationMessageStatus::Cancelled);
             }
             ExecutionUpdate::QuestionAsked { .. } | ExecutionUpdate::PermissionRequested { .. } => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
@@ -1242,8 +1520,8 @@ impl Projection {
                     self.view.messages[index].status = ConversationMessageStatus::Running;
                 }
             }
-            ExecutionUpdate::ReviewDeclined(observation) => {
-                if observation.decline().outcome() == RefusalOutcome::Continue {
+            ExecutionUpdate::ReviewDeclined(review) => {
+                if review.decline().outcome() == RefusalOutcome::Continue {
                     self.view.messages[index].status = ConversationMessageStatus::Running;
                 }
             }
@@ -1273,6 +1551,10 @@ impl Projection {
                     }
                     agreed
                 });
+                // When the session heard this report. A time no JSON reader
+                // can hold, read back from a damaged file, is left unknown
+                // rather than refusing the whole view.
+                let at = event.observed_at_ms().filter(|at| *at <= LATEST_TIME_MS);
                 let position = self.view.tools.iter().position(|tool| {
                     tool.execution_id == id && tool.tool_id == update.id().as_str()
                 });
@@ -1294,9 +1576,23 @@ impl Projection {
                         mcp: None,
                         structured_content: None,
                         native_hooks: None,
+                        // The call's span is when the session first heard of
+                        // it, to when it heard the call settle. Only the
+                        // call's first report sets the start: a call first
+                        // reported before arrivals were stamped, or whose row
+                        // was let go for room and is back, keeps an unknown
+                        // start rather than taking a later report's time.
+                        started_at_ms: at.filter(|_| !heard),
+                        ended_at_ms: None,
+                        changes: Vec::new(),
+                        changes_cut: false,
                     });
                     self.view.tools.last_mut().unwrap()
                 };
+                // A later report of a settled call does not move its end.
+                if let Some(input) = update.input() {
+                    tool.input = input.as_str().to_owned();
+                }
                 if let Some(agreed) = hooks {
                     tool.native_hooks = agreed.map(|allowed| {
                         if allowed {
@@ -1372,16 +1668,56 @@ impl Projection {
                         .filter(|json| json.len() <= MAX_STRUCTURED_CONTENT_BYTES)
                         .map(str::to_owned);
                     let mut details = String::new();
+                    // Once the details are full, later items still list their
+                    // file changes; only their text is left out.
+                    let mut details_full = false;
+                    tool.changes.clear();
+                    tool.changes_cut = false;
                     for item in content {
                         let text = match item.view() {
                             ToolContentView::Structured(_) => continue,
-                            ToolContentView::Text(text) => clipped(text, 16384),
-                            ToolContentView::Diff { path, old, new } => format!(
-                                "File: {}\nBefore:\n{}\nAfter:\n{}",
-                                path.as_str(),
-                                clipped(old.unwrap_or("(not provided)"), 7000),
-                                clipped(new, 7000)
-                            ),
+                            ToolContentView::Text(text) => {
+                                (!details_full).then(|| clipped(text, 16384))
+                            }
+                            ToolContentView::Diff { path, old, new } => {
+                                let before =
+                                    old.map(|old| clipped(old, MAX_TOOL_CHANGE_SIDE_BYTES));
+                                let after = clipped(new, MAX_TOOL_CHANGE_SIDE_BYTES);
+                                let cut = before
+                                    .as_ref()
+                                    .is_some_and(|before| before.len() < old.map_or(0, str::len))
+                                    || after.len() < new.len();
+                                // Only while the details have room, and no
+                                // more of the path than they could hold. A
+                                // clipped side says so in the text too.
+                                let text = (!details_full).then(|| {
+                                    format!(
+                                        "File: {}\nBefore:\n{}\nAfter:\n{}{}",
+                                        clipped(path.as_str(), 16384),
+                                        before.as_deref().unwrap_or("(not provided)"),
+                                        after,
+                                        if cut { "\n[Output truncated]" } else { "" }
+                                    )
+                                });
+                                // A path past its bound is not listed rather
+                                // than cut: a cut path names another file.
+                                if tool.changes.len() == MAX_TOOL_CHANGES
+                                    || path.as_str().len() > MAX_TOOL_CHANGE_PATH_BYTES
+                                {
+                                    tool.changes_cut = true;
+                                } else {
+                                    tool.changes.push(ConversationToolChange {
+                                        path: path.as_str().to_owned(),
+                                        cut,
+                                        before,
+                                        after,
+                                    });
+                                }
+                                text
+                            }
+                        };
+                        let Some(text) = text else {
+                            continue;
                         };
                         if !details.is_empty() {
                             details.push('\n');
@@ -1390,7 +1726,7 @@ impl Projection {
                         if details.len() > 16000 {
                             details = clipped(&details, 16000);
                             details.push_str("\n[Output truncated]");
-                            break;
+                            details_full = true;
                         }
                     }
                     tool.details = details;
@@ -1403,6 +1739,12 @@ impl Projection {
                         ToolStatus::Failed => "failed",
                     }
                     .into();
+                    match status {
+                        ToolStatus::Completed | ToolStatus::Failed => {
+                            tool.ended_at_ms = tool.ended_at_ms.or(at);
+                        }
+                        ToolStatus::Pending | ToolStatus::Running => tool.ended_at_ms = None,
+                    }
                 }
             }
         }
@@ -1423,6 +1765,13 @@ impl Projection {
             .request
             .user_message
             .images()
+            .iter()
+            .map(Into::into)
+            .collect();
+        self.view.messages[index].uploads = record
+            .request
+            .user_message
+            .uploads()
             .iter()
             .map(Into::into)
             .collect();
@@ -1460,8 +1809,13 @@ impl Projection {
             .map(|_| true);
         self.view.messages[index].required_work_failed = (self.view.messages[index].status
             == ConversationMessageStatus::Failed
-            && authentication_independent_failure(record))
+            && (authentication_independent_failure(record)
+                || usage_limit_independent_failure(record)))
         .then_some(true);
+        self.view.messages[index].usage_limit = (self.view.messages[index].status
+            == ConversationMessageStatus::Failed)
+            .then_some(record)
+            .and_then(published_usage_limit);
         // An ask is offered only while its execution is the one running here.
         // A settled or restarted message drops it, and so does a turn that is
         // running but not active: the gap around liveness is not an open ask.
@@ -1673,6 +2027,16 @@ pub fn bound_view_within(
     limit: usize,
     interactions: bool,
 ) -> ConversationView {
+    // A fork's copied turns come before every turn of the conversation, so
+    // a view that leaves out its oldest turns leaves them out too: shown, they
+    // would read as if nothing came between them and the turns listed.
+    if view.truncated {
+        for handoff in &mut view.handoffs {
+            let left_out = u32::try_from(handoff.turns.len()).unwrap_or(u32::MAX);
+            handoff.omitted_turns = handoff.omitted_turns.saturating_add(left_out);
+            handoff.turns.clear();
+        }
+    }
     // The binding bounds actual admitted ACP asks. Custom backends can
     // retain other valid histories, so the encoded display owner gives up
     // whole interactions with an explicit notice rather than cutting choices.
@@ -1687,10 +2051,27 @@ pub fn bound_view_within(
             tool.structured_content = None;
             continue;
         }
+        // So are the structured changes: the same text is in the details.
+        if let Some(tool) = view.tools.iter_mut().find(|tool| !tool.changes.is_empty()) {
+            tool.changes.clear();
+            tool.changes_cut = true;
+            continue;
+        }
         // Only the interactions are left, and they are not to be given up:
         // nothing is removed, so the view is not truncated either.
         if !interactions && !gives_up_anything_but_interactions(&view) {
             break;
+        }
+        // A fork's copied turns are older than every turn the view lists:
+        // they yield first, the oldest first, each counted as left out.
+        if let Some(fork) = view
+            .handoffs
+            .iter_mut()
+            .find(|handoff| !handoff.turns.is_empty())
+        {
+            fork.turns.remove(0);
+            fork.omitted_turns = fork.omitted_turns.saturating_add(1);
+            continue;
         }
         // Arguments are what an app is told its call with. They yield once
         // the history has nothing left to give, and before the tool row
@@ -1789,6 +2170,10 @@ fn transcript_can_yield(view: &ConversationView) -> bool {
 /// interactions: its transcript, notes, artifacts, tool calls or queue.
 fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
     transcript_can_yield(view)
+        || view
+            .handoffs
+            .iter()
+            .any(|handoff| !handoff.turns.is_empty())
         || !view.notes.is_empty()
         || !view.artifacts.is_empty()
         || !view.tools.is_empty()

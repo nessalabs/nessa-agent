@@ -24,7 +24,9 @@ use crate::application::agent_execution::{
     agents::AgentError,
     providers::{ImageInputRefusal, UserImageError, UserImageSource},
 };
-use crate::domain::agent_execution::prompts::{ImageReference, NoteAuthor, UserMessage};
+use crate::domain::agent_execution::prompts::{
+    CarriedHistory, ImageReference, NoteAuthor, UserMessage,
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -139,7 +141,15 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
     let context = app_model_context_text(message)
         .map_or(0, |context| TEXT_BLOCK_BYTES + json_string_bytes(&context));
     let notes = notes_text(message).map_or(0, |notes| TEXT_BLOCK_BYTES + json_string_bytes(&notes));
-    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + context + notes + text + images + files;
+    let history =
+        history_text(message).map_or(0, |history| TEXT_BLOCK_BYTES + json_string_bytes(&history));
+    let uploads = message.uploads().len() as u64
+        * (RESOURCE_LINK_BLOCK_BYTES
+            + 6 * 3 * crate::domain::agent_execution::prompts::LinkedFile::MAX_PATH_BYTES as u64
+            + 6 * crate::domain::agent_execution::prompts::UploadedFileReference::MAX_NAME_BYTES
+                as u64);
+    let encoded_bytes =
+        REQUEST_ALLOWANCE_BYTES + history + context + notes + text + images + files + uploads;
     let max_bytes = max_frame_bytes as u64;
     if encoded_bytes > max_bytes {
         return Err(AgentError::MessageTooLarge {
@@ -234,6 +244,46 @@ fn notes_text(message: &UserMessage) -> Option<String> {
     Some(format!("{NOTES_PREAMBLE}[{}]", entries.join(",")))
 }
 
+/// What the model is told before the earlier turns a turn after a fork or an
+/// agent switch is given.
+const HISTORY_PREAMBLE: &str = "Earlier turns of this conversation, which this session has not seen: the conversation was forked from another one, or carried on here from another agent or model. Each is what was said and the agent's final reply, oldest first, and none was written by the person sending this message. omittedTurns counts older turns left out:\n";
+
+/// The one text block that carries the earlier turns `message` is given, or
+/// `None` when it is given none: [`HISTORY_PREAMBLE`], then one JSON object
+/// `{omittedTurns, turns: [{said?, reply?}]}`.
+///
+/// Written as JSON, as [`notes_text`] is and for the same reason: nothing a
+/// turn said can close the block or pass for the person's own message.
+fn history_text(message: &UserMessage) -> Option<String> {
+    let history = message.history()?;
+    let string = |text: &str| Value::from(text).to_string();
+    let turns: Vec<String> = history
+        .turns()
+        .iter()
+        .map(|turn| {
+            let mut parts = Vec::with_capacity(2);
+            if let Some(said) = turn.said() {
+                parts.push(format!("\"said\":{}", string(said)));
+            }
+            if let Some(reply) = turn.reply() {
+                parts.push(format!("\"reply\":{}", string(reply)));
+            }
+            format!("{{{}}}", parts.join(","))
+        })
+        .collect();
+    Some(format!(
+        "{HISTORY_PREAMBLE}{{\"omittedTurns\":{},\"turns\":[{}]}}",
+        history.omitted(),
+        turns.join(",")
+    ))
+}
+
+/// The history block's syntax around its turns, with the largest count of
+/// omitted turns: [`history_text`]'s object keys, quotes and brackets.
+const HISTORY_SYNTAX: &str = r#"{"omittedTurns":4294967295,"turns":[]}"#;
+/// One turn's entry in the history block with both parts present and empty.
+const HISTORY_TURN_SYNTAX: &str = r#"{"said":"","reply":""}"#;
+
 /// One note's entry in the notes block with its surface and text empty and
 /// the longer author: the keys, quotes, and braces [`notes_text`] writes
 /// around what the note says.
@@ -272,7 +322,10 @@ const APP_CONTEXT_ENTRY_SYNTAX: &str =
 /// [`APP_CONTEXT_ENTRY_SYNTAX`] and the commas between them, all escaped once
 /// into the block's string; the notes block's [`NOTES_PREAMBLE`] and
 /// brackets, and [`UserMessage::MAX_NOTES`] entries' [`NOTE_ENTRY_SYNTAX`] and
-/// the commas between them, escaped the same way;
+/// the commas between them, escaped the same way; the history block's own
+/// text block, [`HISTORY_PREAMBLE`], [`HISTORY_SYNTAX`], and
+/// [`CarriedHistory::MAX_TURNS`] entries' [`HISTORY_TURN_SYNTAX`] and the
+/// commas between them, escaped the same way;
 /// [`UserMessage::MAX_IMAGES`] image blocks; and
 /// [`UserMessage::MAX_FILES`] resource links, each with its URI's quotes and
 /// [`FILE_URI_SCHEME`] and its label's quotes.
@@ -280,7 +333,8 @@ const APP_CONTEXT_ENTRY_SYNTAX: &str =
 /// Content is everything a message's sender chooses, and the notes the turn
 /// takes: the text, each image's base64, each app's server, tool, tool call,
 /// text and structured content, each file's path and name, and each note's
-/// surface and text, with whatever escaping they take. A host
+/// surface and text, and each carried turn's text, with whatever escaping
+/// they take. A host
 /// adds its own bound on those to this to know the largest frame it can be
 /// asked to write (`largest_message_syntax_is_what_the_frame_figure_adds_to_its_content`).
 pub(in crate::infrastructure::acp) const LARGEST_MESSAGE_SYNTAX_BYTES: u64 = REQUEST_ALLOWANCE_BYTES
@@ -293,6 +347,11 @@ pub(in crate::infrastructure::acp) const LARGEST_MESSAGE_SYNTAX_BYTES: u64 = REQ
     + 2
     + UserMessage::MAX_NOTES as u64 * (json_string_bytes(NOTE_ENTRY_SYNTAX) - 2)
     + (UserMessage::MAX_NOTES as u64 - 1)
+    + (TEXT_BLOCK_BYTES + 2)
+    + (json_string_bytes(HISTORY_PREAMBLE) - 2)
+    + (json_string_bytes(HISTORY_SYNTAX) - 2)
+    + CarriedHistory::MAX_TURNS as u64 * (json_string_bytes(HISTORY_TURN_SYNTAX) - 2)
+    + (CarriedHistory::MAX_TURNS as u64 - 1)
     + UserMessage::MAX_IMAGES as u64 * IMAGE_BLOCK_BYTES
     + UserMessage::MAX_FILES as u64
         * (RESOURCE_LINK_BLOCK_BYTES + json_string_bytes(FILE_URI_SCHEME) + 2);
@@ -472,8 +531,10 @@ fn markdown_label(name: &str) -> String {
     label
 }
 
-/// The content blocks for `message`: what apps gave the model, when any did
-/// ([`app_model_context_text`]), then its text, then its images in attachment
+/// The content blocks for `message`: the earlier turns it is given after a
+/// fork or an agent switch ([`history_text`]), then what apps gave the model,
+/// when any did ([`app_model_context_text`]), then the notes it takes, then
+/// its text, then its images in attachment
 /// order, then a link to each of its files. `images` must be what
 /// [`read_images`] answered for this message.
 ///
@@ -495,7 +556,11 @@ pub(in crate::infrastructure::acp) fn content_blocks(
             "resolved image blocks do not match the message".into(),
         ));
     }
-    let mut blocks = Vec::with_capacity(3 + images.blocks.len() + message.files().len());
+    let mut blocks = Vec::with_capacity(4 + images.blocks.len() + message.files().len());
+    // What came before goes first: it is older than anything else here.
+    if let Some(history) = history_text(message) {
+        blocks.push(json!({"type":"text","text":history}));
+    }
     if let Some(context) = app_model_context_text(message) {
         blocks.push(json!({"type":"text","text":context}));
     }

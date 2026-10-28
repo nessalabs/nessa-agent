@@ -3,7 +3,7 @@
  * and does not read the store or dispatch. A view that shows one fact —
  * the content mark, the switcher — keeps that subscription itself.
  */
-import { memo, type CSSProperties } from "react"
+import { memo, type CSSProperties, type ReactNode } from "react"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
 import { ResizeEdge } from "../../../ui/resize-edge"
@@ -15,10 +15,13 @@ import { IconButton } from "../../../ui/icon-button"
 import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { WindowTabs } from "../chrome/window-tabs"
+import { StudioCorner } from "../chrome/identity-footer"
+import { PanelMaximize, PanelToggle, WorkspacePanel } from "../chrome/right-panel"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { SessionList } from "../session-list/session-list"
 import { ShareDialogHost } from "../share/share-dialog"
+import { NewChannelHost } from "../channel-creation/new-channel"
 import { DeleteSessionHost } from "../session-row-actions"
 import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { SourceList } from "../source-list/source-list"
@@ -28,6 +31,7 @@ import {
   WorkspaceFrameProvider,
 } from "../workspace-frame"
 import type { WorkspaceWindowModel } from "./use-workspace-window"
+import { ColumnFit, FoldMark, ListMeasureHold } from "./column-paint"
 import { ContentMark } from "./content-mark"
 import { SwitcherHost } from "./switcher-host"
 import "../chrome/chrome.css"
@@ -62,6 +66,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     frame,
     peek,
     shape,
+    openColumns,
     splitPanes,
     railOffered,
     railDrawn,
@@ -74,6 +79,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     listedChannel,
     sidebarWidth,
     listWidth,
+    windowWidth,
     switcher,
     onPickRail,
     onToggleRail,
@@ -86,6 +92,13 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     onSidebarDragMove,
     onListDragStart,
     onListDragMove,
+    panelOpen,
+    panelMaximized,
+    panelWidth,
+    onTogglePanel,
+    onTogglePanelMaximized,
+    onPanelDragStart,
+    onPanelDragMove,
   } = model
   return (
     <OverviewQuietProvider store={store} root={root}>
@@ -93,7 +106,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
         <EscapeScopesProvider value={escapeScopes}>
           <ListedChannelProvider value={listedChannel}>
             <SidebarPeekProvider value={peek}>
-              <FlipScope shape={shape} root={root}>
+              <FlipScope shape={shape} columns={openColumns} root={root}>
                 <div
                   className="workspace-window"
                   data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
@@ -102,7 +115,13 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
                   data-sidebar={sidebarOpen ? "open" : "closed"}
-                  style={{ "--rail-width": `${railWidth}px` } as CSSProperties}
+                  data-panel-maximized={panelMaximized || undefined}
+                  style={
+                    {
+                      "--rail-width": `${railWidth}px`,
+                      "--workspace-panel-width": `${panelWidth}px`,
+                    } as CSSProperties
+                  }
                 >
                   {/* The light behind the window spans the rail too, so the
                       rail and the workspace stand on one ground. */}
@@ -122,15 +141,17 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       </div>
                     ) : (
                       <div className="workspace-titlebar-navigation">
-                        <IconButton
-                          icon="sidebar"
-                          label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
-                          shortcut={frame.shortcut("toggleSidebar")}
-                          aria-expanded={sidebarOpen}
-                          aria-controls="workspace-sidebar"
-                          onClick={onToggleSidebar}
-                        />
-                        {region.sessionList ? (
+                        {panelMaximized ? null : (
+                          <IconButton
+                            icon="sidebar"
+                            label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
+                            shortcut={frame.shortcut("toggleSidebar")}
+                            aria-expanded={sidebarOpen}
+                            aria-controls="workspace-sidebar"
+                            onClick={onToggleSidebar}
+                          />
+                        )}
+                        {region.sessionList && !panelMaximized ? (
                           <IconButton
                             icon="sessionList"
                             label={`${listOpen ? "Hide" : "Show"} Session List`}
@@ -145,7 +166,18 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                     {shownRailItem ? (
                       <div className="workspace-titlebar-space" data-tauri-drag-region />
                     ) : (
-                      <WindowTabs />
+                      <>
+                        <WindowTabs />
+                        <div className="workspace-titlebar-trailing">
+                          {panelOpen ? (
+                            <PanelMaximize
+                              maximized={panelMaximized}
+                              onToggle={onTogglePanelMaximized}
+                            />
+                          ) : null}
+                          <PanelToggle shown={panelOpen} onToggle={onTogglePanel} />
+                        </div>
+                      </>
                     )}
                   </WorkspaceTitlebar>
                   {railOffered ? (
@@ -156,6 +188,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                         room={railRoom}
                         toggle={onToggleRail}
                       />
+                      {shownRailItem?.studio === false ? null : <StudioCorner />}
                     </>
                   ) : null}
                   <div
@@ -173,6 +206,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       region.sessionList ? (listOpen ? "open" : "closed") : undefined
                     }
                     data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
+                    data-panel={panelOpen ? "open" : "closed"}
                     style={
                       {
                         "--workspace-sidebar-width": `${sidebarWidth}px`,
@@ -182,23 +216,45 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       } as CSSProperties
                     }
                   >
-                    {sidebarOpen ? null : (
-                      <EdgePeekStrip peek={peek} onDragOut={onRevealSidebar} />
-                    )}
+                    <Covered by={panelMaximized}>
+                      {sidebarOpen ? null : (
+                        <EdgePeekStrip peek={peek} onDragOut={onRevealSidebar} />
+                      )}
+                    </Covered>
                     <ContentMark root={root} />
-                    <Columns
-                      region={region}
-                      sidebarOpen={sidebarOpen}
-                      listOpen={listOpen}
+                    <ColumnFit
+                      windowWidth={windowWidth}
                       sidebarWidth={sidebarWidth}
                       listWidth={listWidth}
-                      splitPanes={splitPanes}
-                      onSidebarDragStart={onSidebarDragStart}
-                      onSidebarDragMove={onSidebarDragMove}
-                      onListDragStart={onListDragStart}
-                      onListDragMove={onListDragMove}
+                      covered={shownRailItem !== undefined}
                     />
-                    <OverviewLayer root={root} />
+                    <ListMeasureHold root={root} />
+                    <FoldMark root={root} />
+                    <Covered by={panelMaximized}>
+                      <Columns
+                        region={region}
+                        sidebarOpen={sidebarOpen}
+                        listOpen={listOpen}
+                        sidebarWidth={sidebarWidth}
+                        listWidth={listWidth}
+                        splitPanes={splitPanes}
+                        onSidebarDragStart={onSidebarDragStart}
+                        onSidebarDragMove={onSidebarDragMove}
+                        onListDragStart={onListDragStart}
+                        onListDragMove={onListDragMove}
+                      />
+                    </Covered>
+                    <WorkspacePanel
+                      open={panelOpen}
+                      maximized={panelMaximized}
+                      width={panelWidth}
+                      onDragStart={onPanelDragStart}
+                      onDragMove={onPanelDragMove}
+                    />
+                    <Covered by={panelMaximized}>
+                      <OverviewLayer root={root} />
+                      <NewChannelHost />
+                    </Covered>
                     <ShareDialogHost />
                     <DeleteSessionHost />
                     {switcher ? (
@@ -217,6 +273,19 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
         </EscapeScopesProvider>
       </WorkspaceFrameProvider>
     </OverviewQuietProvider>
+  )
+}
+
+/**
+ * What the maximized right panel covers: inert while it does, and laid out
+ * as if the wrapper were not there (`display: contents`), so the columns and
+ * their selectors are untouched. Each region keeps its own `inert` besides.
+ */
+function Covered({ by, children }: { by: boolean; children: ReactNode }) {
+  return (
+    <div className="workspace-covered" inert={by || undefined}>
+      {children}
+    </div>
   )
 }
 
@@ -252,7 +321,7 @@ const Columns = memo(function Columns({
   const limits = region.sidebar.limits
   return (
     <>
-      <SourceList variant={region.sidebar.variant} />
+      <SourceList variant={region.sidebar.variant} open={sidebarOpen} />
       {sidebarOpen ? (
         <ResizeEdge
           label="Resize Sidebar"

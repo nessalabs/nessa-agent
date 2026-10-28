@@ -167,7 +167,7 @@ impl ProviderSessionBackend for ScriptedBackend {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         let started = self.started.clone();
@@ -176,6 +176,10 @@ impl ProviderSessionBackend for ScriptedBackend {
         let release = self.release.clone();
         let handshake = self.handshake.clone();
         Box::pin(async move {
+            let input = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -864,6 +868,14 @@ async fn a_continue_without_a_deny_option_does_not_invent_one() {
 
 #[tokio::test]
 async fn an_end_turn_refusal_does_not_close_the_session() {
+    if let Some(log) = isolated_warn_log("an_end_turn_refusal_does_not_close_the_session") {
+        assert!(
+            log.contains("a hook refused a tool and stopped the turn"),
+            "{log}"
+        );
+        assert!(log.contains("stop the turn"), "{log}");
+        return;
+    }
     let fixture = agent_with(
         script(),
         vec![Arc::new(ReviewHook {
@@ -1490,6 +1502,36 @@ async fn a_verdict_first_seen_after_the_deadline_is_a_timeout() {
     assert_eq!(hook_refusal(&answers[0]).reason(), "hook failed: timeout");
 }
 
+/// Runs this test once in a child process with a process-wide warn subscriber,
+/// and returns that process's stderr. `None` in the child, which then runs
+/// the test. Worker threads do not see a thread-local subscriber, and the
+/// hook stop is logged from one.
+fn isolated_warn_log(test: &str) -> Option<String> {
+    const CHILD: &str = "NESSA_HOOK_STOP_LOG";
+    if std::env::var_os(CHILD).is_some() {
+        tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .try_init()
+            .expect("the child process has no subscriber yet");
+        return None;
+    }
+    let name = format!("{}::{test}", module_path!().split_once("::").unwrap().1);
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--test-threads=1"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "child {name} failed\n{stdout}\n{stderr}"
+    );
+    Some(format!("{stdout}\n{stderr}"))
+}
+
 /// Lets the provider settle its execution, waits for that to be seen, then
 /// ends the turn.
 struct SettlingRefuser(Arc<tokio::sync::Notify>);
@@ -1508,6 +1550,14 @@ impl InvocationHook for SettlingRefuser {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_end_turn_after_the_provider_settled_keeps_the_session() {
+    if let Some(log) = isolated_warn_log("an_end_turn_after_the_provider_settled_keeps_the_session")
+    {
+        assert!(
+            !log.contains("a hook refused a tool and stopped the turn"),
+            "{log}"
+        );
+        return;
+    }
     let fixture = agent_with(script(), Vec::new()).await;
     fixture
         .agent

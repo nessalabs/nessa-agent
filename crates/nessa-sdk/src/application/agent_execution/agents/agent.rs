@@ -43,7 +43,9 @@ use crate::application::agent_execution::sessions::{
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::agent_execution::traces::{GenAiSpan, LocalTraceStore};
-use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
+use crate::domain::agent_execution::executions::{
+    Initiation, Initiator, SchedulingCause, ToolChecking,
+};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,
     PermissionCancellationReason, PermissionEffect, PermissionId, PermissionOptionId,
@@ -303,6 +305,41 @@ fn effective_hook_outcome(
     }
 }
 
+/// The gateway log for a hook that stopped the turn: the tool, which hook, and why.
+///
+/// Called only after that stop is applied. A continue is not logged here, and
+/// neither is an end-turn whose provider had already settled, nor a close that
+/// did not confirm. Tool arguments are not logged.
+fn log_hook_stop(
+    event: &ExecutionEvent,
+    index: Option<usize>,
+    reason: &str,
+    outcome: RefusalOutcome,
+) {
+    if !matches!(
+        outcome,
+        RefusalOutcome::EndTurn | RefusalOutcome::CloseSession
+    ) {
+        return;
+    }
+    let tool = match event.update() {
+        ExecutionUpdate::PermissionRequested { input, .. } if !input.name.is_empty() => {
+            input.name.as_str()
+        }
+        _ => "<unnamed>",
+    };
+    tracing::warn!(
+        tool,
+        hook = index
+            .map(|index| index.to_string())
+            .as_deref()
+            .unwrap_or("runtime"),
+        reason,
+        ?outcome,
+        "a hook refused a tool and stopped the turn"
+    );
+}
+
 fn hook_attribution(
     event: &ExecutionEvent,
     index: Option<usize>,
@@ -464,16 +501,29 @@ impl Agent {
     pub fn supports_turn_cancel(&self) -> bool {
         self.inner.lifecycle.supports_turn_cancel()
     }
-    /// Cancel `id` only when it is the active execution. A different or finished
-    /// turn, or a provider that cannot cancel one turn, returns
-    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`] and
-    /// sends nothing. This does not close the attachment.
+    /// Cancel `id` only while it is active, without closing the attachment.
+    /// Before native handoff the operation-owned work permit records a local
+    /// `TurnStopped` decision and prevents dispatch; this needs no native cancel
+    /// capability. After handoff the backend must support targeted cancellation.
+    /// A different or finished turn, or unsupported native cancellation, returns
+    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`].
+    /// `a_targeted_stop_during_file_preparation_is_undispatched_cancelled_and_does_not_close_the_session`
+    /// covers immediate and queued preparation and subsequent session reuse.
     pub async fn cancel_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
         let waiter = CallerWaiter::TurnCancel(id.clone());
         contain_caller_wake(waiter, self.cancel_active_turn(id)).await
     }
     async fn cancel_active_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
-        if !self.turn_is_active(&id) || !self.supports_turn_cancel() {
+        if !self.turn_is_active(&id) {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn cancel".into()),
+                ProviderSessionState::Usable,
+            ));
+        }
+        if self.inner.lifecycle.cancel_preparing_turn(&id) {
+            return Ok(());
+        }
+        if !self.supports_turn_cancel() {
             return Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("turn cancel".into()),
                 ProviderSessionState::Usable,
@@ -1137,10 +1187,16 @@ impl Agent {
             .await
             .map_err(|cause| AgentInitializationError::new(cause, None))?;
         let traces = provider.traces();
-        let saved_configuration = session_manager
-            .snapshot()
-            .await
-            .and_then(|snapshot| snapshot.current_configuration);
+        // A switch leaves the earlier provider's settings behind: they name
+        // that provider, which the new native session never had.
+        let saved_configuration = if session_manager.switching() {
+            None
+        } else {
+            session_manager
+                .snapshot()
+                .await
+                .and_then(|snapshot| snapshot.current_configuration)
+        };
         let provider = match saved_configuration.as_ref() {
             Some(record)
                 if provider.approval_mode() == record.after().approval_mode()
@@ -1664,7 +1720,7 @@ impl Agent {
             let event = match ready {
                 Poll::Pending | Poll::Ready(Ok(None)) => return Ok(()),
                 Poll::Ready(Err(error)) => return Err(error),
-                Poll::Ready(Ok(Some(event))) => event,
+                Poll::Ready(Ok(Some(event))) => self.inner.manager.observed(event),
             };
             self.inner
                 .manager
@@ -1741,7 +1797,8 @@ impl Agent {
     }
 
     /// `input` as the provider is given it: with the notes its saved turn
-    /// took, when it took any.
+    /// took, when it took any, and the earlier turns, when it is the first
+    /// after a fork or an agent switch.
     async fn with_taken_notes(
         &self,
         index: usize,
@@ -1753,14 +1810,23 @@ impl Agent {
             .taken_notes(index)
             .await
             .map_err(AgentError::Storage)?;
-        if notes.is_empty() {
+        let history = self
+            .inner
+            .manager
+            .carried_history(index)
+            .await
+            .map_err(AgentError::Storage)?;
+        if notes.is_empty() && history.is_none() {
             return Ok(input.clone());
         }
-        let user_message = input
+        let mut user_message = input
             .user_message
             .clone()
             .with_notes(notes)
             .map_err(|error| AgentError::Storage(StorageError::Corrupt(error.to_string())))?;
+        if let Some(history) = history {
+            user_message = user_message.with_history(history);
+        }
         Ok(ExecutionRequest {
             user_message,
             ..input.clone()
@@ -1937,6 +2003,7 @@ impl Agent {
                 &self.inner.lifecycle,
                 input.execution_id.clone(),
                 self.current_provider(),
+                work,
             ) {
                 Ok(active) => active,
                 Err(error) => {
@@ -2094,7 +2161,9 @@ impl Agent {
                 _ = stop_notice.changed(), if !stop_observed => {
                     stop_observed = true;
                     if !work.execution_started() {
-                        result = Some(Err(AgentError::Closed));
+                        result = Some(if work.cancellation().is_some_and(|stop| stop.cause == SchedulingCause::TurnStopped) {
+                            Ok(ExecutionOutcome::Cancelled)
+                        } else { Err(AgentError::Closed) });
                         break;
                     }
                     // Already dispatched: keep draining confirmed provider
@@ -2131,6 +2200,7 @@ impl Agent {
                 next = events.next(), if !ended => {
                     match next {
                         Ok(Some(event)) => {
+                            let event = self.inner.manager.observed(event);
                             observed_current_execution |= event.execution_id() == &input.execution_id;
                             if admission_rejected && observed_current_execution {
                                 // Fence controls before validation or persistence can suspend.
@@ -2532,6 +2602,9 @@ impl Agent {
         };
         let (reason, outcome) = (refusal.reason(), refusal.outcome());
         if outcome == RefusalOutcome::CloseSession {
+            // The withdrawal is the audit record, and the session can record
+            // it only while it is still open, so it precedes the close. The
+            // panel sentence is that cancellation.
             let recorded = wait
                 .run(self.withdraw_hook_refusal(
                     session,
@@ -2545,6 +2618,9 @@ impl Agent {
                 .run(self.shutdown_after_failure(SessionCloseRequest::PolicyRefusal))
                 .await;
             let confirmed = cleanup.is_confirmed();
+            if confirmed {
+                log_hook_stop(event, index, reason, RefusalOutcome::CloseSession);
+            }
             let failure = match (recorded.err(), cleanup.into_result().err()) {
                 (Some(operation_error), Some(cleanup_error)) => {
                     Some(AgentError::OperationAndCleanupFailure {
@@ -2565,16 +2641,24 @@ impl Agent {
             deny_option(event).is_some(),
             self.supports_turn_cancel(),
         );
+        // An end-turn the provider has already finished is continue: the
+        // cancellation would say the turn stopped, and it did not.
+        let recorded = if effective == RefusalOutcome::EndTurn && wait.provider_settled() {
+            RefusalOutcome::Continue
+        } else {
+            effective
+        };
         let delivered = wait
-            .run(self.deliver_hook_refusal(session, event, index, reason, effective))
+            .run(self.deliver_hook_refusal(session, event, index, reason, recorded))
             .await;
         let delivery_failure = delivered.err();
-        if delivery_failure.is_none() && effective != RefusalOutcome::EndTurn {
+        if delivery_failure.is_none() && recorded != RefusalOutcome::EndTurn {
             return AppliedVerdict::default();
         }
-        // The provider can settle while the hook runs. Only its captured reply
-        // shows that: a turn no longer active may instead have been retired by
-        // cleanup a failed control reported, and that still needs the stop.
+        // The provider can settle while the refusal is delivered. Only its
+        // captured reply shows that: a turn no longer active may instead have
+        // been retired by cleanup a failed control reported, and that still
+        // needs the stop.
         if wait.provider_settled() {
             return AppliedVerdict {
                 closed: None,
@@ -2585,10 +2669,15 @@ impl Agent {
             .run(self.cancel_turn(event.execution_id().clone()))
             .await
         {
-            Ok(()) => AppliedVerdict {
-                closed: None,
-                failure: delivery_failure,
-            },
+            Ok(()) => {
+                if recorded == RefusalOutcome::EndTurn {
+                    log_hook_stop(event, index, reason, RefusalOutcome::EndTurn);
+                }
+                AppliedVerdict {
+                    closed: None,
+                    failure: delivery_failure,
+                }
+            }
             // The reply arrived while the cancel ran, so the cancel found no
             // turn and sent nothing. A cancel that reached the provider keeps
             // its failure.
@@ -2617,6 +2706,9 @@ impl Agent {
                         ObservationFailureCause::ExecutionFailed,
                     ))
                     .await;
+                if confirmed && recorded == RefusalOutcome::EndTurn {
+                    log_hook_stop(event, index, reason, RefusalOutcome::CloseSession);
+                }
                 AppliedVerdict {
                     closed: Some(confirmed),
                     failure: Some(error),
@@ -3182,6 +3274,76 @@ mod hook_wait_tests {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             assert!(!entered.load(Ordering::SeqCst), "the hook did not run");
         });
+    }
+
+    #[test]
+    fn a_hook_stop_log_names_the_tool_and_the_hook_and_not_the_arguments() {
+        use crate::domain::agent_execution::executions::ExecutionId;
+        use crate::domain::agent_execution::permissions::{
+            PermissionDecision, PermissionOfferPolicy, PermissionOption, PermissionOptions,
+        };
+        use crate::domain::agent_execution::tools::{ToolCallId, ToolObservation};
+        use std::io::{self, Write};
+        use std::sync::Mutex;
+        #[derive(Clone, Default)]
+        struct Log(Arc<Mutex<Vec<u8>>>);
+        impl Write for Log {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let event = ExecutionEvent::new(
+            ExecutionId::new("execution").unwrap(),
+            ExecutionUpdate::PermissionRequested {
+                id: PermissionId::new("7").unwrap(),
+                tool_id: ToolCallId::new("tool").unwrap(),
+                observation: ToolObservation::default(),
+                input: ToolReviewInput {
+                    name: "bash".into(),
+                    arguments_json: r#"{"secret":"do-not-log"}"#.into(),
+                },
+                options: PermissionOptions::new(
+                    vec![PermissionOption::new(
+                        PermissionOptionId::new("deny").unwrap(),
+                        "Deny",
+                        PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+                    )
+                    .unwrap()],
+                    &PermissionOfferPolicy::once_only(),
+                )
+                .unwrap(),
+                deadline: None,
+            },
+        );
+        let capture = |outcome: RefusalOutcome| {
+            let captured = Log::default();
+            let writer = captured.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish();
+            tracing::subscriber::with_default(subscriber, || {
+                log_hook_stop(&event, Some(2), "shell is blocked", outcome);
+            });
+            let bytes = captured.0.lock().unwrap().clone();
+            String::from_utf8(bytes).unwrap()
+        };
+        let stopped = capture(RefusalOutcome::EndTurn);
+        assert!(stopped.contains("bash"), "{stopped}");
+        assert!(stopped.contains("shell is blocked"), "{stopped}");
+        assert!(
+            stopped.contains("a hook refused a tool and stopped the turn"),
+            "{stopped}"
+        );
+        assert!(stopped.contains("2"), "{stopped}");
+        assert!(!stopped.contains("do-not-log"), "{stopped}");
+        assert!(!stopped.contains("arguments"), "{stopped}");
+        assert!(capture(RefusalOutcome::Continue).is_empty());
     }
 
     #[test]

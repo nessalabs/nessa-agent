@@ -178,3 +178,26 @@ export function rowStatus(subagent: Subagent): {
       }
   }
 }
+
+/** The panel's sections, as the session list groups its rows. */
+export interface SubagentGroup {
+  readonly id: "ongoing" | "ended"
+  readonly label: string
+  readonly subagents: readonly Subagent[]
+}
+
+/**
+ * The children in two sections, each in the order given: Ongoing — starting
+ * or open, whatever it is doing — and Ended, closing or closed. An empty
+ * section is left out. A child does not need the person the way a session
+ * can, so there is no "Needs you".
+ */
+export function subagentGroups(subagents: readonly Subagent[]): readonly SubagentGroup[] {
+  const ended = (subagent: Subagent) =>
+    subagent.lifecycle === "closing" || subagent.lifecycle === "closed"
+  const groups: SubagentGroup[] = [
+    { id: "ongoing", label: "Ongoing", subagents: subagents.filter((s) => !ended(s)) },
+    { id: "ended", label: "Ended", subagents: subagents.filter(ended) },
+  ]
+  return groups.filter((group) => group.subagents.length > 0)
+}

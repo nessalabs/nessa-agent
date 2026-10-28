@@ -30,9 +30,11 @@ invocations: [
                         path: "/tmp/notes.txt",
                     },
                 ],
+                uploads: [],
                 sender: Person,
                 app_model_context: [],
                 notes: [],
+                history: None,
             },
             estimated_input_tokens: 95904,
             reserved_output_tokens: 4096,
@@ -47,6 +49,7 @@ invocations: [
             tools: NotChecked,
         },
         notes: [],
+        handoff: None,
         acknowledgement: Acknowledged,
         events: [
             ExecutionEvent {
@@ -61,6 +64,9 @@ invocations: [
                     },
                 ),
                 native_hooks: None,
+                observed_at_ms: Some(
+                    1792000000000,
+                ),
             },
             ExecutionEvent {
                 execution_id: ExecutionId(
@@ -70,6 +76,9 @@ invocations: [
                     Completed,
                 ),
                 native_hooks: None,
+                observed_at_ms: Some(
+                    1792000000000,
+                ),
             },
         ],
         scheduling: [

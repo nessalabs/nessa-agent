@@ -17,7 +17,9 @@ import {
   newSession,
   openSession,
   sendMessage,
+  setComposerText,
 } from "../../adapters/store/commands"
+import { workspaceActions } from "../../adapters/store/slice"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
 import { ClockProvider } from "../../../../clock"
 import type { ModelRef } from "../../model/workspace-index"
@@ -95,7 +97,7 @@ async function sentWith(store: Store, source: FakeSource, sessionId: string) {
 }
 
 describe("a pane's composer shows the model the next message is sent with", () => {
-  it("keeps the established model when an agent asks for an unsupported local switch", async () => {
+  it("shows a staged pick at once and sends on it once the source takes it", async () => {
     const { store, source } = await conversation()
     expect(shownModel()).toContain("Claude Opus 5")
     const mounted = field()
@@ -103,11 +105,32 @@ describe("a pane's composer shows the model the next message is sent with", () =
       store.dispatch(chooseModel({ sessionId: "a", model: astra }))
     })
     expect(field()).toBe(mounted)
-    expect(shownModel()).toContain("Claude Opus 5")
+    expect(shownModel()).toContain("GPT-6 Astra")
     expect(host.querySelector(".desktop-chip-model")?.getAttribute("disabled")).toBeNull()
+    expect(source.calls.some((call) => call[0] === "setModel")).toBe(false)
+    expect(await sentWith(store, source, "a")).toEqual(astra)
+    const order = source.calls.map((call) => call[0])
+    expect(order.indexOf("setModel")).toBeLessThan(order.indexOf("send"))
+  })
+
+  it("takes a staged pick back when the session's own model is picked again", async () => {
+    const { store, source } = await conversation()
+    await act(async () => {
+      store.dispatch(chooseModel({ sessionId: "a", model: astra }))
+    })
+    await act(async () => {
+      store.dispatch(
+        chooseModel({
+          sessionId: "a",
+          model: store.getState().workspace.sessions.a.model,
+        }),
+      )
+    })
+    expect(shownModel()).toContain("Claude Opus 5")
     expect(await sentWith(store, source, "a")).toEqual(
       store.getState().workspace.sessions.a.model,
     )
+    expect(source.calls.some((call) => call[0] === "setModel")).toBe(false)
   })
 
   it("follows a newer summary that moves the session to another model", async () => {
@@ -139,6 +162,90 @@ describe("a pane's composer shows the model the next message is sent with", () =
     })
     expect(shownModel()).toContain("GPT-6 Astra")
     expect(await sentWith(store, source, draftId)).toEqual(astra)
+  })
+
+  it("says the chat cannot be reopened when the model change was refused as a configuration change", async () => {
+    const { store } = await conversation()
+    const choice = { requestId: "r", model: astra }
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.modelChoiceAsked({
+          sessionId: "a",
+          choice: { ...choice, state: "asking" },
+        }),
+      )
+      store.dispatch(
+        workspaceActions.modelChoiceSettled({
+          sessionId: "a",
+          choice: {
+            ...choice,
+            state: "recovery_required",
+            reason: "unavailable",
+            code: "conversation_configuration_changed",
+          },
+        }),
+      )
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "This chat can't be reopened.",
+    )
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.modelChoiceSettled({
+          sessionId: "a",
+          choice: {
+            ...choice,
+            state: "refused",
+            reason: "not-supported",
+            code: "conversation_configuration_changed",
+          },
+        }),
+      )
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "This chat can't be reopened.",
+    )
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.modelChoiceSettled({
+          sessionId: "a",
+          choice: { ...choice, state: "recovery_required", reason: "unavailable" },
+        }),
+      )
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "The model change is not confirmed. Send again to check and try.",
+    )
+  })
+  it("asks for no send while the source settles a model change it holds", async () => {
+    const { store } = await conversation()
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.transcriptLoaded({
+          transcript: {
+            sessionId: "a",
+            messages: [],
+            activity: null,
+            approvals: [],
+            revision: 50,
+            modelControl: {
+              pending: {
+                requestId: "elsewhere",
+                requestedModel: astra.modelId,
+                status: "recovery_required",
+              },
+            },
+          },
+        }),
+      )
+      store.dispatch(setComposerText({ sessionId: "a", text: "next" }))
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "The model change is not confirmed yet. You can send once it settles.",
+    )
+    expect(
+      host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled,
+    ).toBe(true)
   })
 })
 

@@ -33,7 +33,7 @@ impl OwnerPhonePurpose {
         let (receiver, paired_epoch) = record.receiver_binding().ok_or(AccessError::Unavailable)?;
         if intent.class() != ConsentClass::OwnerPhoneReadWrite
             || record.phase() != PairingPhase::Active
-            || record.owner_phone_approval().is_none()
+            || record.owner_approved_key().is_none()
             || record.credential() != Some(context.credential_id())
             || intent.owner() != context.principal_id()
             || intent.membership() != context.membership_id()

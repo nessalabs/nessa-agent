@@ -1,4 +1,5 @@
 import { memo } from "react"
+import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 import {
   PublishedFiles,
   MessageImages,
@@ -8,14 +9,18 @@ import {
 } from "../../../../conversation"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
 import { InlineWidget, type WidgetRef } from "../../../widgets"
+import { handoffLine } from "../../model/handoff"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import {
   groupSteps,
+  runSettled,
   terminalLabel,
   type Message as MessageValue,
   type MessageApp,
   type TurnTerminal,
 } from "../../model/transcript"
+import { reportVerb, threadReportOf } from "../../model/thread-report"
+import { ChatPill } from "./chat-pill"
 import { AgentProse, RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
@@ -36,7 +41,8 @@ export function messageAuthor(app: MessageApp): Said {
  * published, each a card the conversation vertical draws and reads back
  * (`PublishedFiles`). A note somebody left is a row of its own, neither
  * (`TranscriptNote`). A record this read could not apply is one line
- * (`UnreadablePartLine`). Memoised on the
+ * (`UnreadablePartLine`), and so is the point where the agent ran on in a
+ * new session, a switch or a fork (`handoffLine`). Memoised on the
  * message itself, so a reply streaming in renders only the message it grows.
  */
 export const Message = memo(function Message({
@@ -75,7 +81,39 @@ export const Message = memo(function Message({
         <UnreadableOverflowLine />
       </div>
     )
+  if (message.role === "handoff") {
+    const line = handoffLine(message.handoff)
+    return (
+      <div
+        className="workspace-message"
+        data-role="handoff"
+        data-handoff={message.handoff.kind}
+        data-new={isNew || undefined}
+      >
+        <TranscriptDivider className="[overflow-wrap:anywhere]" meta={line.meta}>
+          {line.label}
+        </TranscriptDivider>
+      </div>
+    )
+  }
   if (message.role === "user") {
+    // A thread's report reaches the agent whole; here it is one line: the
+    // thread, and what it did (`model/thread-report.ts`).
+    const first = message.parts[0]
+    const report = first?.kind === "text" ? threadReportOf(first.text) : null
+    if (report)
+      return (
+        <div
+          className="workspace-message"
+          data-role="thread-report"
+          data-new={isNew || undefined}
+        >
+          <p className="workspace-thread-report" data-outcome={report.outcome}>
+            <ChatPill sessionId={report.thread} />
+            <span>{reportVerb(report.outcome)}</span>
+          </p>
+        </div>
+      )
     return (
       <div
         className="workspace-message"
@@ -123,7 +161,15 @@ export const Message = memo(function Message({
         {groups.map((group, index) => {
           if (Array.isArray(group))
             return (
-              <ToolSteps key={index} steps={group} settled={message.working !== true} />
+              <ToolSteps
+                key={index}
+                steps={group}
+                settled={runSettled(
+                  group,
+                  index === groups.length - 1,
+                  message.working === true,
+                )}
+              />
             )
           // What the agent said is Markdown, whitespace and all: its line
           // breaks and blank lines are structure, so it is parsed, not set in

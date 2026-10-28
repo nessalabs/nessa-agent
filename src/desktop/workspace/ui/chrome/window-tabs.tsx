@@ -87,8 +87,8 @@ export const WindowTabs = memo(function WindowTabs() {
         aria-label="Open views"
         onKeyDown={moveTab}
       >
-        {ids.map((id) => (
-          <SessionTab key={id} sessionId={id} />
+        {ids.map((id, index) => (
+          <SessionTab key={id} sessionId={id} focusable={!focused && index === 0} />
         ))}
         {widgets.map((pane) => (
           <div
@@ -136,7 +136,7 @@ export const WindowTabs = memo(function WindowTabs() {
   )
 })
 
-function SessionTab({ sessionId }: { sessionId: string }) {
+function SessionTab({ sessionId, focusable }: { sessionId: string; focusable: boolean }) {
   const dispatch = useWorkspaceDispatch()
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
   const focused = useWorkspaceSelector(
@@ -155,7 +155,7 @@ function SessionTab({ sessionId }: { sessionId: string }) {
         type="button"
         role="tab"
         aria-selected={active}
-        tabIndex={focused ? 0 : -1}
+        tabIndex={focused || focusable ? 0 : -1}
         title={title}
         onClick={() => dispatch(openSession({ sessionId }))}
       >
@@ -170,7 +170,7 @@ function SessionTab({ sessionId }: { sessionId: string }) {
         icon="close"
         size="sm"
         label={`Close Tab: ${title}`}
-        tabIndex={focused ? 0 : -1}
+        tabIndex={focused || focusable ? 0 : -1}
         onClick={(event) => {
           focusAfterClose(event.currentTarget)
           dispatch(closeSessionTab({ sessionId }))

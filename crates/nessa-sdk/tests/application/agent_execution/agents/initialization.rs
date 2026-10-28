@@ -353,7 +353,7 @@ impl ProviderSessionBackend for PanickingCleanupBackend {
     }
     fn execute(
         &self,
-        _input: ExecutionRequest,
+        _input: ProviderInputFuture,
         _handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async { ProviderExecutionReply::Rejected(AgentError::Closed) })
@@ -695,6 +695,7 @@ async fn initialization_unit_left_unfinished_is_completed_by_the_next_prepare() 
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     assert_eq!(

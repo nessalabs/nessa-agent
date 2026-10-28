@@ -408,6 +408,20 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
         .create(path)?;
     verify_directory(path)
 }
+
+/// Create one private directory. An existing path is `AlreadyExists` and is
+/// not adopted. The mode is what `open_beneath` accepts as its root.
+pub fn create_directory_exclusive(path: &Path) -> io::Result<()> {
+    let name = CString::new(path.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    if unsafe { libc::mkdir(name.as_ptr(), 0o700) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if let Err(error) = verify_directory(path) {
+        let _ = fs::remove_dir(path);
+        return Err(error);
+    }
+    Ok(())
+}
 /// Create a private relative directory tree beneath an already-private root.
 ///
 /// Each component is opened relative to the verified parent handle, so a

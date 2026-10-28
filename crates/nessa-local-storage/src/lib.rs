@@ -21,10 +21,22 @@ mod windows;
 #[cfg(windows)]
 use windows as platform;
 
+#[cfg(windows)]
+pub use platform::create_no_writers;
 pub use platform::{
-    create_directory, create_directory_beneath, open, open_beneath, remove_directory_beneath,
-    remove_file_beneath, replace, replace_beneath, sync_directory, sync_directory_beneath,
-    verify_directory, verify_file,
+    create_directory, create_directory_beneath, create_directory_exclusive, open, open_beneath,
+    remove_directory_beneath, remove_file_beneath, replace, replace_beneath, sync_directory,
+    sync_directory_beneath, verify_directory, verify_file,
+};
+#[cfg(windows)]
+pub use platform::{
+    create_pinned_file_at, create_protected_directory_at, create_protected_file_at,
+    create_protected_subdirectory_at, create_session_directory_at, open_directory_at, open_file_at,
+    open_relative_directory, open_relative_file, open_session_directory_at,
+    open_verified_directory_at, open_verified_file_at, reacquire_exclusive_file,
+    relative_entry_kind, relative_names, release_directory_writes, release_file_writes,
+    remove_handle, rename_handle_at, rename_relative_entry_at, seal_directory_writes,
+    seal_file_writes, DirectoryAcl, NativeObjectId, RelativeEntryKind,
 };
 #[cfg(unix)]
 pub use platform::{
@@ -36,9 +48,12 @@ pub use retained_directory::{
     PublishedPrivateFile,
 };
 pub use shared_read::{find_shared_read, SharedReadCandidate, SharedReadKind};
-// One owner: a temporary file is published by the type that reserved it, so
-// that nothing can publish a name it did not create privately first.
-pub(crate) use platform::publish_new;
+// Exclusive rename. An existing destination, including an empty directory, is
+// `AlreadyExists` and is not replaced. A private temporary file is still
+// published by the type that reserved it; this is the rename that publication
+// and a directory promotion share. Both platforms rename, so the name does
+// not stay behind on one of them.
+pub use platform::publish_new;
 
 const TEMPORARY_PREFIX: &str = ".nessa-";
 const TEMPORARY_SUFFIX: &str = ".tmp";
@@ -242,6 +257,10 @@ impl PrivateTempFile {
             io::ErrorKind::AlreadyExists,
             "could not reserve private temporary file",
         ))
+    }
+    /// The reserved private name, for libraries that open their own handle.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
     pub fn as_file(&self) -> &File {
         self.file.as_ref().expect("temporary file is open")

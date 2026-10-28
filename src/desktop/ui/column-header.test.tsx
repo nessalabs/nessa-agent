@@ -121,6 +121,61 @@ it("draws one title, whichever row it is in, and a column without one measures n
   )
 })
 
+it("starts the glide where the title's row left the body", () => {
+  const starts: string[] = []
+  HTMLElement.prototype.animate = function (keyframes) {
+    const frames = Array.isArray(keyframes) ? keyframes : []
+    const transform = frames[0]?.transform
+    if (typeof transform === "string" && transform.startsWith("translateY"))
+      starts.push(transform)
+    return { finished: Promise.resolve(), cancel() {} } as unknown as Animation
+  }
+  const hadAnimations = "getAnimations" in Element.prototype
+  const getAnimations = Element.prototype.getAnimations
+  Element.prototype.getAnimations = () => []
+  const computed = vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+    const bar =
+      element instanceof HTMLElement && element.classList.contains("desktop-column-bar")
+    return {
+      getPropertyValue(name: string) {
+        if (!bar) return ""
+        if (name === "--desktop-base") return "160ms"
+        if (name === "--desktop-ease") return "ease"
+        if (name === "--desktop-column-title-block") return "32px"
+        return ""
+      },
+    } as CSSStyleDeclaration
+  })
+  try {
+    act(() =>
+      root.render(
+        <ColumnHeader title="desktop-app">
+          <div className="column-body" />
+        </ColumnHeader>,
+      ),
+    )
+    // The first placement has nothing to glide from.
+    act(() => layOut({ row: 100, title: 110, action: 0 }))
+    act(paint)
+    expect(title()?.dataset.placement).toBe("below")
+    expect(starts).toEqual([])
+    // The below row goes away and the body moves up, so the glide starts below.
+    act(() => layOut({ row: 400, title: 110, action: 0 }))
+    act(paint)
+    expect(title()?.dataset.placement).toBe("inline")
+    // The below row arrives and the body moves down, so the glide starts above.
+    act(() => layOut({ row: 100, title: 110, action: 0 }))
+    act(paint)
+    expect(title()?.dataset.placement).toBe("below")
+    expect(starts).toEqual(["translateY(32px)", "translateY(-32px)"])
+  } finally {
+    computed.mockRestore()
+    Reflect.deleteProperty(HTMLElement.prototype, "animate")
+    if (hadAnimations) Element.prototype.getAnimations = getAnimations
+    else Reflect.deleteProperty(Element.prototype, "getAnimations")
+  }
+})
+
 it("measures during observer delivery and commits only the latest widths before the next paint", () => {
   act(() => root.render(<ColumnHeader title="desktop-app" />))
   act(() => layOut({ row: 400, title: 110, action: 0 }))

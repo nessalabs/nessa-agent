@@ -74,7 +74,8 @@ behaviour set down here is unchanged by the move.
     keeps of what it does not show (`retention.ts`);
   - session grouping ("Needs you", "Running", "Earlier"), search, and the
     new-session lifecycle, where a draft is never listed and is let go once no
-    pane shows it;
+    pane shows it, unless something is typed in it: that one is kept for a new
+    session in its channel to show again, until its pane is closed;
   - the Agents overview's rules (`model/overview/`): what it lists and in
     what order (`agents-glance.ts`), its filter (`filter.ts`), where the
     keyboard goes (`walk.ts`), a peek's story of the turn and a request read
@@ -256,10 +257,9 @@ conversation title's size, and the composer docks at the pane's foot as a
 conversation's does, with the greeting turned off in Settings too. Every
 pane's "…" menu also offers Choose Header Picture… and, with a picture, Use
 Night Scene, through the same picker Customize uses. A home's picture, in
-either shape, reaches up behind the pane's title row to the pane's top edge,
-fading in there as a conversation's band does, except in the window's corner
-with nothing beside it, where the title row is the window's controls' and the
-picture stays below it. The greeting follows the hour of the window's clock
+either shape, reaches up behind the pane's title row to the window's top
+edge, in every pane — in the window's corner too, behind the window's
+controls, as a conversation's band does (the safe area below). The greeting follows the hour of the window's clock
 (`model/greeting.ts`): good morning, afternoon or evening, and "Working
 late?" only from 10pm to 5am. The pane's own size decides, by the container query the pane
 already is (`workspace-pane`), never the window's. It is one composer in both
@@ -285,7 +285,7 @@ pane marks its home `data-reshaped` when that name changes under it
 plays only its own entrance, as it did before. Focus on the scene's controls
 (Customize, the picture's framing) when the scene steps aside goes to the
 focused pane's composer, as focus that falls away from anything in a pane
-does (`adapters/dom/focus.ts`; a widget's body in a widget's pane, ADR 326); a framing being adjusted waits, as it was,
+does (`adapters/dom/focus.ts`; a widget's body in its chat's panel, ADR 326); a framing being adjusted waits, as it was,
 for the scene to come back.
 
 `responsive.mjs --only home-shape` measures, in Chromium and WebKit: the
@@ -766,8 +766,10 @@ tooltip for the whole window, in the window's own glass
 (`src/desktop/adapters/use-window-tooltips.ts`).
 
 **The titlebar's safe area.** Titlebar content starts at the safe area;
-nothing is painted under the window's controls — no text, code, picture,
-drawing or decorative layer's image. `--desktop-titlebar-safe-start`
+nothing is painted under the window's controls — no text, code, control or
+drawing — but a header's picture: a home's picture and a conversation's band
+run on behind the controls to the window's edge, so each pane's picture
+reads as one band from the top, never cut off where the controls end. `--desktop-titlebar-safe-start`
 is defined once, from the host's inset for its traffic lights and the width
 of our control cluster (sidebar toggle, Back, Forward, and the session list's
 toggle or New Session), and every titlebar-row element derives its start from
@@ -789,14 +791,15 @@ once as the column folds and shows once it has slid in. Pane headers keep
 rendering while their panes fly and change size (#914). A pane's header is its titlebar
 row, and what follows it begins below the titlebar's height wherever the pane
 is, so a scrolled transcript or a narrow pane's heading never passes under
-the controls; a conversation's picture band begins after them in the corner
-pane. Existing pane content stays visible while panes travel. A frame-sampled check over
+the controls; in the corner pane its name, menu and close start after them,
+while its picture runs on behind them. Chats have no tabs: each has this one
+header, and only what opens in a chat's right panel is a tab, in the panel's
+own top row (ADR 326's `panel` place). Existing pane content stays visible while panes travel. A frame-sampled check over
 every transition that moves titlebar content (⌘B, ⌥⌘S, the edge reveal, a
 resize that folds, a split, a new session, Settings, a change of layout), a
 scrolled transcript, and widths down to 560, in Chrome and WebKit at 1440 ×
 900 and 1000 × 700, finds nothing painted under the controls in any frame:
-text, `pre`, svg, images, canvas, and any element's background image but the
-window's own backdrop.
+text, `pre`, svg, images and canvas, but a header's picture.
 
 **A column's edge dragged past its narrowest folds it** (`draggedEdge`, in
 `src/desktop/model/side-column.ts`): it resists at its minimum, folds once
@@ -808,8 +811,8 @@ choice, as a toggle is, moving as a toggle does.
 marked `pending` in the catalogue, its control disabled and its row saying
 "Not available yet": open at login, show in menu bar, open to, the three
 notifications, update checks and channel, keep finished sessions, default
-model, thinking and fast mode, providers, agents, Nessa account, GitHub, MCP
-servers, default access, remember approvals, crash reports, session history.
+model, thinking and fast mode, providers, agents, MCP servers, default
+access, remember approvals, crash reports, session history.
 No control may look as if it works when it does not (`settings-view.test.tsx`).
 
 Icons resolve through a provider that mirrors nessa_ui's `NessaIconProvider`
@@ -936,6 +939,10 @@ links here):
 - **A selection is a fill.** No ring or border on a selected row or a
   highlighted menu item, in either theme.
 - **Menus lead with icons only when every item has one.**
+- **A menu is a solid card of 30px rows.** A row leads with its icon; a
+  chosen option's check and then its number or shortcut sit at the row's end,
+  the numbers in one column (nessa_ui's `lib/menu-recipe.ts`; the card in
+  `ui/menu/menu.css`). Where a menu numbers its choices, the number picks one.
 - **Shortcuts are right-aligned** in menus and tooltips, and named only where
   they work (`ui/layouts/shortcuts.ts` labels them).
 - **A key is written as the platform writes it**: ⌃⌥⇧⌘ on a Mac, and

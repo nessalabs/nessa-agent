@@ -197,6 +197,7 @@ jobs:
               'crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs',
               'crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs',
               'crates/nessa-sdk/src/infrastructure/mcp/servers.rs',
+              'crates/nessa-server/src/conversation/domain/value_objects/channel.rs',
               'crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs',
               'crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs',
               'crates/nessa-protocol/src/product_contract/generated.rs',
@@ -334,22 +335,75 @@ jobs:
         with:
           node-version: 24
       - uses: ./.github/actions/pnpm-install
-      - name: Install the pinned Chromium and its runtime dependencies
-        run: pnpm exec playwright install --with-deps chromium
-        timeout-minutes: 15
-      - run: cargo build -p nessa-server
+      - name: Install the pinned browsers and their runtime dependencies
+        run: pnpm exec playwright install --with-deps chromium webkit
+        # The Ubuntu dependency download exceeded 15 minutes in run 40248544263.
+        timeout-minutes: 30
+      # nessa-mcp: the stress check's `github` step runs commands through
+      # Nessa's own shell tool.
+      - id: gateway-build
+        run: cargo build -p nessa-server -p nessa-mcp
+      # Reuse this job's gateway build and browser install. The reset-boundary
+      # regression needs both engines, including WebKit's ticking-clock path.
+      - name: Run the scripted gateway checks in both browsers
+        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
+      - name: Verify GitHub live-event opt-in in both browsers
+        run: node verification/desktop/scripts/github-live-events.mjs --channel bundled --out "$STRESS_EVIDENCE/github-live-events.json" --shots "$STRESS_EVIDENCE/github-live-events"
+      - name: Verify usage-limit cards in both browsers
+        run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
+      - name: Verify pane dragging after deferred fitting in both browsers
+        run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+      # The private Swift phone product is exercised by nessa-ios's macOS
+      # phone-files-stress workflow against this exact gateway source.
+      # This Ubuntu job cannot build that product; it retains core window load.
       - name: Run the conversation stress check
         shell: bash
         run: |
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
-          pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+          pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
+      # The menu-bar panel ships in WKWebView, so its step also runs alone in
+      # WebKit: page dots, the sent bubble's accent and rim, and the undo card.
+      - name: Run the menu-bar panel stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menuPanels') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menuPanels 1 --evidence "$STRESS_EVIDENCE/menu-panel-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-panel-webkit.log"
+        timeout-minutes: 10
+      # The window's menus ship in WKWebView too: row height, icons, the
+      # check before its number, and picking a filter choice by its number.
+      - name: Run the menu stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menus') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menus 1 --evidence "$STRESS_EVIDENCE/menu-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-webkit.log"
+        timeout-minutes: 10
+      # Settings' GitHub row runs in WebKit too: its actions show under the
+      # pointer or focus, take no pointer while hidden, and Tab between them.
+      - name: Run the GitHub stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'githubs') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --githubs 1 --evidence "$STRESS_EVIDENCE/github-webkit" 2>&1 | tee "$STRESS_EVIDENCE/github-webkit.log"
+        timeout-minutes: 10
+      # First-run setup ships in WKWebView too: the welcome is whole as it
+      # opens, and a summon sends nothing through the light behind it.
+      - name: Run the onboarding stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'onboardings') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --onboardings 1 --evidence "$STRESS_EVIDENCE/onboarding-webkit" 2>&1 | tee "$STRESS_EVIDENCE/onboarding-webkit.log"
+        timeout-minutes: 10
       # Seeded random actions from several clients at once on the same
       # gateway build (conversation-chaos.mjs): a few short seeds here, many
       # long ones nightly. A failure prints its seed and a shrunk action list.
       - name: Run the conversation chaos check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.gateway-build.outcome == 'success' }}
         shell: bash
         run: |
           set -o pipefail
@@ -375,6 +429,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/native-crypto
+        if: runner.os == 'Windows'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -390,7 +446,7 @@ jobs:
         with:
           node-version: 24
       - shell: bash
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault
         timeout-minutes: 45
 
   local-auth:
@@ -398,12 +454,15 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     strategy:
       fail-fast: false
+      # Native verification uses the shipping Linux baseline. A newer
+      # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
+      # underneath the release contract (ci-harness.test.mjs, issue #1167).
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-22.04, macos-latest]
         include:
           - os: windows-latest
             partition: remaining
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             partition: all
           - os: macos-latest
             partition: all
@@ -416,12 +475,17 @@ jobs:
     timeout-minutes: 130
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/native-crypto
+        if: runner.os == 'Windows'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
         with:
+          # Rust's host triple does not distinguish Ubuntu's glibc baseline.
+          # Keep other platforms' existing shared cache keys unchanged.
+          key: ${{ runner.os == 'Linux' && matrix.os || '' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - uses: actions/setup-node@v4
@@ -436,13 +500,13 @@ jobs:
       # CI does too. Dropping it saved 28 seconds on Windows and cost that
       # guarantee, which is not a trade worth making. `database:check`'s fmt is
       # the exception: `cargo fmt --all` in `gateway-contract` covers it.
-      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -- --check
+      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault -- --check
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
       # Endpoint file publication crosses the platform-specific local-storage
       # adapters, so each OS gives a different answer. Lint this new crate before
-      # its tests; the existing package group below retains its measured order.
+      # its tests; the package group below also lints before its runtime tests.
       - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
       - run: cargo test -p nessa-gateway-endpoint
       # The database opener's privacy checks cross the same platform-specific
@@ -464,6 +528,8 @@ jobs:
           while IFS= read -r line; do
             printf '::notice title=Native load acceptance::%s\n' "$line"
           done < "$RUNNER_TEMP/page-load-acceptance.txt"
+      # Platform-only unused ports must fail before the long runtime suites.
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault --all-targets -- -D warnings
       # A test that deadlocks here held this job for six hours, until GitHub's
       # job limit cancelled it (#366). Over 53 green runs this step took at most
       # 7 minutes on Linux, 11 on macOS and 19 on Windows, compile included, so
@@ -475,8 +541,9 @@ jobs:
       # The package list is still one cargo invocation (`--no-run`), so feature
       # unification does not change. scripts/cargo-test-parallel.mjs then runs
       # the built test binaries two at a time and runs doctests with the same
-      # packages. Windows uses remaining; windows-server-tests owns its library
-      # executable. Linux/macOS use all. It does not raise libtest's thread count:
+      # packages. Windows remaining also runs the four seeded catalogue cases;
+      # windows-server-tests runs the complementary server library cases.
+      # Linux/macOS use all. It does not raise libtest's thread count:
       # the ACP
       # process-contract semaphore is process-local, and a process-per-test
       # runner would make that semaphore admit every contract test at once.
@@ -507,9 +574,15 @@ jobs:
           observe_phases cargo test -p nessa-server --test native_enrollment one_thread:: -- --nocapture
         timeout-minutes: 45
       - shell: bash
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault
         timeout-minutes: 45
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --all-targets -- -D warnings
+      # Passing libtest output is normally captured. Keep these bounded native
+      # receipts visible even when a separate strict fixture precondition fails.
+      - name: Capture native retained-file security query order
+        if: runner.os == 'Windows' && !cancelled()
+        shell: bash
+        run: cargo test -p nessa-local-storage --lib fresh_hardlink_security_queries_reverse_provider_order_without_inheritance_assumptions -- --nocapture
+        timeout-minutes: 5
       - run: node scripts/check-sdk-docs.mjs
       # Not on Linux: `gateway-contract` is an ubuntu-latest job and already
       # runs exactly what this script runs — fmt, clippy and test for

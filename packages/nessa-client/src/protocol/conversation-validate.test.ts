@@ -24,6 +24,17 @@ function image(change: { size?: number } = {}) {
   return { digest: DIGEST, mimeType: "image/png", size: 3, ...change }
 }
 
+function messageParts(value: ReturnType<typeof view>) {
+  return value.messages[1]!.parts as Array<{
+    offset: number
+    kind: string
+    text: string
+    toolId: string
+    noticeId: string
+    noticeKind?: "review" | "hook" | "deadline"
+  }>
+}
+
 function view() {
   return {
     conversationId: "conversation",
@@ -31,6 +42,7 @@ function view() {
     revision: "1",
     serverNowMs: 1_700_000_000_000,
     approvalMode: "ask",
+    model: "claude-sonnet-5",
     approvalModes: [
       {
         id: "ask",
@@ -45,6 +57,7 @@ function view() {
     notes: [],
     unreadable: [],
     unreadableTruncated: false,
+    handoffs: [],
     messages: [
       {
         executionId: "queued",
@@ -186,6 +199,62 @@ describe("conversation view agreement", () => {
     ).toThrow(/Empty conversation/)
   })
 
+  it("keeps each handoff a view lists, in the shape its kind has", () => {
+    const sample = view()
+    const switched = {
+      handoffId: "h-switch",
+      kind: "switch",
+      atMs: 10,
+      afterExecutionId: "run-1",
+      from: { agent: "claude", model: "opus" },
+      to: { agent: "codex", model: "gpt" },
+    }
+    const forked = {
+      handoffId: "h-fork",
+      kind: "fork",
+      atMs: 5,
+      turns: [{ said: "Plan a trip", reply: "Lisbon" }, {}],
+      omittedTurns: 3,
+    }
+    expect(
+      conversationView({ ...sample, handoffs: [forked, switched] }, "conversation")
+        .handoffs,
+    ).toEqual([forked, switched])
+    // A switch from a provider this gateway has no agent for names only its model.
+    expect(() =>
+      conversationView(
+        { ...sample, handoffs: [{ ...switched, from: { model: "old" } }] },
+        "conversation",
+      ),
+    ).not.toThrow()
+    // The schema's floor: a count of none, though the gateway leaves it out.
+    expect(() =>
+      conversationView(
+        { ...sample, handoffs: [{ ...forked, omittedTurns: 0 }] },
+        "conversation",
+      ),
+    ).not.toThrow()
+    for (const wrong of [
+      { ...switched, to: undefined },
+      { ...switched, turns: [{ said: "x" }] },
+      { ...forked, from: { model: "m" } },
+      { ...forked, kind: "merge" },
+      { ...forked, omittedTurns: -1 },
+      { ...forked, omittedTurns: 1.5 },
+      { ...forked, turns: [{ said: "" }] },
+      { ...forked, extra: true },
+    ])
+      expect(() =>
+        conversationView({ ...sample, handoffs: [wrong] }, "conversation"),
+      ).toThrow()
+    expect(() =>
+      conversationView({ ...sample, handoffs: [forked, forked] }, "conversation"),
+    ).toThrow(/Repeated conversation handoff id/)
+    expect(() =>
+      conversationView({ ...sample, handoffs: undefined }, "conversation"),
+    ).toThrow(/handoffs/)
+  })
+
   it("keeps a line for a record it could not read, including when the chat is otherwise empty", () => {
     const sample = view()
     const empty = {
@@ -267,6 +336,63 @@ describe("conversation view agreement", () => {
     expect(conversationView(view(), "conversation").tools[0]?.mcp).toBeUndefined()
   })
 
+  it("accepts a tool's start and end times, and a tool without them", () => {
+    const value = view()
+    Object.assign(value.tools[0]!, {
+      startedAtMs: 1_700_000_000_000,
+      endedAtMs: 1_700_000_000_420,
+    })
+    expect(conversationView(value, "conversation").tools[0]).toMatchObject({
+      startedAtMs: 1_700_000_000_000,
+      endedAtMs: 1_700_000_000_420,
+    })
+    expect(conversationView(view(), "conversation").tools[0]?.startedAtMs).toBeUndefined()
+    for (const mutation of [
+      { startedAtMs: -1 },
+      { endedAtMs: 1.5 },
+      { startedAtMs: "1" },
+    ]) {
+      const value = view()
+      Object.assign(value.tools[0]!, mutation)
+      expect(
+        () => conversationView(value, "conversation"),
+        JSON.stringify(mutation),
+      ).toThrow()
+    }
+  })
+
+  it("accepts the files a tool changed within their bounds, and nothing past them", () => {
+    const value = view()
+    const changes = [
+      { path: "new.ts", after: "export {}", cut: false },
+      { path: "big.ts", before: "a", after: "b", cut: true },
+    ]
+    Object.assign(value.tools[0]!, { changes })
+    expect(conversationView(value, "conversation").tools[0]?.changes).toEqual(changes)
+    Object.assign(value.tools[0]!, { changesCut: true })
+    expect(conversationView(value, "conversation").tools[0]?.changesCut).toBe(true)
+    for (const changesCut of ["yes", 1]) {
+      const value = view()
+      Object.assign(value.tools[0]!, { changes, changesCut })
+      expect(() => conversationView(value, "conversation")).toThrow()
+    }
+    for (const changes of [
+      [{ path: "", after: "", cut: false }],
+      [{ path: "a", after: "x".repeat(7001), cut: false }],
+      [{ path: "a", before: "x".repeat(7001), after: "", cut: false }],
+      [{ path: "a", after: "", cut: "no" }],
+      [{ path: "a", after: "", cut: false, extra: 1 }],
+      Array.from({ length: 17 }, () => ({ path: "a", after: "", cut: false })),
+    ]) {
+      const value = view()
+      Object.assign(value.tools[0]!, { changes })
+      expect(
+        () => conversationView(value, "conversation"),
+        JSON.stringify(changes).slice(0, 80),
+      ).toThrow()
+    }
+  })
+
   it("rejects a tool's MCP identity or structured result outside the published bounds", () => {
     const mutations: Array<Record<string, unknown>> = [
       { mcp: { server: "", tool: "show" } },
@@ -328,22 +454,24 @@ describe("conversation view agreement", () => {
 
   it("accepts one bounded local notice and rejects a repeated identity", () => {
     const value = view()
-    value.messages[1]!.parts.push({
+    messageParts(value).push({
       offset: 1,
       kind: "local_notice",
       text: "Nessa declined.",
       toolId: "",
       noticeId: "1",
+      noticeKind: "review",
     })
     expect(conversationView(value, "conversation").messages[1]!.parts[1]!.noticeId).toBe(
       "1",
     )
-    value.messages[1]!.parts.push({
+    messageParts(value).push({
       offset: 2,
       kind: "local_notice",
       text: "conflicting duplicate",
       toolId: "",
       noticeId: "1",
+      noticeKind: "review",
     })
     expect(() => conversationView(value, "conversation")).toThrow(
       "repeats a local notice identity",
@@ -365,14 +493,89 @@ describe("conversation view agreement", () => {
     )
   })
 
+  it("keeps a hook notice beside a review notice that uses the same decimal", () => {
+    const value = view()
+    const parts = messageParts(value)
+    parts.push(
+      {
+        offset: 1,
+        kind: "local_notice",
+        text: "Nessa declined.",
+        toolId: "",
+        noticeId: "7",
+        noticeKind: "review",
+      },
+      {
+        offset: 2,
+        kind: "local_notice",
+        text: "Nessa stopped this turn.",
+        toolId: "",
+        noticeId: "7",
+        noticeKind: "hook",
+      },
+    )
+    expect(
+      conversationView(value, "conversation").messages[1]!.parts.map(
+        (part) => part.noticeKind,
+      ),
+    ).toEqual([undefined, "review", "hook"])
+    parts.push({
+      offset: 3,
+      kind: "local_notice",
+      text: "Denied automatically.",
+      toolId: "",
+      noticeId: "7",
+      noticeKind: "deadline",
+    })
+    expect(
+      conversationView(value, "conversation").messages[1]!.parts.map(
+        (part) => part.noticeKind,
+      ),
+    ).toEqual([undefined, "review", "hook", "deadline"])
+    parts.push({
+      offset: 4,
+      kind: "local_notice",
+      text: "another deadline",
+      toolId: "",
+      noticeId: "7",
+      noticeKind: "deadline",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a local notice identity",
+    )
+    parts.pop()
+    parts.push({
+      offset: 4,
+      kind: "local_notice",
+      text: "another hook",
+      toolId: "",
+      noticeId: "7",
+      noticeKind: "hook",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a local notice identity",
+    )
+    parts.pop()
+    delete parts[1]!.noticeKind
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "local notice has no source",
+    )
+    parts[1]!.noticeKind = "review"
+    parts[0]!.noticeKind = "review"
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "non-notice part has a notice identity",
+    )
+  })
+
   it("rejects a local notice identity outside the SDK sequence range", () => {
     const value = view()
-    value.messages[1]!.parts.push({
+    messageParts(value).push({
       offset: 1,
       kind: "local_notice",
       text: "Nessa declined.",
       toolId: "",
       noticeId: "18446744073709551616",
+      noticeKind: "review",
     })
     expect(() => conversationView(value, "conversation")).toThrow(
       "local notice has no valid identity",
@@ -1123,6 +1326,100 @@ it("accepts typed authentication only on a failed turn and rejects untyped value
   ).toThrow(/required-work failure/)
 })
 
+it("accepts required work beside a usage limit on a failed turn", () => {
+  const sample = view()
+  const limited = {
+    ...sample,
+    messages: [
+      {
+        ...sample.messages[1],
+        parts: [],
+        status: "failed",
+        error: "The turn could not complete all required work.",
+        requiredWorkFailed: true,
+        usageLimit: {
+          provider: "claude",
+          recovery: "timed_reset",
+          resetsAtMs: 1_800_000_000_000,
+        },
+      },
+    ],
+    pending: [],
+    permissions: [],
+    questions: [],
+    tools: [],
+  }
+  const message = conversationView(limited, "conversation").messages[0]
+  expect(message?.requiredWorkFailed).toBe(true)
+  expect(message?.usageLimit).toMatchObject({
+    provider: "claude",
+    recovery: "timed_reset",
+    resetsAtMs: 1_800_000_000_000,
+  })
+  expect(message?.authenticationRequired).toBeUndefined()
+  expect(() =>
+    conversationView(
+      {
+        ...limited,
+        messages: [{ ...limited.messages[0], error: undefined }],
+      },
+      "conversation",
+    ),
+  ).toThrow(/required-work failure/)
+  expect(() =>
+    conversationView(
+      {
+        ...limited,
+        messages: [
+          {
+            ...limited.messages[0],
+            usageLimit: undefined,
+          },
+        ],
+      },
+      "conversation",
+    ),
+  ).toThrow(/required-work failure/)
+})
+
+it("accepts the inclusive reset bound the schema publishes", () => {
+  const sample = view()
+  const limited = (resetsAtMs: number) => ({
+    ...sample,
+    messages: [
+      {
+        ...sample.messages[1],
+        parts: [],
+        status: "failed",
+        error: "Usage limit reached.",
+        usageLimit: {
+          provider: "claude",
+          recovery: "timed_reset",
+          resetsAtMs,
+        },
+      },
+    ],
+    pending: [],
+    permissions: [],
+    questions: [],
+    tools: [],
+  })
+  expect(
+    conversationView(limited(4_102_444_800_000), "conversation").messages[0]?.usageLimit
+      ?.resetsAtMs,
+  ).toBe(4_102_444_800_000)
+  expect(
+    conversationView(limited(1_704_067_200_000), "conversation").messages[0]?.usageLimit
+      ?.resetsAtMs,
+  ).toBe(1_704_067_200_000)
+  expect(() => conversationView(limited(4_102_444_800_001), "conversation")).toThrow(
+    /reset instant/,
+  )
+  expect(() => conversationView(limited(1_704_067_199_999), "conversation")).toThrow(
+    /reset instant/,
+  )
+})
+
 function protocolFile(path: string) {
   return JSON.parse(
     readFileSync(
@@ -1306,6 +1603,11 @@ describe("the view's lease", () => {
       }
       expect(String(error), key).not.toMatch(/unknown fields/)
     }
+    expect(conversationView(view(), "conversation").model).toBe("claude-sonnet-5")
+    const { model: _omitted, ...withoutModel } = view()
+    expect(() => conversationView(withoutModel, "conversation")).toThrow(
+      /Invalid conversation model/,
+    )
     const properties = defs.ConversationLease.properties as Record<
       string,
       { enum?: string[] }
@@ -1458,4 +1760,50 @@ describe("a share's policy revision", () => {
       minPolicyRevision,
     )
   })
+})
+
+it("correlates pending uploaded input across every original fact and ignores JSON key order", () => {
+  const file = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "application/pdf",
+    size: 12,
+    name: "report.pdf",
+  }
+  const value = view()
+  Object.assign(value.messages[0]!, { userText: "", uploads: [file] })
+  Object.assign(value.pending[0]!, {
+    text: "",
+    uploads: [
+      { name: file.name, size: file.size, mimeType: file.mimeType, digest: file.digest },
+    ],
+  })
+  expect(() => conversationView(value, "conversation")).not.toThrow()
+  for (const replacement of [
+    { name: "other.pdf" },
+    { size: 13 },
+    { mimeType: "text/plain" },
+    { digest: `sha256:${"b".repeat(64)}` },
+  ]) {
+    const changed = structuredClone(value)
+    Object.assign(changed.pending[0]!, { uploads: [{ ...file, ...replacement }] })
+    expect(() => conversationView(changed, "conversation")).toThrow(
+      "Pending execution contradicts",
+    )
+  }
+  const bad = structuredClone(value)
+  Object.assign(bad.messages[0]!, { uploads: [{ ...file, name: "../escape" }] })
+  expect(() => conversationView(bad, "conversation")).toThrow("filename")
+})
+
+it("keeps a non-whitespace Unicode filename accepted by phone and SDK", () => {
+  const value = view()
+  Object.assign(value.messages[0]!, {
+    uploads: [{ digest: DIGEST, mimeType: "text/plain", size: 1, name: "\uFEFF" }],
+  })
+  Object.assign(value.pending[0]!, {
+    uploads: [{ digest: DIGEST, mimeType: "text/plain", size: 1, name: "\uFEFF" }],
+  })
+  expect(conversationView(value, "conversation").messages[0]?.uploads?.[0]?.name).toBe(
+    "\uFEFF",
+  )
 })

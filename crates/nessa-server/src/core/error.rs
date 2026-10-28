@@ -257,6 +257,8 @@ pub enum Dataset {
     BrowserSessions,
     PermissionRules,
     ThreadReports,
+    ScheduledMessages,
+    Channels,
 }
 
 impl fmt::Display for Dataset {
@@ -267,6 +269,8 @@ impl fmt::Display for Dataset {
             Self::BrowserSessions => "browser sessions",
             Self::PermissionRules => "permission rules",
             Self::ThreadReports => "thread reports",
+            Self::ScheduledMessages => "scheduled messages",
+            Self::Channels => "channels",
         })
     }
 }

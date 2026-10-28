@@ -242,6 +242,22 @@
           },
           "additionalAttributes": false
         }
+      },
+      "Channel": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "owner": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
       }
     },
     "actions": {
@@ -469,6 +485,45 @@
           ],
           "resourceTypes": [
             "Workspace"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "channel.create": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person"
+          ],
+          "resourceTypes": [
+            "Catalogue"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "channel.list": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person"
+          ],
+          "resourceTypes": [
+            "Catalogue"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "channel.use": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person"
+          ],
+          "resourceTypes": [
+            "Channel"
           ],
           "context": {
             "type": "Ask"

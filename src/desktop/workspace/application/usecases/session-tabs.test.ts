@@ -3,6 +3,7 @@ import { focusedPane, panesOf } from "../../../split-panes/model/pane-layout"
 import { roomyGrid, shownBy, testIndex } from "../../testing"
 import { initialWorkspace, paneIds, shownIds } from "../workspace-state"
 import { createDraft, openBeside, openSession } from "./panes"
+import { openWidgetInPanel } from "./chat-panel"
 import { indexLoaded, sessionRemoved } from "./updates"
 import { closeSessionTab } from "./session-tabs"
 
@@ -85,6 +86,18 @@ it("retains an unsent draft across tab switches and releases it only when its ta
   expect(closed.drafts.unsent).toBeUndefined()
   expect(closed.composerText.unsent).toBeUndefined()
   expect(closed.sessionTabs).not.toContain("unsent")
+})
+
+it("closing a draft document releases its right-panel tabs too", () => {
+  const drafted = createDraft(loaded(), { draftId: "unsent" })
+  const withPanel = openWidgetInPanel(drafted, {
+    origin: "unsent",
+    widget: { plugin: "sample", id: "notes" },
+  })
+  expect(withPanel.panels.unsent).toBeDefined()
+  const closed = closeSessionTab(withPanel, { sessionId: "unsent", draftId: "fresh" })
+  expect(closed.panels.unsent).toBeUndefined()
+  expect(closed.drafts.unsent).toBeUndefined()
 })
 
 it("closing the last unsent tab shows a fresh home without leaving a pane pointing at a missing draft", () => {

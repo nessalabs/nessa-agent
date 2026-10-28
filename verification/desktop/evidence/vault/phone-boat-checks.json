@@ -1,0 +1,43 @@
+[
+  {
+    "name": "token validated and encrypted"
+  },
+  {
+    "name": "Local creates no cloud VM"
+  },
+  {
+    "name": "two threads use distinct saved VMs",
+    "main": "02fbd8fc-e9d4-53e3-80a2-f1e80636fbd6",
+    "worker": "27fbc0a8-298c-4e41-a58c-f58eb427be91",
+    "workerVm": "bx_f78gtsn2"
+  },
+  {
+    "name": "subscription inference writes workspace file"
+  },
+  {
+    "name": "restart and VM resume retain identity and workspace files"
+  },
+  {
+    "name": "cold main subscription starts after gateway restart"
+  },
+  {
+    "name": "cloud subscription reads approved local log through existing MCP",
+    "reader": "f00412ed-630b-4c4f-9994-17be0e476f58"
+  },
+  {
+    "name": "removal plus session close revokes the old local connection"
+  },
+  {
+    "name": "coordinator dispatches real child on another VM",
+    "thread": "8a77ec7c-161f-c275-ccd1-64eb9d6f726f",
+    "vm": "bx_v9kvmcrd"
+  },
+  {
+    "name": "missing VM fails without replacement or Local fallback",
+    "vm": "bx_f78gtsn2",
+    "operation": "bdop_375577b667044da49d44c88b45fc50d3"
+  },
+  {
+    "name": "PASS"
+  }
+]

@@ -25,7 +25,9 @@ const view: ConversationView = {
   notes: [],
   unreadable: [],
   unreadableTruncated: false,
+  handoffs: [],
   approvalMode: "ask",
+  model: "claude-sonnet-5",
   approvalModes: [
     {
       id: "ask",
@@ -110,6 +112,17 @@ it("passes the SSH host a conversation runs on only when one is named", async ()
   ])
 })
 
+it("passes the channel a conversation is in only when one is named", async () => {
+  const request = vi.fn().mockResolvedValue({ conversationId })
+  const api = createConversationApi({ request }, () => "generated")
+  await api.create({ conversationId, requestId: "create-default" })
+  await api.create({ conversationId, requestId: "create-in", channelId: "ch_aaaaaaaaaa" })
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    { conversationId, requestId: "create-default" },
+    { conversationId, requestId: "create-in", channelId: "ch_aaaaaaaaaa" },
+  ])
+})
+
 it("correlates an acknowledged mode change and rejects a mismatched reply", async () => {
   const request = vi.fn().mockResolvedValue({ requestId: "mode-1", mode: "auto" })
   const api = createConversationApi({ request }, () => "generated")
@@ -128,6 +141,25 @@ it("correlates an acknowledged mode change and rejects a mismatched reply", asyn
   await expect(
     api.setApprovalMode(conversationId, "auto", { requestId: "mode-1" }),
   ).rejects.toBeInstanceOf(NessaConversationControlError)
+})
+
+it("sets the gateway usage-limit preference without naming a conversation", async () => {
+  const request = vi.fn().mockResolvedValue({ requestId: "pref-1", enabled: true })
+  const api = createConversationApi({ request }, () => "id")
+  await expect(
+    api.setUsageLimitAutoContinue(true, { requestId: "pref-1" }),
+  ).resolves.toEqual({
+    requestId: "pref-1",
+    enabled: true,
+  })
+  expect(request).toHaveBeenCalledWith("conversation.setUsageLimitAutoContinue", {
+    requestId: "pref-1",
+    enabled: true,
+  })
+  request.mockResolvedValue({ requestId: "pref-1", enabled: false })
+  await expect(
+    api.setUsageLimitAutoContinue(true, { requestId: "pref-1" }),
+  ).rejects.toThrow(/contradicts/)
 })
 it("validates attachment lifecycle fields and their cross-field agreement", async () => {
   const api = createConversationApi(
@@ -394,6 +426,42 @@ it("renames a conversation with the title as given and its own request identity"
   // An answer for another request is not this rename's.
   request.mockResolvedValueOnce({ requestId: "other", applied: true })
   await expect(api.rename(conversationId, "Lisbon")).rejects.toThrow()
+})
+it("switches a conversation's agent under its own request identity", async () => {
+  const request = vi.fn(async (_method: string, params: unknown) => ({
+    requestId: (params as { requestId: string }).requestId,
+    applied: true,
+  }))
+  const api = createConversationApi({ request }, () => "switch")
+  await expect(
+    api.switchAgent(conversationId, "codex", "gpt-5.5-codex"),
+  ).resolves.toEqual({ requestId: "switch", applied: true })
+  expect(request).toHaveBeenCalledWith("conversation.switchAgent", {
+    conversationId,
+    requestId: "switch",
+    agent: "codex",
+    model: "gpt-5.5-codex",
+  })
+  expect(() => api.switchAgent("not-a-uuid", "codex", "m")).toThrow(TypeError)
+  request.mockResolvedValueOnce({ requestId: "other", applied: true })
+  await expect(api.switchAgent(conversationId, "codex", "m")).rejects.toThrow()
+})
+it("forks a conversation into the identity it was given", async () => {
+  const forked = "6f1c1c4e-2b0a-4f0e-9a51-0d7f7b0f3a11"
+  const request = vi.fn(async (_method: string, params: unknown) => ({
+    conversationId: (params as { conversationId: string }).conversationId,
+  }))
+  const api = createConversationApi({ request }, () => forked)
+  await expect(api.fork(conversationId)).resolves.toEqual({ conversationId: forked })
+  expect(request).toHaveBeenCalledWith("conversation.fork", {
+    conversationId: forked,
+    requestId: forked,
+    sourceConversationId: conversationId,
+  })
+  expect(() => api.fork("not-a-uuid")).toThrow(TypeError)
+  // An answer naming another conversation is not this fork's.
+  request.mockResolvedValueOnce({ conversationId })
+  await expect(api.fork(conversationId)).rejects.toThrow()
 })
 it("stops the named turn without closing the attachment", async () => {
   const request = vi.fn(async () => ({
@@ -1514,6 +1582,29 @@ it("refuses a list row outside the schema, or one conversation listed twice", as
   }
 })
 
+it("keeps the channel a listed conversation is in, and refuses one the schema cannot name", async () => {
+  const inChannel = { ...summary, channelId: "ch_abcdefgh27" }
+  const api = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({ conversations: [inChannel], complete: true }),
+    },
+    () => "id",
+  )
+  expect((await api.list()).conversations).toEqual([inChannel])
+  for (const channelId of ["default", "ch_bad", 7]) {
+    const refused = createConversationApi(
+      {
+        request: vi.fn().mockResolvedValue({
+          conversations: [{ ...summary, channelId }],
+          complete: true,
+        }),
+      },
+      () => "id",
+    )
+    await expect(refused.list(), String(channelId)).rejects.toThrow(/channelId/)
+  }
+})
+
 const observeCursor = {
   incarnation: "a".repeat(32),
   boundary: "9",
@@ -2297,4 +2388,51 @@ it.each([
     requestId: "original-model-control",
     model: "selected-model",
   })
+})
+
+it("keeps a channel create pending through cloud preparation without replaying it", async () => {
+  const { conversationWorkspaceCreateTimeoutMs } =
+    await import("../application/agent-budgets.js")
+  const request = vi.fn(
+    async (_method: string, _params: unknown, _deadline?: unknown) => ({
+      conversationId,
+    }),
+  )
+  const api = createConversationApi({ request }, () => "cloud-create")
+  await api.create({ conversationId, channelId: "ch_aaaaaaaaaa" })
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(request.mock.calls[0]?.[2]).toEqual({
+    atLeastMs: conversationWorkspaceCreateTimeoutMs,
+  })
+})
+
+it("captures file-only uploads immutably and includes them in the admitted request", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ executionId: "execution", disposition: "queued" })
+  const api = createConversationApi({ request }, () => "request")
+  const upload = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "application/pdf",
+    size: 12,
+    name: "report.pdf",
+  }
+  const prepared = api.prepare(conversationId, "", [], [], {
+    executionId: "execution",
+    uploads: [upload],
+  })
+  upload.name = "changed.pdf"
+  expect(prepared.uploads[0]?.name).toBe("report.pdf")
+  expect(Object.isFrozen(prepared.uploads[0])).toBe(true)
+  await api.submit(prepared)
+  expect(request.mock.calls[0]?.[1]).toMatchObject({
+    uploads: [{ name: "report.pdf" }],
+    attachments: [],
+    files: [],
+  })
+  expect(() =>
+    api.prepare(conversationId, "", [], [], {
+      uploads: [{ ...upload, name: "../escape" }],
+    }),
+  ).toThrow("filename")
 })

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
-    ConversationModelSelection,
+    ConversationModelSelection, ScheduleActor, SelectionChange,
 };
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::projection::{bound_view, CommittedCursor};
@@ -42,7 +42,7 @@ impl ConversationService {
         .await
     }
 
-    async fn change_model(
+    pub(crate) async fn change_model(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
@@ -92,9 +92,13 @@ impl ConversationService {
                 {
                     return Err(ConversationError::ModelChangeUncertain);
                 }
-                return saved_selection(&terminal);
+                return self
+                    .complete_applied_model(id, saved_selection(&terminal))
+                    .await;
             }
-            return saved_selection(&saved);
+            return self
+                .complete_applied_model(id, saved_selection(&saved))
+                .await;
         }
         self.recover_model_change(id, caller).await?;
         let record = load_conversation(self.inner.metadata.as_ref(), id)
@@ -108,12 +112,14 @@ impl ConversationService {
         if record.model() == &model {
             return Err(ConversationError::ModelChangeNotApplied);
         }
+        let place = self.agent_place(id).await?;
         let configured = self
             .inner
             .agents
             .resolve_model(
                 record.agent().ok_or(ConversationError::AgentUnsupported)?,
                 model.as_str(),
+                place.as_ref(),
             )
             .await?;
         let live = self.resolve(id, caller).await?;
@@ -222,6 +228,15 @@ impl ConversationService {
                 return Err(ConversationError::ModelChangeUncertain);
             }
         };
+        if state == ConversationModelRequestState::Applied {
+            self.invalidate_selection_usage_limit(
+                SelectionChange::Model,
+                id,
+                &observed.request_id,
+                ScheduleActor::model_request(&observed),
+            )
+            .await?;
+        }
         let expected = ConversationModelRequest { state, ..observed };
         let write = contain_mode_terminal(async {
             self.inner
@@ -267,7 +282,69 @@ impl ConversationService {
             selection.approval_mode,
             selection.effect,
         );
+        // Metadata already holds this model. The selection is not complete
+        // until the open continuation is reconciled: changing away and back
+        // before the due time would otherwise hide the mismatch until
+        // delivery, when the model matches again.
+        self.complete_applied_model(id, Ok(selection)).await
+    }
+
+    /// An applied selection, including one read back on retry, is returned
+    /// only after schedule reconciliation commits. A refusal is not reconciled.
+    async fn complete_applied_model(
+        &self,
+        id: &ConversationId,
+        selection: Result<ConversationModelSelection, ConversationError>,
+    ) -> Result<ConversationModelSelection, ConversationError> {
+        let selection = selection?;
+        self.commit_applied_model_plan(id).await?;
         Ok(selection)
+    }
+
+    /// The continuation plan for an applied model. A failure stays owed, and
+    /// the next recovery — what an open read and a submit both call — runs it
+    /// again even when the request is no longer pending.
+    async fn commit_applied_model_plan(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(), ConversationError> {
+        self.note_model_reconcile(id);
+        self.reconcile_usage_limit_schedule(id).await?;
+        self.clear_model_reconcile(id);
+        Ok(())
+    }
+
+    /// Run a plan a previous applied transition left unfinished. Nothing is
+    /// owed on the ordinary path, and that path does not touch the schedule.
+    async fn retry_applied_model_plan(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        if !self.model_reconcile_owed(id) {
+            return Ok(());
+        }
+        self.commit_applied_model_plan(id).await
+    }
+
+    fn note_model_reconcile(&self, id: &ConversationId) {
+        self.inner
+            .model_reconcile_owed
+            .lock()
+            .expect("model reconciliation")
+            .insert(id.clone());
+    }
+
+    fn clear_model_reconcile(&self, id: &ConversationId) {
+        self.inner
+            .model_reconcile_owed
+            .lock()
+            .expect("model reconciliation")
+            .remove(id);
+    }
+
+    fn model_reconcile_owed(&self, id: &ConversationId) -> bool {
+        self.inner
+            .model_reconcile_owed
+            .lock()
+            .expect("model reconciliation")
+            .contains(id)
     }
 
     async fn retire_uncertain_model(&self, id: &ConversationId) -> Result<(), ConversationError> {
@@ -295,17 +372,23 @@ impl ConversationService {
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, caller)?;
         let Some(request) = self.inner.metadata.pending_model_change(id).await? else {
-            return Ok(());
+            return self.retry_applied_model_plan(id).await;
         };
         pending_model_for(id, &record, &request)?;
         self.finish_stopped_selection(id)
             .await
             .map_err(|_| ConversationError::ModelChangeUncertain)?;
         let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
+        let place = self.agent_place(id).await?;
         let prior = self
             .inner
             .agents
-            .resolve_for(agent, record.model().as_str(), record.approval_mode())
+            .resolve_for(
+                agent,
+                record.model().as_str(),
+                record.approval_mode(),
+                place.as_ref(),
+            )
             .await?;
         let (committed, _) = self.committed_with_order(id).await?;
         let matching = committed
@@ -321,6 +404,7 @@ impl ConversationService {
                     agent,
                     request.requested_model.as_str(),
                     selection.approval_mode,
+                    place.as_ref(),
                 )
                 .await?;
             (
@@ -370,13 +454,22 @@ impl ConversationService {
         if saved != observed {
             return Err(ConversationError::ModelChangeUncertain);
         }
-        let state = match application {
+        let state = match &application {
             ConversationModelApplication::Applied(_) => ConversationModelRequestState::Applied,
             ConversationModelApplication::Refused => ConversationModelRequestState::NotApplied,
             ConversationModelApplication::Uncertain => {
                 return Err(ConversationError::ModelChangeUncertain)
             }
         };
+        if state == ConversationModelRequestState::Applied {
+            self.invalidate_selection_usage_limit(
+                SelectionChange::Model,
+                id,
+                &observed.request_id,
+                ScheduleActor::model_request(&observed),
+            )
+            .await?;
+        }
         let expected = ConversationModelRequest { state, ..observed };
         let written = contain_mode_terminal(async {
             self.inner
@@ -408,6 +501,16 @@ impl ConversationService {
             }
             return Err(ConversationError::ModelChangeUncertain);
         }
+        // Metadata already holds an applied model. The recovery is not
+        // finished until the open continuation is reconciled, same as a
+        // command that returns the selection. A failed plan stays owed.
+        let applied = match &application {
+            ConversationModelApplication::Applied(selection) => Some(selection.clone()),
+            ConversationModelApplication::Refused | ConversationModelApplication::Uncertain => None,
+        };
+        if applied.is_some() {
+            self.note_model_reconcile(id);
+        }
         if let Some(live) = self.live_now(id, caller).await? {
             if live.agent.provider_identity() != identity {
                 return Err(ConversationError::ModelChangeUncertain);
@@ -416,13 +519,16 @@ impl ConversationService {
                 identity,
                 reserved_output_tokens: target.reserved_output_tokens,
             };
-            if let ConversationModelApplication::Applied(selection) = application {
+            if let Some(selection) = applied.clone() {
                 live.projection.lock().await.model_selection(
                     selection.model.as_str().into(),
                     selection.approval_mode,
                     selection.effect,
                 );
             }
+        }
+        if applied.is_some() {
+            self.commit_applied_model_plan(id).await?;
         }
         self.inner.live_changes.publish(id);
         Ok(())

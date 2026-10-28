@@ -14,6 +14,9 @@ mod desktop_runtime;
 pub mod device_pairing;
 pub mod env;
 pub mod env_serve;
+pub mod external_events;
+pub mod github;
+pub mod github_relay;
 pub mod health;
 pub(crate) mod limits;
 pub mod mcp_authorization;
@@ -21,8 +24,10 @@ pub mod mcp_servers;
 pub mod peer_gateways;
 pub mod product;
 pub(crate) mod relay;
+pub mod secrets;
 pub mod server;
 pub(crate) mod timer;
+pub mod tunnel;
 
 pub use core::run;
 
@@ -49,3 +54,8 @@ pub(crate) mod app_call_test_support;
 #[cfg(test)]
 #[path = "../tests/conversation/catalogue_receiver/store.rs"]
 pub(crate) mod catalogue_receiver_store;
+
+pub mod vault;
+
+#[cfg(unix)]
+pub(crate) mod workspaces;

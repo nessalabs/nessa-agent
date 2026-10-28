@@ -21,11 +21,12 @@ diagramLinks:
   F5: "gateway-attachments-have-a-large-or-unfamiliar-image-normalized-and-kept-once"
   F6: "gateway-attachments-send-uploaded-images-to-the-agent"
   F7: "gateway-attachments-send-a-non-image-file-by-path-and-approve-its-read"
+  F8: "gateway-attachments-send-an-uploaded-file-from-the-phone"
 ---
 
 # Attachments and content
 
-Files, images and pasted text enter through different paths. Native non-image files send a local path. Images upload bytes. Pasted text becomes part of the message.
+Files, images and pasted text enter through different paths. Desktop non-image files can name a local path. Phone files upload bytes and retain their original references. Images upload bytes. Pasted text becomes part of the message.
 
 Each gesture stays tied to its original conversation. Preview, upload, send and cleanup are separate steps. Reopened history may show references instead of the original local previews.
 
@@ -52,6 +53,8 @@ flowchart TB
     Feature --> F6
     F7["Send a non-image file by path and approve its read"]
     Feature --> F7
+    F8["Send an uploaded file from the phone"]
+    Feature --> F8
 ```
 
 ## Browse flows
@@ -66,7 +69,7 @@ flowchart TB
 - [Reopen a message and understand its reference-only attachments](reopen-a-message-and-understand-its-reference-only-attachments.md)
 - [Send a non-image file by path and approve its read](send-a-non-image-file-by-path-and-approve-its-read.md)
 - [Send uploaded images to the agent](send-uploaded-images-to-the-agent.md)
-- [Stop or delete a conversation and release its uploaded images](stop-or-delete-a-conversation-and-release-its-uploaded-images.md)
+- [Close or delete a conversation and release its uploaded images](stop-or-delete-a-conversation-and-release-its-uploaded-images.md)
 - [Understand an attachment refusal and choose a useful recovery](understand-an-attachment-refusal-and-choose-a-useful-recovery.md)
 - [Upload an image and retry a failed upload](upload-an-image-and-retry-a-failed-upload.md)
 - [Wait for a cloud file without attaching it to another tab](wait-for-a-cloud-file-without-attaching-it-to-another-tab.md)

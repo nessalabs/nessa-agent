@@ -13,6 +13,7 @@ import { messageText, shownWhole } from "../../model/transcript"
 import { defaultModel } from "../../model/workspace-index"
 import {
   approvalId,
+  handoffId,
   inputId,
   modelFor,
   noteId,
@@ -190,9 +191,9 @@ describe("a conversation view as a transcript", () => {
     )
     const reply = transcript.messages.find((message) => message.role === "agent")
     expect(reply?.parts).toEqual([
-      { kind: "step", step: "run", label: "Draw a chart" },
+      { kind: "step", step: "run", label: "Draw a chart", id: "t1", status: "completed" },
       { kind: "widget", widget: appWidget("charts", "c", "e1", "t1") },
-      { kind: "step", step: "run", label: "List rows" },
+      { kind: "step", step: "run", label: "List rows", id: "t2", status: "completed" },
     ])
   })
 
@@ -490,6 +491,78 @@ describe("a conversation view as a transcript", () => {
     expect(line && "unreadable" in line ? line.unreadable : null).toEqual({ id: "3" })
     expect(messageText(transcript.messages[0]!)).toBe("")
     expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(4)
+  })
+
+  it("draws a switch as a line after the turn it followed, and a fork's copied turns first, then its line", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", parts: [textPart("Charted", 0)] }),
+          turn({ executionId: "e2", parts: [textPart("Sailed", 0)] }),
+        ],
+        notes: [note("n1", { afterExecutionId: "e1" })],
+        handoffs: [
+          {
+            handoffId: "fork",
+            kind: "fork",
+            atMs: 1,
+            turns: [{ said: "Plan a trip", reply: "Lisbon" }, { reply: "Only a reply" }],
+            omittedTurns: 2,
+          },
+          {
+            handoffId: "switch",
+            kind: "switch",
+            atMs: 2,
+            afterExecutionId: "e1",
+            from: { agent: "claude", model: "claude-opus-5" },
+            to: { agent: "codex", model: "gpt-6-astra" },
+          },
+          // After a turn the bounded view left out: older than every turn shown.
+          {
+            handoffId: "dropped",
+            kind: "switch",
+            atMs: 0,
+            afterExecutionId: "e0",
+            from: { model: "old" },
+            to: { agent: "claude", model: "claude-opus-5" },
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages.map((message) => [message.id, message.role])).toEqual([
+      [`${handoffId("fork")}/0`, "user"],
+      [`${handoffId("fork")}/0/reply`, "agent"],
+      [`${handoffId("fork")}/1/reply`, "agent"],
+      [handoffId("fork"), "handoff"],
+      [handoffId("dropped"), "handoff"],
+      [inputId("e1"), "user"],
+      [replyId("e1"), "agent"],
+      [noteId("n1"), "note"],
+      [handoffId("switch"), "handoff"],
+      [inputId("e2"), "user"],
+      [replyId("e2"), "agent"],
+    ])
+    const lines = transcript.messages.flatMap((message) =>
+      message.role === "handoff" ? [message.handoff] : [],
+    )
+    expect(lines).toEqual([
+      { kind: "fork", omittedTurns: 2 },
+      {
+        kind: "switch",
+        from: { model: "old" },
+        to: { agent: "claude", model: "claude-opus-5" },
+      },
+      {
+        kind: "switch",
+        from: { agent: "claude", model: "claude-opus-5" },
+        to: { agent: "codex", model: "gpt-6-astra" },
+      },
+    ])
+    expect(messageText(transcript.messages[0]!)).toBe("Plan a trip")
+    expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(11)
   })
 
   it("ends with one line when more records could not be read than the view lists", () => {
@@ -972,8 +1045,9 @@ describe("the model a session runs on", () => {
     const listed = composerModels[composerModels.length - 1]
     const runs = (model: string) =>
       view("c", {
+        model,
         runtime: {
-          model,
+          model: "runtime-model-not-the-selection",
           provider: "codex",
           workspace: "/",
           agent: "codex",
@@ -988,12 +1062,98 @@ describe("the model a session runs on", () => {
     })
     expect(runningModel(runs("a-model-no-catalogue-lists"))).toBeUndefined()
     expect(runningModel(view("c", { runtime: undefined }))).toBeUndefined()
+    expect(
+      runningModel(view("c", { model: listed.modelId, runtime: undefined })),
+    ).toEqual({
+      provider: listed.provider,
+      modelId: listed.modelId,
+    })
   })
 
   it("is said as the known one, else the composer's default", () => {
     const known = { provider: "openai", modelId: "gpt-5" }
     expect(modelFor(known)).toBe(known)
     expect(modelFor(undefined)).toEqual(defaultModel())
+  })
+})
+
+describe("usage limits", () => {
+  it("compares the reset on the gateway timeline", () => {
+    const reset = GATEWAY_NOW_MS + 30_000
+    const receivedAt = GATEWAY_NOW_MS + 120_000
+    const transcript = transcriptFrom(
+      view("limit", {
+        usageLimitAutoContinue: true,
+        messages: [
+          turn({
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: reset,
+            },
+          }),
+        ],
+      }),
+      1,
+      at,
+      receivedAt,
+    )
+    expect(transcript.messages[0]).toMatchObject({
+      usageLimit: {
+        resetsAtMs: reset,
+        resetsAtClientMs: receivedAt + 30_000,
+      },
+    })
+    const past = GATEWAY_NOW_MS - 10_000
+    const slow = GATEWAY_NOW_MS - 120_000
+    const later = transcriptFrom(
+      view("later", {
+        messages: [
+          turn({
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: past,
+            },
+          }),
+        ],
+      }),
+      1,
+      at,
+      slow,
+    )
+    expect(later.messages[0]).toMatchObject({
+      usageLimit: { resetsAtMs: past, resetsAtClientMs: slow - 10_000 },
+    })
+  })
+
+  it("keeps the classification and the gateway preference, without a diagnostic", () => {
+    const source = view("limit", {
+      usageLimitAutoContinue: false,
+      messages: [
+        turn({
+          status: "failed",
+          usageLimit: {
+            provider: "codex",
+            recovery: "unknown",
+          },
+        }),
+      ],
+    })
+    const transcript = transcriptFrom(source, 1, at, GATEWAY_NOW_MS)
+    expect(transcript.usageLimitAutoContinue).toBe(false)
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      executionId: "e1",
+      usageLimit: { provider: "codex", recovery: "unknown" },
+      terminal: { status: "failed" },
+    })
+    expect(transcript.messages[0]).not.toHaveProperty("requiredWorkFailed")
+    const marked = transcript.messages[0]
+    if (marked && "terminal" in marked)
+      expect(marked.terminal).not.toHaveProperty("error")
   })
 })
 

@@ -1,5 +1,6 @@
 import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
-import { draftOf, entry } from "../../application/workspace-state"
+import { useRememberedValue } from "../../adapters/store/remembered-session"
+import { entry } from "../../application/workspace-state"
 import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
@@ -33,13 +34,15 @@ const stayCard = () => {}
  * what the picker shows while it stays mounted (`conversation.test.tsx`).
  */
 function useNextModel(sessionId: string): ModelRef | undefined {
-  return useWorkspaceSelector((state) => selectNextModel(state, sessionId))
+  const live = useWorkspaceSelector((state) => selectNextModel(state, sessionId))
+  return useRememberedValue(sessionId, live)
 }
 
 /** A session's unsent text, held in the workspace so it outlives a change of layout. */
 function useComposerText(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const text = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
+  const live = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
+  const text = useRememberedValue(sessionId, live)
   const onTextChange = useCallback(
     (next: string) => dispatch(setComposerText({ sessionId, text: next })),
     [dispatch, sessionId],
@@ -49,9 +52,10 @@ function useComposerText(sessionId: string) {
 
 function useComposerActions(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const canChangeModel = useWorkspaceSelector((state) =>
+  const canChangeLive = useWorkspaceSelector((state) =>
     selectCanChooseModel(state, sessionId),
   )
+  const canChangeModel = useRememberedValue(sessionId, canChangeLive)
   const send = useCallback(
     (text: string) =>
       void dispatch(sendMessage({ sessionId, text, initiator: "person" })),
@@ -68,10 +72,14 @@ function useComposerActions(sessionId: string) {
  * Stop, while the session's agent is at work (`atWork`): what the docked
  * composer's send button becomes. Held as asked until the stop settles, so
  * one press asks once; the turn's end arrives as the source's update.
+ * A removed session keeps that Stop until its box goes. The transcript is
+ * already gone, and the live read would turn the button back into Send
+ * while the held conversation still shows the turn.
  */
 function useStop(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const working = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
+  const workingLive = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
+  const working = useRememberedValue(sessionId, workingLive)
   const [stopping, setStopping] = useState(false)
   const stop = useCallback(() => {
     setStopping(true)
@@ -161,35 +169,47 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { text, onTextChange } = useComposerText(sessionId)
   const stop = useStop(sessionId)
   const access = useComposerAccess(sessionId)
-  const modelChoice = useWorkspaceSelector((state) =>
+  const modelChoiceLive = useWorkspaceSelector((state) =>
     entry(state.workspace.modelChoices, sessionId),
   )
-  const modelControl = useWorkspaceSelector(
+  const modelChoice = useRememberedValue(sessionId, modelChoiceLive)
+  const modelControlLive = useWorkspaceSelector(
     (state) => entry(state.workspace.transcripts, sessionId)?.modelControl,
   )
-  const modelRequest = useWorkspaceSelector((state) =>
+  const modelControl = useRememberedValue(sessionId, modelControlLive)
+  const modelRequestLive = useWorkspaceSelector((state) =>
     modelRequesting(state.workspace, sessionId),
   )
-  const modelBusy = useWorkspaceSelector((state) =>
+  const modelRequest = useRememberedValue(sessionId, modelRequestLive)
+  const modelBusyLive = useWorkspaceSelector((state) =>
     modelChanging(state.workspace, sessionId),
   )
-  const isDraft = useWorkspaceSelector((state) => !!draftOf(state.workspace, sessionId))
+  const modelBusy = useRememberedValue(sessionId, modelBusyLive)
+  const choiceCode =
+    modelChoice &&
+    (modelChoice.state === "refused" || modelChoice.state === "recovery_required")
+      ? modelChoice.code
+      : undefined
   const modelNotice =
-    modelControl?.pending?.status === "recovery_required" ||
-    modelChoice?.state === "recovery_required" ||
-    modelChoice?.state === "acknowledged"
-      ? "The model change is not confirmed. Choose again to check and try."
-      : modelBusy
-        ? "Changing model…"
-        : modelChoice?.state === "refused"
-          ? modelChoice.code === "model_change_not_applied"
-            ? "Model didn’t change. Choose again to try."
-            : "The model change could not be confirmed. Choose again to check and try."
-          : modelControl?.effect === "nextTurn"
-            ? "Model applies to the next turn."
-            : modelControl?.effect === "subsequentResponses"
-              ? "Model applies to subsequent responses."
-              : undefined
+    choiceCode === "conversation_configuration_changed"
+      ? "This chat can't be reopened."
+      : // The source settles its own pending change; sending waits for it.
+        modelControl?.pending?.status === "recovery_required"
+        ? "The model change is not confirmed yet. You can send once it settles."
+        : modelChoice?.state === "recovery_required" ||
+            modelChoice?.state === "acknowledged"
+          ? "The model change is not confirmed. Send again to check and try."
+          : modelBusy
+            ? "Changing model…"
+            : modelChoice?.state === "refused"
+              ? modelChoice.code === "model_change_not_applied"
+                ? "Model didn’t change. Choose again to try."
+                : "The model change wasn’t made. Choose again to try."
+              : modelControl?.effect === "nextTurn"
+                ? "Model applies to the next turn."
+                : modelControl?.effect === "subsequentResponses"
+                  ? "Model applies to subsequent responses."
+                  : undefined
 
   return (
     <>
@@ -201,7 +221,6 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         onPageChange={stayCard}
         model={model}
         onModelChange={changeModel}
-        modelProvider={!isDraft ? model?.provider : undefined}
         modelDisabled={modelRequest}
         modelNotice={modelNotice}
         onSend={modelBusy ? undefined : send}

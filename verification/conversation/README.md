@@ -52,5 +52,14 @@ current authority. The cropped screenshot lives in
 query it restores another. Both mount the production `useConversation` follow
 and controls over a gated close port. `local-tab-lifetimes.mjs` measures fresh
 local identity, old follow cleanup, replacement follow, original close target,
-and replacement notices at 360, 600 and 1440 pixels in both engines. The
+and replacement notices at 360, 600 and 1440 pixels in both engines. Follow,
+stop and close counts are the fixture's (`__localTabLifetimes.snapshot`), read
+when the check runs, not attributes copied at the last render
+([live owner reads](../../docs/design/live-owner-reads.md)). The
 fixture is served in development and is excluded from product assets.
+
+`user-flow-ordering.html` mounts production AgentDownloads and useComposer over
+controlled offer/install/send ports for #1087. The matching desktop script
+checks obsolete offers after uncertain installation and cross-tab/operation
+send observations. It is frontend ordering evidence, without a gateway or
+physical installation claim; design rows live in `docs/design/user-flow-ordering.md`.

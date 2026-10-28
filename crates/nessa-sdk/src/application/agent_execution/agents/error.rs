@@ -1,10 +1,11 @@
 //! Typed SDK failures preserve execution, observation, storage, and cleanup outcomes.
 #![deny(missing_docs)]
 
+use super::usage_limit::UsageLimit;
 use crate::application::agent_execution::agents::{AttachmentFailureCode, AttachmentPhase};
 use crate::application::agent_execution::hooks::HookFailure;
 use crate::application::agent_execution::{
-    providers::{CloseOutcome, ImageInputRefusal, UserImageError},
+    providers::{CloseOutcome, ImageInputRefusal, UserFileError, UserImageError},
     sessions::{StorageError, UnknownApp},
 };
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
@@ -266,6 +267,8 @@ pub enum AgentError {
     /// An image the message refers to could not be supplied intact, so the
     /// message was not dispatched. Nothing is sent without it.
     UserImage(UserImageError),
+    /// A stored message file could not be prepared in the execution environment.
+    UserFile(UserFileError),
     /// The message's images were refused for what they are or for who would
     /// receive them, without reading a byte. Admission answers this before the
     /// message is accepted, so nothing was saved, queued, or sent; an adapter
@@ -299,6 +302,9 @@ pub enum AgentError {
         /// Bounded provider context, without lifecycle or cleanup authority.
         diagnostic: Option<ProviderDiagnostic>,
     },
+    /// The provider's usage limit stopped the turn. Ordinary resumption does
+    /// not run it again. A reset instant is present only for a timed reset.
+    UsageLimitReached(UsageLimit),
     /// The provider returned a generic protocol error response.
     Provider {
         /// Provider-supplied numeric error code, retained without string classification.
@@ -429,6 +435,7 @@ impl AgentError {
             | Self::RefusedAfterSave
             | Self::AfterSaveUnavailable
             | Self::UnknownApp(_)
+            | Self::UserFile(_)
             | Self::UserImage(_)
             | Self::ImageInputRefused(_)
             | Self::MessageTooLarge { .. }
@@ -436,6 +443,7 @@ impl AgentError {
             | Self::ApprovalModeChanged
             | Self::StalePermission
             | Self::AuthenticationRequired { .. }
+            | Self::UsageLimitReached(_)
             | Self::CleanupUncertain
             | Self::AuditFailure
             | Self::AuditAndCleanupFailure
@@ -449,6 +457,94 @@ impl AgentError {
     /// Generic provider codes and diagnostic text do not establish this fact.
     pub fn authentication_required(&self) -> bool {
         matches!(self, Self::AuthenticationRequired { .. })
+    }
+
+    /// The usage limit this error carries, including through a nested
+    /// operation failure. Absent when the failure is something else.
+    pub fn usage_limit(&self) -> Option<&UsageLimit> {
+        match self {
+            Self::UsageLimitReached(limit) => Some(limit),
+            Self::ExecutionObservation {
+                error,
+                execution_result,
+            } => error.usage_limit().or_else(|| {
+                execution_result
+                    .as_deref()
+                    .and_then(|result| result.as_ref().err())
+                    .and_then(Self::usage_limit)
+            }),
+            Self::StorageAfterExecution {
+                execution_result, ..
+            } => execution_result
+                .as_ref()
+                .as_ref()
+                .err()
+                .and_then(Self::usage_limit),
+            Self::MultipleOperationFailures {
+                first_error,
+                subsequent_error,
+            } => first_error
+                .usage_limit()
+                .or_else(|| subsequent_error.usage_limit()),
+            Self::OperationAndCleanupFailure {
+                operation_error,
+                cleanup_error,
+            } => operation_error
+                .usage_limit()
+                .or_else(|| cleanup_error.usage_limit()),
+            Self::AfterInvocationHooks {
+                execution_result, ..
+            } => execution_result
+                .as_ref()
+                .as_ref()
+                .err()
+                .and_then(Self::usage_limit),
+            _ => None,
+        }
+    }
+
+    /// Whether this error, or one nested in it, is a usage limit. Ordinary
+    /// resumption does not run a turn that ended this way, or the turns the
+    /// runner stopped behind it.
+    pub fn blocks_immediate_resume(&self) -> bool {
+        match self {
+            Self::UsageLimitReached(_) => true,
+            Self::ExecutionObservation {
+                error,
+                execution_result,
+            } => {
+                error.blocks_immediate_resume()
+                    || match execution_result.as_deref() {
+                        Some(Err(failed)) => failed.blocks_immediate_resume(),
+                        _ => false,
+                    }
+            }
+            Self::StorageAfterExecution {
+                execution_result, ..
+            } => execution_result
+                .as_ref()
+                .as_ref()
+                .is_err_and(Self::blocks_immediate_resume),
+            Self::MultipleOperationFailures {
+                first_error,
+                subsequent_error,
+            } => {
+                first_error.blocks_immediate_resume() || subsequent_error.blocks_immediate_resume()
+            }
+            Self::OperationAndCleanupFailure {
+                operation_error,
+                cleanup_error,
+            } => {
+                operation_error.blocks_immediate_resume() || cleanup_error.blocks_immediate_resume()
+            }
+            Self::AfterInvocationHooks {
+                execution_result, ..
+            } => execution_result
+                .as_ref()
+                .as_ref()
+                .is_err_and(Self::blocks_immediate_resume),
+            _ => false,
+        }
     }
 }
 

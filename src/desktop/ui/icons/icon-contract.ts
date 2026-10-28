@@ -89,6 +89,32 @@ const desktopRoles = [
   "privacy",
   "advanced",
   "about",
+  // An account's actions in Settings
+  "repositories",
+  "disconnect",
+  // Menu rows: a pane's, a session's, the header's, the overview filter's
+  "open",
+  "openBeside",
+  "closePane",
+  "moveLeft",
+  "moveRight",
+  "moveUp",
+  "moveDown",
+  "evenOut",
+  "picture",
+  "nightScene",
+  "position",
+  "rename",
+  "pin",
+  "unpin",
+  "fork",
+  "share",
+  "ongoing",
+  "anyTime",
+  "today",
+  "lastWeek",
+  "lastMonth",
+  "tag",
 ] as const
 
 export const desktopIconRoles = [...designSystemRoles, ...desktopRoles] as const

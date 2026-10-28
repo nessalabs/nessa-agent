@@ -18,6 +18,7 @@ fn a_cut_list_says_so_on_the_wire() {
         updated_at_ms: 2,
         running: false,
         archived: true,
+        channel_id: None,
     };
     for complete in [true, false] {
         let wire = serde_json::to_value(list_result(ConversationList {
@@ -41,6 +42,7 @@ fn an_observation_page_keeps_complete_and_its_cursor_on_the_wire() {
         updated_at_ms: 2,
         running: false,
         archived: false,
+        channel_id: None,
     };
     let unfinished = serde_json::to_value(observe_result(ConversationObservation {
         conversations: vec![entry.clone()],
@@ -76,6 +78,7 @@ fn a_list_longer_than_a_frame_is_cut_and_says_so() {
         updated_at_ms: 2,
         running: false,
         archived: false,
+        channel_id: None,
     };
     let long = list_result(ConversationList {
         conversations: (0..10_000).map(entry).collect(),

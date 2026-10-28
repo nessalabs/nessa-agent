@@ -1,9 +1,12 @@
 mod agent_tools;
+mod channels;
 mod creation;
 mod model_changes;
 mod mutation;
+mod scheduled_messages;
 mod thread_reports;
 mod workspace_windows;
+use self::mutation::SubmissionPermit;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::source_permits::SourcePermits;
@@ -19,20 +22,24 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
-    AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
-    ConversationCreationAudit, ConversationDeletionAudit, ConversationDeletionAuditRecord,
-    ConversationDeletionCause, ConversationError, ConversationFileLinkAudit,
-    ConversationFileLinkAuditRecord, ConversationFileLinkCause, ConversationFileLinkState,
-    ConversationListing, ConversationModeApplication, ConversationModeAudit,
-    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
-    ConversationOwnershipState, ConversationRepository, ConversationSummaries, DeletionFailures,
-    FenceCapture, FetchRequests, ListedConversation, ObservationCursor, ObservedConversations,
-    OwnerAccess, PublishRequests, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
+    AccessAction, AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer,
+    AttachmentRelease, AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
+    ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
+    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
+    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
+    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
+    ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
+    ConversationSummaries, DeletionFailures, FenceCapture, FetchRequests, ListedConversation,
+    ObservationCursor, ObservedConversations, OwnerAccess, PairedAccess, PairedParty,
+    PublishRequests, Reader, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
     SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
+};
+pub use channels::{
+    AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -95,11 +102,21 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::{ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UserMessage},
+    prompts::{
+        ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UploadedFileReference,
+        UserMessage,
+    },
     questions::{QuestionChoice, QuestionId},
     sessions::ExecutionSessionId,
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+pub(crate) use scheduled_messages::FENCE_LEASE_MS;
+pub use scheduled_messages::{
+    HistoryGeneration, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
+    PreferenceReading, PreferenceUpdate, ReconcileRetry, RecordedPreference, ScheduleActor,
+    ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
+    ScheduledMessageStore, SelectionChange, SelectionRequest, UnsettledEnable, UsageLimitSnapshot,
+};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -113,7 +130,7 @@ use std::{
     time::Duration,
 };
 #[cfg(test)]
-pub(crate) use thread_reports::report_text_for_test;
+pub(crate) use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
 };
@@ -278,6 +295,8 @@ pub struct RequestedConversation {
     /// it by; `None` runs it here. Kept as asked: a name the configuration
     /// does not have is refused where it would be used.
     pub environment: Option<String>,
+    /// The channel it is in for its whole life; `None` is the default one.
+    pub channel: Option<crate::conversation::domain::ChannelId>,
 }
 
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
@@ -327,6 +346,9 @@ pub(super) fn blank_text(text: &str) -> bool {
 /// agent nobody has selected is still the agent yesterday's conversations need.
 #[derive(Clone)]
 pub struct ConversationAgent {
+    /// Canonical local workspace selected with this exact provider generation.
+    /// The execution environment's reported workspace takes precedence remotely.
+    pub workspace: Option<String>,
     /// What opens an execution session for it.
     pub provider: Arc<dyn AgentProvider>,
     /// The same durable audit sink injected into the provider and prepared Agent.
@@ -362,6 +384,19 @@ pub trait ConversationAgentSource: Send + Sync {
         model: &'a str,
         mode: ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a>;
+    /// As [`Self::resolve_for`], for a conversation in a stored channel: its
+    /// agent is started in `place.folder` and told `place.instructions`. A
+    /// source that cannot start an agent anywhere but its own workspace
+    /// answers `Unavailable`, and the conversation is opened nowhere.
+    fn resolve_in<'a>(
+        &'a self,
+        _agent: AgentId,
+        _model: &'a str,
+        _mode: ConversationApprovalMode,
+        _place: &'a AgentPlace,
+    ) -> ConversationAgentFuture<'a> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
 }
 
 #[derive(Clone)]
@@ -473,24 +508,29 @@ impl ConversationAgents {
         &self,
         agent: AgentId,
         model: &str,
+        place: Option<&AgentPlace>,
     ) -> Result<ConversationAgent, ConversationError> {
-        self.resolve_for(agent, model, ConversationApprovalMode::Ask)
+        self.resolve_for(agent, model, ConversationApprovalMode::Ask, place)
             .await
     }
+    /// The provider generation for `agent` on `model` under `mode`, started
+    /// where the conversation's channel says (`place`), or in the gateway's
+    /// workspace for the default channel.
     async fn resolve_for(
         &self,
         agent: AgentId,
         model: &str,
         mode: ConversationApprovalMode,
+        place: Option<&AgentPlace>,
     ) -> Result<ConversationAgent, ConversationError> {
         if !self.configured.contains(&agent) {
             return Err(ConversationError::AgentNotConfigured);
         }
-        let configured = self
-            .source
-            .resolve_for(agent, model, mode)
-            .await?
-            .ok_or(ConversationError::AgentNotConfigured)?;
+        let resolved = match place {
+            None => self.source.resolve_for(agent, model, mode).await?,
+            Some(place) => self.source.resolve_in(agent, model, mode, place).await?,
+        };
+        let configured = resolved.ok_or(ConversationError::AgentNotConfigured)?;
         if configured.reserved_output_tokens == 0 {
             return Err(ConversationError::InvalidInput);
         }
@@ -795,6 +835,8 @@ impl Slot {
     }
 }
 struct Inner {
+    input_file_slots: Arc<Semaphore>,
+    input_files: Option<Arc<super::InputFileDelivery>>,
     workspace: Option<String>,
     /// Every agent this server can start, and which of them a creation that
     /// names none is made on.
@@ -844,6 +886,28 @@ struct Inner {
     workspace_windows: Arc<super::WorkspaceWindows>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
+    /// Where channels, and which conversation is in which, are kept.
+    channels: channels::ChannelBinding,
+    /// One-shot continuations after a provider usage limit.
+    scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
+    /// Cedar for the gateway usage-limit preference. Unbound refuses the change.
+    preference_policy:
+        OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
+    /// Wakes the continuation loop when a row is accepted or the preference changes.
+    schedule_wakeup: Arc<Notify>,
+    /// Applied model changes whose continuation plan has not committed.
+    /// [`ConversationService::commit_applied_model_plan`] is the only writer.
+    /// A crash drops the set; catch-up runs the same plan while the preference is on.
+    model_reconcile_owed: std::sync::Mutex<HashSet<ConversationId>>,
+    /// Settlement plans that did not commit. The schedule database holds the
+    /// same debt when it accepted the write. This map is the copy written
+    /// when that write failed, so this process still retries it. A crash
+    /// drops it; the next start's catch-up plans every owner.
+    reconcile_retry_owed: std::sync::Mutex<HashMap<String, (u32, u64)>>,
+    /// A submit or an outcome whose retry row did not commit. Keyed by
+    /// execution id. The same backoff as a reconcile debt. A crash drops it;
+    /// the submitting row is still due, and the next pass records the retry.
+    submit_retry_owed: std::sync::Mutex<HashMap<String, (u32, u64)>>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -926,6 +990,9 @@ struct Inner {
     /// The deletion inventory, asked after a tombstone commits. Unbound, a
     /// delete still fences and finishes; the inventory is unchanged.
     fence_capture: Arc<OnceLock<Arc<dyn FenceCapture>>>,
+    /// Forks being created, each the history its first opening records
+    /// (`handoffs`). Taken by that opening; let go of when the creation ends.
+    forks: std::sync::Mutex<HashMap<ConversationId, handoffs::ForkSeed>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -1091,6 +1158,7 @@ fn admission_evidence_error(failure: &AdmissionEvidenceFailure) -> ConversationE
 /// tests. Grouped rather than passed one by one, so that adding one does not
 /// add another positional argument at every call site.
 pub struct ConversationDependencies {
+    pub(crate) input_files: Option<Arc<super::InputFileDelivery>>,
     /// Every configured agent, and the one a caller that names none gets.
     pub agents: ConversationAgents,
     pub storage: Arc<dyn SessionStorage>,
@@ -1308,6 +1376,7 @@ impl ConversationService {
         mcp_apps: Option<McpAppPorts>,
     ) -> Result<Self, ConversationError> {
         let ConversationDependencies {
+            input_files,
             agents,
             storage,
             message_commit_clock,
@@ -1337,7 +1406,9 @@ impl ConversationService {
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                input_file_slots: Arc::new(Semaphore::new(16)),
                 workspace,
+                input_files,
                 agents,
                 storage,
                 message_commit_clock,
@@ -1363,6 +1434,13 @@ impl ConversationService {
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
                 thread_reports: Default::default(),
+                channels: Default::default(),
+                scheduled_messages: OnceLock::new(),
+                preference_policy: OnceLock::new(),
+                schedule_wakeup: Arc::new(Notify::new()),
+                model_reconcile_owed: std::sync::Mutex::default(),
+                reconcile_retry_owed: std::sync::Mutex::default(),
+                submit_retry_owed: std::sync::Mutex::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1389,6 +1467,7 @@ impl ConversationService {
                 drive: Arc::new(OnceLock::new()),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
+                forks: std::sync::Mutex::default(),
             }),
         })
     }
@@ -1489,32 +1568,52 @@ impl ConversationService {
         // conversation that does not need that agent at all. The same is
         // true of a name no adapter exists for, which is why that one is
         // carried this far instead of being refused where it was parsed.
+        // A stored channel's folder is on this machine: a conversation in one
+        // runs here.
+        let channel = service
+            .channel_for_creation(&caller, requested.channel.as_ref())
+            .await?;
+        if channel.is_some() && requested.environment.is_some() {
+            return Err(ConversationError::InvalidInput);
+        }
+        // What the caller left out starts as its channel says. The channel's
+        // model is its agent's, so it is the default only on that agent.
+        let defaults = channel.as_ref().map(|channel| channel.defaults());
         let agent_request = match requested.agent {
             Some(RequestedAgent::Known(agent)) => Some(agent),
             Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
-            None => None,
+            None => defaults.map(|defaults| defaults.agent),
         };
         let agent = service.inner.agents.select(agent_request)?;
-        let approval_mode = requested
-            .approval_mode
-            .unwrap_or_else(Self::default_creation_approval_mode);
-        let configured = match requested.model.as_deref() {
+        let approval_mode = Self::starting_mode(requested.approval_mode, channel.as_ref());
+        let model = requested.model.clone().or_else(|| {
+            defaults
+                .filter(|defaults| defaults.agent == agent)
+                .map(|defaults| defaults.model.as_str().to_owned())
+        });
+        let place = channel.as_ref().map(AgentPlace::of);
+        let configured = match model.as_deref() {
             Some(model) => {
                 service
                     .inner
                     .agents
-                    .resolve_for(agent, model, approval_mode)
+                    .resolve_for(agent, model, approval_mode, place.as_ref())
                     .await?
             }
             None => {
                 let default = service.inner.agents.resolve(agent).await?;
-                if approval_mode == ConversationApprovalMode::Ask {
+                if approval_mode == ConversationApprovalMode::Ask && place.is_none() {
                     default
                 } else {
                     service
                         .inner
                         .agents
-                        .resolve_for(agent, default.provider.identity().model_id(), approval_mode)
+                        .resolve_for(
+                            agent,
+                            default.provider.identity().model_id(),
+                            approval_mode,
+                            place.as_ref(),
+                        )
                         .await?
                 }
             }
@@ -1561,11 +1660,25 @@ impl ConversationService {
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
+        let channel_environment = channel.as_ref().and_then(|channel| {
+            match if id == channel.coordinator_id() {
+                channel.execution().coordinator
+            } else {
+                channel.execution().threads
+            } {
+                crate::conversation::domain::WorkspacePlacement::Local => None,
+                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
+            }
+        });
         service
             .inner
             .environment
-            .place(&id, requested.environment.as_deref())
+            .place(
+                &id,
+                requested.environment.as_deref().or(channel_environment),
+            )
             .await?;
+        service.place_in_channel(&id, channel.as_ref()).await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
@@ -1818,6 +1931,9 @@ impl ConversationService {
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
             tokio::spawn(async move {
+                // The pending switch this opening carries on, if it does:
+                // settled once the opening has ended (`handoffs`).
+                let carried = std::sync::Mutex::new(None);
                 let result = owner
                     .value
                     .get_or_init(|| async {
@@ -1851,17 +1967,29 @@ impl ConversationService {
                             })?;
                             // A record naming an agent this build has no
                             // adapter for is read, listed, and deletable,
-                            // and never opened on some other agent.
-                            let agent = record.agent().ok_or(OpeningFailure {
-                                cause: ConversationError::AgentUnsupported,
-                                holds: false,
+                            // and never opened on some other agent. A
+                            // pending switch opens the agent it asked for.
+                            let plan = service.opening_plan(&record).await.map_err(|cause| {
+                                OpeningFailure {
+                                    cause,
+                                    holds: false,
+                                }
+                            })?;
+                            let agent = plan.agent;
+                            *carried.lock().expect("carried switch") = plan.switch.clone();
+                            let place = service.agent_place(&id).await.map_err(|cause| {
+                                OpeningFailure {
+                                    cause,
+                                    holds: false,
+                                }
                             })?;
                             let mut stops = service.inner.stops.subscribe();
                             let configured = tokio::select! {
                                 resolved = service.inner.agents.resolve_for(
                                     agent,
-                                    record.model().as_str(),
+                                    plan.model.as_str(),
                                     record.approval_mode(),
+                                    place.as_ref(),
                                 ) => {
                                     resolved.map_err(|cause| OpeningFailure {
                                         cause,
@@ -1901,7 +2029,7 @@ impl ConversationService {
                                     });
                                 }
                             };
-                            let manager = opened.map_err(|error| {
+                            let mut manager = opened.map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure {
                                     cause: ConversationError::Storage(error),
@@ -1989,7 +2117,21 @@ impl ConversationService {
                                     _ => break (place.environment, opening),
                                 }
                             };
+                            if let Some(handoff) = plan.handoff.clone() {
+                                manager.expect_handoff(handoff);
+                            }
                             let tool_source = checked_source(agent);
+                            if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
+                                let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                                if let Some(workspace) = workspace {
+                                    let local = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| delivery.local.clone());
+                                    opening.fence.set_input_files(Arc::new(super::ConversationInputFiles::new(
+                                        attachments.clone(), service.inner.file_link_audit.clone(), service.inner.clock.clone(), record.organization().clone(), record.owner().clone(), id.clone(), opening.lease.clone(), hold.clone(), workspace, local, opening.fence.input_stop(),
+                                            service.inner.input_file_slots.clone(),
+                                            delivery.timer.clone(),
+                                    )));
+                                }
+                            }
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
                                 manager,
@@ -2170,17 +2312,22 @@ impl ConversationService {
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref())
                                     .with_tool_uis(service.inner.tool_uis.clone());
                             projection.selection(ConversationSelectionView {
-                                agent: record.agent().expect("agent was resolved"),
-                                model: record.model().as_str().into(),
+                                agent: plan.agent,
+                                model: plan.model.as_str().into(),
                                 approval_mode: record.approval_mode(),
                             });
                             projection.lifecycle(lifecycle_view(&agent));
                             // Where its agent works: what its environment
                             // reported (a host's own directory), else this
                             // gateway's.
+                            let channel_folder = place
+                                .as_ref()
+                                .and_then(|place| place.folder.to_str().map(str::to_owned));
                             let workspace = opening
                                 .workspace
                                 .as_ref()
+                                .or(configured.workspace.as_ref())
+                                .or(channel_folder.as_ref())
                                 .or(service.inner.workspace.as_ref());
                             if let Some(workspace) = workspace {
                                 let identity = configured.provider.identity();
@@ -2279,6 +2426,34 @@ impl ConversationService {
                         }
                     })
                     .await;
+                // A switch this opening carried is settled once it has
+                // ended: attached, or failed, its history decides.
+                let switch = carried.lock().expect("carried switch").take();
+                if let Some(switch) = switch {
+                    if let Ok(live) = result {
+                        let _ = live.join_attachment_owner().await;
+                    }
+                    match service.settle_if_saved(&id, &switch).await {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            // Not saved: settled once the requested agent is
+                            // stopped, which waits for this opening to be ready.
+                            let service = service.clone();
+                            let id = id.clone();
+                            let actor = actor.clone();
+                            tokio::spawn(async move {
+                                if let Err(error) =
+                                    service.settle_switch(&id, &switch, &actor, None).await
+                                {
+                                    tracing::warn!(conversation_id = %id, %error, "an agent switch could not be settled; the next opening carries it on");
+                                }
+                            });
+                        }
+                        Err(error) => {
+                            tracing::warn!(conversation_id = %id, %error, "an agent switch could not be settled; the next opening carries it on");
+                        }
+                    }
+                }
                 owner.ready.notify_waiters();
                 if result.as_ref().is_err_and(|failure| !failure.holds) {
                     let mut owners = service.inner.conversations.lock().await;
@@ -2714,10 +2889,11 @@ impl ConversationService {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
             let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
+            let place = service.agent_place(&id).await?;
             service
                 .inner
                 .agents
-                .resolve_for(agent, record.model().as_str(), mode)
+                .resolve_for(agent, record.model().as_str(), mode, place.as_ref())
                 .await?;
             let live_slot = service.inner.conversations.lock().await.get(&id).cloned();
             let live = if let Some(slot) = live_slot {
@@ -3354,8 +3530,29 @@ impl ConversationService {
             .into_iter()
             .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
             .collect::<Result<Vec<_>, _>>()?;
-        let message =
-            UserMessage::new(prompt, images, files).map_err(|_| ConversationError::InvalidInput)?;
+        let message = UserMessage::new(
+            prompt,
+            images,
+            files,
+            message
+                .uploads
+                .into_iter()
+                .map(|file| {
+                    UploadedFileReference::new(
+                        Sha256Digest::parse(&file.digest)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                        nessa_sdk::domain::common::value_objects::MediaType::parse(
+                            &file.media_type,
+                        )
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                        file.size,
+                        file.name,
+                    )
+                    .map_err(|_| ConversationError::InvalidInput)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+        .map_err(|_| ConversationError::InvalidInput)?;
         Ok((execution, message))
     }
 
@@ -3531,6 +3728,32 @@ impl ConversationService {
         writer: Writer,
         held: bool,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
+        self.submit_admitted_as_permitted(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            writer,
+            held,
+            None,
+        )
+        .await
+    }
+
+    /// Reuse the scheduler's selection lock without queueing behind ourselves.
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_admitted_as_permitted(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+        selection: Option<Arc<SubmissionPermit>>,
+    ) -> Result<SubmissionReceipt, SubmitFailure> {
         // A message that reaches an agent between a failed turn and its
         // recovery is refused with nothing taken (`Halt::Again`): the agent
         // is stopping, or would run it at a mode other than the
@@ -3546,7 +3769,7 @@ impl ConversationService {
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
         let carried = Carried::default();
         let (asked, outcome) = loop {
-            let (asked, submission) = self.submission_future(
+            let (asked, submission) = self.submission_future_permitted(
                 id.clone(),
                 caller.clone(),
                 execution_id.clone(),
@@ -3555,6 +3778,7 @@ impl ConversationService {
                 writer.clone(),
                 held,
                 carried.clone(),
+                selection.clone(),
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -3579,6 +3803,7 @@ impl ConversationService {
     /// The submission task, shared by normal supervision and controlled polling
     /// in the desktop-stop ordering test. Refusal attribution stays on this task.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     fn submission_future(
         &self,
         id: ConversationId,
@@ -3589,6 +3814,35 @@ impl ConversationService {
         writer: Writer,
         held: bool,
         carried: Carried,
+    ) -> (
+        Arc<AtomicBool>,
+        impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
+    ) {
+        self.submission_future_permitted(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            writer,
+            held,
+            carried,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submission_future_permitted(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+        carried: Carried,
+        selection: Option<Arc<SubmissionPermit>>,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -3607,7 +3861,12 @@ impl ConversationService {
             } else {
                 Some(service.admit().await?)
             };
-            let _mode = service.inner.mode_changes.lock(&id).await;
+            let _mode = if selection.is_some() {
+                None
+            } else {
+                Some(service.inner.mode_changes.lock(&id).await)
+            };
+            let _selection = selection;
             service.recover_mode_change(&id, &caller).await?;
             service.recover_model_change(&id, &caller).await?;
             service.refuse_pending_model_change(&id, &caller).await?;
@@ -3661,6 +3920,7 @@ impl ConversationService {
                     (owner, live) = service.resolve_opening(&id, &caller, true).await?;
                     reopened = true;
                 }
+                service.finish_agent_switch_before_submission(&id).await?;
                 // A submission the agent already has is the agent's to answer:
                 // the same message recovers its original delivery and any
                 // other is a conflict, whatever this conversation holds today.
@@ -3784,6 +4044,56 @@ impl ConversationService {
                     {
                         return Err(ConversationError::AttachmentNotFound.into());
                     }
+                }
+            }
+            if !message.uploads().is_empty() && !known {
+                let attachments = service
+                    .inner
+                    .attachments
+                    .as_ref()
+                    .ok_or(ConversationError::AttachmentNotFound)?;
+                let timer = service
+                    .inner
+                    .input_files
+                    .as_ref()
+                    .ok_or(ConversationError::AttachmentNotFound)?
+                    .timer
+                    .as_ref();
+                for file in message.uploads() {
+                    if !crate::timer::within(
+                        timer,
+                        timer.now() + std::time::Duration::from_secs(10),
+                        attachments.holds_file(&caller.organization_id, &id, file),
+                    )
+                    .await
+                    .map_err(|_| ConversationError::AttachmentNotFound)??
+                    {
+                        return Err(ConversationError::AttachmentNotFound.into());
+                    }
+                }
+                for (index, file) in message.uploads().iter().enumerate() {
+                    super::input_files::record_input(
+                        timer,
+                        service.inner.file_link_audit.as_ref(),
+                        super::InputFileAudit {
+                            conversation: id.clone(),
+                            organization: caller.organization_id.clone(),
+                            execution: execution_id.clone(),
+                            lease: None,
+                            attempt: format!("submission-{}-{index}", execution_id),
+                            file: file.clone(),
+                            stage: super::InputFileStage::Submitted,
+                            destination: None,
+                            delivered: false,
+                            failure: None,
+                            initiator: Some((
+                                caller.principal_id.clone(),
+                                caller.surface_id.clone(),
+                            )),
+                            observed_at_ms: service.inner.clock.unix_milliseconds(),
+                        },
+                    )
+                    .await?;
                 }
             }
             // A message naming paths is recorded before it is admitted, and
@@ -4212,6 +4522,23 @@ impl ConversationService {
         caller: ConversationCaller,
         archived: bool,
     ) -> Result<ConversationList, ConversationError> {
+        let owner = caller.principal_id.clone();
+        self.list_for(caller, archived, &Reader::Owner, &owner, None)
+            .await
+            .map(|(list, _)| list)
+    }
+
+    /// Read the bounded list for this reader without opening an agent. A paired
+    /// result carries the catalogue head acquired with its rows; cancellation
+    /// releases the service admission and does not retain live agent handles.
+    pub(crate) async fn list_for(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<(ConversationList, Option<CatalogueHead>), ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         // One past the bound, so the list can say whether it left any out.
@@ -4220,27 +4547,37 @@ impl ConversationService {
             .listing
             .list(
                 &caller.organization_id,
-                &caller.principal_id,
+                owner,
                 archived,
                 MAX_LISTED_CONVERSATIONS + 1,
+                reader,
             )
             .await?;
         let complete =
             listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
+        let head = if matches!(reader, Reader::PairedDevice { .. }) {
+            Some(listed.head.ok_or(ConversationError::Metadata)?)
+        } else {
+            None
+        };
         // Found by the listing, decided by the access policy: a row it
         // returns that is not this caller's, or is deleted, is not shown
         // whatever listing is wired here
         // (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
         let owned: Vec<ListedConversation> = self
-            .admitted(listed.conversations, &caller)?
+            .admitted_for(listed.conversations, &caller, reader, owner, paired_policy)?
             .into_iter()
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         let running = self.running_ids(&owned).await;
-        Ok(ConversationList {
-            conversations: list_entries(&owned, &running),
-            complete,
-        })
+        let channels = self.listed_channels(listed_ids(&owned)).await?;
+        Ok((
+            ConversationList {
+                conversations: list_entries(&owned, &running, &channels),
+                complete,
+            },
+            head,
+        ))
     }
     /// One page of every summary this caller owns under `archived`, in
     /// creation order, from [`ConversationListing::observe`].
@@ -4257,6 +4594,22 @@ impl ConversationService {
         archived: bool,
         cursor: Option<ConversationObservationCursor>,
     ) -> Result<ConversationObservation, ConversationError> {
+        let owner = caller.principal_id.clone();
+        self.observe_for(caller, archived, cursor, &Reader::Owner, &owner, None)
+            .await
+    }
+
+    /// Continue the current observation cursor in this reader's grant scope.
+    /// Uses the existing incarnation/boundary/creation cursor and opens no agent.
+    pub(crate) async fn observe_for(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+        cursor: Option<ConversationObservationCursor>,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<ConversationObservation, ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         let cursor = match cursor {
@@ -4271,22 +4624,19 @@ impl ConversationService {
         let observed = self
             .inner
             .listing
-            .observe(
-                &caller.organization_id,
-                &caller.principal_id,
-                archived,
-                cursor,
-            )
+            .observe(&caller.organization_id, owner, archived, cursor, reader)
             .await?;
         let ObservedConversations {
             conversations,
             complete,
             cursor,
         } = observed;
-        let owned: Vec<ListedConversation> = self.admitted(conversations, &caller)?;
+        let owned: Vec<ListedConversation> =
+            self.admitted_for(conversations, &caller, reader, owner, paired_policy)?;
         let running = self.running_ids(&owned).await;
+        let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok(ConversationObservation {
-            conversations: list_entries(&owned, &running),
+            conversations: list_entries(&owned, &running, &channels),
             complete,
             cursor: cursor.map(|cursor| ConversationObservationCursor {
                 incarnation: cursor.incarnation,
@@ -4318,6 +4668,38 @@ impl ConversationService {
             .zip(admitted)
             .filter_map(|(row, admitted)| admitted.then_some(row))
             .collect())
+    }
+
+    fn admitted_for(
+        &self,
+        listed: Vec<ListedConversation>,
+        caller: &ConversationCaller,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<Vec<ListedConversation>, ConversationError> {
+        let Reader::PairedDevice { receiver_id } = reader else {
+            return self.admitted(listed, caller);
+        };
+        let access = PairedAccess::new(
+            paired_policy.ok_or(ConversationError::Metadata)?,
+            PairedParty {
+                organization: &caller.organization_id,
+                signed_in_as: &caller.principal_id,
+                binding_owner: owner,
+                receiver: receiver_id,
+            },
+        );
+        let admitted = access
+            .allows_each(
+                AccessAction::Read,
+                listed.iter().map(|row| (&row.conversation, row.held)),
+            )
+            .map_err(|_| ConversationError::Metadata)?;
+        if admitted.iter().any(|admitted| !admitted) {
+            return Err(ConversationError::Metadata);
+        }
+        Ok(listed)
     }
     /// Which of `owned` are open here with a turn under way.
     ///
@@ -4351,7 +4733,11 @@ impl ConversationService {
     /// Record in the conversation's summary that `message` was accepted.
     async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
         let at_ms = self.inner.clock.unix_milliseconds();
-        let first_file = message.files().first().map(LinkedFile::name);
+        let first_file = message
+            .files()
+            .first()
+            .map(LinkedFile::name)
+            .or_else(|| message.uploads().first().map(|file| file.name()));
         self.change_summary(id, |previous| {
             Some(ConversationSummary::after_message(
                 previous,
@@ -4818,7 +5204,7 @@ impl ConversationService {
                         // need the files. An agent that did not close keeps its
                         // saved invocations, and one of those may be a turn that
                         // names images and has not settled.
-                        let may_release = closed || !awaits_images(snapshot.as_ref());
+                        let may_release = closed || !awaits_uploaded_input(snapshot.as_ref());
                         (
                             result.map(|_| ()).map_err(ConversationError::Agent),
                             may_release,
@@ -5519,6 +5905,14 @@ impl ConversationService {
                 }
             }
             self.forget_thread_reports_of(&id).await;
+            // Retiring a channel main publishes its replacement. That transition
+            // requires confirmed history erasure and participates in deletion
+            // retries; a failed channel commit must not finish the tombstone.
+            if failures.history.is_none() && !failures.history_leased_elsewhere {
+                if let Err(error) = self.forget_channel_of(&id).await {
+                    failures.summary.get_or_insert(error);
+                }
+            }
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
@@ -5527,6 +5921,14 @@ impl ConversationService {
             // the summary's kind of failure, retried with the erasure.
             if let Err(error) = self.inner.environment.erase(&id).await {
                 failures.summary.get_or_insert(error);
+            }
+            if let Some(store) = self.inner.scheduled_messages.get() {
+                if let Err(error) = store
+                    .erase_conversation(&id.to_string(), self.inner.clock.unix_milliseconds())
+                    .await
+                {
+                    failures.schedule = Some(error);
+                }
             }
         }
         drop(lease);
@@ -5746,8 +6148,18 @@ impl ConversationService {
         // other: the tombstone is written, so the delete happened and is
         // answered unfinished (`conversation_erasure_incomplete`), not as
         // the command failing (`a_slot_freed_by_an_ask_that_panicked_still_wakes_those_waiting`).
+        // A conversation in a channel kept its session where its agent
+        // worked: the channel's folder.
+        let place = self
+            .agent_place(record.id())
+            .await
+            .map_err(AskFailure::Failed)?;
         let asked = async {
-            match AssertUnwindSafe(eraser.erase(session)).catch_unwind().await {
+            let erasing = match place {
+                Some(place) => eraser.erase_in(session, place),
+                None => eraser.erase(session),
+            };
+            match AssertUnwindSafe(erasing).catch_unwind().await {
                 Ok(erased) => erased,
                 Err(payload) => {
                     mem::forget(payload);
@@ -6896,9 +7308,17 @@ fn carried(
     retries.done(claim);
 }
 
+fn listed_ids(owned: &[ListedConversation]) -> Vec<ConversationId> {
+    owned
+        .iter()
+        .map(|listed| listed.conversation.id().clone())
+        .collect()
+}
+
 fn list_entries(
     owned: &[ListedConversation],
     running: &HashSet<ConversationId>,
+    channels: &HashMap<ConversationId, crate::conversation::domain::ChannelId>,
 ) -> Vec<ConversationListEntry> {
     owned
         .iter()
@@ -6916,6 +7336,9 @@ fn list_entries(
             updated_at_ms: listed.summary.updated_at_ms(),
             running: running.contains(listed.conversation.id()),
             archived: listed.summary.archived(),
+            channel_id: channels
+                .get(listed.conversation.id())
+                .map(|channel| channel.as_str().to_owned()),
         })
         .collect()
 }
@@ -7036,12 +7459,13 @@ fn offers_notes(known: bool, is_app: bool, mode: &SubmissionMode) -> bool {
     !known && !is_app && matches!(mode, SubmissionMode::Queue)
 }
 
-fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
+fn awaits_uploaded_input(snapshot: Option<&SessionSnapshot>) -> bool {
     let Some(snapshot) = snapshot else {
         return true;
     };
     snapshot.invocations.iter().any(|record| {
-        !record.request.user_message.images().is_empty()
+        (!record.request.user_message.images().is_empty()
+            || !record.request.user_message.uploads().is_empty())
             && record.result.is_none()
             && !record.scheduling.last().is_some_and(|event| {
                 matches!(
@@ -7062,6 +7486,7 @@ mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
 mod event_read;
+mod handoffs;
 mod notes;
 mod parking;
 use parking::ParkWhen;
@@ -7104,6 +7529,10 @@ mod desktop_stop_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/parking.rs"]
 mod parking_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/handoffs.rs"]
+mod handoff_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/stop_release.rs"]

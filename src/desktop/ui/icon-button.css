@@ -47,6 +47,11 @@
   --icon-button-rest: var(--desktop-ink-2);
 }
 
+/* Resting while it cannot act, such as while the action it started is in flight. */
+.desktop-icon-button:disabled {
+  color: var(--desktop-faint);
+}
+
 .desktop-icon-button:hover:not(:disabled),
 .desktop-icon-button[data-state="open"] {
   color: var(--foreground);

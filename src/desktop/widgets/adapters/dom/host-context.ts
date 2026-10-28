@@ -3,7 +3,7 @@
  * document wears (its `dark` class, which the design system's tokens
  * follow), the browser's language, and the place's size as laid out,
  * followed as it changes. Nothing of the window's chrome lies over a place a
- * host draws in — the pane's header and the window's sit above its body —
+ * host draws in — the panel's tabs and the window's header sit above its body —
  * so its safe area is none.
  *
  * The size is nessa_ui's `useMeasuredSize` (registry item `size-observer`),

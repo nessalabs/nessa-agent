@@ -32,17 +32,20 @@ public final class NativeSessionWorker: @unchecked Sendable {
 
     /// Compose a session off the caller's executor. Cancellation before this call
     /// refuses construction; once queued, await its result and close its owner.
+    /// `tunnel` is the origin `server.reach` last named; status and product
+    /// dials fall back on it when the direct one does not connect.
     public static func open(
-        root: String, directory: String, address: String
+        root: String, directory: String, address: String, tunnel: String? = nil
     ) async throws -> NativeSessionWorker {
-        try await open(root: root, directory: directory, address: address,
+        try await open(root: root, directory: directory, address: address, tunnel: tunnel,
                        queue: DispatchQueue(label: "nessa.native.session"))
     }
 
     // Queue substitution stays inside this adapter/its verification module;
     // consuming UI cannot target physical native calls at the main queue.
     static func open(
-        root: String, directory: String, address: String, queue: DispatchQueue
+        root: String, directory: String, address: String, tunnel: String? = nil,
+        queue: DispatchQueue
     ) async throws -> NativeSessionWorker {
         try Task.checkCancellation()
         let workerQueue = DispatchQueue(label: "nessa.native.session.worker", target: queue)
@@ -50,7 +53,7 @@ public final class NativeSessionWorker: @unchecked Sendable {
             workerQueue.async {
                 do {
                     let session = try NativeDeviceSession.open(
-                        root: root, directory: directory, address: address)
+                        root: root, directory: directory, address: address, tunnel: tunnel)
                     continuation.resume(returning: NativeSessionWorker(session: session, queue: workerQueue))
                 } catch { continuation.resume(throwing: error) }
             }
@@ -175,28 +178,91 @@ public final class NativeSessionWorker: @unchecked Sendable {
             try capture(try session.refresh(stop: stop))
         }
     }
-    public func cataloguePage(after: NativeEntryKey?, maximum: UInt32) async throws -> NativeCataloguePage? {
-        try await cataloguePage(after: after, maximum: maximum, capture: { $0 })
+    public func bindSavedReceiver() async throws -> NativePhoneStamp {
+        try await bindSavedReceiver(capture: { $0 })
     }
-    /// Capture a bounded passive value off UI before releasing admission.
-    public func cataloguePage<Value: Sendable>(
-        after: NativeEntryKey?, maximum: UInt32, capture: @escaping @Sendable (NativeCataloguePage?) throws -> Value
+    /// Capture the bound stamp off UI before releasing admission.
+    public func bindSavedReceiver<Value: Sendable>(
+        capture: @escaping @Sendable (NativePhoneStamp) throws -> Value
     ) async throws -> Value {
         try await perform { session, _ in
-            try capture(try session.cataloguePage(after: after, maximum: maximum))
+            try capture(try session.bindSavedReceiver())
         }
     }
-    public func transcript(conversation: String, revision: String) async throws -> NativeTranscript {
-        try await transcript(conversation: conversation, revision: revision, capture: { $0 })
+    public func publication() async throws -> NativePhoneStamp {
+        try await publication(capture: { $0 })
     }
-    /// Capture a bounded passive value off UI before releasing admission.
-    public func transcript<Value: Sendable>(
-        conversation: String, revision: String, capture: @escaping @Sendable (NativeTranscript) throws -> Value
+    /// Capture the current stamp off UI before releasing admission.
+    public func publication<Value: Sendable>(
+        capture: @escaping @Sendable (NativePhoneStamp) throws -> Value
     ) async throws -> Value {
         try await perform { session, _ in
-            try capture(try session.transcript(conversation: conversation, revision: revision))
+            try capture(try session.publication())
         }
     }
+    public func publishedTranscript(
+        stamp: NativePhoneStamp, conversation: String, revision: String
+    ) async throws -> NativeTranscript {
+        try await publishedTranscript(
+            stamp: stamp, conversation: conversation, revision: revision, capture: { $0 })
+    }
+    /// Capture a stamped transcript off UI before releasing admission.
+    public func publishedTranscript<Value: Sendable>(
+        stamp: NativePhoneStamp, conversation: String, revision: String,
+        capture: @escaping @Sendable (NativeTranscript) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(
+                try session.publishedTranscript(
+                    stamp: stamp, conversation: conversation, revision: revision))
+        }
+    }
+    public func publishedCataloguePage(
+        stamp: NativePhoneStamp, after: NativeEntryKey?, maximum: UInt32
+    ) async throws -> NativeCataloguePage? {
+        try await publishedCataloguePage(
+            stamp: stamp, after: after, maximum: maximum, capture: { $0 })
+    }
+    /// Capture a stamped catalogue page off UI before releasing admission.
+    public func publishedCataloguePage<Value: Sendable>(
+        stamp: NativePhoneStamp, after: NativeEntryKey?, maximum: UInt32,
+        capture: @escaping @Sendable (NativeCataloguePage?) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(
+                try session.publishedCataloguePage(stamp: stamp, after: after, maximum: maximum))
+        }
+    }
+    public func cataloguePresence(
+        stamp: NativePhoneStamp, conversation: String
+    ) async throws -> NativeCataloguePresence {
+        try await cataloguePresence(stamp: stamp, conversation: conversation, capture: { $0 })
+    }
+    /// Capture stored presence off UI before releasing admission.
+    public func cataloguePresence<Value: Sendable>(
+        stamp: NativePhoneStamp, conversation: String,
+        capture: @escaping @Sendable (NativeCataloguePresence) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.cataloguePresence(stamp: stamp, conversation: conversation))
+        }
+    }
+    public func fetchArtifact(
+        stamp: NativePhoneStamp, request: NativeArtifactRequest
+    ) async throws -> NativeArtifactAdmission {
+        try await fetchArtifact(stamp: stamp, request: request, capture: { $0 })
+    }
+    /// Capture one held-file admission off UI before releasing admission.
+    /// The value keeps the initial status and any refusal recheck with the fetch.
+    public func fetchArtifact<Value: Sendable>(
+        stamp: NativePhoneStamp, request: NativeArtifactRequest,
+        capture: @escaping @Sendable (NativeArtifactAdmission) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, stop in
+            try capture(try session.fetchArtifact(stamp: stamp, request: request, stop: stop))
+        }
+    }
+
     public func purgeReceipt(receiver: String) async throws -> NativePurge? {
         try await purgeReceipt(receiver: receiver, capture: { $0 })
     }

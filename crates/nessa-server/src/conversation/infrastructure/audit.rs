@@ -1,6 +1,9 @@
 //! Durable execution evidence. Each call commits one private record before acknowledgement.
 //! One instance worker bounds physical I/O through observer loss and captured cleanup.
-use super::audit_mapping::record_value;
+use super::{
+    audit_diagnostics::{observe_io, unavailable},
+    audit_mapping::record_value,
+};
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{
     create_directory, physical_operation::Worker, sync_directory, PrivateTempFile,
@@ -34,14 +37,26 @@ struct PrivateExecutionAuditFileWriter;
 
 impl ExecutionAuditFileWriter for PrivateExecutionAuditFileWriter {
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
-        let directory = path.parent().ok_or(AgentError::AuditFailure)?;
+        let directory = path.parent().ok_or_else(|| failure("parent"))?;
         let commit = || -> IoResult<()> {
-            let mut file = PrivateTempFile::new_in(directory)?;
-            file.as_file_mut().write_all(bytes)?;
-            file.as_file_mut().write_all(b"\n")?;
-            file.as_file().sync_all()?;
-            file.persist(path)?;
-            sync_directory(directory)
+            let mut file = observe_io(
+                "execution",
+                "create_temp",
+                PrivateTempFile::new_in(directory),
+            )?;
+            observe_io(
+                "execution",
+                "write_record",
+                file.as_file_mut().write_all(bytes),
+            )?;
+            observe_io(
+                "execution",
+                "write_newline",
+                file.as_file_mut().write_all(b"\n"),
+            )?;
+            observe_io("execution", "sync_file", file.as_file().sync_all())?;
+            observe_io("execution", "persist", file.persist(path))?;
+            observe_io("execution", "sync_directory", sync_directory(directory))
         };
         commit().map_err(|_| AgentError::AuditFailure)
     }
@@ -84,7 +99,12 @@ impl DurableExecutionAudit {
         clock: Arc<dyn Clock>,
         writer: Arc<dyn ExecutionAuditFileWriter>,
     ) -> Result<Self, AgentError> {
-        create_directory(&directory).map_err(|_| AgentError::AuditFailure)?;
+        observe_io(
+            "execution",
+            "create_directory",
+            create_directory(&directory),
+        )
+        .map_err(|_| AgentError::AuditFailure)?;
         Ok(Self {
             state: Arc::new(AuditState {
                 directory,
@@ -105,11 +125,15 @@ impl ExecutionAudit for DurableExecutionAudit {
                 .worker
                 .admit()
                 .await
-                .map_err(|_| AgentError::AuditFailure)?;
+                .map_err(|_| failure("admission"))?;
             let state = self.state.clone();
             admission
                 .submit(move || {
                     let id = Uuid::new_v4().to_string();
+                    let _span = tracing::error_span!(
+                        "execution_audit", record_id = %id, writer_id = %state.writer_id
+                    )
+                    .entered();
                     let value = json!({
                         "recordId": id,
                         "writerId": state.writer_id,
@@ -117,18 +141,27 @@ impl ExecutionAudit for DurableExecutionAudit {
                         "observedAtMs": state.clock.unix_milliseconds(),
                         "record": record_value(&record),
                     });
-                    let bytes = serde_json::to_vec(&value).map_err(|_| AgentError::AuditFailure)?;
+                    let bytes = serde_json::to_vec(&value).map_err(|_| failure("encode"))?;
                     state
                         .writer
                         .write(&state.directory.join(format!("{id}.json")), &bytes)
-                        .map_err(|_| AgentError::AuditFailure)
+                        .map_err(|_| failure("writer"))
                 })
                 .await
-                .map_err(|_| AgentError::AuditFailure)?
+                .map_err(|_| failure("worker"))?
         })
     }
+}
+
+fn failure(phase: &'static str) -> AgentError {
+    unavailable("execution", phase);
+    AgentError::AuditFailure
 }
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/audit.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/audit_diagnostics.rs"]
+mod diagnostics_tests;

@@ -82,6 +82,15 @@ use tokio::sync::{mpsc, oneshot, Notify};
 
 const CONVERSATION: &str = "5c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e30";
 
+/// How long a completion wait may take while the Windows server library
+/// suite is running. That suite takes about fifteen minutes with the tests
+/// in parallel. Five seconds was not enough for a turn to be recorded
+/// completed, and ten seconds was not enough for admission to read the
+/// policy: both elapsed while the work was still going. A step that never
+/// finishes still fails this bound. A wait that proves something has not
+/// happened yet stays short.
+const LOADED_SUITE_WAIT: Duration = Duration::from_secs(60);
+
 fn caller(action: &str) -> ConversationCaller {
     ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),
@@ -433,6 +442,7 @@ fn harness_working_in(
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: binding,
                 execution_audit: Arc::new(
                     DurableExecutionAudit::new(root.join("audit"), clock.clone()).unwrap(),
@@ -464,6 +474,7 @@ fn harness_working_in(
     let metadata_store = Arc::clone(&metadata);
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
@@ -534,6 +545,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -542,7 +554,7 @@ impl Harness {
             )
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(LOADED_SUITE_WAIT, async {
             loop {
                 let view = self
                     .service
@@ -565,7 +577,7 @@ impl Harness {
     /// The conversation's stream once no agent holds it.
     async fn snapshot(&self) -> SessionSnapshot {
         let session = SessionId::new(self.id.to_string()).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(LOADED_SUITE_WAIT, async {
             loop {
                 match self.storage.open_existing(session.clone()).await {
                     Ok(Some(lease)) => break lease.load().await.unwrap().snapshot().cloned(),
@@ -914,6 +926,7 @@ async fn l5_l11_a_lease_whose_record_failed_to_save_ends_with_the_opening_it_fai
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -955,6 +968,7 @@ async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_ac
             caller("turn-1"),
             "turn-1".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -1053,6 +1067,7 @@ async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: Sa
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -1425,6 +1440,7 @@ async fn l5_l11_an_opening_whose_lease_cannot_be_saved_holds_nothing_and_opens_a
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2377,6 +2393,7 @@ async fn b_a_conversation_on_a_host_shows_the_hosts_workspace() {
 #[tokio::test]
 async fn b_a_file_linked_by_path_is_refused_for_a_conversation_on_a_host() {
     let linking = |execution: &str| SubmittedMessage {
+        uploads: Vec::new(),
         text: "read this".into(),
         images: Vec::new(),
         files: vec![SubmittedFile {
@@ -2526,6 +2543,7 @@ async fn b_a_conversation_whose_host_is_no_longer_configured_is_refused_never_ru
             caller("turn-1"),
             "turn-1".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2557,7 +2575,7 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         harness.create_on("devbox").await.unwrap();
         harness.turn("turn-1").await;
         host.lose.send_replace(Some(LeaseEndCause::Lost));
-        let lease = tokio::time::timeout(Duration::from_secs(5), async {
+        let lease = tokio::time::timeout(LOADED_SUITE_WAIT, async {
             loop {
                 let lease = harness.lease().await;
                 if kinds(&lease).len() == 3 {
@@ -2639,7 +2657,7 @@ async fn an_environment_ends_the_lease(
     harness.create_on("devbox").await.unwrap();
     harness.turn("turn-1").await;
     host.lose.send_replace(Some(cause));
-    let lease = tokio::time::timeout(Duration::from_secs(5), async {
+    let lease = tokio::time::timeout(LOADED_SUITE_WAIT, async {
         loop {
             let lease = harness.lease().await;
             if kinds(&lease).len() == 3 {
@@ -2742,9 +2760,22 @@ struct CommandHost {
     granted: AtomicUsize,
     finish: tokio::sync::watch::Sender<Option<CommandExit>>,
     stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
+    /// When set, a grant hands the test a sender for files the command
+    /// publishes, and the command keeps the channel open until it ends.
+    publish: bool,
+    offers: Mutex<Option<tokio::sync::mpsc::Sender<ArtifactOffer>>>,
 }
 impl CommandHost {
     fn new() -> Arc<Self> {
+        Self::build(false)
+    }
+
+    /// A host whose commands publish files the test offers.
+    fn publishing() -> Arc<Self> {
+        Self::build(true)
+    }
+
+    fn build(publish: bool) -> Arc<Self> {
         Arc::new(Self {
             refusal: Mutex::new(None),
             terms: Mutex::new(None),
@@ -2752,7 +2783,14 @@ impl CommandHost {
             granted: AtomicUsize::new(0),
             finish: tokio::sync::watch::channel(None).0,
             stopped: Arc::default(),
+            publish,
+            offers: Mutex::new(None),
         })
+    }
+
+    /// The sender for the command granted most recently, once.
+    fn take_offer(&self) -> Option<tokio::sync::mpsc::Sender<ArtifactOffer>> {
+        self.offers.lock().unwrap().take()
     }
 }
 impl Environment for CommandHost {
@@ -2797,11 +2835,20 @@ impl CommandEnvironment for CommandHost {
                 return Err(refusal);
             }
             self.granted.fetch_add(1, Ordering::SeqCst);
+            let (incoming, published) = if self.publish {
+                let (sender, receiver) = tokio::sync::mpsc::channel(4);
+                *self.offers.lock().unwrap() = Some(sender.clone());
+                (Some(receiver), Some(sender))
+            } else {
+                (None, None)
+            };
             Ok(GrantedCommand {
                 hold: Box::new(FakeCommand {
                     finish: self.finish.subscribe(),
                     stopped: self.stopped.clone(),
                     timeouts: self.timeouts.clone(),
+                    incoming,
+                    published,
                 }),
                 granted,
             })
@@ -2813,8 +2860,15 @@ struct FakeCommand {
     stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
     /// The timeout each run was given.
     timeouts: Arc<Mutex<Vec<u64>>>,
+    incoming: Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>,
+    /// Kept until the command ends, so the collector's receive finishes then.
+    published: Option<tokio::sync::mpsc::Sender<ArtifactOffer>>,
 }
 impl CommandHold for FakeCommand {
+    fn publications(&mut self) -> Option<tokio::sync::mpsc::Receiver<ArtifactOffer>> {
+        self.incoming.take()
+    }
+
     fn run(
         self: Box<Self>,
         timeout_ms: u64,
@@ -2823,7 +2877,9 @@ impl CommandHold for FakeCommand {
         let mut finish = self.finish.clone();
         let stopped = self.stopped.clone();
         self.timeouts.lock().unwrap().push(timeout_ms);
+        let published = self.published;
         Box::pin(async move {
+            let _open = published;
             let exit = tokio::select! {
                 Ok(exit) = finish.wait_for(Option::is_some) => exit.unwrap(),
                 Ok(cause) = stop.wait_for(Option::is_some) => {
@@ -2838,6 +2894,7 @@ impl CommandHold for FakeCommand {
                 stderr: Vec::new(),
                 dropped_bytes: 0,
                 cleanup: Some(LeaseCleanup::Confirmed { forced: false }),
+                published: Vec::new(),
             }
         })
     }
@@ -2850,6 +2907,15 @@ fn with_command_host(
     host: Arc<CommandHost>,
     policy: Option<CommandPolicy>,
 ) -> Harness {
+    with_command_host_keeping(root, host, policy, None)
+}
+
+fn with_command_host_keeping(
+    root: &Path,
+    host: Arc<CommandHost>,
+    policy: Option<CommandPolicy>,
+    attachments: Option<Arc<dyn ConversationAttachments>>,
+) -> Harness {
     let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
     hosts.insert("devbox".into(), host);
     let placements =
@@ -2861,7 +2927,15 @@ fn with_command_host(
         Some(policy) => environments.with_commands(commands(&policy)),
         None => environments,
     };
-    harness_in(root, environments, DELETION_BUDGETS.stop, provider, binding)
+    harness_working_in(
+        root,
+        environments,
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+        None,
+        attachments,
+    )
 }
 
 /// The command policy over `policy`, as composition builds it.
@@ -2900,6 +2974,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -2944,6 +3019,287 @@ fn command_actor(record: &LeaseRecord) -> Option<&ActionContext> {
         }
         _ => None,
     }
+}
+
+/// Row C12: a file a command publishes is kept under the command lease, for
+/// the person the command runs for, and `run` lists it.
+#[tokio::test]
+async fn a_command_s_published_file_is_kept_under_its_lease_and_listed_on_its_result() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_command_host_keeping(
+        root.path(),
+        host.clone(),
+        Some(devbox_policy()),
+        Some(attachments.clone()),
+    );
+    harness.create().await;
+    let go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    let sender = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(sender) = host.take_offer() {
+                return sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the command's publish point");
+    let answered = publish_at(&sender, "shot.dmg", "/srv/work/.nessa/shot.dmg".into()).await;
+    drop(sender);
+    assert_eq!(answered.await.unwrap(), Collection::Held);
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let CommandAnswer::Ran {
+        lease,
+        result,
+        recorded: true,
+    } = running.await.unwrap().unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert_eq!(result.published.len(), 1);
+    assert_eq!(result.published[0].name, "shot.dmg");
+    assert_eq!(result.published[0].digest, "ab".repeat(32));
+    assert_eq!(result.published[0].size, b"a disk image".len() as u64);
+    assert_eq!(result.published[0].outcome, super::PublicationOutcome::Held);
+    let published = attachments.published.lock().unwrap().clone();
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].0, lease.as_str());
+    assert_eq!(published[0].1, "shot.dmg");
+    let saved = harness.saved_commands();
+    let actor = saved
+        .iter()
+        .find_map(command_actor)
+        .expect("the command was issued")
+        .clone();
+    assert_eq!(
+        attachments.requested_by.lock().unwrap().as_slice(),
+        &[actor]
+    );
+    assert!(saved.iter().any(|record| matches!(
+        record,
+        LeaseRecord::CommandEnded { lease: ended, .. } if ended == &lease
+    )));
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    assert_eq!(snapshot.artifacts.len(), 1);
+    assert_eq!(snapshot.artifacts[0].lease, lease);
+}
+
+/// Row C19: the caller going away does not leave `run` waiting on a
+/// publication stream the command already finished with.
+#[tokio::test]
+async fn a_caller_gone_does_not_wait_out_an_open_publication_stream() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let running = tokio::spawn(async move {
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    caller_gone.send_replace(true);
+    let CommandAnswer::Ran {
+        result,
+        recorded: true,
+        ..
+    } = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("the call did not wait out the open stream")
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert!(result.published.is_empty());
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+}
+
+/// Rows C15 and C16: a path this build does not accept, and a file past the
+/// command's own byte budget, are refused and listed. Nothing is held, and
+/// the command's end is still recorded.
+#[tokio::test]
+async fn a_command_s_refused_publish_is_listed_and_the_command_still_ends() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_command_host_keeping(
+        root.path(),
+        host.clone(),
+        Some(devbox_policy()),
+        Some(attachments.clone()),
+    );
+    harness.create().await;
+    let _go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    let sender = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(sender) = host.take_offer() {
+                return sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the command's publish point");
+    let bad_path = publish_at(&sender, "shot.dmg", "shot.dmg".into()).await;
+    let (over_budget_answered, over_budget) = tokio::sync::oneshot::channel();
+    let mut huge = offer("big.bin", None, move |outcome| {
+        let _ = over_budget_answered.send(outcome);
+    });
+    huge.file.path = "/srv/work/.nessa/big.bin".into();
+    huge.file.size = super::ArtifactBudget::LEASE.bytes + 1;
+    sender.send(huge).await.unwrap();
+    drop(sender);
+    assert_eq!(
+        bad_path.await.unwrap(),
+        Collection::Refused {
+            reason: CollectionRefusal::Invalid,
+        }
+    );
+    assert_eq!(
+        over_budget.await.unwrap(),
+        Collection::Refused {
+            reason: CollectionRefusal::BudgetExceeded,
+        }
+    );
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let CommandAnswer::Ran {
+        result,
+        recorded: true,
+        ..
+    } = running.await.unwrap().unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert!(attachments.published.lock().unwrap().is_empty());
+    assert_eq!(result.published.len(), 2);
+    assert!(matches!(
+        result.published[0].outcome,
+        super::PublicationOutcome::Refused(CollectionRefusal::Invalid)
+    ));
+    assert!(matches!(
+        result.published[1].outcome,
+        super::PublicationOutcome::Refused(CollectionRefusal::BudgetExceeded)
+    ));
+    assert!(harness
+        .saved_commands()
+        .iter()
+        .any(|record| { matches!(record, LeaseRecord::CommandEnded { .. }) }));
+}
+
+/// Row C20: `run` lists at most the lease's file budget. A file offered
+/// past that is answered `budgetExceeded`, unread, and not listed, and
+/// the command's end is still recorded.
+#[tokio::test]
+async fn a_command_lists_at_most_its_file_budget_of_publications() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_command_host_keeping(
+        root.path(),
+        host.clone(),
+        Some(devbox_policy()),
+        Some(attachments.clone()),
+    );
+    harness.create().await;
+    let _go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    let sender = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(sender) = host.take_offer() {
+                return sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the command's publish point");
+    let listed = super::ArtifactBudget::LEASE.files as usize;
+    let mut answers = Vec::with_capacity(listed + 1);
+    for index in 0..=listed {
+        let (answered, answer) = tokio::sync::oneshot::channel();
+        let mut sent = offer(&format!("note-{index}.txt"), None, move |outcome| {
+            let _ = answered.send(outcome);
+        });
+        sent.file.path = format!("note-{index}.txt");
+        sender.send(sent).await.unwrap();
+        answers.push(answer);
+    }
+    drop(sender);
+    for (index, answer) in answers.into_iter().enumerate() {
+        let outcome = tokio::time::timeout(Duration::from_secs(5), answer)
+            .await
+            .expect("the publish was answered")
+            .unwrap();
+        let reason = if index < listed {
+            CollectionRefusal::Invalid
+        } else {
+            CollectionRefusal::BudgetExceeded
+        };
+        assert_eq!(outcome, Collection::Refused { reason }, "{index}");
+    }
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let CommandAnswer::Ran {
+        result,
+        recorded: true,
+        ..
+    } = running.await.unwrap().unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert!(attachments.published.lock().unwrap().is_empty());
+    assert_eq!(result.published.len(), listed);
+    assert!(result.published.iter().all(|publication| {
+        matches!(
+            publication.outcome,
+            super::PublicationOutcome::Refused(CollectionRefusal::Invalid)
+        )
+    }));
 }
 
 #[tokio::test]
@@ -3589,7 +3945,13 @@ async fn a_publish_is_answered_only_after_the_hosts_answer_is_queued() {
                 .await
         })
     };
-    tokio::time::timeout(Duration::from_secs(5), host.asked.answering.notified())
+    // `notify_one` stores a permit, so this wait cannot miss an answer that
+    // already started. The host notifies before it waits on the gate. Five
+    // seconds was not enough on the Windows runner: the library suite took
+    // about fifteen minutes, and another lease test was still running when
+    // this one gave up. The ordering proof is the wait below, after the
+    // signal. A host that never starts answering still fails this bound.
+    tokio::time::timeout(Duration::from_secs(60), host.asked.answering.notified())
         .await
         .expect("the host is being answered");
     // Kept, but the host's answer is not queued: the call still waits.
@@ -3600,7 +3962,7 @@ async fn a_publish_is_answered_only_after_the_hosts_answer_is_queued() {
     );
     queue.send(()).unwrap();
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), publishing)
+        tokio::time::timeout(Duration::from_secs(60), publishing)
             .await
             .unwrap()
             .unwrap(),
@@ -5779,6 +6141,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -6387,6 +6750,7 @@ async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, recei
 
 fn drive_message() -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: "hello".into(),
         images: Vec::new(),
         files: Vec::new(),
@@ -6450,7 +6814,7 @@ async fn moved_during_admission(revoke: bool) {
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+    tokio::time::timeout(LOADED_SUITE_WAIT, entered.notified())
         .await
         .expect("admission read the policy");
     if revoke {
@@ -6469,7 +6833,7 @@ async fn moved_during_admission(revoke: bool) {
         .await;
     }
     release.notify_one();
-    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+    let sent = tokio::time::timeout(LOADED_SUITE_WAIT, sent)
         .await
         .expect("the send finishes")
         .expect("the send task");
@@ -6550,12 +6914,12 @@ async fn a_revoked_admission_settles_the_command_and_the_same_request_is_revoked
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+    tokio::time::timeout(LOADED_SUITE_WAIT, entered.notified())
         .await
         .expect("admission read the policy");
     assert!(revoke_drive(&harness.metadata, &harness.id, "phone").await);
     release.notify_one();
-    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+    let sent = tokio::time::timeout(LOADED_SUITE_WAIT, sent)
         .await
         .expect("the send finishes")
         .expect("the send task");

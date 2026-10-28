@@ -16,6 +16,7 @@ mod cancellation;
 pub(super) mod checkpoint;
 pub(super) mod decode;
 mod errors;
+mod handoffs;
 mod initiation;
 mod leases;
 mod notes;

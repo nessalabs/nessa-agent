@@ -5,7 +5,9 @@ import type { HostKind } from "../../host/features"
  * the page was opened with:
  *
  * An explicit sample configuration (validated by the environment adapter)
- * selects the sample on native hosts too. Otherwise:
+ * selects the sample on native hosts too; a browser page's own `?gateway` or
+ * `?seeded` still wins, so a verification run is never the sample by an
+ * exported variable. Otherwise:
  *
  * - `host`: the desktop app. The host serves the window the local gateway's
  *   endpoint and the panel's surface credential once its startup of the
@@ -29,10 +31,9 @@ export function workspaceBackend(
   search: string,
   sample = false,
 ): WorkspaceBackend {
-  if (sample) return "sample"
-  if (host !== "browser") return "host"
   const params = new URLSearchParams(search)
-  if (params.has("gateway")) return "browser"
-  if (params.has("seeded")) return "seeded"
-  return "sample"
+  if (host === "browser" && params.has("gateway")) return "browser"
+  if (host === "browser" && params.has("seeded")) return "seeded"
+  if (sample || host === "browser") return "sample"
+  return "host"
 }

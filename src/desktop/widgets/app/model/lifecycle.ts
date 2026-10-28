@@ -11,7 +11,7 @@
  *      │ server gone    ▼                      ▼                            ▼
  *      └────────────▶ failed ◀──── proxy-ready again, app-left (loading … ending) live
  *                                                                           │ request-teardown
- *                                                                           ▼ (pane, window)
+ *                                                                           ▼ (panel, window)
  *   removed, from anywhere ──▶ gone ◀──── answered, or deadline ──────── ending
  * ```
  *

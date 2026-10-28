@@ -1,3 +1,5 @@
+import { useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectChannel, selectDraft, selectSession } from "../../adapters/store/selectors"
 import { memo, useCallback, useEffect, useState } from "react"
 import {
   ContextMenu,
@@ -13,8 +15,7 @@ import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { PaneMenuItems } from "./pane-menu"
 import { ClosePaneButton, PaneHeaderFrame } from "./pane-header-frame"
-import { useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectSession } from "../../adapters/store/selectors"
+import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { SessionAccessories } from "./session-accessories"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
@@ -59,7 +60,18 @@ export const PaneHeader = memo(function PaneHeader({
     const timer = window.setTimeout(() => setRefusal(null), headerImageRefusalMs)
     return () => window.clearTimeout(timer)
   }, [refusal])
-  const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
+  const session = useRememberedSession(sessionId)
+  const mainLocation = useWorkspaceSelector((state) => {
+    const channelId =
+      selectSession(state, sessionId)?.channelId ??
+      selectDraft(state, sessionId)?.channelId
+    const channel = channelId ? selectChannel(state, channelId) : undefined
+    return channel?.coordinatorConversationId === sessionId
+      ? channel.coordinatorPlacement === "boat"
+        ? "Boat"
+        : "Local"
+      : undefined
+  })
   const title = session?.title ?? "New session"
   const shown = titleShown && session !== undefined
   return (
@@ -83,6 +95,11 @@ export const PaneHeader = memo(function PaneHeader({
           }
           accessories={
             <>
+              {mainLocation ? (
+                <span className="workspace-pane-main-agent">
+                  Main agent · {mainLocation}
+                </span>
+              ) : null}
               <SessionAccessories sessionId={sessionId} />
               {refusal ? (
                 <span className="workspace-pane-refusal" role="status">

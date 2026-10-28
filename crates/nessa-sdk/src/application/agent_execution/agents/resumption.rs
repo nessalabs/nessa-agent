@@ -132,14 +132,15 @@ fn owed(
     record: &InvocationRecord,
     saved: &HashSet<&ExecutionId>,
     superseded: bool,
-    live: impl Fn(&ExecutionId) -> bool,
+    live: &impl Fn(&ExecutionId) -> bool,
+    hold_runner_stopped: bool,
 ) -> Option<Stop> {
     let id = &record.request.execution_id;
     if record.submission == SubmissionMode::Immediate || resumed(record, saved) {
         return None;
     }
     let last = record.scheduling.last()?;
-    match last.stage {
+    let stop = match last.stage {
         // Decided already: the host's NotResumed edge is final.
         InvocationStage::Cancelled if last.cause.leaves_work_owed() => {
             Some(Stop::Recorded(last.clone()))
@@ -195,6 +196,16 @@ fn owed(
             })
         }
         _ => None,
+    };
+    match stop {
+        // The newest turn that ran ended in a usage limit. A turn the runner
+        // stopped behind it is not sent again before that window resets.
+        Some(Stop::Recorded(edge) | Stop::CutOff { edge })
+            if hold_runner_stopped && edge.cause == SchedulingCause::RunnerStopped =>
+        {
+            None
+        }
+        other => other,
     }
 }
 
@@ -207,18 +218,26 @@ fn owed(
 fn ended_for_good(
     record: &InvocationRecord,
     saved: &HashSet<&ExecutionId>,
-    live: impl Fn(&ExecutionId) -> bool,
+    live: &impl Fn(&ExecutionId) -> bool,
 ) -> bool {
     record.submission != SubmissionMode::Immediate
         && Resumption::of(&record.request.execution_id).attempt() == 0
         && (dispatched(record)
-            || (!resumed(record, saved) && owed(record, saved, false, live).is_none()))
+            || (!resumed(record, saved) && owed(record, saved, false, live, false).is_none()))
 }
 
 /// Whether a turn that a failure ended still owes its work: no stop but the
 /// runner's was asked for it, and it has no result, or a cancelled one, or
 /// an error a retry can fix ([`AgentError::leaves_work_owed`]). A turn the
 /// provider finished or refused, and one a person stopped, is not owed.
+fn usage_limit_blocks_resume(record: &InvocationRecord) -> bool {
+    record.result.as_ref().is_some_and(|result| {
+        result
+            .as_ref()
+            .is_err_and(AgentError::blocks_immediate_resume)
+    })
+}
+
 fn failure_owed(record: &InvocationRecord) -> bool {
     let stopped_by_others = record
         .local_cancellation
@@ -308,9 +327,14 @@ fn successor_request(
     } else {
         original.images().to_vec()
     };
-    let message = UserMessage::new(Some(text), images, original.files().to_vec())
-        .map_err(|error| AgentError::InvalidInput(error.to_string()))?
-        .sent_by(original.sender().clone());
+    let message = UserMessage::new(
+        Some(text),
+        images,
+        original.files().to_vec(),
+        original.uploads().to_vec(),
+    )
+    .map_err(|error| AgentError::InvalidInput(error.to_string()))?
+    .sent_by(original.sender().clone());
     Ok(ExecutionRequest {
         execution_id: successor,
         user_message: message,
@@ -330,7 +354,8 @@ impl Agent {
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
-        let newest_final = self.newest_final(live).await;
+        let newest_final = self.newest_final(&live).await;
+        let hold = self.usage_limit_hold(&live).await;
         let newest_message = self.newest_message().await;
         self.inner
             .manager
@@ -342,7 +367,8 @@ impl Agent {
                 let retry_moved_past = Resumption::of(&record.request.execution_id).attempt() > 0
                     && newest_message > Some(index);
                 let superseded = newest_final > Some(index) || retry_moved_past;
-                owed(record, saved, superseded, live).map(|_| OwedTurn {
+                let hold_runner_stopped = hold.is_some_and(|held| index > held);
+                owed(record, saved, superseded, &live, hold_runner_stopped).map(|_| OwedTurn {
                     index,
                     execution_id: record.request.execution_id.clone(),
                     submitted_by: record.actor.clone(),
@@ -495,11 +521,24 @@ impl Agent {
 
     /// The index of the newest turn that ended for good or that this process
     /// admitted ([`ended_for_good`]): a failure before it is not owed.
-    async fn newest_final(&self, live: impl Fn(&ExecutionId) -> bool) -> Option<usize> {
+    /// Index of the newest turn that ran, when that turn ended in a usage
+    /// limit. Turns the runner stopped after it are not owed.
+    async fn usage_limit_hold(&self, live: &impl Fn(&ExecutionId) -> bool) -> Option<usize> {
+        let newest = self.newest_final(live).await?;
+        self.inner
+            .manager
+            .pick_invocations(|index, record, _| {
+                (index == newest && usage_limit_blocks_resume(record)).then_some(index)
+            })
+            .await
+            .pop()
+    }
+
+    async fn newest_final(&self, live: &impl Fn(&ExecutionId) -> bool) -> Option<usize> {
         self.inner
             .manager
             .pick_invocations(|index, record, saved| {
-                ended_for_good(record, saved, &live).then_some(index)
+                ended_for_good(record, saved, live).then_some(index)
             })
             .await
             .pop()
@@ -531,15 +570,23 @@ impl Agent {
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
-        let newest_final = self.newest_final(live).await;
+        let newest_final = self.newest_final(&live).await;
+        let hold = self.usage_limit_hold(&live).await;
         let found = self
             .inner
             .manager
             .pick_invocations(|index, record, saved| {
                 (index == turn.index && record.request.execution_id == turn.execution_id)
                     .then(|| {
-                        owed(record, saved, newest_final > Some(index), live)
-                            .map(|stop| (record.clone(), stop))
+                        let hold_runner_stopped = hold.is_some_and(|held| index > held);
+                        owed(
+                            record,
+                            saved,
+                            newest_final > Some(index),
+                            &live,
+                            hold_runner_stopped,
+                        )
+                        .map(|stop| (record.clone(), stop))
                     })
                     .flatten()
             })

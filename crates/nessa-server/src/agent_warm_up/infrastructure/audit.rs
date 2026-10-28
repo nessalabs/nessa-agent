@@ -99,6 +99,19 @@ fn error(failure: &AgentError) -> Value {
             "cleanupError": error(cleanup_error),
         }),
         AgentError::Provider { code, .. } => json!({"kind": "provider", "code": code}),
+        AgentError::UsageLimitReached(limit) => json!({
+            "kind": "usage_limit",
+            "provider": match limit.provider() {
+                nessa_sdk::application::agent_execution::agents::UsageLimitProvider::Claude => "claude",
+                nessa_sdk::application::agent_execution::agents::UsageLimitProvider::Codex => "codex",
+            },
+            "recovery": match limit.recovery() {
+                nessa_sdk::application::agent_execution::agents::UsageLimitRecovery::TimedReset => "timed_reset",
+                nessa_sdk::application::agent_execution::agents::UsageLimitRecovery::UserAction => "user_action",
+                nessa_sdk::application::agent_execution::agents::UsageLimitRecovery::Unknown => "unknown",
+            },
+            "resetsAtMs": limit.resets_at_ms(),
+        }),
         AgentError::Storage(error) => {
             json!({"kind": "storage", "diagnostic": error.to_string()})
         }
@@ -124,6 +137,7 @@ fn error(failure: &AgentError) -> Value {
         | AgentError::StorageAfterExecution { .. }
         | AgentError::UnknownApp(_)
         | AgentError::UserImage(_)
+        | AgentError::UserFile(_)
         | AgentError::ImageInputRefused(_)
         | AgentError::MessageTooLarge { .. }
         | AgentError::Busy

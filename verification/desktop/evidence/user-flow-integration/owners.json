@@ -1,0 +1,32 @@
+[
+  {
+    "path": "src/onboarding/ui/use-agent-downloads.ts",
+    "reviewedSource": "0d30b39e440c97523dd925ba90e187fd92da8b9d",
+    "sha256": "068378760f0819270022d277b1dd077f189d1fab8692f0e7248bfab31f3cd0ca",
+    "identical": true
+  },
+  {
+    "path": "src/panel/ui/use-composer.ts",
+    "reviewedSource": "0d30b39e440c97523dd925ba90e187fd92da8b9d",
+    "sha256": "ae0e9aa0dc3b4a151acec45189f5d44c5666a36c32774b4102c085a7644fd15f",
+    "identical": true
+  },
+  {
+    "path": "src/desktop/settings/ui/permission-rule-rows.tsx",
+    "reviewedSource": "0d30b39e440c97523dd925ba90e187fd92da8b9d",
+    "sha256": "bc8d62113bc7f9d537354327a6b8177c6231c0db3ec0e75cb43927efb88ef52a",
+    "identical": true
+  },
+  {
+    "path": "src/desktop/settings/ui/native-hooks-rows.tsx",
+    "reviewedSource": "de4f682f1f53ac081530d05347fc36e17dada2ce",
+    "sha256": "295ae2991a15d758df5254d35cc74673743bf64fb6b3b9e0cca3d9d437d32a89",
+    "identical": true
+  },
+  {
+    "path": "src/desktop/settings/ui/review-notice-rows.tsx",
+    "reviewedSource": "de4f682f1f53ac081530d05347fc36e17dada2ce",
+    "sha256": "df3e874ebc63c46625eb7406cf3cfdbff890cede9572db7276f6c71367ae2ec6",
+    "identical": true
+  }
+]

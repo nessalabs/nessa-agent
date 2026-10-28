@@ -10,7 +10,14 @@ import type { FailureDiagnostic } from "../../model/failure"
  * `commands.ts`, which dispatch these.
  */
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
-import type { ModelRef, WorkspaceIndex } from "../../model/workspace-index"
+import type { Channel, ModelRef, WorkspaceIndex } from "../../model/workspace-index"
+import type {
+  ChannelDraft,
+  ChannelFailure,
+  ChannelStep,
+  ResourceKind,
+} from "../../model/channel-draft"
+import * as channelCreation from "../../application/usecases/channel-creation"
 import type {
   Direction,
   PaneKey,
@@ -38,6 +45,7 @@ import type { AgentsFilter } from "../../model/overview/filter"
 import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
 import * as sessionTabs from "../../application/usecases/session-tabs"
+import * as chatPanel from "../../application/usecases/chat-panel"
 import * as sessions from "../../application/usecases/sessions"
 import * as access from "../../application/usecases/access"
 import type { AccessMode } from "../../model/access"
@@ -60,6 +68,15 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; draftId: string }>,
     ) => sessionTabs.closeSessionTab(state, payload),
+    // A chat's right panel: its widgets, as tabs (`usecases/chat-panel.ts`).
+    panelTabShown: (
+      state,
+      { payload }: Payload<{ sessionId: string; widget: WidgetRef }>,
+    ) => chatPanel.showPanelTab(state, payload),
+    panelTabClosed: (
+      state,
+      { payload }: Payload<{ sessionId: string; widget: WidgetRef }>,
+    ) => chatPanel.closePanelTab(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),
@@ -120,12 +137,8 @@ const workspaceSlice = createSlice({
       panes.closePane(state, payload),
     closeInFront: (state, { payload }: Payload<{ draftId?: string }>) =>
       navigation.closeInFront(state, payload),
-    widgetOpened: (
-      state,
-      {
-        payload,
-      }: Payload<{ widget: WidgetRef; origin?: string; room: PaneRoom | undefined }>,
-    ) => panes.openWidget(state, payload),
+    widgetOpened: (state, { payload }: Payload<{ widget: WidgetRef; origin?: string }>) =>
+      chatPanel.openWidgetInPanel(state, payload),
     draftCreated: (
       state,
       {
@@ -137,6 +150,7 @@ const workspaceSlice = createSlice({
         beside?: Side
         target?: PaneKey
         room?: PaneRoom
+        restore?: boolean
       }>,
     ) => panes.createDraft(state, payload),
 
@@ -180,6 +194,8 @@ const workspaceSlice = createSlice({
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSessionList(state, payload ?? {}),
+    searchList: (state, { payload }: Payload<{ query: string }>) =>
+      navigation.searchList(state, payload),
     resizeSidebar: (state, { payload }: Payload<{ width: number }>) =>
       navigation.resizeSidebar(state, payload),
     resizeSessionList: (state, { payload }: Payload<{ width: number }>) =>
@@ -284,6 +300,10 @@ const workspaceSlice = createSlice({
     },
     chooseModel: (state, { payload }: Payload<{ sessionId: string; model: ModelRef }>) =>
       sessions.chooseModel(state, payload),
+    stagedModelSettled: (
+      state,
+      { payload }: Payload<{ sessionId: string; model: ModelRef }>,
+    ) => sessions.stagedModelSettled(state, payload),
     accessChosen: (
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
@@ -390,6 +410,67 @@ const workspaceSlice = createSlice({
     ) => sharing.shareConfirming(state, payload),
     shareConfirmCancelled: (state, { payload }: Payload<{ opening: string }>) =>
       sharing.shareConfirmCancelled(state, payload),
+
+    // Making a channel
+    channelCreationOpened: (
+      state,
+      { payload }: Payload<{ opening: string; model: ModelRef }>,
+    ) => channelCreation.channelCreationOpened(state, payload),
+    channelCreationClosed: (state, { payload }: Payload<{ opening: string }>) =>
+      channelCreation.channelCreationClosed(state, payload),
+    channelDrafted: (
+      state,
+      {
+        payload,
+      }: Payload<{ opening: string; change: Partial<Omit<ChannelDraft, "resources">> }>,
+    ) => channelCreation.channelDrafted(state, payload),
+    channelResourcesAdded: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        opening: string
+        added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+      }>,
+    ) => channelCreation.channelResourcesAdded(state, payload),
+    channelResourceRemoved: (
+      state,
+      { payload }: Payload<{ opening: string; path: string }>,
+    ) => channelCreation.channelResourceRemoved(state, payload),
+    channelDropLanded: (state, { payload }: Payload<{ opening: string; drop: string }>) =>
+      channelCreation.channelDropLanded(state, payload),
+    channelDropSettled: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        drop: string
+        added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+        unread: number
+      }>,
+    ) => channelCreation.channelDropSettled(state, payload),
+    channelStepAsked: (
+      state,
+      { payload }: Payload<{ opening: string; step: ChannelStep }>,
+    ) => channelCreation.channelStepAsked(state, payload),
+    channelStepAnswered: (state, { payload }: Payload<{ opening: string }>) =>
+      channelCreation.channelStepAnswered(state, payload),
+    channelCreating: (
+      state,
+      { payload }: Payload<{ opening: string; requestId: string }>,
+    ) => channelCreation.channelCreating(state, payload),
+    channelCreationFailed: (
+      state,
+      { payload }: Payload<{ opening: string; failure: ChannelFailure }>,
+    ) => channelCreation.channelCreationFailed(state, payload),
+    channelHomeKnown: (state, { payload }: Payload<{ home: string }>) => ({
+      ...state,
+      channelMaking: { ...state.channelMaking, home: payload.home },
+    }),
+    channelMade: (
+      state,
+      { payload }: Payload<{ opening: string; channel: Channel; draftId: string }>,
+    ) => channelCreation.channelMade(state, payload),
   },
 })
 
@@ -397,22 +478,33 @@ export const workspaceActions = workspaceSlice.actions
 
 /**
  * The workspace's first state, with what was kept between launches — the
- * overview's filter — and whether its sessions can be shared from here.
+ * overview's filter — whether its sessions can be shared from here, and
+ * whether channels can be made here and their paths picked.
  */
 export function initialWorkspaceFrom({
   overviewFilter,
   sharing,
-}: Pick<WorkspaceDependencies, "overviewFilter" | "sharing">): WorkspaceState {
+  channels,
+  paths,
+}: Pick<
+  WorkspaceDependencies,
+  "overviewFilter" | "sharing" | "channels" | "paths"
+>): WorkspaceState {
   return {
     ...initialWorkspace,
     overview: { ...initialWorkspace.overview, filter: overviewFilter.read() },
     shareable: sharing !== undefined,
+    channelMaking: {
+      creatable: channels !== undefined,
+      pickable: paths !== undefined,
+      home: null,
+    },
   }
 }
 
 /**
  * The actions that go somewhere — a session, a channel, a new
- * session, a widget's pane, another pane (or the focused one, asked for by
+ * session, a widget in a chat's panel, another pane (or the focused one, asked for by
  * name). Each leaves the Agents overview, or a widget over the panes, for
  * the panes (`navigated`), whoever dispatched it —
  * the sidebar, the switcher, a key, the overview's own Open, or an agent —

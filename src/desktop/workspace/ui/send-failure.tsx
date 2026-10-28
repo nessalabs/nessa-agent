@@ -3,13 +3,15 @@ import { agentForProvider } from "../../model/composer-options"
 import { SendFailure } from "../../../conversation"
 import { discardUnsent, resendMessage } from "../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/hooks"
+import { useRememberedValue } from "../adapters/store/remembered-session"
 import { selectFailedMessage } from "../adapters/store/selectors"
 import { failureCopy } from "./failure-copy"
 
 /** Both conversation and overview composers act on the same refused message. */
 export function WorkspaceSendFailure({ sessionId }: { sessionId: string }) {
   const dispatch = useWorkspaceDispatch()
-  const message = useWorkspaceSelector((state) => selectFailedMessage(state, sessionId))
+  const live = useWorkspaceSelector((state) => selectFailedMessage(state, sessionId))
+  const message = useRememberedValue(sessionId, live)
   if (!message || message.delivery?.state !== "failed") return null
   const { diagnostic, reason, model } = message.delivery
   const agent = model ? agentForProvider(model.provider) : undefined

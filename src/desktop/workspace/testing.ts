@@ -284,6 +284,18 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
           throw new WorkspaceModelError(error.reason, false, error.diagnostic)
         throw error
       }),
+    setUsageLimitAutoContinue: (enabled, initiator) =>
+      answer("setUsageLimitAutoContinue", [enabled, initiator], () => {
+        for (const [sessionId, transcript] of transcripts) {
+          const next: Transcript = {
+            ...transcript,
+            usageLimitAutoContinue: enabled,
+            revision: transcript.revision + 1,
+          }
+          transcripts.set(sessionId, next)
+          emit({ kind: "transcript", transcript: next })
+        }
+      }),
     setAccess: (sessionId, mode, initiator) =>
       answer("setAccess", [sessionId, mode, initiator], () => {
         if (archived.has(sessionId) || !summaries.has(sessionId))
@@ -325,6 +337,14 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
           kind: "session",
           session: { ...session, title, revision: session.revision + 1 },
         })
+      }),
+    fork: (sessionId, initiator) =>
+      answer("fork", [sessionId, initiator], () => {
+        const session = summaries.get(sessionId)
+        if (!session) throw new WorkspaceSourceError("unknown-session")
+        const forked = `${sessionId}-fork`
+        emit({ kind: "session", session: { ...session, id: forked, revision: 1 } })
+        return forked
       }),
     delete: (sessionId, initiator) =>
       answer("delete", [sessionId, initiator], () => {
@@ -409,32 +429,40 @@ export function controlledAnimationFrames(): {
   /** Runs the callbacks queued now, not the frame they themselves ask for. */
   runFrame: () => void
   restore: () => void
+  /** Where each callback still queued was asked for. Empty once it has run. */
+  pendingStacks: () => readonly string[]
 } {
   const queued = new Map<number, FrameRequestCallback>()
+  const stacks = new Map<number, string>()
   let next = 1
   const request = window.requestAnimationFrame
   const cancel = window.cancelAnimationFrame
   window.requestAnimationFrame = (callback) => {
     const id = next++
     queued.set(id, callback)
+    stacks.set(id, new Error("animation frame").stack ?? "")
     return id
   }
   window.cancelAnimationFrame = (id) => {
     queued.delete(id)
+    stacks.delete(id)
   }
   return {
     pending: () => queued.size,
+    pendingStacks: () => [...stacks.values()],
     runFrame() {
       // A callback can cancel one queued beside it; that one does not run.
       for (const id of [...queued.keys()]) {
         const callback = queued.get(id)
         if (callback === undefined) continue
         queued.delete(id)
+        stacks.delete(id)
         callback(performance.now())
       }
     },
     restore() {
       queued.clear()
+      stacks.clear()
       window.requestAnimationFrame = request
       window.cancelAnimationFrame = cancel
     },

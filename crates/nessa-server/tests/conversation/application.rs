@@ -144,6 +144,7 @@ async fn an_idle_mode_change_commits_once_and_an_uncertain_change_recovers_prior
             caller("panel", "mode-turn"),
             "mode-turn".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "After recovery".into(),
                 ..SubmittedMessage::default()
             },
@@ -611,6 +612,7 @@ async fn a_turn_waits_for_an_admitted_mode_change_and_uses_its_committed_mode() 
                     caller("panel", "turn-after-mode"),
                     "turn-after-mode".into(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: "After mode change".into(),
                         ..SubmittedMessage::default()
                     },
@@ -720,6 +722,7 @@ async fn a_mode_change_during_an_owner_turn_is_applied_and_audited_without_retir
             caller("panel", "running-turn"),
             "running-turn".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Keep running".into(),
                 ..SubmittedMessage::default()
             },
@@ -779,6 +782,7 @@ async fn a_pending_permission_keeps_its_identity_when_a_preset_changes() {
             caller("panel", "permission-turn"),
             "permission-turn".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Review this edit".into(),
                 ..SubmittedMessage::default()
             },
@@ -996,6 +1000,7 @@ async fn a_deferred_mode_is_committed_but_a_wrong_cold_profile_cannot_admit_a_tu
                 caller("panel", "deferred-turn"),
                 "deferred-turn".into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "Should not run under Ask".into(),
                     ..SubmittedMessage::default()
                 },
@@ -1202,6 +1207,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -1272,6 +1278,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -1389,6 +1396,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -1439,6 +1447,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
                 caller("panel", "send-1"),
                 "send-1".into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "Hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -1476,6 +1485,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             caller("phone", "send-2"),
             "send-2".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -1513,6 +1523,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -1552,6 +1563,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
@@ -1636,6 +1648,7 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -1782,6 +1795,7 @@ async fn permission_consumption_case(
             caller("panel", "send"),
             "review".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "change file".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -1921,6 +1935,7 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
                 caller("panel", "send"),
                 "reviews".into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "change files".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -2038,6 +2053,7 @@ async fn every_review_the_agent_may_hold_open_is_offered_and_answered_ones_leave
             caller("panel", "send"),
             "reviews".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "change files".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2132,6 +2148,7 @@ async fn a_large_write_review_is_listed_and_read_whole_from_its_live_owner_befor
             caller("panel", "send"),
             "reviews".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "write a big file".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2279,6 +2296,7 @@ async fn asking(service: &ConversationService) -> ConversationId {
             caller("panel", "send"),
             "asks".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "choose".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2581,6 +2599,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
 
     let restarted = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -2653,6 +2672,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2668,6 +2688,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("phone", "second"),
             "second".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Again".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2689,6 +2710,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -2804,6 +2826,7 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -2858,6 +2881,35 @@ struct GatedCreateRepository {
     started: Notify,
 }
 impl ConversationRepository for GatedCreateRepository {
+    fn begin_agent_switch(
+        &self,
+        request: crate::conversation::application::ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.inner.begin_agent_switch(request)
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.inner.pending_agent_switch(id)
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.inner.agent_switch(id, request_id)
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.inner.finish_agent_switch(id, request_id, state)
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -2973,6 +3025,7 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
@@ -3064,6 +3117,7 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
@@ -3170,6 +3224,7 @@ fn prepared(
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -3239,6 +3294,7 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
@@ -3313,6 +3369,7 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
@@ -3420,6 +3477,7 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
@@ -3463,6 +3521,7 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
                     caller("panel", execution_id),
                     execution_id.into(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: text.into(),
                         images: Vec::new(),
                         files: Vec::new(),
@@ -3523,6 +3582,7 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
@@ -3611,6 +3671,7 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
@@ -3700,6 +3761,7 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
@@ -3809,6 +3871,7 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
@@ -3868,6 +3931,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
@@ -3946,6 +4010,7 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
             caller("panel", "work"),
             "work".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hold on".into(),
                 ..SubmittedMessage::default()
             },
@@ -4057,6 +4122,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             caller("panel", "first"),
             "first".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -4072,6 +4138,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -4121,6 +4188,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(PanickingStorage),
@@ -4175,6 +4243,7 @@ async fn delete_after_a_held_opening(
 ) {
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage,
@@ -4270,6 +4339,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("panel", "running"),
             "running".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -4285,6 +4355,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("phone", "steer"),
             "steer".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Followup".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -4334,6 +4405,7 @@ async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -4353,6 +4425,7 @@ async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -4378,6 +4451,7 @@ async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works
             caller("phone", "new"),
             "new".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Again".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -4408,6 +4482,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(HostileStorage),
@@ -4452,7 +4527,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
 }
 
 #[tokio::test]
-async fn changed_configuration_retains_history_and_reports_exact_opening_failure() {
+async fn a_context_only_fingerprint_change_opens_fresh_and_keeps_the_conversation() {
     let (service, provider, repository, storage) = fixture(ConversationLimits::default());
     let id = id();
     repository.records.lock().unwrap().insert(
@@ -4484,6 +4559,7 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         invocations: vec![],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     lease
@@ -4499,28 +4575,41 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         .await
         .unwrap();
     drop(lease);
-    for _ in 0..2 {
-        assert!(matches!(
-            service.read(id.clone(), caller("panel", "read")).await,
-            Err(ConversationError::Agent(AgentError::Storage(
-                StorageError::IdentityMismatch
-            )))
-        ));
-    }
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
-    let lease = storage.open(session_id.clone()).await.unwrap();
-    let saved = SessionSnapshot::load_saved(lease.as_ref(), &session_id)
+    // Same provider and model, a different context fingerprint. The saved
+    // native session is not resumed; a new one is opened and recorded with
+    // the fingerprint that opened it. The conversation itself stays.
+    service
+        .read(id.clone(), caller("panel", "read"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    let opened = provider.provider_opens.lock().unwrap().clone();
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].1, None);
+    // The attached agent holds the storage lease, so the saved identity is
+    // read without taking it.
+    let saved = storage
+        .read_committed(session_id.clone())
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .clone();
+    assert_eq!(saved.provider_context.recorded(), Some(&opened[0].0));
+    assert_ne!(
         saved.provider_context.recorded().unwrap().as_str(),
         "retained-context"
     );
     assert_eq!(
         saved.provider,
-        ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap()
+        ProviderIdentity::new("gateway-test", "test", "test").unwrap()
     );
+    service
+        .read(id.clone(), caller("panel", "read-again"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     service.shutdown().await.unwrap();
 }
 
@@ -4552,6 +4641,7 @@ async fn desktop_quit_keeps_gateway_admission_open() {
             caller("panel", "submit-next"),
             "next".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -4579,6 +4669,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                 (
                     AgentId::Claude,
                     ConversationAgent {
+                workspace: None,
                         provider: Arc::new(Provider::new(claude.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
@@ -4589,6 +4680,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                 (
                     AgentId::Codex,
                     ConversationAgent {
+                workspace: None,
                         provider: Arc::new(Provider::new(codex.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
@@ -4603,6 +4695,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     };
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: both(),
             storage: storage.clone(),
@@ -4633,6 +4726,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             id.clone(),
             caller("panel", "create"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,
@@ -4655,6 +4749,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     tokio::task::yield_now().await;
     let restarted = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: both(),
             storage,
@@ -4706,6 +4801,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
         (
             id,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -4717,6 +4813,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     };
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([
@@ -4754,6 +4851,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             id.clone(),
             caller("panel", "create"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,
@@ -4769,6 +4867,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     // Restarted with Codex no longer configured at all.
     let without_codex = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([agent(AgentId::Claude, &claude)]),
@@ -4832,6 +4931,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
         (
             id,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -4850,6 +4950,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
     {
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: ConversationAgents::new(
                     HashMap::from([
@@ -4886,6 +4987,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
                 stranded.clone(),
                 caller("panel", "create"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Known(AgentId::Codex)),
                     model: None,
                     approval_mode: None,
@@ -4900,6 +5002,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
 
     let without_codex = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([agent(AgentId::Claude, &claude)]),
@@ -4971,6 +5074,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
         (
             id,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -4984,6 +5088,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
     {
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: ConversationAgents::new(
                     HashMap::from([
@@ -5020,6 +5125,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
                 id.clone(),
                 caller("panel", "create"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Known(AgentId::Codex)),
                     model: None,
                     approval_mode: None,
@@ -5040,6 +5146,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
 
     let without_codex = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([agent(AgentId::Claude, &claude)]),
@@ -5092,6 +5199,7 @@ async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written
                 id.clone(),
                 caller("panel", "create"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Known(AgentId::Codex)),
                     model: None,
                     approval_mode: None,
@@ -5126,6 +5234,7 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
             id.clone(),
             caller("panel", "reopen"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,
@@ -5163,6 +5272,7 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
             existing,
             caller("panel", "reopen"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Unknown),
                 model: None,
                 approval_mode: None,
@@ -5182,6 +5292,7 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
                 fresh,
                 caller("panel", "create-unknown"),
                 crate::conversation::application::RequestedConversation {
+                    channel: None,
                     agent: Some(RequestedAgent::Unknown),
                     model: None,
                     approval_mode: None,
@@ -5217,6 +5328,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
@@ -5327,6 +5439,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
                 caller("panel", wiped),
                 "execution".into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "Hello".into(),
                     images: Vec::new(),
                     files: Vec::new(),
@@ -5348,6 +5461,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
             caller("panel", "send"),
             "execution".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -5372,6 +5486,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -5392,6 +5507,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
     let nothing_reserved = HashMap::from([(
         AgentId::Claude,
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
             execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
             reserved_output_tokens: 0,
@@ -5426,12 +5542,14 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+ input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([
                     (
                         AgentId::Claude,
                         ConversationAgent {
+                workspace: None,
                             provider: Arc::new(Provider::new(claude.clone())),
                             execution_audit: Arc::new(
                                 crate::conversation_test_support::AcceptingAudit,
@@ -5444,6 +5562,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                     (
                         AgentId::Codex,
                         ConversationAgent {
+                workspace: None,
                             provider: Arc::new(Provider::new(codex.clone())),
                             execution_audit: Arc::new(
                                 crate::conversation_test_support::AcceptingAudit,
@@ -5488,6 +5607,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
             id(),
             caller("panel", "first"),
             crate::conversation::application::RequestedConversation {
+                channel: None,
                 agent: Some(RequestedAgent::Known(AgentId::Codex)),
                 model: None,
                 approval_mode: None,
@@ -5550,6 +5670,7 @@ async fn custom_committed_adapter_cannot_substitute_requested_session_or_destroy
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: storage.clone(),
@@ -5649,6 +5770,7 @@ async fn a_note_past_where_one_committed_read_stops_is_still_found() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: storage.clone(),
@@ -5714,6 +5836,7 @@ async fn committed_reads_recheck_tombstone_after_title_lookup() {
         let mode_audit = Arc::new(RecordingModeAudit::default());
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: mode_agents(provider, Arc::new(RecordingModeExecutionAudit::default())),
                 storage: Arc::new(InMemoryStorage::new()),
@@ -5859,6 +5982,7 @@ async fn returned_committed_views_bound_late_titles_and_preserve_pending_selecti
         });
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: mode_agents(
                     provider.clone(),
@@ -5904,6 +6028,7 @@ async fn returned_committed_views_bound_late_titles_and_preserve_pending_selecti
                     caller("panel", "budget-send"),
                     execution.clone(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: "Input".into(),
                         ..SubmittedMessage::default()
                     },

@@ -80,6 +80,8 @@ use crate::updater::{self, ReleaseSource};
 /// `&dyn SettingsStore`, which is also what makes it testable.
 #[derive(Clone)]
 pub struct HostDependencies {
+    /// One app-lifetime anonymous-pipe vault connection, shared by all windows.
+    pub vault: Arc<dyn crate::vault::application::VaultConnection>,
     /// Opens provider-owned CLI login flows without reading their credentials.
     pub provider_login: Arc<dyn crate::provider_authentication::ProviderLogin>,
     /// The settings file: the panel's geometry, the quit policy, and whether
@@ -158,6 +160,9 @@ pub struct HostDependencies {
     /// The system notices for reviews waiting on the person. A host with no
     /// center it can post to and take back answers `unsupported`.
     pub review_notices: Arc<ReviewNotices>,
+    /// Where the window server says the menu bar icon and the setup window
+    /// are, so the finished setup window can fly onto the icon.
+    pub tray_geometry: Arc<dyn crate::tray::TrayGeometry>,
 }
 
 impl HostDependencies {
@@ -278,7 +283,38 @@ impl HostDependencies {
             )))
         };
 
+        let credential = Arc::new(SurfaceCredential::for_namespace(
+            service_namespace.clone(),
+            stage.clone(),
+        ));
+        let endpoint = Arc::new(GatewayEndpointAccess::new(
+            stage.clone(),
+            gateway_endpoint::infrastructure::endpoint_discovery(service_namespace),
+        ));
+        let vault_binary = if cfg!(debug_assertions) {
+            std::env::var_os("NESSA_VAULT_BINARY")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../target/debug")
+                        .join(if cfg!(windows) { "nessa.exe" } else { "nessa" })
+                })
+        } else {
+            app.path()
+                .resource_dir()
+                .map_err(|error| StartupRefusal::Resources(error.to_string()))?
+                .join("runtime")
+                .join(if cfg!(windows) { "nessa.exe" } else { "nessa" })
+        };
+        let vault = Arc::new(crate::vault::infrastructure::NativeVault::new(
+            vault_binary,
+            endpoint.clone(),
+            credential.clone(),
+            stage,
+            service_configuration.port(),
+        ));
         Ok(Self {
+            vault,
             provider_login: Arc::new(crate::platform::PlatformProviderLogin),
             settings,
             agent_credentials: Arc::new(LocalAgentCredentialStore::new(
@@ -290,14 +326,8 @@ impl HostDependencies {
             credential_save_ids: Arc::new(RandomCredentialSaveIds),
             credential_save_audit,
             shortcuts: Arc::new(ShortcutsFile::at(config_root)),
-            credential: Arc::new(SurfaceCredential::for_namespace(
-                service_namespace.clone(),
-                stage.clone(),
-            )),
-            endpoint: Arc::new(GatewayEndpointAccess::new(
-                stage,
-                gateway_endpoint::infrastructure::endpoint_discovery(service_namespace),
-            )),
+            credential,
+            endpoint,
             picker: attachments::file_picker(app),
             save_destination: saving::save_destination(app),
             save_sessions: saving::save_sessions(),
@@ -311,6 +341,7 @@ impl HostDependencies {
             releases: updater::release_source(app),
             linger,
             review_notices: Arc::new(ReviewNotices::start(notice_center(app))),
+            tray_geometry: crate::tray::tray_geometry(app),
         })
     }
 }

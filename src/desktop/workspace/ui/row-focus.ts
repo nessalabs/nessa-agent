@@ -11,7 +11,10 @@
  * notes its place as it opens one (`rowPlace`). As it closes, focus goes
  * back where it was; when that was the row or nothing, it goes by that place
  * (`focusRowPlace`): to the row, or past it when it went meanwhile, and only
- * ever in the list it was asked from.
+ * ever in the list it was asked from. A dialog that outlives that menu, such
+ * as Share, looks the session's row up when it closes (`focusSessionRow`).
+ * A row inside an inert ancestor, such as a folded sidebar, cannot take
+ * focus, so the lookup skips it.
  */
 import { useEffect, type RefObject } from "react"
 
@@ -55,6 +58,26 @@ function beside(node: Element, list: HTMLElement): HTMLElement | null {
     if (found.length) return found.length === 1 ? found[0] : null
   }
   return null
+}
+
+/** A row focus can land on: still in the document, and not under `inert`. */
+function canTakeFocus(row: HTMLElement): boolean {
+  return row.isConnected && row.closest("[inert]") === null
+}
+
+/**
+ * Focus the session row `id` names, as it is drawn now. When several copies
+ * are drawn, the first that can take focus. In a list that keeps focus, that
+ * list's rule (`focusRowPlace`); otherwise the row itself. Whether a row took it.
+ */
+export function focusSessionRow(id: string, root: ParentNode = document): boolean {
+  const selector = `[data-session-row="${CSS.escape(id)}"]`
+  const row = [...root.querySelectorAll<HTMLElement>(selector)].find(canTakeFocus)
+  if (!row) return false
+  const place = rowPlace(row)
+  if (place) return focusRowPlace(place)
+  row.focus({ preventScroll: true })
+  return row.ownerDocument.activeElement === row
 }
 
 /** Focus the row at `place` by the rule above; whether a row took it. */

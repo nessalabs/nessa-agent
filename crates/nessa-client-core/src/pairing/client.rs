@@ -114,8 +114,9 @@ impl NativeEnrollmentClient {
     pub fn new(pending: Arc<dyn ClientPendingStore>, clock: Arc<dyn Clock>) -> Self {
         Self::enrolling(ConsentClass::DeviceRead, pending, clock)
     }
-    /// A client that enrolls as `class` and refuses an invitation of any other
-    /// class before the PAKE begins (`NativeClientError::OtherEnrollee`).
+    /// A client that enrolls as `class` and refuses an invitation it does not
+    /// accept (`ConsentClass::accepts`) before the PAKE begins
+    /// (`NativeClientError::OtherEnrollee`).
     pub fn enrolling(
         class: ConsentClass,
         pending: Arc<dyn ClientPendingStore>,
@@ -456,7 +457,7 @@ fn complete_enrollment<R: RngCore + CryptoRng>(
     if public.attempt() != AttemptId::new(attempt) {
         return Err(NativeClientError::Phase);
     }
-    if public.class() != class {
+    if !class.accepts(public.class()) {
         return Err(NativeClientError::OtherEnrollee);
     }
     if expected.is_some_and(|original: PublicIntent| {

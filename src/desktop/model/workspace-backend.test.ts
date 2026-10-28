@@ -34,4 +34,7 @@ it("a browser page with ?seeded is the seeded workspace, and ?gateway wins (C4)"
 it("an explicitly configured development preview uses the sample on a native host", () => {
   expect(workspaceBackend("macos", "", true)).toBe("sample")
   expect(workspaceBackend("macos", "", false)).toBe("host")
+  // A page's own query wins over the exported preview.
+  expect(workspaceBackend("browser", "?seeded=10k", true)).toBe("seeded")
+  expect(workspaceBackend("browser", "?gateway", true)).toBe("browser")
 })

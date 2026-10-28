@@ -21,7 +21,13 @@ import {
   sessionRead,
   unsentDiscarded,
 } from "./sessions"
-import { indexLoaded, sessionRemoved, transcriptLoaded, updateReceived } from "./updates"
+import {
+  indexLoaded,
+  indexRequested,
+  sessionRemoved,
+  transcriptLoaded,
+  updateReceived,
+} from "./updates"
 
 const loaded = () =>
   indexLoaded(initialWorkspace, {
@@ -281,33 +287,41 @@ describe("sending", () => {
 })
 
 describe("what the person changes", () => {
-  it("chooses a draft model and keeps an established conversation on its source-owned model", () => {
+  it("chooses a draft model and stages one for an established conversation", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const draftChosen = chooseModel(drafted, { sessionId: "new", model: astra })
     expect(draftChosen.drafts.new.model).toEqual(astra)
     expect(modelForNextTurn(draftChosen, "new")).toEqual(astra)
     const state = loaded()
     const chosen = chooseModel(state, { sessionId: "a", model: astra })
+    // Staged only: the summary stays the source's.
     expect(chosen.sessions.a).toBe(state.sessions.a)
-    expect(chosen).toBe(state)
-    expect(modelForNextTurn(chosen, "a")).toEqual(state.sessions.a.model)
+    expect(chosen.stagedModels.a).toEqual(astra)
+    expect(modelForNextTurn(chosen, "a")).toEqual(astra)
     expect(modelForNextTurn(state, "a")).toEqual(state.sessions.a.model)
     expect(modelForNextTurn(state, "missing")).toBeUndefined()
     expect(chooseModel(state, { sessionId: "missing", model: astra })).toBe(state)
-    // A newer authoritative summary owns the established model.
-    const same = updateReceived(chosen, {
+    // Its own model again stays staged: the send then asks nothing.
+    const back = chooseModel(chosen, { sessionId: "a", model: state.sessions.a.model })
+    expect(back.stagedModels.a).toEqual(state.sessions.a.model)
+    expect(modelForNextTurn(back, "a")).toEqual(state.sessions.a.model)
+    // A newer summary that runs another model leaves the pick waiting for a send.
+    const other = updateReceived(chosen, {
       update: {
         kind: "session",
-        session: summary("a", "desktop", 900, "running", { model: astra, revision: 2 }),
+        session: summary("a", "desktop", 901, "running", { revision: 2 }),
       },
     })
-    const other = updateReceived(same, {
+    expect(other.stagedModels.a).toEqual(astra)
+    // Even one saying the conversation runs it does not: only a send settles it.
+    const same = updateReceived(other, {
       update: {
         kind: "session",
-        session: summary("a", "desktop", 901, "running", { revision: 3 }),
+        session: summary("a", "desktop", 902, "running", { model: astra, revision: 3 }),
       },
     })
-    expect(modelForNextTurn(other, "a")).toEqual(other.sessions.a.model)
+    expect(same.stagedModels.a).toEqual(astra)
+    expect(modelForNextTurn(same, "a")).toEqual(astra)
   })
 
   it("holds an answer beside the approval while it is on its way, and why it failed", () => {
@@ -519,6 +533,31 @@ describe("what the person changes", () => {
     const closed = closeSessionTab(discarded, { sessionId: "new", draftId: "unused" })
     expect(closed.drafts.new).toBeUndefined()
     expect(closed.sessionTabs).not.toContain("new")
+  })
+
+  it("releases a refused first send when its channel has disappeared", () => {
+    const drafted = createDraft(loaded(), { draftId: "new" })
+    const sent = messageSent(drafted, {
+      initiator: "person",
+      sessionId: "new",
+      message: message("m1", "hi"),
+    })
+    const refused = sendFailed(sent, {
+      sessionId: "new",
+      messageId: "m1",
+      reason: "unavailable",
+    })
+    const empty = { sections: [], channels: [], sessions: [] }
+    const resynced = indexLoaded(indexRequested(refused, { read: "r" }), {
+      index: empty,
+      draftId: "fresh",
+      read: "r",
+    })
+    const discarded = unsentDiscarded(resynced, { sessionId: "new", messageId: "m1" })
+    expect(discarded.sessions.new).toBeUndefined()
+    expect(discarded.drafts.new).toBeUndefined()
+    expect(discarded.sessionTabs).not.toContain("new")
+    expect(discarded.panes).toBeNull()
   })
 
   it("forgets an unconfirmed session after its failed message and tab are gone", () => {

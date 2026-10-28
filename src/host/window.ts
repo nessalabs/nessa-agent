@@ -53,9 +53,27 @@ const HOST_EVENTS = {
   attachmentDragging: "nessa://attachment-dragging",
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
+  pathsDragging: "nessa://paths-dragging",
+  pathsDropBegan: "nessa://paths-drop-began",
+  pathsDropped: "nessa://paths-dropped",
   gatewayStartup: "nessa://gateway-startup",
+  runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
+  setupRecorded: "nessa://setup-recorded",
 } as const
+
+/** How many staged runtime files have finished `sync_all`.
+ *
+ * `settled` means the host stopped reporting. It does not say the generation
+ * was published. This is not gateway startup, and setup does not treat it as
+ * readiness. */
+export interface RuntimeCopy {
+  state: "copying" | "settled"
+  filesCompleted: number
+  filesTotal: number
+  bytesCompleted: number
+  bytesTotal: number
+}
 
 export interface WebviewConsoleEntry {
   level: "warn" | "error"
@@ -131,6 +149,27 @@ export async function onGatewayStartup(handler: (startup: GatewayStartup) => voi
   return listen<GatewayStartup>(HOST_EVENTS.gatewayStartup, ({ payload }) =>
     handler(payload),
   )
+}
+
+/** Subscribes to private-runtime copy progress. A browser has no staged runtime. */
+export async function onRuntimeCopy(handler: (progress: RuntimeCopy) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<RuntimeCopy>(HOST_EVENTS.runtimeCopy, ({ payload }) => handler(payload))
+}
+
+/**
+ * The latest private-runtime copy report retained by the host.
+ *
+ * A browser has no staged runtime. `null` means the host has not reported.
+ * Subscribe with `onRuntimeCopy` before calling this, and keep an event that
+ * arrives while this read is in flight: that event is newer than a snapshot
+ * taken before it.
+ */
+export async function runtimeCopy(): Promise<RuntimeCopy | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<RuntimeCopy | null>("runtime_copy")
 }
 
 /** Asks the host to retry a failed gateway reconciliation. */
@@ -505,6 +544,74 @@ export async function chooseAttachmentFiles(
   if (!inTauri) return null
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<ChosenFile[]>("choose_attachment_files", { requestId })
+}
+
+/**
+ * The folder a new channel's agents work in, chosen in the system's picker;
+ * `null` when the person cancelled, or outside Tauri. Only a choice: the
+ * gateway checks the folder again when the channel is made.
+ */
+export async function chooseChannelFolder(): Promise<string | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string | null>("choose_channel_folder")
+}
+
+/**
+ * Files, or folders, to attach to a new channel, chosen in the system's
+ * picker; empty when the person cancelled, or outside Tauri. One kind at a
+ * time: not every system's picker chooses both at once.
+ */
+export async function chooseChannelResources(
+  kind: "files" | "folders",
+): Promise<string[]> {
+  if (!inTauri) return []
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string[]>("choose_channel_resources", { folders: kind === "folders" })
+}
+
+/** A file or folder dragged onto the desktop window, as the host names it. */
+export interface DroppedPath {
+  path: string
+  kind: "file" | "folder"
+}
+
+/**
+ * Be told of files and folders dragged onto the desktop window: `dragging`
+ * while a drag carrying paths is over it, `began` the moment a drop lands
+ * (named), and `dropped` with the paths it let go of, under the same name,
+ * once the host has looked at them (which can be a couple of seconds later). The window receives no drop events of its own (the webview's drag and
+ * drop belongs to the host), and a DOM `File` names no path, so this is the
+ * only way the page learns where a dropped file is. Only paths, like the
+ * channel pickers': the gateway checks each again before using it.
+ */
+export async function onPathsDragged(handlers: {
+  dragging: (over: boolean) => void
+  began: (drop: string) => void
+  dropped: (drop: string, paths: DroppedPath[], unread: number) => void
+}): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  const stops = await Promise.all([
+    listen<{ dragging: boolean }>(HOST_EVENTS.pathsDragging, ({ payload }) =>
+      handlers.dragging(payload.dragging),
+    ),
+    listen<{ drop: string }>(HOST_EVENTS.pathsDropBegan, ({ payload }) =>
+      handlers.began(payload.drop),
+    ),
+    listen<{ drop: string; paths: DroppedPath[]; unread: number }>(
+      HOST_EVENTS.pathsDropped,
+      ({ payload }) => handlers.dropped(payload.drop, payload.paths, payload.unread),
+    ),
+  ])
+  return () => stops.forEach((stop) => stop())
+}
+
+/** The person's home folder, to write paths under it from `~`; `null` outside Tauri. */
+export async function homeFolder(): Promise<string | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string | null>("home_folder")
 }
 
 /**
@@ -1014,6 +1121,25 @@ export async function finishSetupWindow(
 }
 
 /**
+ * Where the menu bar icon is, in this page's CSS pixels.
+ *
+ * The finished setup window flies into it. Undefined when there is nothing to
+ * aim at: no native host, no tray, or a system that does not say where its tray
+ * items are. The caller then picks a corner, so a failed ask is never an error.
+ */
+export async function setupTrayPoint(): Promise<{ x: number; y: number } | undefined> {
+  if (!inTauri) return undefined
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return (
+      (await invoke<{ x: number; y: number } | null>("setup_tray_point")) ?? undefined
+    )
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Write setup off again, after a handoff whose write the host refused.
  *
  * The panel is already up, so this asks for the write and the close alone.
@@ -1061,6 +1187,38 @@ export async function revealSetupWindow() {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("reveal_setup_window")
+}
+
+/**
+ * Shows first-run setup again, from its first step, for somebody who asked to
+ * see it from Settings.
+ *
+ * A replay, not a restart: what setup recorded stays recorded, so leaving
+ * part-way changes nothing and only finishing writes a choice again. A browser
+ * has no setup window to open; Settings only offers this with a native host.
+ */
+export async function replayOnboarding(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("replay_onboarding")
+}
+
+/**
+ * Subscribes to setup recording a finish, which may have chosen another agent:
+ * a replay from Settings finishes while this window is running.
+ */
+export async function onSetupRecorded(handler: () => void) {
+  if (!inTauri) return () => undefined
+  // Never rejects: composition starts this and does not wait for it, and a
+  // host that cannot be listened to costs the replay's new agent until the
+  // next launch, not the window.
+  try {
+    const { listen } = await import("@tauri-apps/api/event")
+    return await listen(HOST_EVENTS.setupRecorded, () => handler())
+  } catch (cause) {
+    console.warn("[nessa] could not listen for setup being recorded", cause)
+    return () => undefined
+  }
 }
 
 /**
@@ -1192,4 +1350,15 @@ export async function writeClipboardText(text: string): Promise<void> {
   }
   if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable.")
   await navigator.clipboard.writeText(text)
+}
+
+/** Transient local-vault input; the native host retains one app-owned connection.
+ * Browser composition uses the gateway adapter instead of invoking this seam. */
+export async function vaultCommand(request: {
+  operation: "status" | "setup" | "unlock" | "lock"
+  passphrase?: string
+}): Promise<unknown> {
+  if (!inTauri) return undefined
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("vault_command", { request })
 }

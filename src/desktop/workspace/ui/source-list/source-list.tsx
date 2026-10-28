@@ -5,15 +5,16 @@ import { IconButton } from "../../../ui/icon-button"
 import {
   openBeside,
   openChannel,
+  openChannelCreation,
   toggleChannel,
   toggleSection,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectChannelIdsIn,
+  selectChannelMaking,
   selectSectionCollapsed,
   selectSections,
-  selectSidebarOpen,
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
@@ -35,10 +36,16 @@ import { useRowFocusKept } from "../row-focus"
  */
 export const SourceList = memo(function SourceList({
   variant,
+  open,
 }: {
   variant: "channels" | "tree"
+  /**
+   * Whether the sidebar is painted. A pane column paints this with the new
+   * boxes (`usePaintedWithPanes`), so the list does not read the store's
+   * drawn bit and fold in the click.
+   */
+  open: boolean
 }) {
-  const open = useWorkspaceSelector(selectSidebarOpen)
   const sections = useWorkspaceSelector(selectSections)
   const treeRef = useRef<HTMLElement>(null)
   useRowFocusKept(treeRef, "[data-row]")
@@ -165,6 +172,7 @@ const SourceSection = memo(function SourceSection({
     selectSectionCollapsed(state, sectionId),
   )
   const channelIds = useWorkspaceSelector((state) => selectChannelIdsIn(state, sectionId))
+  const { creatable } = useWorkspaceSelector(selectChannelMaking)
   return (
     <section className="workspace-section" data-collapsed={collapsed || undefined}>
       <div className="workspace-section-head">
@@ -179,14 +187,23 @@ const SourceSection = memo(function SourceSection({
           <span>{name}</span>
           <DesktopIcon name="chevronRight" />
         </button>
-        {variant === "channels" ? (
-          // Channels cannot be added yet; the control shows where it will be.
+        {creatable ? (
           <IconButton
             className="workspace-section-add"
             icon="add"
             label={`Add channel to ${name}`}
             tone="faint"
-            {...tooltip("Adding channels isn’t available yet")}
+            {...tooltip(`Add channel to ${name}`)}
+            onClick={() => dispatch(openChannelCreation())}
+          />
+        ) : variant === "channels" ? (
+          // This window cannot make channels; the control shows where it would be.
+          <IconButton
+            className="workspace-section-add"
+            icon="add"
+            label={`Add channel to ${name}`}
+            tone="faint"
+            {...tooltip("Adding channels isn’t available here")}
             disabled
           />
         ) : null}

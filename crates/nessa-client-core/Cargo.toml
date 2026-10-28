@@ -17,6 +17,9 @@ cli = []
 name = "read_only_sync"
 required-features = ["cli"]
 
+[[example]]
+name = "weak_link_measure"
+
 [dependencies]
 base64 = "0.22"
 nessa-auth = { path = "../nessa-auth" }
@@ -29,7 +32,14 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["rt", "sync", "time", "net"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# TLS to a web tunnel's edge (`tunnel`), checked against the platform's trust
+# store; the gateway itself is proved by the native TLS inside.
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
+tokio = { version = "1", features = ["rt", "sync", "time", "net", "io-util", "macros"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 tracing = "0.1"
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }

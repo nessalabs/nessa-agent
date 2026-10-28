@@ -366,13 +366,17 @@ fn owner_phone_disclosure_requires_full_same_resource_ordered_capabilities() {
         DisclosedConsent::new(public, audience, grants[0].clone()),
         Err(PairingError::Invalid)
     );
-    assert!(!class.uses_pake());
+    // A device client takes an owner-phone invitation; a peer client does not.
+    assert!(ConsentClass::DeviceRead.accepts(class));
+    assert!(!ConsentClass::PeerRead.accepts(class));
+    assert!(!ConsentClass::PeerEnvironment.accepts(class));
+    assert!(!class.accepts(ConsentClass::DeviceRead));
     for legacy in [
         ConsentClass::DeviceRead,
         ConsentClass::PeerRead,
         ConsentClass::PeerEnvironment,
     ] {
-        assert!(legacy.uses_pake());
+        assert!(legacy.accepts(legacy));
         assert_eq!(
             legacy.grants(resource("org-1", "gateway-1")).unwrap().len(),
             1

@@ -25,8 +25,9 @@ use crate::env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
 use crate::env_serve::install::Platform;
 use crate::timer::TokioTimer;
 use nessa_protocol::lease::{
-    decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, GrantedTerms as WireTerms, Sandbox,
-    ToEnvironment, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
+    decode, encode, Cleanup, Collection, CommandEnd, Data, FromEnvironment,
+    GrantedTerms as WireTerms, Sandbox, StagedArtifact, ToEnvironment, COMMAND_STOP_WAIT,
+    KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{ApprovalMode, ModelChange};
@@ -192,6 +193,13 @@ enum Reach {
     /// A host that grants the first command lease it is asked for, then
     /// says it is ending it, as no host may, and keeps reading.
     EndsItsCommand,
+    /// A host that grants a command, and on Run publishes one file and then
+    /// says it ran. It answers reads of that file and ends the lease when
+    /// asked. Every frame it reads is kept.
+    PublishesOnRun,
+    /// A host that grants a command and, on Run, says it ran. It keeps
+    /// reading, keepalives included, and never answers `Ended`.
+    AnswersRan,
     /// A host that grants every lease, says it is ending one as expired at
     /// once when `early`, and, told it is revoked, says each is ending as
     /// expired and then ended; keeps every frame it reads.
@@ -397,6 +405,135 @@ impl LeaseConnector for Connector {
                     }
                 });
             }
+            Reach::PublishesOnRun => {
+                let frames = self.frames.clone();
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    let file = b"note";
+                    while let Ok(Some(body)) = stream.next().await {
+                        let Ok(frame) = decode::<ToEnvironment>(&body) else {
+                            continue;
+                        };
+                        frames.lock().unwrap().push(frame.clone());
+                        let said = match frame {
+                            ToEnvironment::GrantCommand {
+                                lease, timeout_ms, ..
+                            } => Some(FromEnvironment::Granted {
+                                lease,
+                                terms: WireTerms {
+                                    sandbox: Sandbox::None,
+                                    timeout_ms: Some(timeout_ms),
+                                    lease_ms: None,
+                                },
+                            }),
+                            ToEnvironment::Run { lease } => {
+                                host_out
+                                    .write_all(
+                                        &encode(&FromEnvironment::Published {
+                                            lease: lease.clone(),
+                                            artifact: 0,
+                                            request: None,
+                                            file: StagedArtifact {
+                                                name: "note.txt".into(),
+                                                media_type: "text/plain".into(),
+                                                size: file.len() as u64,
+                                                digest: "ab".repeat(32),
+                                                path: "/srv/work/note.txt".into(),
+                                            },
+                                        })
+                                        .unwrap(),
+                                    )
+                                    .await
+                                    .unwrap();
+                                Some(FromEnvironment::Ran {
+                                    lease,
+                                    end: CommandEnd::Exited { code: 0 },
+                                    stdout: Data(Vec::new()),
+                                    stderr: Data(Vec::new()),
+                                    dropped_bytes: 0,
+                                    cleanup: Cleanup::Confirmed { forced: false },
+                                })
+                            }
+                            ToEnvironment::ReadArtifact {
+                                lease,
+                                artifact,
+                                offset,
+                                length,
+                            } => {
+                                let start = usize::try_from(offset).unwrap_or(file.len());
+                                let len = usize::try_from(length).unwrap_or(0);
+                                let end = start.saturating_add(len).min(file.len());
+                                let start = start.min(file.len());
+                                Some(FromEnvironment::ArtifactRead {
+                                    lease,
+                                    artifact,
+                                    offset,
+                                    data: Data(file[start..end].to_vec()),
+                                })
+                            }
+                            ToEnvironment::End { lease } => Some(FromEnvironment::Ended {
+                                lease,
+                                cleanup: Cleanup::Confirmed { forced: false },
+                            }),
+                            _ => None,
+                        };
+                        if let Some(said) = said {
+                            host_out.write_all(&encode(&said).unwrap()).await.unwrap();
+                        }
+                    }
+                });
+            }
+            Reach::AnswersRan => {
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    while let Ok(Some(body)) = stream.next().await {
+                        let Ok(frame) = decode::<ToEnvironment>(&body) else {
+                            continue;
+                        };
+                        let said = match frame {
+                            ToEnvironment::GrantCommand {
+                                lease, timeout_ms, ..
+                            } => Some(FromEnvironment::Granted {
+                                lease,
+                                terms: WireTerms {
+                                    sandbox: Sandbox::None,
+                                    timeout_ms: Some(timeout_ms),
+                                    lease_ms: None,
+                                },
+                            }),
+                            ToEnvironment::Run { lease } => Some(FromEnvironment::Ran {
+                                lease,
+                                end: CommandEnd::Exited { code: 0 },
+                                stdout: Data(Vec::new()),
+                                stderr: Data(Vec::new()),
+                                dropped_bytes: 0,
+                                cleanup: Cleanup::Confirmed { forced: false },
+                            }),
+                            ToEnvironment::Keepalive | ToEnvironment::End { .. } => None,
+                            _ => None,
+                        };
+                        if let Some(said) = said {
+                            host_out.write_all(&encode(&said).unwrap()).await.unwrap();
+                        }
+                    }
+                });
+            }
             Reach::Expiring { early } => {
                 let frames = self.frames.clone();
                 tokio::spawn(async move {
@@ -533,6 +670,7 @@ impl LeaseConnector for Connector {
         ));
         let (from_environment, to_environment) = split(gateway);
         Ok(LeaseConnection {
+            mcp_relay: None,
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
@@ -544,8 +682,8 @@ impl LeaseConnector for Connector {
 /// An SSH connection whose artifact channels never open: these tests
 /// carry no file.
 struct NoChannels;
-impl super::connector::ArtifactChannels for NoChannels {
-    fn open(&self) -> io::Result<super::connector::ArtifactChannel> {
+impl crate::conversation::application::ArtifactChannels for NoChannels {
+    fn open(&self) -> io::Result<crate::conversation::application::ArtifactChannel> {
         Err(io::Error::other("no artifact channels"))
     }
 }
@@ -1959,6 +2097,7 @@ impl CommandRunner for Commands {
         &self,
         command: CommandWork,
         mut stop: tokio::sync::watch::Receiver<Option<CommandStop>>,
+        _publish_point: Option<String>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CommandRan> + Send + 'static>> {
         Box::pin(async move {
             if command.program() == "echo" {
@@ -2026,6 +2165,66 @@ async fn a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed
             .any(|entry| matches!(entry, LedgerEntry::Ended { .. })),
         "{ledger:?}"
     );
+}
+
+/// Row C17: a command that has finished keeps its route until the host
+/// answers End. A file already offered holds End back until it is
+/// answered, and End is then asked, so the host closes the publish point.
+#[tokio::test]
+async fn a_finished_command_keeps_its_publish_route_until_the_host_ends_it() {
+    let connector = Connector::new(Reach::PublishesOnRun);
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let commands = host.commands().expect("an SSH host runs commands");
+    let mut hold = commands
+        .grant(&lease(), &work(&["echo", "note"]))
+        .await
+        .expect("granted")
+        .hold;
+    let mut offers = hold.publications().expect("the command publishes");
+    let (_stop, stopped) = tokio::sync::watch::channel(None);
+    let running = tokio::spawn(async move { hold.run(10_000, stopped).await });
+    let offer = tokio::time::timeout(Duration::from_secs(5), offers.recv())
+        .await
+        .expect("the file was offered")
+        .expect("the file was offered");
+    let result = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("answered")
+        .expect("the command ran");
+    assert_eq!(result.exit, CommandExit::Exited { code: 0 });
+    // The publication stream ends with `Ran`, without waiting for `Ended`.
+    assert!(tokio::time::timeout(Duration::from_secs(1), offers.recv())
+        .await
+        .expect("the stream ended")
+        .is_none());
+    // `Ran` is routed. End waits while the offered file is still unanswered.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !connector
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|frame| matches!(frame, ToEnvironment::End { .. })),
+        "End was asked while a file was still unanswered"
+    );
+    offer.answer.answer(Collection::Held).await;
+    let asked = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if connector
+                .frames
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|frame| matches!(frame, ToEnvironment::End { .. }))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(asked.is_ok(), "End was asked once the file was answered");
 }
 
 #[tokio::test]
@@ -3495,6 +3694,48 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     assert!(revoking < ended, "{entries:?}");
 }
 
+/// Row C22: a command whose host says `Ran` and never `Ended`, while the
+/// connection stays up, gives its organization place back after the stop
+/// wait. A later command can take that place.
+#[tokio::test]
+async fn a_finished_command_releases_its_budget_place_when_ended_never_arrives() {
+    let connector = Connector::new(Reach::AnswersRan);
+    let link = dialed_link(&connector, Arc::new(Audit::default())).await;
+    let budgets = crate::conversation::application::OrganizationBudgets::new(None, Some(1));
+    let id = lease();
+    link.grant_command(
+        id.as_str(),
+        vec!["echo".into(), "hi".into()],
+        None,
+        5_000,
+        budgets.command(),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("the host grants the command");
+    assert_eq!(budgets.running(), (0, 1));
+    let answer = tokio::time::timeout(Duration::from_secs(5), link.run(id.as_str()))
+        .await
+        .expect("the host says Ran")
+        .expect("the command is still routed");
+    assert!(matches!(answer.end, CommandEnd::Exited { code: 0 }));
+    assert_eq!(budgets.running(), (0, 1));
+    tokio::time::timeout(COMMAND_STOP_WAIT + Duration::from_secs(2), async {
+        while budgets.running() != (0, 0) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the place is given back once Ended does not arrive");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), link.ended())
+            .await
+            .is_err(),
+        "the connection stayed up"
+    );
+    assert!(budgets.command().is_some());
+}
+
 /// A grant the host does not answer in time keeps its organization budget
 /// place: the host may still admit it, so the place is given back only once
 /// the host answers the End it is sent.
@@ -3935,4 +4176,51 @@ async fn model_targets_and_normalization_retain_the_granted_host() {
     );
     assert_eq!(connector.stopped.load(Ordering::SeqCst), 2);
     connector.cut();
+}
+
+/// The startup table is consumed on both sides of the wire. A client waiting
+/// less than this actual connection bound abandoned a live Boat allocation.
+#[tokio::test(start_paused = true)]
+async fn workspace_connection_deadline_matches_the_published_client_budget() {
+    struct PendingConnector(Arc<tokio::sync::Notify>);
+    impl super::connector::WorkspaceConnector for PendingConnector {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                self.0.notify_one();
+                std::future::pending().await
+            })
+        }
+    }
+    let budgets: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../protocol/defaults/agent-startup-budgets.json"
+    ))
+    .unwrap();
+    let duration = Duration::from_millis(budgets["workspace"]["connectMs"].as_u64().unwrap());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let environment = SshEnvironment::workspace(
+        Arc::new(PendingConnector(entered.clone())),
+        Arc::new(Audit::default()),
+    );
+    let opening = tokio::spawn(async move {
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+    });
+    entered.notified().await;
+    tokio::time::advance(duration - Duration::from_millis(1)).await;
+    assert!(
+        !opening.is_finished(),
+        "workspace timed out before its published bound"
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(
+        opening.await.unwrap().err(),
+        Some(LeaseRefusal::EnvironmentUnreachable)
+    );
 }

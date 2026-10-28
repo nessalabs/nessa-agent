@@ -1,7 +1,7 @@
 /**
- * A deadline's `dueAtMs`, read on the gateway's clock, as the same moment on
- * this client's clock: as long after `receivedAtMs` as it was after the
- * view's `serverNowMs`.
+ * A moment on the gateway's clock — a deadline's `dueAtMs`, a usage limit's
+ * reset, a tool call's start — as the same moment on this client's clock: as
+ * long after `receivedAtMs` as it was after the view's `serverNowMs`.
  *
  * The gateway and the client are often different machines, and their clocks
  * need not agree. Measured against the gateway's own time in the same view,
@@ -42,6 +42,8 @@ export function deadlinePendingLine(
   if (!Number.isFinite(remainingMs) || remainingMs <= 0)
     return `If nobody answers, this is ${outcome}${stop}.`
   const seconds = Math.ceil(remainingMs / 1000)
-  const unit = seconds === 1 ? "second" : "seconds"
-  return `If nobody answers within ${seconds} ${unit}, this is ${outcome}${stop}.`
+  // Past a minute, whole minutes: "within 5 minutes", not "within 300 seconds".
+  const [count, unit] =
+    seconds > 60 ? [Math.ceil(seconds / 60), "minute"] : [seconds, "second"]
+  return `If nobody answers within ${count} ${unit}${count === 1 ? "" : "s"}, this is ${outcome}${stop}.`
 }

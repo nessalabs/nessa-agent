@@ -1,0 +1,41 @@
+{
+  "original1": {
+    "errors": [
+      {
+        "message": "ResizeObserver loop completed with undelivered notifications.",
+        "at": 1306.5
+      }
+    ]
+  },
+  "original2": {
+    "errors": [
+      {
+        "message": "ResizeObserver loop completed with undelivered notifications.",
+        "at": 1340.5
+      }
+    ]
+  },
+  "defer1": {
+    "errors": []
+  },
+  "defer2": {
+    "errors": []
+  },
+  "unitMutations": {
+    "coalescing": [
+      "APPLIED if (!active || frame !== null) return -> if (!active) return",
+      " FAIL  src/desktop/split-panes/ui/split-panes.test.tsx > fits outside resize delivery and coalesces notifications before that frame",
+      "      Tests  1 failed | 11 skipped (12)"
+    ],
+    "active": [
+      "APPLIED if (!active || frame !== null) return -> if (frame !== null) return",
+      " FAIL  src/desktop/split-panes/ui/split-panes.test.tsx > retires queued and late fits when the source changes or the grid unmounts",
+      "      Tests  1 failed | 11 skipped (12)"
+    ],
+    "cancel": [
+      "APPLIED if (frame !== null) cancelAnimationFrame(frame) -> // Deliberately retain the queued frame for the mutation probe.",
+      " FAIL  src/desktop/split-panes/ui/split-panes.test.tsx > retires queued and late fits when the source changes or the grid unmounts",
+      "      Tests  1 failed | 11 skipped (12)"
+    ]
+  }
+}

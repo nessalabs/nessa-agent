@@ -284,9 +284,9 @@ fresh while a conversation changes, so a separate-process test can drive
 "subscribe, then copy records from the durable checkpoint whenever they
 change" with the real client, on two paired devices at once. It is
 deliberately minimal: a phone keeps its own continuous lifecycle. No stop
-seam, no reconnect, no timestamps on its lines, no catalogue follow (a paired
-device's `conversation.subscribeList` waits on #724; catalogue freshness is
-`sync-catalogue`).
+seam, no reconnect, no timestamps on its lines, no catalogue follow in this CLI
+(the gateway supports a device's grant-scoped `conversation.subscribeList`;
+this CLI's catalogue freshness remains `sync-catalogue`).
 
 The wake is the gateway's own `conversation.subscribe`, the one live read path
 ([record subscriptions](record-subscriptions.md)). A view frame names the
@@ -508,7 +508,7 @@ The CLI has finite record and catalogue sync, an online record check, offline
 `list`/`show`, explicit reset, and one bounded `follow PROFILE CONVERSATION
 PAGES MAX_PASSES` that follows a conversation through `conversation.subscribe`
 on one connection ([following a conversation](#following-a-conversation)).
-Experiment controls and weak-link shaping remain future #262 work. Data goes to stdout as JSON and tracing to stderr.
+Weak-link and metered scheduling is [weak-link scheduling](weak-link-scheduling.md). `cargo run -p nessa-client-core --example weak_link_measure` prints that harness's JSON. Data goes to stdout as JSON and tracing to stderr.
 Offline cache readability is intentional local policy. Only correlated trusted
 grant/epoch/deletion contact evidence authorizes fencing/purge; generic auth
 failure or network absence supplies no such evidence. The one purge is the

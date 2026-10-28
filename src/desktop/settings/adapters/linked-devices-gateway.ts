@@ -13,6 +13,7 @@
 import {
   NessaMutationError,
   NessaPairingError,
+  PairingEnrollee,
   PairingRefusalCode,
   type AuthApi,
   type ConnectionState,
@@ -41,8 +42,21 @@ import type {
   ReadValue,
   TerminalCause,
 } from "../model/linked-devices"
+import type {
+  TunnelChange,
+  TunnelFailure,
+  TunnelRead,
+  TunnelSaved,
+} from "../model/tunnel"
 
 type OwnerStatus = Awaited<ReturnType<PairingApi["status"]>>
+
+/**
+ * Who a code from this window enrolls: the owner's own phone, which then
+ * reads and writes every chat as the owner, with no per-chat share. The
+ * owner still compares the fingerprint and approves the exact key.
+ */
+const ENROLLEE = { enrollee: PairingEnrollee.OwnerPhone }
 
 /** What Settings asks of the window's gateway client. */
 export interface LinkedDevicesClient {
@@ -75,6 +89,10 @@ export interface LinkedDevicesGateway {
   revoke(credentialId: string): Promise<Outcome<{ credentialId: string }>>
   /** Turn native linking on or off; answered whether or not it is on now. */
   setLinking(enabled: boolean): Promise<Outcome<LinkingChange>>
+  /** The saved web tunnel, without its token, and the running one. */
+  tunnel(): Promise<Outcome<TunnelRead>>
+  /** Change the web tunnel; answered whether or not it applies now. */
+  setTunnel(change: TunnelChange): Promise<Outcome<TunnelSaved>>
 }
 
 /** The pairing refusals, each one sentence in the model. */
@@ -89,6 +107,8 @@ const pairingFailure: Record<PairingRefusal, FailureKind> = {
   [PairingRefusalCode.PairingUnavailable]: "unavailable",
   [PairingRefusalCode.PairingAddressInUse]: "addressInUse",
   [PairingRefusalCode.PairingAuditUnavailable]: "auditUnavailable",
+  [PairingRefusalCode.PairingLinkingOff]: "linkingOff",
+  [PairingRefusalCode.PairingTunnelIncomplete]: "tunnelIncomplete",
   [PairingRefusalCode.Forbidden]: "refused",
   [PairingRefusalCode.Unauthorized]: "unauthorized",
   [PairingRefusalCode.InvalidRequest]: "invalid",
@@ -153,6 +173,42 @@ export function failureOf(error: unknown): Failure {
       return { kind: credentialFailure[code as keyof typeof credentialFailure] }
   }
   return { kind: "unanswered" }
+}
+
+/** The running tunnel's failure in the window's words; one this build does not know is "other". */
+function tunnelFailureOf(failure: string | undefined): TunnelFailure | undefined {
+  switch (failure) {
+    case undefined:
+      return undefined
+    case "unsupported":
+    case "download":
+    case "unverified":
+    case "ingress":
+    case "storage":
+    case "token":
+    case "start":
+      return failure
+    case "not_ready":
+      return "notReady"
+    default:
+      return "other"
+  }
+}
+
+type TunnelAnswer = Awaited<ReturnType<PairingApi["tunnel"]>>
+
+function tunnelOf(answer: TunnelAnswer): TunnelRead {
+  const failure = tunnelFailureOf(answer.failure)
+  return {
+    enabled: answer.enabled,
+    mode: answer.mode,
+    hasToken: answer.hasToken,
+    ingress: answer.ingress,
+    status: answer.status,
+    ...(answer.hostname !== undefined ? { hostname: answer.hostname } : {}),
+    ...(answer.address !== undefined ? { address: answer.address } : {}),
+    ...(failure ? { failure } : {}),
+  }
 }
 
 const unanswered = <T>(): Outcome<T> => ({ ok: false, failure: { kind: "unanswered" } })
@@ -280,7 +336,7 @@ export function linkedDevicesGateway(options: {
       client().then(
         (current) =>
           outcomeOf(async () => {
-            const created = await current.pairing.create()
+            const created = await current.pairing.create(ENROLLEE)
             return { code: created.code, enrollment: await enrollmentOf(created.status) }
           }),
         () => unanswered(),
@@ -306,7 +362,7 @@ export function linkedDevicesGateway(options: {
         return { ok: false, failure: failureOf(error) }
       }
       try {
-        const created = await current.pairing.create()
+        const created = await current.pairing.create(ENROLLEE)
         return {
           ok: true,
           value: { code: created.code, enrollment: await enrollmentOf(created.status) },
@@ -321,6 +377,20 @@ export function linkedDevicesGateway(options: {
           outcomeOf(async () => {
             const changed = await current.pairing.setLinking(enabled)
             return { enabled: changed.enabled, applies: changed.applies }
+          }),
+        () => unanswered(),
+      ),
+    tunnel: () =>
+      client().then(
+        (current) => outcomeOf(async () => tunnelOf(await current.pairing.tunnel())),
+        () => unanswered(),
+      ),
+    setTunnel: (change) =>
+      client().then(
+        (current) =>
+          outcomeOf(async () => {
+            const saved = await current.pairing.setTunnel(change)
+            return { enabled: saved.enabled, mode: saved.mode, applies: saved.applies }
           }),
         () => unanswered(),
       ),

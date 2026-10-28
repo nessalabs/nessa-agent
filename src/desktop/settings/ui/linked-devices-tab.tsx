@@ -5,8 +5,9 @@
  * kit's: this screen only wires them to `pairing.*` and says what went wrong.
  * With no gateway — the sample preview — the page stays pending.
  *
- * The phone's scanner, and how a phone finds the gateway, are not this
- * screen. The orbs carry the same 8-character code the gateway showed.
+ * Pair a device is one row; the code it opens is drawn in a modal, beside
+ * the one signal orb that carries the same 8-character code. The phone's
+ * scanner, and how a phone finds the gateway, are not this screen.
  */
 import {
   createContext,
@@ -14,14 +15,16 @@ import {
   useEffect,
   useReducer,
   useRef,
+  useState,
   type ReactNode,
 } from "react"
+import { Dialog } from "@nessa-ui/react/dialog"
 import { KeyFingerprint } from "@nessa-ui/react/key-fingerprint"
 import { PairingCode } from "@nessa-ui/react/pairing-code"
-import { QrOrb } from "@nessa-ui/react/qr-orb"
 import { SettingsGroup, SettingsRow } from "@nessa-ui/react/settings-group"
 import { SignalOrb } from "@nessa-ui/react/signal-orb"
 import { Switch } from "@nessa-ui/react/switch"
+import { useNow } from "../../../clock"
 import { linkedOn } from "../../model/linked-device"
 import type { LinkedDevicesGateway } from "../adapters/linked-devices-gateway"
 import {
@@ -40,9 +43,11 @@ import {
   type LinkedDevice,
   type LinkedDevicesEvent,
   type LinkedDevicesState,
+  type OpenCode,
   type WaitingDevice,
 } from "../model/linked-devices"
 import { FoundSetting } from "./settings-controls"
+import { TunnelGroup } from "./tunnel-group"
 
 /** The window's pairing gateway, given by composition (`main.tsx`); none without one. */
 const LinkedDevicesContext = createContext<LinkedDevicesGateway | undefined>(undefined)
@@ -61,11 +66,11 @@ export function LinkedDevicesProvider({
   )
 }
 
-const orbSize = 168
+const orbSize = 176
 
 /**
  * The gateway's code is eight symbols with a hyphen between the groups
- * (`ABCD-2345`). PairingCode groups those eight itself, and an orb carries
+ * (`ABCD-2345`). PairingCode groups those eight itself, and the orb carries
  * only them.
  */
 function pairingSymbols(code: string): string {
@@ -179,30 +184,6 @@ function useSwitchWait(
   }, [switching, gateway, dispatch])
 }
 
-/**
- * Puts focus on Cancel once a code is shown and Cancel can be used. The
- * read that follows create leaves Cancel resting until it returns, and a
- * disabled button does not take focus.
- */
-function useCodeFocus(state: LinkedDevicesState) {
-  const container = useRef<HTMLDivElement>(null)
-  const aimed = useRef(false)
-  useEffect(() => {
-    if (state.code === null) {
-      aimed.current = false
-      return
-    }
-    if (aimed.current) return
-    const button = container.current?.querySelector<HTMLButtonElement>(
-      '[data-linked-action="cancel"]',
-    )
-    if (!button || button.disabled) return
-    button.focus()
-    aimed.current = true
-  })
-  return container
-}
-
 function ManagedDevices({
   gateway,
   found,
@@ -219,16 +200,64 @@ function ManagedDevices({
   useRequests(gateway, state, dispatch)
   usePoll(gateway, state, dispatch)
   useSwitchWait(gateway, state, dispatch)
-  const container = useCodeFocus(state)
+  // The invitation whose code the person closed the modal on. The code stays
+  // open on the gateway; the row offers it again. A new code opens the modal.
+  const [closed, setClosed] = useState<string | null>(null)
+  const shown =
+    state.code !== null && state.code.invitationId !== closed ? state.code : null
+  const page = useRef<HTMLDivElement>(null)
+  // The control that opened the modal is gone by the time it closes (Pair
+  // becomes Show code, Show code becomes Pair after a cancel): focus returns
+  // to whatever the row offers now.
+  // While the read after a cancel is out, the row's buttons rest disabled
+  // and cannot take focus: it waits on the row itself, then moves to the
+  // control once one can be used.
+  const parked = useRef(false)
+  const returnFocus = () => {
+    const row = page.current?.querySelector<HTMLElement>("[data-pairing-row]")
+    const control = row?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+    parked.current = !control
+    ;(control ?? row)?.focus()
+  }
+  useEffect(() => {
+    if (!parked.current) return
+    const row = page.current?.querySelector<HTMLElement>("[data-pairing-row]")
+    // Focus that has moved on since is the person's; leave it.
+    if (!row || row.ownerDocument.activeElement !== row) {
+      parked.current = false
+      return
+    }
+    const control = row.querySelector<HTMLButtonElement>("button:not(:disabled)")
+    if (!control) return
+    parked.current = false
+    control.focus()
+  })
   const phase =
     state.connection === "unreachable" && state.linking === "unknown"
       ? "unreachable"
       : state.linking === "unknown"
         ? "checking"
         : state.linking
+  // How the last request settled. While the modal is open it is said there,
+  // since the page behind it is hidden from sight and from assistive technology.
+  const notice =
+    state.switching !== null ? null : state.notice &&
+      state.linking !== "off" &&
+      state.linking !== "refused" &&
+      state.linking !== "unknown" ? (
+      <p className="settings-footnote" role="status" data-linked-notice>
+        {state.connection === "unreachable" && state.notice.kind === "unreachable"
+          ? sentences.unreachable
+          : noticeText[state.notice.kind]}
+      </p>
+    ) : state.connection === "unreachable" ? (
+      <p className="settings-footnote" role="status" data-linked-notice>
+        {sentences.unreachable}
+      </p>
+    ) : null
   return (
     <div
-      ref={container}
+      ref={page}
       className="settings-group linked-devices"
       data-setting="linked-devices"
       data-found={found || undefined}
@@ -240,25 +269,29 @@ function ManagedDevices({
       <LinkingGroup state={state} dispatch={dispatch} />
       {state.linking === "on" ? (
         <>
-          <PairingGroup state={state} dispatch={dispatch} />
-          <WaitingGroup state={state} dispatch={dispatch} />
+          <PairingGroup
+            state={state}
+            dispatch={dispatch}
+            onShow={() => setClosed(null)}
+          />
+          <PairingDialog
+            state={state}
+            dispatch={dispatch}
+            shown={shown}
+            notice={notice}
+            onClose={() => setClosed(state.code?.invitationId ?? null)}
+            onReturnFocus={returnFocus}
+          />
+          <WaitingGroup
+            state={state}
+            dispatch={dispatch}
+            inDialog={shown?.invitationId ?? null}
+          />
           <DevicesGroup state={state} dispatch={dispatch} />
+          {state.switching === null ? <TunnelGroup gateway={gateway} /> : null}
         </>
       ) : null}
-      {state.switching !== null ? null : state.notice &&
-        state.linking !== "off" &&
-        state.linking !== "refused" &&
-        state.linking !== "unknown" ? (
-        <p className="settings-footnote" role="status" data-linked-notice>
-          {state.connection === "unreachable" && state.notice.kind === "unreachable"
-            ? sentences.unreachable
-            : noticeText[state.notice.kind]}
-        </p>
-      ) : state.connection === "unreachable" ? (
-        <p className="settings-footnote" role="status" data-linked-notice>
-          {sentences.unreachable}
-        </p>
-      ) : null}
+      {shown === null ? notice : null}
     </div>
   )
 }
@@ -312,96 +345,33 @@ function LinkingGroup({
 function PairingGroup({
   state,
   dispatch,
+  onShow,
 }: {
   state: LinkedDevicesState
   dispatch: Dispatch
+  onShow: () => void
 }) {
   const busy = state.pending !== null
+  const open = state.code?.invitationId ?? state.hiddenInvitation
   return (
-    <SettingsGroup title="Pair a device">
-      {state.code ? (
-        <SettingsRow
-          label="Pairing code"
-          detail="Enter it on the device, or scan either orb."
-        >
-          <PairingCode
-            code={pairingSymbols(state.code.code)}
-            expiresAt={state.code.expiresAtMs}
-            state={state.code.state}
-            onExpire={() => dispatch({ type: "expired" })}
-            actions={
-              <span className="linked-actions">
-                <button
-                  type="button"
-                  className="settings-button"
-                  data-linked-action="refresh"
-                  disabled={!canReplace(state)}
-                  onClick={() => dispatch({ type: "refresh" })}
-                >
-                  {sentences.refresh}
-                </button>
-                <button
-                  type="button"
-                  className="settings-button"
-                  data-linked-action="cancel"
-                  disabled={!canReplace(state)}
-                  onClick={() => dispatch({ type: "cancel" })}
-                >
-                  {sentences.cancel}
-                </button>
-              </span>
-            }
-          />
-          {state.code.state === "open" ? (
-            <span className="linked-orbs">
-              <SignalOrb
-                code={pairingSymbols(state.code.code)}
-                size={orbSize}
-                still
-                aria-label="Signal orb"
-              />
-              <QrOrb
-                value={pairingSymbols(state.code.code)}
-                size={orbSize}
-                aria-label="QR orb"
-              />
-            </span>
-          ) : null}
-        </SettingsRow>
-      ) : state.hiddenInvitation ? (
-        <SettingsRow
-          label="Pairing code"
-          detail={sentences.codeHidden}
-          control={
-            <span className="linked-actions">
-              <button
-                type="button"
-                className="settings-button"
-                data-linked-action="refresh"
-                data-invitation={state.hiddenInvitation}
-                disabled={!canReplace(state)}
-                onClick={() => dispatch({ type: "refresh" })}
-              >
-                {sentences.refresh}
-              </button>
-              <button
-                type="button"
-                className="settings-button"
-                data-linked-action="cancel"
-                data-invitation={state.hiddenInvitation}
-                disabled={!canReplace(state)}
-                onClick={() => dispatch({ type: "cancel" })}
-              >
-                {sentences.cancel}
-              </button>
-            </span>
-          }
-        />
-      ) : (
-        <SettingsRow
-          label="Pair a device"
-          detail="Shows a one-use code and two orbs. The code is shown once."
-          control={
+    <SettingsGroup>
+      <SettingsRow
+        label={sentences.pair}
+        detail={
+          state.code?.state === "used"
+            ? sentences.codeUsed
+            : state.code?.state === "cancelled"
+              ? sentences.codeCancelled
+              : state.code
+                ? sentences.codeOpen
+                : state.hiddenInvitation
+                  ? sentences.codeHidden
+                  : sentences.pairDetail
+        }
+        data-pairing-row
+        tabIndex={-1}
+        control={
+          open === null ? (
             <button
               type="button"
               className="settings-button settings-button-primary"
@@ -411,24 +381,168 @@ function PairingGroup({
             >
               {sentences.pair}
             </button>
-          }
-        />
-      )}
+          ) : (
+            <span className="linked-actions">
+              {state.code ? (
+                <button
+                  type="button"
+                  className="settings-button settings-button-primary"
+                  data-linked-action="show"
+                  onClick={onShow}
+                >
+                  {sentences.showCode}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="settings-button"
+                  data-linked-action="refresh"
+                  data-invitation={open}
+                  disabled={!canReplace(state)}
+                  onClick={() => dispatch({ type: "refresh" })}
+                >
+                  {sentences.refresh}
+                </button>
+              )}
+              <button
+                type="button"
+                className="settings-button"
+                data-linked-action="cancel"
+                data-invitation={open}
+                disabled={!canReplace(state)}
+                onClick={() => dispatch({ type: "cancel" })}
+              >
+                {sentences.cancel}
+              </button>
+            </span>
+          )
+        }
+      />
     </SettingsGroup>
   )
 }
 
-function WaitingGroup({
+/**
+ * The code Pair a device opened, in a modal: the one signal orb on the left,
+ * live, and the code with its clock and actions beside it. Once a device
+ * uses the code, its approval is asked here too, so pairing ends where it
+ * began. Closing the modal leaves the code open; the row shows it again.
+ */
+function PairingDialog({
   state,
   dispatch,
+  shown,
+  notice,
+  onClose,
+  onReturnFocus,
 }: {
   state: LinkedDevicesState
   dispatch: Dispatch
+  shown: OpenCode | null
+  notice: ReactNode
+  onClose: () => void
+  onReturnFocus: () => void
 }) {
-  if (state.waiting.length === 0) return null
+  // The code whose clock ran out here. Until the gateway records it the
+  // reducer still calls it open, but a spent code draws no orb to scan.
+  const [expired, setExpired] = useState<string | null>(null)
+  // The window's injected clock, read again each second while the modal is
+  // up, so a code that crosses its deadline drops its orb at the deadline
+  // tick even when the kit's own countdown has not reported it yet.
+  const now = useNow(1_000)
+  const symbols = shown ? pairingSymbols(shown.code) : ""
+  const live =
+    shown !== null &&
+    shown.state === "open" &&
+    shown.expiresAtMs > now &&
+    expired !== shown.invitationId
+  const waiting = shown
+    ? state.waiting.filter((device) => device.invitationId === shown.invitationId)
+    : []
+  return (
+    <Dialog
+      open={shown !== null}
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+      title={sentences.pairingTitle}
+      description={sentences.pairingDetail}
+      size="lg"
+      className="linked-pairing-dialog"
+      onReturnFocus={onReturnFocus}
+    >
+      {shown ? (
+        <div className="linked-pairing" data-linked-pairing data-state={shown.state}>
+          {live ? (
+            <SignalOrb code={symbols} size={orbSize} aria-label="Signal orb" />
+          ) : null}
+          <div className="linked-pairing-code">
+            <PairingCode
+              code={symbols}
+              expiresAt={shown.expiresAtMs}
+              state={shown.state}
+              onExpire={() => {
+                setExpired(shown.invitationId)
+                dispatch({ type: "expired" })
+              }}
+              actions={
+                <span className="linked-actions">
+                  <button
+                    type="button"
+                    className="settings-button"
+                    data-linked-action="refresh"
+                    disabled={!canReplace(state)}
+                    onClick={() => dispatch({ type: "refresh" })}
+                  >
+                    {sentences.refresh}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-button"
+                    data-linked-action="cancel"
+                    disabled={!canReplace(state)}
+                    onClick={() => dispatch({ type: "cancel" })}
+                  >
+                    {sentences.cancel}
+                  </button>
+                </span>
+              }
+            />
+          </div>
+          {waiting.length > 0 ? (
+            <SettingsGroup className="linked-pairing-waiting">
+              {waiting.map((device) => (
+                <WaitingRow
+                  key={device.invitationId}
+                  device={device}
+                  state={state}
+                  dispatch={dispatch}
+                />
+              ))}
+            </SettingsGroup>
+          ) : null}
+          {notice ? <div className="linked-pairing-notice">{notice}</div> : null}
+        </div>
+      ) : null}
+    </Dialog>
+  )
+}
+
+/** Devices waiting for approval, less the one the pairing modal asks about. */
+function WaitingGroup({
+  state,
+  dispatch,
+  inDialog,
+}: {
+  state: LinkedDevicesState
+  dispatch: Dispatch
+  inDialog: string | null
+}) {
+  const waiting = state.waiting.filter((device) => device.invitationId !== inDialog)
+  if (waiting.length === 0) return null
   return (
     <SettingsGroup title="Waiting for approval">
-      {state.waiting.map((device) => (
+      {waiting.map((device) => (
         <WaitingRow
           key={device.invitationId}
           device={device}
@@ -535,7 +649,7 @@ function DeviceRow({
   const issued = linkedOn(device.issuedAt)
   return (
     <SettingsRow
-      label="Linked device"
+      label={device.fullAccess ? sentences.fullAccessDevice : "Linked device"}
       detail={confirming ? sentences.revokeAsk : `Linked ${issued}`}
       data-credential={device.credentialId}
       control={

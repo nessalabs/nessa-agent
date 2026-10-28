@@ -166,14 +166,34 @@
   container: workspace-docked / inline-size;
 }
 
+/*
+ * While the panes are alone at the window's left edge, the window's corner
+ * mark — the side rail's toggle, closed rail (`side-rail.css`) — stands over
+ * the bottom-left pane's foot. That pane's dock keeps clear of it: its
+ * composer starts one gutter past the mark, never under it. `--ci` 0 and the
+ * last row is that pane; every other pane's clearance is nothing.
+ */
+.workspace-window[data-rail="closed"] .workspace[data-panes-alone] .workspace-pane {
+  --workspace-corner-mark: calc(
+    max(0, 1 - var(--ci)) * max(0, 1 - (var(--rn) - 1 - var(--ri))) *
+      (var(--rail-column) + var(--desktop-control-size) + var(--desktop-gutter))
+  );
+}
+
 @container workspace-docked (width >= 0) {
-  /* The composer sits at the foot of the pane, a little tighter than on home. */
+  /* The composer sits at the foot of the pane, a little tighter than on home.
+     A centred dock already stands that far in; a narrow one steps past the
+     corner mark (above). */
   .workspace-dock {
     width: 100%;
     max-width: 752px;
     flex: none;
     margin: 0 auto;
     padding: 0 16px 16px;
+    padding-left: max(
+      16px,
+      var(--workspace-corner-mark, 0px) - max(0px, (100cqw - 752px) / 2)
+    );
   }
 
   .workspace-dock .desktop-composer {
@@ -216,6 +236,7 @@
   @container workspace-pane (max-height: 219px) {
     .workspace-dock {
       padding: 0 6px 6px;
+      padding-left: max(6px, var(--workspace-corner-mark, 0px));
     }
 
     .workspace-dock .desktop-composer {
@@ -249,6 +270,94 @@
 
     .workspace-conversation .workspace-transcript {
       min-height: 0;
+    }
+  }
+
+  /*
+   * A short pane of several that you are not in keeps its room for the
+   * conversation (`paneLimits.quietComposerBelow`): its composer is one line,
+   * with no choices — the reply so far, and Send — and while its turn runs,
+   * Stop alone in the dock's corner, so the turn can still be stopped. Back
+   * in the pane, the whole composer grows out of that corner.
+   */
+  @container workspace-pane (max-height: 419px) {
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 4px 4px 12px;
+      border-radius: var(--desktop-radius-md);
+      animation: workspace-composer-quiet var(--desktop-fast) var(--desktop-out) both;
+    }
+
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer-body {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer
+      textarea {
+      min-height: 20px;
+      max-height: 20px;
+      overflow: hidden;
+      font-size: var(--desktop-text-body);
+    }
+
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer-row {
+      flex: none;
+      margin: 0;
+      opacity: 1;
+    }
+
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      :is(
+        .desktop-composer-controls:not(:last-child),
+        .desktop-composer-controls:last-child > :not(.desktop-send)
+      ) {
+      display: none;
+    }
+
+    /* Running: Stop alone, in the corner, on no card. */
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer[data-running] {
+      justify-content: flex-end;
+      padding: 0;
+      background: none;
+      box-shadow: none;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    .split-panes-grid[data-split-multi]
+      .workspace-pane:not([data-focused])
+      .workspace-dock
+      .desktop-composer[data-running]
+      .desktop-composer-body {
+      display: none;
+    }
+
+    /* Back in the pane: the whole composer, grown out of the corner. */
+    .split-panes-grid[data-split-multi]
+      .workspace-pane[data-focused]
+      .workspace-dock
+      .desktop-composer {
+      animation: workspace-composer-grow var(--desktop-base) var(--desktop-out) both;
     }
   }
 
@@ -318,4 +427,41 @@
     flex-wrap: wrap;
     row-gap: 4px;
   }
+}
+
+/* Up to the window's top edge the picture is as bright as below: it fades
+   only out toward the sides and into the pane. */
+.workspace-pane-home > .desktop-home:not([data-page]) .desktop-header-image {
+  mask-image:
+    linear-gradient(to right, transparent, black 8%, black 92%, transparent),
+    linear-gradient(to bottom, black 72%, transparent);
+}
+
+@keyframes workspace-composer-grow {
+  from {
+    clip-path: inset(calc(100% - 36px) 0 0 calc(100% - 36px) round 18px);
+  }
+  to {
+    clip-path: inset(0 round var(--desktop-radius-xl));
+  }
+}
+
+@keyframes workspace-composer-quiet {
+  from {
+    opacity: 0.4;
+  }
+}
+
+/* Less motion: the composer changes at once, quiet or whole. */
+:root[data-motion="reduced"]
+  .split-panes-grid[data-split-multi]
+  .workspace-pane
+  .workspace-dock
+  .desktop-composer {
+  animation: none;
+}
+
+.workspace-pane-main-agent {
+  color: var(--muted-foreground);
+  white-space: nowrap;
 }

@@ -1,6 +1,7 @@
 use crate::cli::application::{
-    issue_token, BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest, MAX_SAFE_TIMESTAMP,
+    issue_token, BrowserToken, CliError, Gateway, GatewayIdentity, TokenRequest,
 };
+use nessa_client_core::local_product::MAX_SAFE_TIMESTAMP;
 struct Fake {
     identity: GatewayIdentity,
     requests: Vec<TokenRequest>,

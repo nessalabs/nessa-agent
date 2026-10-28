@@ -10,6 +10,7 @@ use crate::application::agent_execution::providers::{
 use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
+use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::effective_capabilities::value_objects::{
     BindingRestrictions, EffectiveCapabilities,
@@ -24,6 +25,10 @@ use crate::infrastructure::acp::sessions::{
 use crate::infrastructure::process::ProcessScope;
 use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
 use tokio::process::Command;
+
+/// The provider name every session this binding opens records in its
+/// history, as its provider identity.
+pub const PROVIDER_NAME: &str = "claude-acp";
 
 /// Immutable composition factory; opening twice creates independent process scopes.
 #[derive(Clone)]
@@ -122,7 +127,7 @@ impl ClaudeAcpProvider {
                 "selected model does not support tools".into(),
             ));
         }
-        ProviderIdentity::new("claude-acp", capabilities.model().model_id(), "")?;
+        ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
             capabilities,
@@ -232,16 +237,23 @@ impl ClaudeAcpProvider {
     fn launch_command(&self) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
-            .args(&self.config.arguments)
+            .args(self.config.command_arguments())
             .current_dir(&self.config.workspace)
             .env_clear()
             .envs(&self.config.environment)
+            .envs(&self.config.runtime_environment)
             .envs(&self.config.credential_environment)
             .envs(self.launch_environment());
         command
     }
 }
 impl AgentProvider for ClaudeAcpProvider {
+    fn restores_saved_context(&self, _: &ExecutionSessionId, has_invocations: bool) -> bool {
+        // Claude persists native context on its first prompt, not session/new.
+        // An untouched context can be replaced without dropping admitted work.
+        // Used histories still require a successful native resume.
+        has_invocations
+    }
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
     }
@@ -283,9 +295,12 @@ impl AgentProvider for ClaudeAcpProvider {
         normalized.traces = traces.unwrap_or_else(|| self.traces.clone());
         Ok(Arc::new(normalized))
     }
+    fn launch_fingerprint(&self) -> String {
+        identity::launch_fingerprint(&self.config)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
-            "claude-acp",
+            PROVIDER_NAME,
             self.capabilities.model().model_id(),
             identity::fingerprint(
                 &self.config,
@@ -299,7 +314,9 @@ impl AgentProvider for ClaudeAcpProvider {
         &self.capabilities
     }
     fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
-        let config = self.config.on_host(host.workspace().to_path_buf());
+        let config = self
+            .config
+            .on_host(host.workspace().to_path_buf(), host.mcp_relay());
         config.validate()?;
         Ok(Arc::new(Self {
             config,
@@ -314,10 +331,15 @@ impl AgentProvider for ClaudeAcpProvider {
         // The process start reads the switch. This open does not snapshot it.
         let profile = self.launch_profile();
         let traces = self.traces.clone();
+        // This open's credentials, read once for every start of its process.
+        let opened = Self {
+            config: self.config.with_open_credentials(),
+            ..self.clone()
+        };
         Box::pin(async move {
             acp_binding::open(
-                self.process_factory(),
-                self.config.clone(),
+                opened.process_factory(),
+                opened.config.clone(),
                 self.capabilities.clone(),
                 profile,
                 self.audit.clone(),

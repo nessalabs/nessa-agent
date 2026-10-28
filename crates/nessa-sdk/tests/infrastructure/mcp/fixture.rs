@@ -11,6 +11,7 @@ use crate::infrastructure::acp::sessions::StdioMcpServer;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashSet},
+    ffi::OsString,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -147,6 +148,8 @@ pub(super) struct FixtureLauncher {
     pub launched: Mutex<Vec<Control>>,
     /// When set, launching fails with this.
     pub refuse: Mutex<Option<McpError>>,
+    /// The environment each server was launched with, in order.
+    pub environments: Mutex<Vec<BTreeMap<OsString, OsString>>>,
 }
 impl FixtureLauncher {
     pub fn new(behaviour: Behaviour) -> Arc<Self> {
@@ -154,6 +157,7 @@ impl FixtureLauncher {
             behaviour: Mutex::new(behaviour),
             launched: Mutex::default(),
             refuse: Mutex::default(),
+            environments: Mutex::default(),
         })
     }
     /// The `index`th launched server's control: one per session.
@@ -165,10 +169,14 @@ impl FixtureLauncher {
     }
 }
 impl Launcher for FixtureLauncher {
-    fn launch(&self, _: &McpServerLaunch) -> Result<Launched, McpError> {
+    fn launch(&self, launch: &McpServerLaunch) -> Result<Launched, McpError> {
         if let Some(error) = self.refuse.lock().unwrap().clone() {
             return Err(error);
         }
+        self.environments
+            .lock()
+            .unwrap()
+            .push(launch.environment.clone());
         let (client_input, server_output) = tokio::io::duplex(64 * 1024);
         let (server_input, client_output) = tokio::io::duplex(64 * 1024);
         let (to_client, from_test) = mpsc::unbounded_channel();

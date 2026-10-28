@@ -217,6 +217,9 @@ impl OwnerPhoneOriginalStore for Refusing {
     fn load_original(&self) -> Result<Option<OwnerPhonePrivateOriginal>, PrivateStateError> {
         panic!("invalid pin cannot read")
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        panic!("invalid pin cannot read")
+    }
 }
 #[test]
 fn invalid_pin_refuses_before_any_private_effect_or_entropy() {
@@ -324,6 +327,9 @@ impl OwnerPhoneOriginalStore for Reported {
     fn load_original(&self) -> Result<Option<OwnerPhonePrivateOriginal>, PrivateStateError> {
         Ok(None)
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        Ok(false)
+    }
 }
 #[test]
 fn contradictory_creation_refuses_before_entropy_and_uncertain_publication_stays_typed() {
@@ -373,6 +379,9 @@ impl OwnerPhoneOriginalStore for RaceStore {
             self.read_barrier.wait();
         }
         Ok(saved)
+    }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
     }
 }
 #[test]

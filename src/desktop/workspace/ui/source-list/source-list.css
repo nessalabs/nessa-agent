@@ -5,16 +5,20 @@
  */
 
 /*
- * Folding the sidebar is transform only. A closed sidebar leaves the flow at
- * once, so what is beside it takes its new place in one layout and travels
- * there by transform (FLIP, `split-panes/adapters/dom/flip.tsx`); the sidebar
- * itself slides out on its own without fading, and
- * hides once it is off-screen.
+ * Folding the sidebar is transform only. A closed sidebar leaves the flow,
+ * so what is beside it takes its new place in one layout and travels there
+ * by transform (FLIP, `split-panes/adapters/dom/flip.tsx`); the sidebar
+ * itself slides out on its own without fading, and hides once it is
+ * off-screen. A pane change that folds it waits (`data-spare-held`, below):
+ * the sidebar stays in the row until the new boxes paint, and the two
+ * changes share that one layout.
  */
 .workspace-sidebar {
   position: relative;
   display: flex;
-  width: var(--workspace-sidebar-width);
+  /* The gutter it used to stand in is now inside it: the material reaches the
+     window's edge, as a macOS sidebar does, with the same room for its rows. */
+  width: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
   flex: none;
   flex-direction: column;
   /* A wash rather than a framed pane, continuous with the window's light. */
@@ -30,7 +34,7 @@
   -webkit-user-select: none;
   user-select: none;
   transition:
-    transform var(--desktop-slow) var(--desktop-out),
+    transform var(--desktop-drawer) var(--desktop-ease),
     visibility 0s;
 }
 
@@ -39,16 +43,35 @@
   top: 0;
   bottom: 0;
   left: 0;
-  transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
+  /* Exactly as far as the column beside it travels — its own width and the
+     resize edge's gutter — so the two move as one, with no gap opening
+     between them; the workspace clips what passes its edge. */
+  transform: translateX(calc(-100% - var(--desktop-gutter)));
   visibility: hidden;
   transition:
-    transform var(--desktop-slow) var(--desktop-out),
-    visibility 0s linear var(--desktop-slow);
+    transform var(--desktop-drawer) var(--desktop-ease),
+    visibility 0s linear var(--desktop-drawer);
+}
+
+/*
+ * A pane change folds the sidebar a frame before the grid paints the new
+ * boxes (`data-spare-held`, `split-panes.tsx`). Leaving the row on that
+ * frame widens the one pane. It stays in the row, hidden, until the boxes
+ * paint, and the two changes share one layout.
+ */
+.workspace[data-spare-held][data-folding][data-sidebar="closed"] .workspace-sidebar {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  visibility: visible;
 }
 
 /*
  * Revealed from the window's edge while folded (`useEdgePeek`, the same
- * reveal as the classic shell and Settings): it slides in over the panes,
+ * reveal as Settings'): it slides in over the panes,
  * more opaque than when docked since there is content under it, and lifted
  * with a deeper shadow. Its opaque fill keeps text underneath out of the peek.
  */

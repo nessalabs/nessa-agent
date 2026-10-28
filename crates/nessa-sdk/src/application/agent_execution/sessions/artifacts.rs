@@ -9,13 +9,16 @@
 //! ```
 //!
 //! Arrows are the one rule both paths ask: a record is committed only while
-//! the lease it names is the conversation's latest and still live, and its
-//! actor is that lease's issuer or the person of the turn it names, and the
-//! same rule reads it back. The list only grows; a
+//! the lease it names is the conversation's latest and still live, or a
+//! command running under that lease, and its actor is that lease's issuer
+//! or the person of the turn it names — for a command, the person the
+//! command runs for — and the same rule reads it back. The list only grows; a
 //! record past [`ArtifactRecord::MAX_PER_CONVERSATION`] is refused, never
 //! made room for. An artifact recorded under a lease this build cannot read is
 //! kept as written, as that lease's own records are.
-use super::{CurrentLeaseState, EnvironmentPath, LeaseRecord, SessionSnapshot, StorageError};
+use super::{
+    CurrentLease, CurrentLeaseState, EnvironmentPath, LeaseRecord, SessionSnapshot, StorageError,
+};
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
@@ -136,8 +139,9 @@ impl PublishedFile {
 /// hold is later let go.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactRecord {
-    /// The lease it was published under: the conversation's latest when it
-    /// was recorded, and live then.
+    /// The lease it was published under: the conversation's latest agent
+    /// lease when it was recorded, or a command running under that lease,
+    /// and live then.
     pub lease: LeaseId,
     /// The turn that was running when it was recorded, if one was. It names
     /// a turn the conversation accepted.
@@ -189,21 +193,34 @@ impl ArtifactRecord {
             .lease
             .as_ref()
             .ok_or(ArtifactRefusal::NotThisLease)?;
-        match current.state() {
+        let under_command = match current.state() {
             CurrentLeaseState::Unreadable { .. } => return Err(ArtifactRefusal::LeaseUnreadable),
             CurrentLeaseState::Refused { .. } => return Err(ArtifactRefusal::NotThisLease),
-            CurrentLeaseState::Held(lease)
-                if lease.id() != &self.lease || lease.phase() != LeasePhase::Live =>
-            {
-                return Err(ArtifactRefusal::NotThisLease);
+            CurrentLeaseState::Held(lease) => {
+                if lease.phase() != LeasePhase::Live {
+                    return Err(ArtifactRefusal::NotThisLease);
+                }
+                if lease.id() == &self.lease {
+                    false
+                } else if lease.commands().contains(&self.lease) {
+                    true
+                } else {
+                    return Err(ArtifactRefusal::NotThisLease);
+                }
             }
-            CurrentLeaseState::Held(_) => {}
-        }
+        };
         let turn = match &self.turn {
             Some(turn) => Some(turn_actor(turn).ok_or(ArtifactRefusal::UnknownTurn)?),
             None => None,
         };
-        if !self.asked_by(current.issued_by(), turn.as_ref()) {
+        // A command's file names the person that command runs for. An agent
+        // lease's file names its issuer, or the person of the turn it names.
+        let asked = if under_command {
+            command_actor(current, &self.lease) == Some(&self.actor)
+        } else {
+            self.asked_by(current.issued_by(), turn.as_ref())
+        };
+        if !asked {
             return Err(ArtifactRefusal::NotThisLease);
         }
         // Last, so a refusal for room is one the record would otherwise
@@ -250,13 +267,22 @@ impl ArtifactRecord {
     }
 }
 
+/// Who `command` runs for, while its `CommandIssued` is still in `current`.
+fn command_actor<'a>(current: &'a CurrentLease, command: &LeaseId) -> Option<&'a ActionContext> {
+    current.records().iter().find_map(|record| match record {
+        LeaseRecord::CommandIssued { lease, actor, .. } if lease == command => Some(actor),
+        _ => None,
+    })
+}
+
 /// Why [`ArtifactRecord::admit`] refused a record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ArtifactRefusal {
     /// The conversation already records its most artifacts.
     Full,
-    /// The record's lease is not the conversation's latest or is not live,
-    /// or its actor is neither that lease's issuer nor its turn's person.
+    /// The record's lease is not the conversation's latest live agent lease
+    /// or a command running under it, or its actor is not someone who asked
+    /// under that lease.
     NotThisLease,
     /// The conversation's latest lease is of a kind this build cannot read.
     LeaseUnreadable,
@@ -268,7 +294,7 @@ impl fmt::Display for ArtifactRefusal {
         f.write_str(match self {
             Self::Full => "the conversation records its most artifacts",
             Self::NotThisLease => {
-                "it names a lease that is not the latest live one, or nobody who asked under it"
+                "it names a lease that is not the latest live one or a command running under it, or nobody who asked under it"
             }
             Self::LeaseUnreadable => "the latest lease cannot be read",
             Self::UnknownTurn => "it names a turn the conversation did not accept",
@@ -278,10 +304,11 @@ impl fmt::Display for ArtifactRefusal {
 
 /// Whether every artifact `snapshot` saves stays within the conversation's
 /// bound, names a turn it accepted, and, when it names the snapshot's latest
-/// lease, was published under it as [`ArtifactRecord::admit`] allows: that
-/// lease was issued, and the record's actor is its issuer or the person of
-/// the record's turn. A saved snapshot keeps only the
-/// latest lease, so an artifact under an earlier one is kept as written; a
+/// lease or a command that lease still records, was published under it as
+/// [`ArtifactRecord::admit`] allows. A command still recorded
+/// (`CommandIssued` kept until the command ends) must name that command's
+/// actor. A saved snapshot keeps only the latest lease, so an artifact under
+/// an earlier one, or under a command that has ended, is kept as written; a
 /// record log replays each beside its lease and checks it in full.
 pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
     if snapshot.artifacts.len() > ArtifactRecord::MAX_PER_CONVERSATION {
@@ -324,7 +351,13 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
             .turn
             .as_ref()
             .and_then(|turn| accepted.get(turn).copied());
-        &artifact.lease == lease && !artifact.asked_by(issuer, turn)
+        if &artifact.lease == lease {
+            return !artifact.asked_by(issuer, turn);
+        }
+        // A command still in the saved lease: its actor has to be the one
+        // the command was issued for. Once the command ends, that record is
+        // gone and the file is historical.
+        command_actor(latest, &artifact.lease).is_some_and(|actor| actor != &artifact.actor)
     });
     if unproven {
         return Err(StorageError::Corrupt(format!(

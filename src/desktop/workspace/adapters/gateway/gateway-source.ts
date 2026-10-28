@@ -110,6 +110,7 @@ import {
   NessaRpcError,
   NessaSessionUnavailableError,
   subscriptionLimits,
+  type ChannelApi,
   type ConnectionState,
   type ConversationApi,
   conversationTitle,
@@ -140,9 +141,11 @@ import {
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { Transcript } from "../../model/transcript"
-import type { SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
+import type { Channel, SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
 import {
+  channelFrom,
   gatewayChannel,
+  gatewayChannelId,
   gatewaySection,
   modelFor,
   REMEMBER_ALLOW_OPTION,
@@ -167,13 +170,18 @@ export interface GatewayClient {
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
+    | "setUsageLimitAutoContinue"
     | "setModel"
+    | "switchAgent"
+    | "fork"
     | "read"
     | "archive"
     | "rename"
     | "delete"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
+  /** The person's channels, which the index lists and a new session names. */
+  readonly channels: Pick<ChannelApi, "list" | "create">
   /** Stops the active execution, which the gateway names from its own peek. */
   stopThread(threadId: string): Promise<StopThreadResult>
   readonly connectionState: ConnectionState
@@ -328,6 +336,8 @@ interface Waiter<T> {
  */
 interface Followed<T> {
   handle: Subscription | undefined
+  /** The ACK of a live open's close, retained across superseding opens. */
+  closing: Promise<void> | undefined
   /**
    * Gives the current open up: closed now, or once answered. The client sends
    * the next subscribe to this target only after that close (D23).
@@ -348,6 +358,7 @@ interface Followed<T> {
 
 const followed = <T>(): Followed<T> => ({
   handle: undefined,
+  closing: undefined,
   giveUp: undefined,
   applied: false,
   opening: undefined,
@@ -364,6 +375,15 @@ const followed = <T>(): Followed<T> => ({
  */
 const letGo = <T>(follow: Followed<T>) => {
   follow.token = {}
+  // Closing explicitly removes the live handle's abort listener. Its ACK
+  // must arrive before the next subscribe, as for an aborted pending open.
+  if (follow.handle) {
+    const closing = follow.handle.close()
+    follow.closing = Promise.all([follow.closing, closing]).then(noop)
+    // Disposal need not wait, but a replacement open must observe a failed
+    // close rather than treating it as permission to subscribe again.
+    void follow.closing.catch(noop)
+  }
   follow.giveUp?.abort()
   follow.giveUp = undefined
   follow.handle = undefined
@@ -404,6 +424,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const removedIds = new Set<string>()
   const takenOut = (sessionId: string) => removedIds.has(sessionId)
   const rows = new Map<string, ConversationSummary>()
+  // The channels the gateway last listed, the default one first. Kept when a
+  // listing fails, so a session in one of them is not left out of the index
+  // for a read that did not answer.
+  let channels: readonly Channel[] = [gatewayChannel]
   // Each conversation's counter, and its latest frame.
   const transcriptCounts = new Map<string, number>()
   const reads = new Map<string, Read>()
@@ -725,7 +749,19 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     summaries.set(sessionId, summary)
     removedIds.delete(sessionId)
     emit({ kind: "session", session: summary })
+    // A channel made since the index was read (from another window, or an
+    // agent's thread) is read with the index again, once per channel: the
+    // session is placed in it then.
+    if (
+      !channels.some((channel) => channel.id === summary.channelId) &&
+      !unknownChannels.has(summary.channelId)
+    ) {
+      unknownChannels.add(summary.channelId)
+      resync()
+    }
   }
+  // Channels a session was in before the index listed them, each read for once.
+  const unknownChannels = new Set<string>()
 
   // The conversations followed, least recently opened first (D7).
   const views = new Map<string, Followed<Transcript>>()
@@ -941,6 +977,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const opening = within(
       async (live) => {
         const connected = await client(who)
+        if (list.closing) await list.closing
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         const handle = await connected.subscriptions
           .list(
@@ -1000,6 +1037,26 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     gap = true
     settle(list, { error: endRefusal(end) })
     scheduleRetry()
+  }
+
+  /**
+   * Every channel the gateway lists, the default one first; the ones held
+   * when it does not answer.
+   */
+  const listChannels = async (live: () => boolean): Promise<readonly Channel[]> => {
+    try {
+      const listed = await dispatch(live, (connected) => connected.channels.list())
+      const made = listed.channels.map(channelFrom)
+      return made.some((channel) => channel.id === gatewayChannel.id)
+        ? made
+        : [gatewayChannel, ...made]
+    } catch (error) {
+      if (!live()) throw error
+      console.warn("The gateway's channels were not read; the last ones are kept", error)
+      // A channel a session named is asked for again, by its next frame.
+      unknownChannels.clear()
+      return channels
+    }
   }
 
   /** The index once a list frame is applied: opening the list subscription as `who`. */
@@ -1180,7 +1237,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * is open or on its way: the one place it is opened (D14). A cursor ahead
    * of the history the gateway holds opens once more without it.
    */
-  const open = (sessionId: string, follow: Followed<Transcript>, who: Caller) => {
+  const open = (
+    sessionId: string,
+    follow: Followed<Transcript>,
+    who: Caller,
+    snapshot = false,
+  ) => {
     if (follow.handle || follow.opening) return
     const token = {}
     follow.token = token
@@ -1205,6 +1267,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const opening = within(
       async (live) => {
         const connected = await client(who)
+        if (follow.closing) await follow.closing
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         if (evicted) {
           await evicted
@@ -1212,17 +1275,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         }
         let handle: Subscription
         try {
-          const subscribing = subscribe(connected, reads.get(sessionId)?.cursor).catch(
-            (error: unknown) => {
-              if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
-                throw error
-              // The client is ahead of the history the gateway holds: start over.
-              reads.delete(sessionId)
-              dropReviews(sessionId, true)
-              if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
-              return subscribe(connected, undefined)
-            },
-          )
+          const subscribing = subscribe(
+            connected,
+            snapshot ? undefined : reads.get(sessionId)?.cursor,
+          ).catch((error: unknown) => {
+            if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
+              throw error
+            // The client is ahead of the history the gateway holds: start over.
+            reads.delete(sessionId)
+            dropReviews(sessionId, true)
+            if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
+            return subscribe(connected, undefined)
+          })
           follow.subscribing = subscribing.then(noop, noop)
           handle = await subscribing
         } catch (error) {
@@ -1379,16 +1443,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
 
   return {
     index: () =>
-      within(async () => {
+      within(async (live) => {
         await listReady("person").catch((error: unknown) => {
           gap = true
           throw error
         })
         // The index is the resync: what any gap missed is read now (S20).
         gap = false
+        channels = await listChannels(live)
         const index: WorkspaceIndex = {
           sections: [gatewaySection],
-          channels: [gatewayChannel],
+          channels,
           sessions: [...summaries.values()].filter((summary) => !takenOut(summary.id)),
         }
         return index
@@ -1412,6 +1477,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const model = Object.freeze({ ...message.model })
       const start = message.start !== undefined
       const access = message.start?.access
+      const channelId = message.start && gatewayChannelId(message.start.channelId)
       let prepared
       try {
         prepared = prepareSubmission({
@@ -1441,8 +1507,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               conversationId: prepared.conversationId,
               ...(agent ? { agent } : {}),
               model: model.modelId,
-              // The access chosen in the home; the gateway asks when told none.
+              // The access chosen in the home; the gateway asks when told none,
+              // or starts as the channel says.
               ...(access ? { approvalMode: access } : {}),
+              // The channel it is in for its whole life; none is the default one.
+              ...(channelId ? { channelId } : {}),
             })
           })
         }
@@ -1570,13 +1639,47 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           return connected.conversation.setApprovalMode(sessionId, mode)
         })
       }),
+    setUsageLimitAutoContinue: (enabled, _initiator) =>
+      within(async (live) => {
+        await dispatch(live, (connected) =>
+          connected.conversation.setUsageLimitAutoContinue(enabled),
+        )
+        // The receipt can precede its streamed frame. Complete only after
+        // the existing frame owners have published fresh snapshots, which
+        // may already include a newer preference from another client.
+        await Promise.all(
+          [...views].map(([sessionId, following]) => {
+            letGo(following)
+            const applied = new Promise<Transcript>((resolve, reject) =>
+              following.waiters.add({ resolve, reject }),
+            )
+            open(sessionId, following, "person", true)
+            return applied
+          }),
+        )
+      }),
     setModel: (sessionId, { provider, modelId }, requestId, _initiator) =>
       within(async (live) => {
         await transcriptOf(sessionId, "person")
         const current = knownModel(sessionId)
-        if (!current) throw new WorkspaceModelError("unavailable", true)
-        if (current.provider !== provider)
-          throw new WorkspaceModelError("not-supported", false)
+        if (!current) {
+          const held = reads.get(sessionId)?.view
+          // Nothing was sent. A view with no selected model has no
+          // conversation to retarget; one whose model the catalogue does
+          // not list is not known, so the change stays unconfirmed.
+          if (!held?.model)
+            throw new WorkspaceModelError("not-supported", false, {
+              message: "conversation_configuration_changed",
+              code: "conversation_configuration_changed",
+            })
+          throw new WorkspaceModelError("unavailable", true)
+        }
+        // Another provider is another agent: the gateway carries the
+        // conversation on under it (`conversation.switchAgent`), and the
+        // transcript draws the line where it did.
+        const switching = current.provider !== provider
+        const agent = switching ? agentForProvider(provider) : undefined
+        if (switching && !agent) throw new WorkspaceModelError("not-supported", false)
         // Read reconciles a lost native receipt. Refollow uses the existing
         // bounded frame owner; the read or ACK does not fabricate a frame.
         const reconcile = async () => {
@@ -1601,10 +1704,48 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         let receipt: Awaited<ReturnType<GatewayClient["conversation"]["setModel"]>>
         try {
           await reconcile()
-          receipt = await dispatch(live, (connected) => {
-            held(sessionId)
-            return connected.conversation.setModel(sessionId, modelId, { requestId })
-          })
+          // Already what the conversation runs, read fresh just now (a pick
+          // applied once, sent again before the summary said so): nothing
+          // is asked again.
+          const fresh = reads.get(sessionId)?.view
+          const running = knownModel(sessionId)
+          if (fresh && running?.provider === provider && running.modelId === modelId)
+            receipt = {
+              requestId,
+              model: modelId,
+              approvalMode: fresh.approvalMode,
+              effect: "nextTurn",
+            }
+          else if (agent) {
+            const switched = await dispatch(live, (connected) => {
+              held(sessionId)
+              return connected.conversation.switchAgent(sessionId, agent, modelId, {
+                requestId,
+              })
+            })
+            // The gateway answers once the switch was made or found not to
+            // be: one not made leaves the conversation on its agent.
+            if (!switched.applied)
+              throw new WorkspaceModelError("not-supported", false, {
+                message: "model_change_not_applied",
+                code: "model_change_not_applied",
+              })
+            // The receipt carries the approval mode the session already
+            // had: a switch keeps it. With no view to say what that is,
+            // the change is not confirmed.
+            const approvalMode = reads.get(sessionId)?.view?.approvalMode
+            if (!approvalMode) throw new WorkspaceModelError("unavailable", true)
+            receipt = {
+              requestId: switched.requestId,
+              model: modelId,
+              approvalMode,
+              effect: "nextTurn",
+            }
+          } else
+            receipt = await dispatch(live, (connected) => {
+              held(sessionId)
+              return connected.conversation.setModel(sessionId, modelId, { requestId })
+            })
         } catch (error) {
           if (error instanceof WorkspaceModelError) throw error
           const refused = refusalOf(error)
@@ -1680,6 +1821,38 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           if (renaming.get(sessionId) === asked) renaming.delete(sessionId)
         })
         await turn
+      }),
+    // The gateway lists the fork as it lists the conversation it was made
+    // from, under its title and last words, not running and not archived
+    // (`ConversationSummary::after_forking`), so the row is said at once, in
+    // the list's turn (W6); the list frames after it say it again with the
+    // gateway's own times. The fork itself is asked outside that turn: it
+    // opens an agent, and a rename or archive meanwhile does not wait on it.
+    fork: (sessionId) =>
+      within(async (live) => {
+        const conversationId = crypto.randomUUID()
+        await dispatch(live, (connected) => {
+          held(sessionId)
+          return connected.conversation.fork(sessionId, { conversationId })
+        })
+        const { turn, settled } = inTurn(listing, async () => {
+          const source = rows.get(sessionId)
+          if (source && !rows.has(conversationId) && !takenOut(conversationId)) {
+            const at = Date.now()
+            rows.set(conversationId, {
+              ...source,
+              conversationId,
+              createdAtMs: at,
+              updatedAtMs: at,
+              running: false,
+              archived: false,
+            })
+            publish(conversationId)
+          }
+        })
+        listing = settled
+        await turn
+        return conversationId
       }),
     // As an archive, in the list's turn (W6), and the window's apps forget it.
     delete: (sessionId) =>
@@ -1979,6 +2152,7 @@ function reasonFor(
       return uncertain ? "unavailable" : "agent-not-configured"
     case ConversationErrorCode.AgentUnsupported:
     case ConversationErrorCode.ConversationsNotConfigured:
+    case ConversationErrorCode.ChannelNotFound:
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentVersionMismatch:
     case ConversationErrorCode.EnvironmentPlatformUnsupported:
@@ -2022,6 +2196,10 @@ function reasonFor(
     case ConversationErrorCode.AttachmentCapacity:
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
+    case ConversationErrorCode.UploadTicketInvalid:
+    case ConversationErrorCode.UploadFailed:
+    case ConversationErrorCode.UnsupportedImage:
+    case ConversationErrorCode.ImageTooLarge:
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.MessageQuotaExceeded:
       return "unavailable"

@@ -1,5 +1,8 @@
 //! Public Rust parent calls with one actual FS owner and held admitted publication.
 use super::*;
+
+#[path = "../../../../scripts/rust-test-support/isolated.rs"]
+mod isolated;
 use crate::test_support::PrivateFixture;
 use nessa_auth::{
     adapters::pairing::verify_owner_phone_request,
@@ -97,12 +100,14 @@ impl RngCore for ReservedEntropy {
         self.try_fill_bytes(bytes).unwrap();
     }
     fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), EntropyError> {
-        assert_eq!(
-            &fs::read(&self.path).unwrap()[..4],
-            b"NSOR",
-            "actual durable reservation precedes entropy"
-        );
-        self.counts.entropy.fetch_add(1, Ordering::SeqCst);
+        let prior = self.counts.entropy.fetch_add(1, Ordering::SeqCst);
+        if prior > 0 {
+            assert_eq!(
+                &fs::read(&self.path).unwrap()[..4],
+                b"NSOR",
+                "actual durable reservation precedes enrollment entropy"
+            );
+        }
         bytes.fill(7);
         Ok(())
     }
@@ -116,10 +121,13 @@ fn parent(root: &Path, state: Arc<dyn NativePrivateState>, counts: Arc<Counts>) 
             counts,
             path: root.join("private/owner-phone-original"),
         }),
+        files: Arc::new(OsCacheFiles),
+        artifacts: Arc::new(DiskArtifactFiles),
         path: root.join("private/cache.sqlite"),
         address: "127.0.0.1:9".parse().unwrap(),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
+        pause: Arc::new(ThreadPause),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies::default(),
     })
@@ -128,11 +136,13 @@ fn parent(root: &Path, state: Arc<dyn NativePrivateState>, counts: Arc<Counts>) 
 struct Gate {
     entered: mpsc::SyncSender<()>,
     release: Mutex<mpsc::Receiver<()>>,
+    after_release: Duration,
 }
 impl Gate {
     fn hold(&self) {
         self.entered.send(()).unwrap();
         self.release.lock().unwrap().recv().unwrap();
+        thread::sleep(self.after_release);
     }
 }
 struct Release(Option<mpsc::Sender<()>>);
@@ -210,6 +220,9 @@ impl OwnerPhoneOriginalStore for Store {
     fn load_original(&self) -> Result<Option<OwnerPhonePrivateOriginal>, PrivateStateError> {
         self.owned.load_original()
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
+    }
 }
 
 #[test]
@@ -228,10 +241,11 @@ fn parent_prepares_after_actual_reservation_and_revalidates_restoration_without_
             OwnerPhonePreparationError::Missing
         ))
     ));
-    assert_eq!(counts.factory.load(Ordering::SeqCst), 0);
-    let proof = parent.prepare_owner_original(reservation()).unwrap();
     assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
     assert_eq!(counts.entropy.load(Ordering::SeqCst), 1);
+    let proof = parent.prepare_owner_original(reservation()).unwrap();
+    assert_eq!(counts.factory.load(Ordering::SeqCst), 2);
+    assert_eq!(counts.entropy.load(Ordering::SeqCst), 2);
     for restore in [true, false] {
         let replay = if restore {
             parent.restore_owner_original(&reservation())
@@ -243,8 +257,8 @@ fn parent_prepares_after_actual_reservation_and_revalidates_restoration_without_
         assert_eq!(replay.signature(), proof.signature());
         assert_eq!(replay.digest(), proof.digest());
     }
-    assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
-    assert_eq!(counts.entropy.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.factory.load(Ordering::SeqCst), 2);
+    assert_eq!(counts.entropy.load(Ordering::SeqCst), 2);
     assert_eq!(counts.network.load(Ordering::SeqCst), 0);
     verify_owner_phone_request(proof.original().clone(), proof.signature()).unwrap();
     parent.close().unwrap();
@@ -252,10 +266,25 @@ fn parent_prepares_after_actual_reservation_and_revalidates_restoration_without_
         parent.restore_owner_original(&reservation()),
         Err(SessionPreparationFailure::Session(SessionFailure::Closed))
     ));
-    assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.factory.load(Ordering::SeqCst), 2);
 }
 #[test]
 fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fact_or_failure() {
+    isolated::run(
+        "session::owner_original_tests::admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fact_or_failure",
+        || admitted_preparation(Duration::ZERO),
+    );
+}
+
+#[test]
+fn admitted_preparation_can_finish_after_the_former_three_second_wait() {
+    isolated::run(
+        "session::owner_original_tests::admitted_preparation_can_finish_after_the_former_three_second_wait",
+        || admitted_preparation(Duration::from_secs(4)),
+    );
+}
+
+fn admitted_preparation(after_release: Duration) {
     for failure in [None, Some(PrivateStateError::Uncertain)] {
         let root = root();
         let counts = Counts::new();
@@ -264,6 +293,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
         let gate = Arc::new(Gate {
             entered: entered_tx,
             release: Mutex::new(released),
+            after_release,
         });
         let parent = Arc::new(parent(
             root.path(),
@@ -282,7 +312,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
             })
         };
         let release = Release(Some(release));
-        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        entered.recv().unwrap();
         let (admission_tx, admission_rx) = mpsc::channel();
         let concurrent = {
             let parent = parent.clone();
@@ -290,10 +320,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
                 admission_tx.send(parent.local_enrollment()).ok();
             })
         };
-        assert!(matches!(
-            admission_rx.recv_timeout(Duration::from_secs(3)),
-            Ok(Err(SessionFailure::Busy))
-        ));
+        assert!(matches!(admission_rx.recv(), Ok(Err(SessionFailure::Busy))));
         concurrent.join().unwrap();
         assert_eq!(
             &fs::read(root.path().join("private/owner-phone-original")).unwrap()[..4],
@@ -311,10 +338,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
             Err(PrivateStateError::Locked)
         ));
         drop(release);
-        match (
-            failure,
-            received.recv_timeout(Duration::from_secs(3)).unwrap(),
-        ) {
+        match (failure, received.recv().unwrap()) {
             (None, Ok(proof)) => {
                 assert_eq!(proof.original().id(), reservation().id());
                 verify_owner_phone_request(proof.original().clone(), proof.signature()).unwrap();
@@ -327,7 +351,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
             ) => assert_eq!(actual, expected),
             _ => panic!("admitted physical result was lost or fabricated"),
         }
-        let receipt = closed.recv_timeout(Duration::from_secs(3)).unwrap();
+        let receipt = closed.recv().unwrap();
         assert!(receipt.released());
         assert_eq!(receipt.outcome(), &Ok(()));
         call.join().unwrap();
@@ -335,9 +359,10 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
         let state = FilePairingState::open(root.path(), Path::new("private")).unwrap();
         assert!(state.load_original().unwrap().unwrap().key().is_some());
         assert_eq!(counts.network.load(Ordering::SeqCst), 0);
-        assert_eq!(counts.entropy.load(Ordering::SeqCst), 1);
+        assert_eq!(counts.entropy.load(Ordering::SeqCst), 2);
     }
 }
+
 #[test]
 fn disappearing_observer_and_last_parent_owner_do_not_abandon_admitted_private_work() {
     let root = root();
@@ -351,6 +376,7 @@ fn disappearing_observer_and_last_parent_owner_do_not_abandon_admitted_private_w
             gate: Some(Arc::new(Gate {
                 entered: entered_tx,
                 release: Mutex::new(released),
+                after_release: Duration::ZERO,
             })),
             failure: None,
         }),

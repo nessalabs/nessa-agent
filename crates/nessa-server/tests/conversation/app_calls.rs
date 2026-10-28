@@ -1632,7 +1632,9 @@ async fn overfull(fixture: &Fixture) -> ConversationView {
     let message = view.messages[0].clone();
     view.messages = (0..40)
         .map(|_| ConversationMessage {
+            uploads: Vec::new(),
             authentication_required: None,
+            usage_limit: None,
             user_text: "y".repeat(8_000),
             ..message.clone()
         })

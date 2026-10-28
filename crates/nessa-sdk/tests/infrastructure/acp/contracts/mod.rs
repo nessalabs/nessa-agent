@@ -34,6 +34,7 @@ mod harness_host;
 mod hooks;
 mod identity;
 mod images;
+mod input_files;
 mod live;
 mod live_presets;
 mod native_hooks;

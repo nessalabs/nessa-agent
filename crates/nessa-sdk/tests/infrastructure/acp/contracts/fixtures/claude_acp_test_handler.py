@@ -205,6 +205,9 @@ while True:
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
         saved = root / "saved-session"
         if method == "session/resume":
+            if mode == "uninvoked-context" and not saved.exists():
+                send({"id": msg["id"], "error": {"code": -32002, "message": "Resource not found"}})
+                continue
             assert saved.exists(), "cannot restore missing session"
             state = json.loads(saved.read_text())
             assert msg["params"]["sessionId"] == state["id"]
@@ -231,7 +234,8 @@ while True:
             count_path = root / "new-session-count"
             count = int(count_path.read_text()) if count_path.exists() else 0
             record("new-session-count", str(count + 1))
-            record("saved-session", json.dumps({"id": session, "history": history}))
+            if mode != "uninvoked-context":
+                record("saved-session", json.dumps({"id": session, "history": history}))
         if mode == "system-prompt":
             assert msg["params"]["_meta"]["systemPrompt"] == "Core instructions.\nPlugin instructions."
             assert set(msg["params"]["_meta"]) == {"systemPrompt", "claudeCode"}
@@ -273,6 +277,11 @@ while True:
         # carried, by method, for the test to read back; otherwise none.
         if mode == "stand-ins":
             record("mcp-servers-" + method.split("/")[1], json.dumps(servers))
+            # And the open's credential the process was started with.
+            record(
+                "open-credential-" + method.split("/")[1],
+                os.environ.get("NESSA_FIXTURE_OPEN_CREDENTIAL", ""),
+            )
         elif mode != "forwarded-result":
             assert servers == []
         assert options["settings"]["allowedMcpServers"] == [{"serverName": server["name"]} for server in servers]

@@ -13,15 +13,20 @@ export function motionToken(element: Element, name: string): string | null {
   return value === "" ? null : value
 }
 
-/** A duration token in milliseconds at `element`; zero — no motion — when unset. */
-export function durationToken(element: Element, name: string): number {
-  const value = motionToken(element, name) ?? ""
-  const parsed = value.endsWith("ms")
-    ? Number.parseFloat(value)
-    : value.endsWith("s")
-      ? Number.parseFloat(value) * 1000
+/** A duration token's text in milliseconds; zero — no motion — when unset or not a time. */
+export function durationOf(value: string): number {
+  const token = value.trim()
+  const parsed = token.endsWith("ms")
+    ? Number.parseFloat(token)
+    : token.endsWith("s")
+      ? Number.parseFloat(token) * 1000
       : Number.NaN
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+/** A duration token in milliseconds at `element`; zero — no motion — when unset. */
+export function durationToken(element: Element, name: string): number {
+  return durationOf(getComputedStyle(element).getPropertyValue(name))
 }
 
 /**

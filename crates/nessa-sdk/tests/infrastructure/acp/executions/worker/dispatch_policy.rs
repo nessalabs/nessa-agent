@@ -61,6 +61,7 @@ async fn worker_projection_after_reload(
             actor: ActionContext::new("user", "test", "invoke").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -72,6 +73,7 @@ async fn worker_projection_after_reload(
         }],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     let storage = InMemoryStorage::new();
@@ -290,6 +292,7 @@ async fn worker_with_ready_frames_boundary(
             permission_sequence: Arc::new(AtomicU64::new(0)),
             question_sequence: Arc::new(AtomicU64::new(0)),
             active: None,
+            observed_rate_limit: Default::default(),
             steering: None,
             steering_supported: true,
             agent_accepts_images: false,
@@ -372,20 +375,22 @@ async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
             reply,
             deadline: None,
         });
-        let observation = ReviewDeclineObservation::selected(
+        let review = DeclinedReview::selected(
             ReviewDeclineId::new("1").unwrap(),
             ReviewDecline::new(
                 Some("Read"),
                 ReviewDeclineReason::ToolNotReviewable,
-                crate::domain::agent_execution::permissions::RefusalOutcome::Continue,
+                RefusalOutcome::Continue,
             ),
-        );
+            None,
+        )
+        .unwrap();
         for _ in 0..15 {
             worker
                 .events
                 .try_send(ExecutionEvent::new(
                     execution_id.clone(),
-                    ExecutionUpdate::ReviewDeclined(observation.clone()),
+                    ExecutionUpdate::ReviewDeclined(review.clone()),
                 ))
                 .unwrap();
         }

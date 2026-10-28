@@ -86,6 +86,9 @@ pub enum ConversationError {
     /// Kept apart from an invalid request because the request was valid and the
     /// answer is about this installation, which is something setup can fix.
     AgentNotConfigured,
+    /// A creation named a channel the caller has no channel under, or one
+    /// the policy does not let them use. Nothing was created.
+    ChannelNotFound,
     /// The conversation on disk names an agent this build has no adapter for.
     ///
     /// Apart from [`Self::Metadata`] because the record was read perfectly well
@@ -235,6 +238,9 @@ pub struct DeletionFailures {
     pub attachments: Option<ConversationError>,
     /// The summary could not be erased.
     pub summary: Option<ConversationError>,
+    /// A scheduled continuation still held this conversation's prompt, or
+    /// the scrub of that payload did not finish.
+    pub schedule: Option<ConversationError>,
     /// How far the deletion got could not be written to its tombstone, or
     /// the tombstone could not be read back, so the next attempt repeats
     /// what this one did.
@@ -259,6 +265,7 @@ impl DeletionFailures {
             && self.audit.is_none()
             && self.attachments.is_none()
             && self.summary.is_none()
+            && self.schedule.is_none()
             && self.tombstone.is_none()
             && !self.interrupted
             && !self.another_attempt

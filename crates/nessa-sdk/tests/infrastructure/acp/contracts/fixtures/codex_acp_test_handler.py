@@ -149,6 +149,10 @@ for line in sys.stdin:
         # carried, by method, for the test to read back; otherwise none.
         if mode == "stand-ins":
             (root / ("mcp-servers-" + method.split("/")[1])).write_text(json.dumps(params["mcpServers"]))
+            # And the open's credential the process was started with.
+            (root / ("open-credential-" + method.split("/")[1])).write_text(
+                os.environ.get("NESSA_FIXTURE_OPEN_CREDENTIAL", "")
+            )
         else:
             assert params["mcpServers"] == []
         if method == "session/resume":

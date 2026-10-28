@@ -7,8 +7,9 @@ use crate::application::agent_execution::sessions::{
     records::continuation::Continuation, retained, CurrentLease, LeaseRecord, SessionChange,
 };
 use crate::domain::agent_execution::leases::{
-    AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseRefusal,
-    LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+    AgentWork, CommandExit, CommandOutput, CommandTerms, CommandWork, EnvironmentRef,
+    LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork,
+    SandboxProfile,
 };
 
 const DIGEST: &str = "sha256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff";
@@ -337,4 +338,76 @@ fn an_artifact_before_the_conversation_opened_is_corrupt() {
         continuation.apply_unit(&[SessionChange::Artifact(artifact("lease-1", None))]),
         Err(StorageError::Corrupt(message)) if message.contains("precedes session open")
     ));
+}
+
+fn command_issued(command: &str, who: &str) -> LeaseRecord {
+    LeaseRecord::CommandIssued {
+        lease: LeaseId::new(command).unwrap(),
+        parent: LeaseId::new("lease-1").unwrap(),
+        terms: CommandTerms {
+            environment: EnvironmentRef::Here,
+            command: CommandWork::new(vec!["echo".into(), "hi".into()], None, 5_000).unwrap(),
+            sandbox: SandboxProfile::None,
+        },
+        actor: actor(who),
+    }
+}
+
+fn command_ended(command: &str) -> LeaseRecord {
+    LeaseRecord::CommandEnded {
+        lease: LeaseId::new(command).unwrap(),
+        parent: LeaseId::new("lease-1").unwrap(),
+        exit: CommandExit::Exited { code: 0 },
+        output: CommandOutput::new(0, 0, 0, "", ""),
+        cleanup: None,
+    }
+}
+
+/// Row C12: a file may name a command running under the live agent lease,
+/// and only the person that command runs for. Once the command ends, the
+/// file is historical.
+#[test]
+fn a_file_may_name_a_command_running_under_the_live_lease() {
+    let live = fold(&[issued("lease-1"), command_issued("command-1", "call-1")]).unwrap();
+    let snapshot = under(Some(live));
+    let mut named = artifact("command-1", Some("turn-1"));
+    named.actor = actor("call-1");
+    assert_eq!(named.admit(&snapshot, known(&snapshot)), Ok(()));
+
+    let mut wrong_person = named.clone();
+    wrong_person.actor = actor("someone-else");
+    assert_eq!(
+        wrong_person.admit(&snapshot, known(&snapshot)),
+        Err(ArtifactRefusal::NotThisLease)
+    );
+    assert!(validate_saved(&{
+        let mut saved = snapshot.clone();
+        saved.artifacts.push(wrong_person);
+        saved
+    })
+    .is_err());
+
+    assert_eq!(
+        artifact("command-2", Some("turn-1")).admit(&snapshot, known(&snapshot)),
+        Err(ArtifactRefusal::NotThisLease)
+    );
+
+    let mut kept = snapshot.clone();
+    kept.artifacts.push(named.clone());
+    assert_eq!(validate_saved(&kept), Ok(()));
+
+    let ended = fold(&[
+        issued("lease-1"),
+        command_issued("command-1", "call-1"),
+        command_ended("command-1"),
+    ])
+    .unwrap();
+    let after = under(Some(ended));
+    assert_eq!(
+        named.admit(&after, known(&after)),
+        Err(ArtifactRefusal::NotThisLease)
+    );
+    let mut historical = after;
+    historical.artifacts.push(named);
+    assert_eq!(validate_saved(&historical), Ok(()));
 }

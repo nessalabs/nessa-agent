@@ -15,6 +15,7 @@ json-patch = "3"
 serde_json = "1"
 
 [dependencies]
+zeroize = { version = "=1.9.0", features = ["serde"] }
 nessa-local-storage = { path = "../crates/nessa-local-storage" }
 nessa-gateway-endpoint = { path = "../crates/nessa-gateway-endpoint" }
 nessa-agent-credentials = { path = "../crates/nessa-agent-credentials" }

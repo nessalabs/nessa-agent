@@ -7,8 +7,10 @@ import type {
   ConversationTranscriptState,
   ImageReference,
   LinkedFile,
+  UploadedFileReference,
   Note,
   PublishedFile,
+  UsageLimitNotice,
 } from "../model"
 import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
@@ -48,6 +50,11 @@ export type ConversationView = {
    * Messages list shows — or null before anything was said in it.
    */
   title: string | null
+  /**
+   * Whether this gateway schedules one continuation when a usage limit resets.
+   * Shared by every conversation. Absent on a view that did not say.
+   */
+  usageLimitAutoContinue?: boolean
   conversationId: string
   revision: string
   queueComplete: boolean
@@ -64,12 +71,15 @@ export type ConversationView = {
     attachments: ImageReference[]
     /** Files this turn pointed the agent at, by path. */
     files: LinkedFile[]
+    uploads?: UploadedFileReference[]
     authenticationRequired?: boolean
     /**
      * Independent required work failed on this authentication refusal.
      * The person-facing diagnostic stays in `error`.
      */
     requiredWorkFailed?: boolean
+    /** A provider usage limit on this failed turn. Absent when it did not end in one. */
+    usageLimit?: UsageLimitNotice
     error?: string
     status: string
   }[]
@@ -78,6 +88,7 @@ export type ConversationView = {
     text: string
     attachments: ImageReference[]
     files: LinkedFile[]
+    uploads?: UploadedFileReference[]
     mode: "queued" | "steering"
   }[]
   /**

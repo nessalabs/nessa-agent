@@ -68,7 +68,8 @@
   min-width: 0;
 }
 
-/* A pane at its placement: the frame's custom properties, as the grid's fractions. */
+/* A pane at its placement: the frame's custom properties, as the grid's
+   fractions. `paneBox` in model/pane-sizing.ts computes this same box. */
 .split-panes-grid > [data-pane-key] {
   position: absolute;
   left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
@@ -97,24 +98,34 @@
   cursor: row-resize;
 }
 
+/*
+ * No glow: while the pointer is on an edge, or it is dragged, an even 1px
+ * line down the middle of the gutter brightens along its whole length. At
+ * rest it is clear; the host draws the hairline itself (`panes.css`).
+ */
+.split-panes-grid > .split-panes-pane-edge::before {
+  opacity: 1;
+  background: transparent;
+  transition: background-color var(--desktop-base) ease;
+}
+
 .split-panes-grid > .split-panes-pane-edge[data-axis="x"]::before {
-  inset: var(--desktop-radius) 2.5px;
-  background: radial-gradient(
-    ellipse 3px 90px at 50% 50%,
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
+  inset: 0 auto 0 calc(50% - 0.5px);
+  width: 1px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--desktop-titlebar-height) * 0.6),
+    black calc(var(--desktop-titlebar-height) + 48px)
   );
 }
 
 .split-panes-grid > .split-panes-pane-edge[data-axis="y"]::before {
-  inset: 2.5px var(--desktop-radius);
-  background: radial-gradient(
-    ellipse 90px 3px at 50% 50%,
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
-  );
+  inset: calc(50% - 0.5px) 0 auto 0;
+  height: 1px;
+}
+
+.split-panes-grid > .split-panes-pane-edge:is(:hover, :focus-visible, :active)::before {
+  background: color-mix(in oklab, var(--foreground) 22%, transparent);
 }
 
 /*
@@ -198,6 +209,11 @@
    copy rasters it under the glass blur (`styles.test.ts`). */
 .split-panes-ghost:not([data-drag-waiting]) {
   will-change: transform;
+}
+
+/* The night scene is a full-window raster. The copy moves without painting it. */
+.split-panes-ghost .desktop-night-scene {
+  content-visibility: hidden;
 }
 
 /* Made as the press begins, it waits on the page unseen until the press becomes a drag. */

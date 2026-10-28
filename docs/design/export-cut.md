@@ -3,12 +3,13 @@
 The gateway backup is one cut of the stores that own its records, taken while
 admitted mutations are joined and released afterwards (#271). The deletion
 inventory is the authenticated list of fences that a later restore must not
-undo (#272). This document is the ordering table for both. Restore,
-quarantine, and upload are not this cut: they wait on the cut landing.
+undo (#272). This document is the ordering table for the cut. Quarantine,
+acceptance, and deferred fetch are a separate use case,
+[quarantined restore](quarantined-restore.md). Upload is not either one.
 
 [Standalone verification](backup-verification.md) checks supplied cuts and an
-explicit trusted MAC key. It implements format and integrity verification only;
-restore, quarantine, key recovery and inventory freshness remain separate work.
+explicit trusted MAC key. It implements format and integrity verification only.
+It does not stage, accept, or fetch. Key recovery remains separate work.
 
 ```text
 caller ── hold ──▶ conversation admission (write)
@@ -232,19 +233,23 @@ reconciler needs queue ownership and shutdown semantics and is separate work.
 Decision-log growth and rewrite cost remain a known performance limitation.
 
 
-### Recovery acceptance still outstanding
+### Recovery
 
-#270 remains open for replacement identity, independently verified manifest and
-deletion inventory, quarantine, old-source/remote-lease fencing, explicit
-reconciliation and a synthetic restore drill that proves historical commands do
-not execute. This integrity follow-up does not supply that restore path.
+Quarantined restore verifies the bundle again, leaves out grants, credentials,
+and live metadata named by the authenticated inventory, and appends an `ended`
+line with cleanup `uncertain` for each environment lease still open. The sealed
+directory is not the live root. Acceptance renames it onto an empty live path
+after Cedar allows the principal and, when a lease was open, an operator receipt
+is present. A failed or partial stage deletes that tree. Historical outbox bytes
+stay, and `replay.blocked` stays `blocked\n`, so this use case does not run them.
+The private key is not restored; acceptance writes `identity.txt` as `re-pair`.
 
-#854 remains separate: the cut records deferred conversation identities, byte
-sizes and exact source-state digests for oversized sessions; it does not retain
-or fetch the recorded version. Recovery needs a source that can serve that
-immutable version, a bounded import into the restore path, progress on open, and
-an explicit unavailable/changed-source error that leaves other conversations
-usable. Acceptance must exercise successful recovery of a synthetic session
-over 64 MiB, source disappearance/change, identity mismatch, interrupted fetch
-and retry, while preserving quarantine and command non-execution. The existing
-deferred-entry/digest tests prove export metadata only.
+An oversized conversation is still not copied into the snapshot. Opening it
+streams that one conversation from a source the caller supplies and publishes
+the session file only when the size and stream fingerprint match the cut.
+`a_session_over_64_mib_is_restored_when_opened` is the drill. A missing,
+changed, or interrupted source publishes nothing and leaves other session files
+in place.
+
+`nessa-backup-plan` does not stage or accept. The desktop and `conversation.read`
+do not call the open use case yet. Remote executors are not contacted.

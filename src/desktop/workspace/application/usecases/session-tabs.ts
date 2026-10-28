@@ -1,7 +1,7 @@
 /** Conversation documents share the window's existing split arrangement (#1077). */
 import {
   draftOf,
-  without,
+  letGoOfDrafts,
   paneIds,
   paneShowingSession,
   withPanes,
@@ -46,12 +46,5 @@ export function closeSessionTab(
     ...next,
     sessionTabs: next.sessionTabs.filter((id) => id !== sessionId),
   }
-  return draftOf(closed, sessionId)
-    ? {
-        ...closed,
-        drafts: without(closed.drafts, sessionId),
-        composerText: without(closed.composerText, sessionId),
-        accessChoices: without(closed.accessChoices, sessionId),
-      }
-    : closed
+  return draftOf(closed, sessionId) ? letGoOfDrafts(closed, [sessionId]) : closed
 }

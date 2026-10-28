@@ -17,6 +17,9 @@
 //! `device` composes the same enrollment worker with purge-before-end; `owner`
 //! stores one immutable original recovery separately from its settlement/purge
 //! outcomes. Failed recovery has no settlement slot in that private sum type.
+//! `phone` is the publication lease and catalogue presence. `artifact` fetches
+//! one held file through the existing range owner. A missing catalogue row is
+//! not a tombstone, and a part on disk is not gateway freshness.
 //!
 //! A read has a budget on the injected monotonic clock. Every physical read
 //! and write waits no longer than it, and no conversation starts after it;
@@ -59,9 +62,10 @@ use nessa_protocol::product::generated::{
     MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
     PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
-use nessa_protocol::product_contract::generated::RecordReadErrorCode;
+use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordReadErrorCode};
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
+use nessa_protocol::tunnel::TunnelAddress;
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -74,24 +78,51 @@ use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 mod active;
+mod artifact;
 mod device;
 mod owner;
 pub use owner::RetainedOwnerStatus;
+mod phone;
 mod relay;
 mod saved;
 mod subscribe;
+pub use crate::read_only_sync::application::held_file::Pause;
+pub use crate::read_only_sync::application::held_file::{
+    FetchFiles, FileStep, KeepRefusal, OutputFound,
+};
 pub use active::RetainedDeviceReader;
+pub use artifact::{
+    artifact_name_accepted, local_held_file, local_held_outcome, ArtifactFault, ArtifactFaultKind,
+    ArtifactFetch, ArtifactFileStep, ArtifactFiles, ArtifactFreshness, ArtifactOpenError,
+    ArtifactPartCleanup, ArtifactRequest, DiskArtifactFiles, ThreadPause,
+};
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
+pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};
 pub use saved::{
     RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
     RetainedTranscriptSnapshot,
 };
 pub use subscribe::{ConversationFeed, FeedEvent, SubscribeError};
+
+/// Weak-link and metered scheduling report.
+///
+/// Copies one real record source into a private cache twice: unpaced, and
+/// paced at 8,000 payload bytes per second. Both reopen at the same
+/// downloaded and applied positions. Pace waits are the schedule's virtual
+/// clock. `relayPreambleBytes` is the encoded reader `Connect` and `Joined`
+/// frames, not payload and not TLS. The size table's p50 and p95 are order
+/// statistics of that table. A phone radio, operating-system sleep, and a
+/// sampled production percentile are listed under `notMeasured`.
+///
+/// Await this on the caller's runtime. It does not start a second one.
+pub async fn weak_link_report() -> serde_json::Value {
+    crate::read_only_sync::infrastructure::measure::report().await
+}
 
 /// The catalogue selector, not a grant of read authority. The authenticated
 /// session and the existing source authorizer enforce the selected scope.
@@ -216,6 +247,14 @@ pub enum ReadFailure {
     /// and it does not ask pinned status again. It is not an ungranted
     /// conversation.
     SubscriptionCapacity,
+    /// `artifact.read` answered a conversation product code this client
+    /// recognizes. The code is the one the gateway sent, including a released
+    /// file, an unreadable artifact, a missing conversation, and any other
+    /// taught code. A catalogue or checkpoint read does not produce this, and
+    /// it does not ask pinned status again. `temporarily_unavailable` is
+    /// [`ReadFailure::Unreachable`]: the range was already retried. A response
+    /// this client was not taught is [`ReadFailure::Protocol`].
+    Product(ConversationErrorCode),
 }
 
 /// Stops a read in progress: the flag every physical read and write asks,
@@ -228,6 +267,9 @@ pub enum ReadFailure {
 pub struct ReadStop {
     stopped: AtomicBool,
     sockets: Mutex<Vec<TcpStream>>,
+    /// Held by `stop` while the flag is set, and by [`Self::admit`] while a
+    /// hard link publishes a held file. The call that takes it first wins.
+    publication: Mutex<()>,
 }
 impl ReadStop {
     /// A stop not yet asked for.
@@ -235,11 +277,35 @@ impl ReadStop {
         Arc::new(Self::default())
     }
     /// Stop every read using this, now and later.
+    ///
+    /// The flag is set while this holds the publication gate. A hard link
+    /// already inside that gate finishes and the output stays published. A
+    /// link that has not entered the gate does not start. Socket shutdown
+    /// follows the flag.
     pub fn stop(&self) {
-        self.stopped.store(true, Ordering::SeqCst);
+        {
+            let _gate = self.publication_lock();
+            self.stopped.store(true, Ordering::SeqCst);
+        }
         for socket in self.lock().drain(..) {
             let _ = socket.shutdown(Shutdown::Both);
         }
+    }
+    /// Run `link` while this holds the publication gate. `Err` when `stop`
+    /// already holds the gate, in which case `link` is not called. `link`
+    /// must not call `stop` on this same value from the thread that is
+    /// inside `link`: that waits on the gate `link` is holding.
+    pub(crate) fn admit<T>(&self, link: impl FnOnce() -> T) -> Result<T, ()> {
+        let _gate = self.publication_lock();
+        if self.is_stopped() {
+            return Err(());
+        }
+        Ok(link())
+    }
+    fn publication_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.publication
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
     /// Whether `stop` was called.
     pub fn is_stopped(&self) -> bool {
@@ -265,30 +331,99 @@ impl ReadStop {
 /// stop again. The wait as a whole is still the one the caller set.
 const STOP_SLICE: Duration = Duration::from_millis(50);
 
+/// Nothing has ended this fetch yet.
+const END_OPEN: u8 = 0;
+/// The caller stop was set when the fetch first ended.
+const END_CALLER: u8 = 1;
+/// The budget was spent, and the stop was clear, when the fetch first ended.
+const END_BUDGET: u8 = 2;
+
 /// A read's end: its stop, or its budget on the injected clock.
+/// `cause` is the condition that ended it, recorded once, at that moment.
 struct Stopping {
     stop: Arc<ReadStop>,
     clock: Arc<dyn MonotonicClock>,
     /// When the budget is spent, by `clock`.
     until: u64,
+    /// [`END_OPEN`] until the first end, then [`END_CALLER`] or [`END_BUDGET`].
+    cause: AtomicU8,
 }
 impl Stopping {
+    fn new(stop: Arc<ReadStop>, clock: Arc<dyn MonotonicClock>, until: u64) -> Self {
+        Self {
+            stop,
+            clock,
+            until,
+            cause: AtomicU8::new(END_OPEN),
+        }
+    }
     fn spent(&self) -> bool {
         self.clock.elapsed_ms() >= self.until
+    }
+    /// Whether this fetch has ended, and the first condition that ended it.
+    /// A caller stop observed now is kept ahead of a spent budget. A budget
+    /// observed while the stop is clear stays that budget after a later stop.
+    fn note_end(&self) -> bool {
+        if self.cause.load(Ordering::SeqCst) != END_OPEN {
+            return true;
+        }
+        let cause = if self.stop.is_stopped() {
+            END_CALLER
+        } else if self.spent() {
+            END_BUDGET
+        } else {
+            return false;
+        };
+        let _ = self
+            .cause
+            .compare_exchange(END_OPEN, cause, Ordering::SeqCst, Ordering::SeqCst);
+        true
+    }
+    /// The fetch observed the caller stop when it ended.
+    fn ended_by_caller(&self) -> bool {
+        self.cause.load(Ordering::SeqCst) == END_CALLER
     }
 }
 impl Cancellation for Stopping {
     fn cancelled(&self) -> bool {
-        self.stop.is_stopped() || self.spent()
+        self.note_end()
     }
     fn until_ms(&self) -> Option<u64> {
         Some(self.until)
     }
 }
+/// Connect to a paired gateway's native listener at `address` within
+/// `timeout`, and with a `tunnel`, through it once the direct dial has not
+/// connected within the head start or was refused, the same race as
+/// [`dial_gateway`]. With no tunnel this is the plain direct dial, unchanged.
+/// A device's product connection dials this way.
+///
+/// # Errors
+/// Neither route connected in time.
+pub fn dial_native(
+    address: SocketAddr,
+    tunnel: Option<&TunnelAddress>,
+    timeout: Duration,
+) -> IoResult<TcpStream> {
+    let Some(tunnel) = tunnel.cloned() else {
+        return TcpStream::connect_timeout(&address, timeout);
+    };
+    // The direct leg keeps the typed address, so an IPv6 scope id survives;
+    // a `host:port` string would lose it.
+    race(
+        move |left| TcpStream::connect_timeout(&address, left),
+        move |left| crate::tunnel::dial(&tunnel, left),
+        timeout,
+        DIRECT_HEAD_START,
+        &|| false,
+    )
+}
 /// Connect to the gateway at `address` (`host:port`, each address it
 /// resolves to tried in turn) within `timeout`, the same way a retained read
 /// does: direct, then, with a `relay`, through that relay for the gateway
-/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"). What
+/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"),
+/// and with a `tunnel`, through the gateway's web tunnel
+/// (`docs/design/auth/tunnel.md`); with both, those two at once. What
 /// connects is a plain stream; the caller's pinned TLS decides whether the
 /// gateway is the one it paired with. A paired environment dials its
 /// gateway with it.
@@ -301,6 +436,7 @@ impl Cancellation for Stopping {
 pub fn dial_gateway(
     address: &str,
     relay: Option<(&RelayAddress, &[u8; 44])>,
+    tunnel: Option<&TunnelAddress>,
     timeout: Duration,
 ) -> IoResult<TcpStream> {
     let deadline = Instant::now()
@@ -314,26 +450,44 @@ pub fn dial_gateway(
             "the gateway's address is not host:port",
         ));
     }
-    let Some((relay, pin)) = relay else {
-        return connect_any(address, deadline);
+    let route = match relay {
+        Some((relay, pin)) => {
+            // A pin that is no Ed25519 key fails TLS whatever the route, and
+            // dialing again cannot change it: said now, not left to a direct
+            // dial that may never connect.
+            let key = relay_key(pin).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the gateway's pin is not a key",
+                )
+            })?;
+            Some(RelayRoute {
+                address: relay.clone(),
+                key,
+            })
+        }
+        None => None,
     };
-    // A pin that is no Ed25519 key fails TLS whatever the route, and
-    // dialing again cannot change it: said now, not left to a direct dial
-    // that may never connect.
-    let key = relay_key(pin).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "the gateway's pin is not a key",
-        )
-    })?;
-    let route = RelayRoute {
-        address: relay.clone(),
-        key,
+    let tunnel = tunnel.cloned();
+    let beyond: Box<dyn FnOnce(Duration) -> IoResult<TcpStream> + Send> = match (route, tunnel) {
+        (None, None) => return connect_any(address, deadline),
+        (Some(route), None) => Box::new(move |left| relay_leg(&route, left)),
+        (None, Some(tunnel)) => Box::new(move |left| crate::tunnel::dial(&tunnel, left)),
+        // Both are beyond the local network: neither is preferred.
+        (Some(route), Some(tunnel)) => Box::new(move |left| {
+            race(
+                move |left| relay_leg(&route, left),
+                move |left| crate::tunnel::dial(&tunnel, left),
+                left,
+                Duration::ZERO,
+                &|| false,
+            )
+        }),
     };
     let address = address.to_owned();
     race(
         move |left| connect_any(&address, Instant::now() + left),
-        move |left| relay_leg(&route, left),
+        beyond,
         timeout,
         DIRECT_HEAD_START,
         &|| false,
@@ -545,14 +699,13 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         let receiver = access.receiver.to_owned();
-        let ending = Arc::new(Stopping {
-            stop: stop.clone(),
-            clock: self.clock.clone(),
-            until: self
-                .clock
+        let ending = Arc::new(Stopping::new(
+            stop.clone(),
+            self.clock.clone(),
+            self.clock
                 .elapsed_ms()
                 .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
-        });
+        ));
         let before = withdrawn.len();
         self.progressed = false;
         let offline = Arc::new(AtomicBool::new(false));

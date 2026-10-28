@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { unlockVault } from "./lib/vault.mjs"
 /**
  * The conversation stress check: a person using one conversation for many
  * rounds through the real gateway and the desktop window, with the scripted
@@ -17,6 +18,8 @@
  *   large       one review larger than the old 16 KB display limit
  *   stop        Send turns into Stop while the turn runs; Stop cancels it
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   usageLimit  the turn ends in a usage limit; the card shows, the project
+ *               preference is turned on and back off, and the turn is not resumed
  *   switch      the access shield picks another mode, sometimes mid-turn,
  *               where the change waits for the turn to end
  *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
@@ -35,7 +38,16 @@
  *               what the window shows: it is the focused pane on the right,
  *               the main conversation on the left, the sidebar closed; that
  *               pane is closed with ⌘W and the sidebar shown again, and the
- *               main conversation, asked in its composer, is the whole window
+ *               main conversation, asked in its composer, is the whole window;
+ *               beside, the panes are regions of one flat chat surface that
+ *               reaches the window's top, right and bottom edges: no pane
+ *               draws a fill or rim of its own, and a hairline down the
+ *               middle of the gutter between them divides them; no tab
+ *               strip is drawn for the chats, each pane has one header in
+ *               the titlebar's row, clear of the window's controls, and its
+ *               picture runs up to the window's top edge — with the session
+ *               list shown and with the panes alone; with the list hidden,
+ *               choosing the channel in the sidebar shows it again
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -63,6 +75,31 @@
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
+ *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
+ *               is asked once; in the setup window that ask opens, nothing
+ *               dims the desktop, and a glow fills the screen and forms the
+ *               window (glow, fill, form, open, in that order) before any of
+ *               the window's words can be seen; welcome's words are all
+ *               there as it opens, its name painted still rather than typed in,
+ *               with Get started already showing; welcome has no Back button
+ *               and Close sits in the top-right corner; past it the picker
+ *               has Back in the top-left corner, which returns to welcome;
+ *               it lists Claude, Codex and a Local AI that is coming, never
+ *               OpenCode, with each one's figure on the picture beside it;
+ *               pointing at a row leaves the picture alone and clicking it
+ *               turns the picture to that agent; Close then leaves setup,
+ *               handing over as left, not finished; a second setup window,
+ *               where Codex is not installed but can be downloaded, shows
+ *               Codex as a download card with no row to pick, and no list
+ *               of installed agents or Check downloads; its Download, pressed
+ *               from the keyboard, fetches with the focus kept on the card,
+ *               installs it, and the card becomes Codex's row, which takes
+ *               the focus; on the shortcut step the host's summon, shown then
+ *               hidden, teaches the step without sending a ring through the
+ *               light behind the window; setup is then finished
+ *               on a ready agent: the window flies into the menu bar, asking
+ *               the host where its icon is, and hands over finished on that
+ *               agent; the message sent in the window after it is answered
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -73,7 +110,17 @@
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
- *               message sent after it is answered
+ *               message sent after it is answered. While it is on, the
+ *               gateway is found by a DNS-SD browse on its port, and Pair a
+ *               device opens a code with the window's own sign-in, in a
+ *               modal with one signal orb; Escape hides it, Show code
+ *               brings the same code back, Cancel closes it, and leaving
+ *               the tab and coming back still shows linking on
+ *   drift       the gateway is stopped and started again with its staged
+ *               runtime directory moved and a different agent PATH and
+ *               TMPDIR, the way an app update stages a new tree and
+ *               re-registers the launchd job; the next message sent in the
+ *               window to the existing conversation is answered
  *   pool        native linking is turned on in Settings and two real
  *               `nessa env dial` workers pair with the gateway; a
  *               conversation created on `peer:any` is bound to one of them
@@ -82,12 +129,67 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   tunnel      native linking and then the web tunnel are turned on in
+ *               Settings, each restarting the gateway, which starts a
+ *               stand-in cloudflared (NESSA_TUNNEL_PROGRAM) and shows its
+ *               address once ready; the gateway is stopped and started
+ *               again and takes the same cloudflared back, at the same
+ *               address; a real `nessa env dial` worker pairs, then dials
+ *               only through the tunnel (its direct address refuses), and a
+ *               conversation placed on it is answered; turning the tunnel off
+ *               ends the cloudflared, and linking is turned off again
+ *   launch      the window is reloaded while the host is still starting the
+ *               gateway: the host holds the window's read, the startup
+ *               screen never covers it, and once the gateway is up the
+ *               window lists the conversation and the message sent after
+ *               it is answered
+ *   github      GitHub is connected in Settings › Connections › Accounts
+ *               against a fake GitHub on this machine: the row shows the
+ *               code GitHub handed out and where to enter it, and once the
+ *               fake approves it shows the account's picture (GitHub's
+ *               avatar host answered by the page), its login and
+ *               "Connected", its actions out only under the pointer or
+ *               keyboard focus; the sign-in is a private
+ *               file the gateway never logs; an agent started after it has
+ *               GH_TOKEN and a git credential helper for github.com, both the
+ *               token, and so do the commands it runs through Nessa's own
+ *               shell tool; Disconnect forgets it, and an agent started after
+ *               that has neither, nor do its commands; the audit holds each
+ *               step and no token
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
  *               upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
+ *   channel     a channel is made from the sidebar's +, asked in the
+ *               transcript: named, a folder chosen in the host's picker that
+ *               agents may not work in (the root) refused at its question,
+ *               then one made for it; its model kept, notes typed, and a file
+ *               attached from the host's picker, then a file and a folder
+ *               dragged onto the window (the whole flow lit as the drop
+ *               target while dragged over, each listed once with its kind,
+ *               the hint on one line, the count as 4/5); Create opens a new
+ *               session's home in it, whose first message runs in the made
+ *               folder with the notes in the agent's system prompt (Claude).
+ *               A second channel works in a folder chosen in the picker, and
+ *               its first message runs there; the gateway lists both, with
+ *               their folders, and each conversation in its own
+ *   menu        the pane's ⋯ menu opens with every row leading with its
+ *               icon at the menu recipe's row height; in the overview's
+ *               filter the chosen scope and span each show their check
+ *               before their number, the numbers stand in one column, and
+ *               pressing a number picks that choice and closes the menu;
+ *               the message sent in the window after it is answered
+ *   trace       the agent makes three calls, one failing, then answers: the
+ *               gateway's view keeps each call's start and end time and the
+ *               input it was made with; the window draws them as one folded
+ *               line, "Ran 3 tools", that opens to a row per call, each with
+ *               its status and a bar on the shared time axis (at least as
+ *               wide as it is tall, ending inside the axis), and a call's
+ *               card shows its input. While the run is still at work it
+ *               alone says so: its line reads "Working", open or folded, the
+ *               call at work is named once, and no live row repeats it
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -109,24 +211,40 @@
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
-import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createHash, randomUUID } from "node:crypto"
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
+import { MODELS, repoRoot } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
   STRESS,
   TABLE_LINES,
+  TRACE_CALLS,
+  TRACE_PAUSE_MS,
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { browse } from "./lib/mdns-probe.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
-import { gatewayHost } from "./lib/fake-host.mjs"
+import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
 import {
   connectClient,
   panelTarget,
@@ -142,17 +260,32 @@ import {
   keys,
   names,
   offeredLabel,
+  overviewFilterKeys,
   selectorFor,
+  storage,
 } from "./lib/selectors.mjs"
+import {
+  FAKE_ACCOUNT,
+  FAKE_AVATAR,
+  GITHUB_AVATARS,
+  startFakeGithub,
+  disposableGithubEnvironment,
+} from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
+  pairedCatalogue,
+  preparePairedCatalogue,
+} from "./lib/stress-paired-catalogue.mjs"
+import {
   openStressConversation,
   selectedStressConversation,
 } from "./lib/stress-conversation.mjs"
+import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
+import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
@@ -231,6 +364,15 @@ const FRESH_BURST = 24
 /** The clients that burst is spread over, each well within one socket's 16 requests at once. */
 const FRESH_CLIENTS = 3
 /**
+ * The `launch` step's host stays "starting" this long after the window is
+ * reloaded, well under the host's hold (`STARTING.waitMs`). A refused window
+ * covers itself with the startup screen at once, which is what the step
+ * checks; `LAUNCH_LISTED_MS` only bounds how long listing may take once the
+ * gateway is up.
+ */
+const LAUNCH_STARTING_MS = 3_000
+const LAUNCH_LISTED_MS = 10_000
+/**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
  * history is replayed: half a second of noise, and a little for each turn.
@@ -269,6 +411,8 @@ class Run {
     this.sent = new Map()
     /** Where native linking listens once the `linking` step turns it on. */
     this.nativeAddress = stack.nativeAddress
+    /** What config.json names for it: every interface, on the same port. */
+    this.nativeListen = stack.nativeListen
   }
 
   /** Waits while a restart holds the gateway. */
@@ -402,8 +546,113 @@ async function setSideRail(page, on, failures) {
   if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
 }
 
+/**
+ * The expanded right panel is the chat in front's: its own tabs, or with
+ * nothing open its note, and no toggles for the columns it covers. ⌘N docks it before the new session opens, so the
+ * session is in front, in sight — never under the panel. The chat is
+ * brought back, docked.
+ */
+async function expandedForItsChat(run, failures) {
+  const page = run.page
+  const panel = page.locator("#workspace-panel")
+  if (
+    !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
+    ((await panel.locator("[data-panel-empty]").count()) &&
+      (await panel.innerText()).trim() !== "Nothing open")
+  )
+    failures.push(
+      `the expanded panel shows neither its tabs nor its note: "${await panel.innerText()}"`,
+    )
+  if (await page.locator(`${css.titlebar} [aria-controls="workspace-sidebar"]`).count())
+    failures.push("the expanded panel's titlebar offers the sidebar it covers")
+  await page.keyboard.press(keys.newSession)
+  const docked = await waitFor(
+    async () => (await page.locator("#workspace-panel[data-maximized]").count()) === 0,
+    2000,
+  )
+  if (!docked) failures.push("⌘N left the panel expanded over the new session")
+  const home = page.locator(`${css.focusedPane} ${css.paneHome}`)
+  await home.locator(css.field).waitFor({ timeout: 15_000 })
+  if (await home.evaluate((node) => node.closest("[inert]") !== null))
+    failures.push("the new session opened under the panel")
+  await openStressConversation(page, run.main.id, run.main.title)
+}
+
+/**
+ * "nessa Studio" belongs to whatever column holds the bottom-left corner, at
+ * any width: with the sidebar folded the session list still holds it and the
+ * words stay; only with the panes alone at the window's edge are they gone.
+ * Leaves the columns as it found them.
+ */
+async function studioWithTheCorner(page, failures) {
+  const shown = () =>
+    page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector(".side-rail-studio") ?? document.body)
+          .visibility === "visible",
+    )
+  const column = (controls) =>
+    page.locator(`${css.titlebar} button[aria-controls="${controls}"]`)
+  const list = page.locator(
+    ["Hide", "Show"]
+      .map((verb) => `${css.titlebar} button[aria-label^="${verb} Session List"]`)
+      .join(", "),
+  )
+  const sidebar = column("workspace-sidebar")
+  // Hidden, it fades first and turns invisible at the fade's end: a "shown"
+  // read too soon after a change would see the fade. Settle, then read.
+  const expect = async (want, what) => {
+    await page.waitForTimeout(600)
+    if (!(await waitFor(async () => (await shown()) === want, 2000)))
+      failures.push(`"nessa Studio" is ${want ? "missing" : "shown"} ${what}`)
+  }
+  const open = async (button) =>
+    (await button.count()) > 0 && (await button.getAttribute("aria-expanded")) === "true"
+  const set = async (button, want) => {
+    if ((await button.count()) > 0 && (await open(button)) !== want) await button.click()
+  }
+  // Away from the window's left edge, where the pointer would peek the sidebar out.
+  const size = page.viewportSize()
+  if (size) await page.mouse.move(size.width / 2, size.height / 2)
+  const was = { sidebar: await open(sidebar), list: await open(list) }
+  await set(sidebar, true)
+  await expect(true, "beside the open sidebar")
+  await set(sidebar, false)
+  if ((await list.count()) > 0) {
+    await set(list, true)
+    await expect(true, "with the session list holding the corner")
+    await set(list, false)
+  }
+  await expect(false, "over the panes alone")
+  await set(list, was.list)
+  await set(sidebar, was.sidebar)
+}
+
 /** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
 const LIGHTS_END = 76
+
+/**
+ * Choosing a channel shows its sessions: with the session list hidden, a
+ * click on the main conversation's channel in the sidebar shows the list
+ * again and leaves the one pane as it was. The person can hide it again.
+ */
+async function channelShowsList(page, failures) {
+  const list = (state) => page.locator(`${css.workspace}[data-list="${state}"]`)
+  await page.keyboard.press(keys.toggleSessionList)
+  if (!(await waitFor(async () => (await list("closed").count()) === 1, 5_000))) {
+    failures.push("the session list did not hide")
+    return
+  }
+  await page
+    .locator(`${css.sidebar} nav`)
+    .getByText("Conversations", { exact: true })
+    .first()
+    .click({ timeout: 10_000 })
+  if (!(await waitFor(async () => (await list("open").count()) === 1, 5_000)))
+    failures.push("choosing a channel left the session list hidden")
+  const panes = await page.locator(css.pane).count()
+  if (panes !== 1) failures.push(`choosing a channel left ${panes} panes, not 1`)
+}
 
 /** The compact rail and the window bar keep separate geometry. */
 async function aroundTheLights(page, rail, failures) {
@@ -453,7 +702,8 @@ function railLayout(page) {
         probe.remove()
         return width
       }
-      // The workspace's first card: the rounded panel at its left edge.
+      // The workspace's first column: the rounded box at its left edge (the
+      // docked sidebar, drawn flat but still cornered for its peek).
       const card = (inside) => {
         const left = inside.getBoundingClientRect().left
         const x = left + length(inside, "--desktop-gutter") + 2
@@ -472,11 +722,60 @@ function railLayout(page) {
         rail: document.querySelector(frame)?.dataset.rail,
         at: {
           railWidth: box(rail)?.width ?? NaN,
+          pill: (() => {
+            const shape = document.querySelector(`${rail} .side-rail-pill`)
+            const at = shape?.getBoundingClientRect()
+            return at && at.width > 0
+              ? {
+                  top: at.top,
+                  bottom: at.bottom,
+                  left: at.left,
+                  width: at.width,
+                  radius: parseFloat(getComputedStyle(shape).borderTopLeftRadius),
+                }
+              : null
+          })(),
+          itemTop: box(item)?.top ?? NaN,
+          // The fill each paints last (the sidebar's sits under its washes).
+          railFill: (() => {
+            const shape = document.querySelector(rail)
+            return shape ? getComputedStyle(shape).backgroundColor : null
+          })(),
+          sidebarFill: (() => {
+            const probe = document.createElement("div")
+            probe.style.background = "var(--desktop-sidebar-material)"
+            document.querySelector(frame)?.append(probe)
+            const fill = getComputedStyle(probe).backgroundColor
+            probe.remove()
+            return fill
+          })(),
           item: middle(item),
           toggle: box(toggle)?.left ?? NaN,
           toggleBottom: box(toggle)?.bottom ?? NaN,
+          toggleTop: box(toggle)?.top ?? NaN,
+          toggleMiddle: box(toggle)
+            ? [
+                box(toggle).left + box(toggle).width / 2,
+                box(toggle).top + box(toggle).height / 2,
+              ]
+            : null,
+          // The footer's mark slot the toggle stands in: the visible one, if any.
+          slot: (() => {
+            const found = [
+              ...document.querySelectorAll(".workspace-identity .desktop-identity-mark"),
+            ]
+              .filter(
+                (e) =>
+                  getComputedStyle(e).visibility !== "hidden" && !e.closest("[inert]"),
+              )
+              .map((e) => e.getBoundingClientRect())
+              .find((r) => r.width > 0 && r.left >= 0 && r.left < innerWidth)
+            return found
+              ? [found.left + found.width / 2, found.top + found.height / 2]
+              : null
+          })(),
           windowBottom: innerHeight,
-          itemColumn: length(document.querySelector(frame), "--desktop-control-edge"),
+          itemColumn: length(document.querySelector(frame), "--rail-column"),
           railTop: box(rail)
             ? box(rail).top +
               parseFloat(getComputedStyle(document.querySelector(rail)).paddingTop)
@@ -499,6 +798,52 @@ function railLayout(page) {
       toggle: css.sideRailToggle,
     },
   )
+}
+
+/**
+ * Toggles the rail from the page and follows "nessa Studio" every frame: it
+ * stands in the corner beside the toggle, 8px past the toggle's mark, and
+ * neither moves, not even for a frame. Settled, the toggle (with the rail
+ * closed) stands on Agents' icon column. Returns what it found wrong.
+ */
+function footerThroughToggle(page) {
+  return page.evaluate(async (toggleSelector) => {
+    const words = () =>
+      document.querySelector(".side-rail-studio .desktop-identity-words")
+    const toggle = document.querySelector(toggleSelector)
+    const mark = () => toggle.querySelector("svg").getBoundingClientRect()
+    const middle = (e) => {
+      const at = e.getBoundingClientRect()
+      return at.left + at.width / 2
+    }
+    const failures = []
+    if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
+    const seen = []
+    const started = performance.now()
+    toggle.click()
+    await new Promise((done) => {
+      const frame = () => {
+        if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
+        if (performance.now() - started < 900) requestAnimationFrame(frame)
+        else done()
+      }
+      requestAnimationFrame(frame)
+    })
+    const off = seen.find((gap) => Math.abs(gap - 8) > 0.5)
+    if (off !== undefined)
+      failures.push(
+        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8px`,
+      )
+    const icon = document.querySelector(".agents-overview-entry svg")
+    if (toggle.getAttribute("aria-expanded") === "false" && icon) {
+      const apart = middle(toggle) - middle(icon)
+      if (Math.abs(apart) > 0.5)
+        failures.push(
+          `the closed rail's toggle is ${apart.toFixed(1)}px off Agents' icon`,
+        )
+    }
+    return failures
+  }, css.sideRailToggle)
 }
 
 /** The row of the conversation `conversationId` in the window's list. */
@@ -549,16 +894,128 @@ async function rowShown(page, conversationId, title, failures) {
  * that read, which opens the conversation's agent. `where` is the composer,
  * when more than one pane shows one.
  */
-async function send(run, conversationId, text, failures, known, where = dock(run.page)) {
+async function send(
+  run,
+  conversationId,
+  text,
+  failures,
+  known,
+  where = dock(run.page),
+  sendBy,
+) {
   const before = known ?? (await seenTurns(run, conversationId))
   const box = where.locator("textarea")
   await box.fill(text)
   const button = where.getByRole(...composerControls.send)
-  await button.click({ timeout: 10_000 })
+  const timeout = sendBy === undefined ? 10_000 : sendBy - Date.now()
+  if (timeout <= 0) throw new Error("the upgraded Send exhausted its click budget")
+  await button.click({ timeout })
   const taken = await waitFor(async () => (await box.inputValue()) === "", 10_000)
   if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
   run.sent.set(conversationId, (run.sent.get(conversationId) ?? 0) + 1)
   return before
+}
+
+/**
+ * The `trace` turn's run while it is still at work, after its last call: the
+ * run's trace alone says so. Open, it reads "Working" over a row per call,
+ * and the call at work is named once, in the run, with no live row under it
+ * saying the same; folded, its line still reads "Working". The run is live
+ * only for the turn's hold, so what it draws is read in one go, and nothing
+ * after that waits on it still being live.
+ */
+async function traceWhileLive(run, failures) {
+  const drawn = await waitFor(
+    () =>
+      run.page.evaluate(
+        (tools) => {
+          const works = document.querySelectorAll(
+            '.workspace-work[data-status="running"]',
+          )
+          if (works.length !== 1) return null
+          const work = works[0]
+          const rows = work.querySelectorAll('[data-slot="tool-trace-step"]')
+          if (rows.length !== tools.length) return null
+          const last = rows[rows.length - 1].textContent ?? ""
+          const label = tools.find((tool) => last.includes(tool)) ?? null
+          const count = (text) => (label ? (text ?? "").split(label).length - 1 : 0)
+          // The turn's own message, and any live row drawn in its transcript:
+          // an earlier run of the same calls is not this one.
+          const live = [
+            ...(work
+              .closest(".workspace-transcript")
+              ?.querySelectorAll(".workspace-live") ?? []),
+          ]
+          return {
+            label,
+            last,
+            line: work.querySelector('[data-slot="tool-trace-line"]')?.textContent ?? "",
+            rows: live.length,
+            times:
+              count(work.closest(".workspace-message")?.textContent) +
+              live.reduce((sum, row) => sum + count(row.textContent), 0),
+          }
+        },
+        TRACE_CALLS.map((call) => call.tool),
+      ),
+    15_000,
+  )
+  if (!drawn) {
+    failures.push(
+      `the window never drew the trace turn's ${TRACE_CALLS.length} calls as a live run`,
+    )
+    return
+  }
+  if (drawn.rows !== 0)
+    failures.push(`a live row repeats the running trace under it (${drawn.rows})`)
+  if (drawn.times !== 1)
+    failures.push(
+      `the call at work, ${drawn.label ?? JSON.stringify(drawn.last)}, is named ${drawn.times} times, not once`,
+    )
+  if (!drawn.line.includes("Working"))
+    failures.push(`the live run's line reads ${JSON.stringify(drawn.line)}`)
+  const work = run.page.locator('.workspace-work[data-status="running"]')
+  const transcript = run.page.locator(".workspace-transcript").filter({ has: work })
+  const line = work.locator('[data-slot="tool-trace-line"]')
+  if (run.evidence) await liveShot(run, transcript, "live")
+  // Folded while it works, its line is the one sign of it, still "Working".
+  // A turn that ended first has nothing left to fold.
+  try {
+    await line.click({ timeout: 2_000 })
+  } catch {
+    if ((await work.count()) === 0) return
+    throw new Error("the live run's line cannot be clicked")
+  }
+  const folded = await waitFor(
+    async () =>
+      (await work.count()) === 0 ||
+      ((await line.getAttribute("aria-expanded", { timeout: 500 }).catch(() => null)) ===
+        "false" &&
+        ((await line.textContent({ timeout: 500 }).catch(() => "")) ?? "").includes(
+          "Working",
+        ) &&
+        (await transcript.locator(".workspace-live").count()) === 0),
+    2_000,
+  )
+  if (!folded) failures.push("the live run, folded, does not read Working on its own")
+  else if (run.evidence) await liveShot(run, transcript, "live-folded")
+}
+
+/**
+ * Evidence of the live run, taken from the page by the transcript's box: an
+ * element's own screenshot waits for it to keep still, which a shimmering
+ * line never does within the hold. A run that ended first is not shot.
+ */
+async function liveShot(run, transcript, name) {
+  const box = await transcript.boundingBox({ timeout: 1_000 }).catch(() => null)
+  if (!box) return
+  await run.page
+    .screenshot({
+      path: join(run.evidence, `trace-${run.engine ?? "window"}-${name}.png`),
+      clip: box,
+      timeout: 4_000,
+    })
+    .catch((error) => log(`trace ${name} screenshot: ${error.message.split("\n")[0]}`))
 }
 
 /** The execution ids of the turns `conversationId` has now. */
@@ -629,6 +1086,14 @@ async function expectShown(page, text, failures, ms) {
     failures.push(`the window does not show ${JSON.stringify(text)}`)
 }
 
+/**
+ * How long a review the deadline would deny waits, as the gateway arms it
+ * when `agents.reviewWaitSeconds` is left out (`REVIEW_WAIT` in
+ * crates/nessa-server/src/composition/agent.rs). The stress gateway leaves it
+ * out, so this is the default a person gets.
+ */
+const REVIEW_WAIT_MS = 300_000
+
 /** The visible agent card, once there is one; `null` after `ms`. */
 async function card(page, ms = 30_000) {
   const cards = page.locator(css.agentApproval)
@@ -674,6 +1139,22 @@ async function answerCard(run, conversationId, answer, failures, reason) {
   const permission =
     view?.permissions?.find((each) => !reason || each.title === reason) ??
     view?.permissions?.[0]
+  // A review the deadline would deny waits long enough to answer from the
+  // phone, and the card counts it down in minutes.
+  const deadline = permission?.deadline
+  if (deadline?.effect === "deny") {
+    if (deadline.waitMs !== REVIEW_WAIT_MS)
+      failures.push(
+        `a review waits ${deadline.waitMs} ms before it is denied, not ${REVIEW_WAIT_MS}`,
+      )
+    const said = await asking
+      .first()
+      .locator('[role="timer"]')
+      .getAttribute("aria-label", { timeout: 5_000 })
+      .catch(() => null)
+    if (!said || !/within \d+ minutes?,/.test(said))
+      failures.push(`the card's countdown says ${JSON.stringify(said)}, not minutes`)
+  }
   const label = offeredLabel(permission?.options, answer === "allow" ? "allow" : "deny")
   if (!label) {
     failures.push(`the review offers no ${answer}`)
@@ -771,10 +1252,438 @@ async function startedBeside(run, client, step, n, failures) {
   )
 }
 
+/**
+ * Points the selected agent's command and its absolute file arguments at a
+ * new directory. A script becomes a wrapper there that runs the real file:
+ * a symlink would make `process.argv[1]` differ from the path the script
+ * records, so it would never start, and a copy would break a root it
+ * derives from its own path. The node binary and every other file are
+ * symlinks, so the bytes stay where they are.
+ */
+function moveStagedRuntime(directory) {
+  const configPath = join(directory, "ci", "instances", INSTANCE, "config.json")
+  const config = JSON.parse(readFileSync(configPath, "utf8"))
+  const runtime = config.agents.runtimes[config.agents.selected]
+  const staged = mkdtempSync(join(tmpdir(), "nessa-stress-runtime-"))
+  let n = 0
+  const wrapScript = (path) => {
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    writeFileSync(
+      dest,
+      `import { spawnSync } from "node:child_process"
+import { realpathSync } from "node:fs"
+const result = spawnSync(realpathSync(process.execPath), [${JSON.stringify(path)}, ...process.argv.slice(2)], { stdio: "inherit" })
+process.exit(result.status ?? 1)
+`,
+    )
+    return dest
+  }
+  const relocate = (path) => {
+    if (typeof path !== "string" || !isAbsolute(path) || !existsSync(path)) return path
+    if (lstatSync(path).isDirectory()) return path
+    if (/\.(?:mjs|cjs|js)$/.test(path)) return wrapScript(path)
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    symlinkSync(path, dest)
+    return dest
+  }
+  runtime.command = relocate(runtime.command)
+  // Only the staged runtime moves. An absolute argument such as
+  // `--config /profiles/staging.toml` is the restoration identity.
+  runtime.stagedRuntime = (runtime.stagedRuntime ?? []).map(relocate)
+  writeFileSync(configPath, JSON.stringify(config))
+  chmodSync(configPath, 0o600)
+}
+
+/**
+ * Whether `turn`, the first after a handoff, was the one given the earlier
+ * turns, on `model`: the scenario answers that turn alone with `SAYS.carried`
+ * and the prompt it was given, which quotes `earlier`, a message said before.
+ */
+function carriedBy(turn, model, what, earlier, failures) {
+  const said = (turn?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  if (!said.startsWith(`${SAYS.carried}${model}: `))
+    failures.push(
+      `the first turn after ${what} said ${JSON.stringify(said.slice(0, 200))}, not that it carried the earlier turns on ${model}`,
+    )
+  else if (!said.includes(JSON.stringify(earlier)))
+    failures.push(`the first turn after ${what} was not given ${JSON.stringify(earlier)}`)
+}
+
+/**
+ * Whether the window shows, whole, the reply on `model` to `message`: it says
+ * back the prompt it answered, which ends with `message`, so no other reply
+ * quotes it, and it is shown whole once that end is.
+ */
+async function carriedShown(page, model, message) {
+  return page
+    .locator('.workspace-message[data-role="agent"]:visible')
+    .filter({ hasText: `${SAYS.carried}${model}` })
+    .filter({ hasText: message })
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+}
+
+/** The scripted agent a `handoff` step switches to: the one the run does not start on. */
+function otherAgent(agent) {
+  return agent === "claude" ? "codex" : "claude"
+}
+
+/** Picks `model` in a composer's picker: its provider's tab, then the model. */
+async function pickModel(page, picker, model) {
+  await picker.click()
+  await page
+    .locator(css.modelProviderTab)
+    .filter({ hasText: providerName(model.provider) })
+    .first()
+    .click()
+  await page
+    .locator(css.modelOption)
+    .filter({ hasText: model.displayName })
+    .first()
+    .click()
+}
+
+/** A catalog provider's tab in the picker, as the window names it (`composer-options.ts`). */
+function providerName(provider) {
+  return (
+    { anthropic: "Anthropic", openai: "OpenAI", opencode: "OpenCode" }[provider] ??
+    provider
+  )
+}
+
+/**
+ * Makes a channel with the sidebar's + as a person does, answering each
+ * question as it is asked, and answers the gateway's listing of it; `null`
+ * when it was not made. With `refusedFolder`, that folder is chosen first and
+ * Create must be refused at the folder question, before a folder made for it
+ * is taken instead. With `dropped`, those files and folders are dragged onto
+ * the window as the host tells it (`dropOnChannel`).
+ */
+async function makeChannel(
+  run,
+  failures,
+  { name, folder, refusedFolder, notes, resource, dropped },
+) {
+  const { page } = run
+  const pick = (kind, value) =>
+    page.evaluate(
+      ([kind, value]) => window.__fakeHostPicks[kind].push(value),
+      [kind, value],
+    )
+  const asking = (stepName) =>
+    page
+      .locator(`${css.newChannelAsked}[data-step="${stepName}"]`)
+      .waitFor({ timeout: 10_000 })
+      .then(() => true)
+      .catch(() => {
+        failures.push(`the new channel flow never asked its ${stepName}`)
+        return false
+      })
+  // With evidence asked for, each question is photographed as it is asked.
+  const photograph = (label) =>
+    run.evidence
+      ? page
+          .screenshot({ path: join(run.evidence, `channel-${run.engine}-${label}.png`) })
+          .catch(() => {})
+      : Promise.resolve()
+  const head = page.locator(`${css.sidebar} .workspace-section-head`).first()
+  await head.hover()
+  await head.locator(css.channelAdd).click({ timeout: 10_000 })
+  const flow = page.locator(css.newChannel)
+  if (!(await asking("name"))) return null
+  await page.locator(`${css.newChannelField}[data-step="name"]`).fill(name)
+  await photograph(`${name}-1-name`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("folder"))) return null
+  const folderChoice = refusedFolder ?? folder
+  if (folderChoice) {
+    await pick("folders", folderChoice)
+    await flow.getByRole("button", { name: "Choose a folder…" }).click()
+    await flow
+      .getByRole("button", { name: "Use this folder" })
+      .waitFor({ timeout: 5_000 })
+    await photograph(`${name}-2-folder`)
+    await flow.getByRole("button", { name: "Use this folder" }).click()
+  } else {
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+  }
+  if (!(await asking("placement"))) return null
+  // Both choices must remain independent, and Local must not allocate a VM.
+  const coordinatorLocation = flow.getByLabel("Main agent location")
+  const workerLocation = flow.getByLabel("New threads location")
+  await coordinatorLocation.selectOption("boat")
+  if ((await workerLocation.inputValue()) !== "local")
+    failures.push("changing coordinator placement also changed worker placement")
+  await coordinatorLocation.selectOption("local")
+  await workerLocation.selectOption("boat")
+  if ((await coordinatorLocation.inputValue()) !== "local")
+    failures.push("changing worker placement also changed coordinator placement")
+  await workerLocation.selectOption("local")
+  await photograph(`${name}-3-placement`)
+  await flow.locator(".new-channel-placement").focus()
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("model"))) return null
+  await photograph(`${name}-3-model`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("notes"))) return null
+  await saidWhole(page, `${css.newChannelField}[data-step="notes"]`, "notes", failures)
+  if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
+  await photograph(`${name}-4-notes`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("resources"))) return null
+  if (resource) {
+    await pick("resources", [resource])
+    await flow.getByRole("button", { name: "Add files…" }).click()
+    const row = flow.locator(css.newChannelResource, { hasText: basename(resource) })
+    if (
+      !(await row.waitFor({ timeout: 5_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      failures.push(`the attached ${basename(resource)} is not listed in the flow`)
+  }
+  if (dropped) await dropOnChannel(run, failures, dropped, photograph, name)
+  await photograph(`${name}-5-resources`)
+  const create = flow.getByRole("button", { name: /^Create channel/ })
+  await create.click()
+  if (refusedFolder) {
+    if (!(await asking("folder"))) return null
+    const said = await flow
+      .locator(`${css.newChannelAsked}[data-step="folder"]`)
+      .getByText("Agents can’t work there", { exact: false })
+      .waitFor({ timeout: 10_000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    if (!said)
+      failures.push(`choosing ${refusedFolder} was not refused at the folder question`)
+    await photograph(`${name}-6-refused`)
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+    await create.click()
+  }
+  const gone = await flow.waitFor({ state: "detached", timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  )
+  if (!gone) {
+    failures.push(
+      `the channel ${name} was not made: ${fold(await flow.innerText().catch(() => ""))}`,
+    )
+    await page.keyboard.press(keys.escape)
+    return null
+  }
+  const { channels } = await run.client.channels.list()
+  const listed = channels.find((channel) => channel.name === name)
+  if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  if (
+    listed &&
+    (listed.coordinatorPlacement !== "local" ||
+      listed.threadPlacement !== "local" ||
+      !listed.coordinatorConversationId)
+  )
+    failures.push(
+      `the channel ${name} did not retain its Local placements and main identity`,
+    )
+  return listed ?? null
+}
+
+/** The desktop window's least width, as `tauri.conf.json` sets it. */
+const NARROWEST_WINDOW = 800
+
+/**
+ * The composer's hint for a question (a span's text, or an empty field's
+ * placeholder) fits its box on one line, whole: it is neither wrapped nor
+ * cut short. Measured as the text itself, in the box's own font, so a hint
+ * that is clipped to one line still fails.
+ */
+async function saidWhole(page, selector, question, failures) {
+  // At the narrowest the desktop window goes (`minWidth` in tauri.conf.json),
+  // where the composer has the least room.
+  const size = page.viewportSize()
+  if (size) await page.setViewportSize({ width: NARROWEST_WINDOW, height: size.height })
+  const said = await page.locator(selector).evaluate((node) => {
+    const text =
+      "placeholder" in node && node.value === "" ? node.placeholder : node.textContent
+    const style = getComputedStyle(node)
+    const context = document.createElement("canvas").getContext("2d")
+    context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+    const room =
+      node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    return { text, wide: context.measureText(text).width, room }
+  })
+  if (size) await page.setViewportSize(size)
+  if (said.wide > said.room + 1)
+    failures.push(
+      `the ${question} question's hint "${said.text}" needs ${Math.ceil(said.wide)}px on one line; it has ${Math.floor(said.room)}px`,
+    )
+}
+
+/**
+ * Drags `dropped` (each `{ path, kind }`) onto the window while the flow asks
+ * for files, as the host tells the page: a drag over it lights the whole flow
+ * as the drop target, and the drop lists each path with its kind's icon, once,
+ * after anything already attached, and puts the target out.
+ */
+async function dropOnChannel(run, failures, dropped, photograph, name) {
+  const { page } = run
+  const flow = page.locator(css.newChannel)
+  const heard = await waitFor(
+    () => page.evaluate(() => window.__fakeHostListening("nessa://paths-dropped") > 0),
+    5_000,
+  )
+  if (!heard) {
+    failures.push("the new channel flow does not listen for dropped files")
+    return
+  }
+  // The hint says it whole, on one line, and the count is short.
+  await saidWhole(page, `${css.newChannel} .new-channel-hint`, "files", failures)
+  const count = (await flow.locator(".new-channel-count").innerText()).trim()
+  if (!/^\d\/\d$/.test(count))
+    failures.push(`the flow counts its questions as "${count}"`)
+  const emit = (event, payload) =>
+    page.evaluate(
+      ([event, payload]) => window.__fakeHostEmit(event, payload),
+      [event, payload],
+    )
+  await emit("nessa://paths-dragging", { dragging: true })
+  const target = page.locator(`${css.newChannel}[data-dropping] ${css.newChannelDrop}`)
+  if (
+    !(await target.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("a drag over the new channel flow shows no drop target")
+  } else {
+    await photograph(`${name}-5-drop-target`)
+  }
+  const before = await flow.locator(css.newChannelResource).count()
+  // The host says the drag is gone as it lets go and names the drop, then,
+  // once it has looked at them, which paths that drop held.
+  await emit("nessa://paths-dragging", { dragging: false })
+  await emit("nessa://paths-drop-began", { drop: `stress-${name}` })
+  // Until the paths come, Create waits: the draft is not yet what was dropped.
+  const create = flow.getByRole("button", { name: /^Create channel/ })
+  const held = await waitFor(() => create.isDisabled(), 2_000)
+  if (!held) failures.push("Create can be pressed while dropped files are still coming")
+  await emit("nessa://paths-dropped", {
+    drop: `stress-${name}`,
+    paths: [...dropped, dropped[0]],
+    unread: 0,
+  })
+  const listed = await waitFor(
+    async () =>
+      (await flow.locator(css.newChannelResource).count()) === before + dropped.length,
+    5_000,
+  )
+  if (!listed)
+    failures.push(
+      `dropping ${dropped.length} paths listed ${(await flow.locator(css.newChannelResource).count()) - before}`,
+    )
+  for (const { path, kind } of dropped) {
+    const row = flow.locator(css.newChannelResource, { hasText: basename(path) })
+    const listedAs = await row
+      .getAttribute("data-kind", { timeout: 2_000 })
+      .catch(() => null)
+    if (listedAs !== kind)
+      failures.push(
+        `the dropped ${basename(path)} is listed as ${listedAs ?? "nothing"}, not ${kind}`,
+      )
+  }
+  // Out, and the questions back at full ink once their fade settles.
+  const out = await waitFor(
+    () =>
+      page.evaluate(
+        ([flow, drop]) =>
+          document.querySelector(drop) === null &&
+          getComputedStyle(document.querySelector(`${flow} .new-channel-scroll`))
+            .opacity === "1",
+        [css.newChannel, css.newChannelDrop],
+      ),
+    2_000,
+  )
+  if (!out) failures.push("the drop target stays lit after the drop")
+}
+
+/**
+ * The first message of a new session in `channel`, from the home Create left
+ * open: it is listed in that channel, and its agent works in the channel's
+ * folder, told the channel's notes (Claude's system prompt, where it has one).
+ */
+async function talkInChannel(run, step, channel, failures, notes, attached = []) {
+  const text = prompt(run, STRESS.channel, step, ` ${channel.name}`)
+  const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+  await home.locator(css.field).waitFor({ timeout: 15_000 })
+  await home.locator(css.field).fill(text)
+  await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+  const conversationId = await waitFor(
+    () => selectedStressConversation(run.page, text),
+    30_000,
+  )
+  if (!conversationId) {
+    failures.push(`the first message in ${channel.name} was never listed`)
+    return
+  }
+  run.checked.push(conversationId)
+  const { view } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  const { conversations } = await run.client.conversation.list({})
+  const summary = conversations.find((each) => each.conversationId === conversationId)
+  if (summary?.channelId !== channel.channelId)
+    failures.push(
+      `the conversation started in ${channel.name} is in ${summary?.channelId ?? "no channel"}`,
+    )
+  const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  if (!reply.includes(`${SAYS.channel}${channel.folder}\n`))
+    failures.push(
+      `the agent in ${channel.name} did not work in ${channel.folder}: ${fold(reply.slice(0, 300))}`,
+    )
+  if (notes && run.stack.agent === "claude" && !reply.includes(notes))
+    failures.push(`the agent in ${channel.name} was not told the channel's notes`)
+  for (const path of run.stack.agent === "claude" ? attached : [])
+    if (!reply.includes(path))
+      failures.push(`the agent in ${channel.name} was not told of ${path}`)
+}
+
 const steps = {
+  async inputFiles(run, step, failures) {
+    await uploadedInputFiles(run, step, {
+      prefix: STRESS.reply,
+      settled: (text) =>
+        settled(run, run.main.id, new Set(), text, "completed", failures),
+      shown: (name) => expectShown(run.page, name, failures, 10000),
+    })
+  },
+  async pairedCatalogue(run, step) {
+    const result = await pairedCatalogue(step.cycles)
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `paired-catalogue-${run.engine}-${step.index}.json`),
+        JSON.stringify(result, null, 2),
+      )
+  },
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
-    if (await picker.isDisabled()) {
+    // A mode switch just before this step can still be settling. The picker
+    // is disabled only while that change is in flight.
+    const enabled = await waitFor(async () => !(await picker.isDisabled()), 10_000)
+    if (!enabled) {
       failures.push("the established conversation's model picker is disabled")
       return
     }
@@ -814,14 +1723,8 @@ const steps = {
       })
     const options = run.page.locator(css.modelOption)
     await options.filter({ hasText: target.displayName }).first().click()
-    const confirmed = await waitFor(async () => {
-      const view = await readWithReviews(run.client, run.main.id)
-      return view.runtime?.model === target.modelId && !view.modelChange ? view : null
-    }, 15_000)
-    if (!confirmed) {
-      failures.push("the window's model choice was not confirmed by the gateway")
-      return
-    }
+    // Picking only stages the model: the picker shows it, and the gateway is
+    // asked for nothing until the next message is sent.
     if (
       !(await waitFor(
         async () =>
@@ -829,15 +1732,24 @@ const steps = {
         5_000,
       ))
     )
-      failures.push("the picker did not show the source-confirmed model")
+      failures.push("the picker did not show the staged model")
+    const asked = await waitFor(async () => {
+      const view = await readWithReviews(run.client, run.main.id)
+      return view.runtime?.model !== current.modelId || view.modelChange ? view : null
+    }, 2_000)
+    if (asked) {
+      failures.push("picking a model changed the conversation before a message was sent")
+      return
+    }
+    const staged = await readWithReviews(run.client, run.main.id)
     if (photograph) {
       await run.page.screenshot({
-        path: join(run.evidence, `model-${run.engine}-confirmed-review-draft.png`),
+        path: join(run.evidence, `model-${run.engine}-staged-review-draft.png`),
         scale: "css",
       })
       run.modelPhotographed = true
     }
-    const unchanged = confirmed.permissions.map((review) => ({
+    const unchanged = staged.permissions.map((review) => ({
       review: review.review,
       executionId: review.executionId,
       options: review.options,
@@ -856,7 +1768,16 @@ const steps = {
     await settled(run, run.main.id, seen, text, "completed", failures)
     if ((await box.inputValue()) !== draft)
       failures.push("answering the original review lost the model-change draft")
+    // Sending applies the staged model first, and the message runs on it.
     const next = await send(run, run.main.id, draft, failures)
+    const confirmed = await waitFor(async () => {
+      const view = await readWithReviews(run.client, run.main.id)
+      return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+    }, 15_000)
+    if (!confirmed) {
+      failures.push("sending did not apply the staged model")
+      return
+    }
     await settled(run, run.main.id, next, draft, "completed", failures)
     await expectShown(run.page, `${SAYS.model}${target.modelId}`, failures)
     if (run.evidence)
@@ -875,9 +1796,17 @@ const steps = {
         ),
       )
   },
-  async reply(run, step, failures) {
-    const text = prompt(run, STRESS.reply, step)
-    const seen = await send(run, run.main.id, text, failures)
+  async reply(run, step, failures, sendBy) {
+    const text = prompt(run, STRESS.reply, step, step.extra ?? "")
+    const seen = await send(
+      run,
+      run.main.id,
+      text,
+      failures,
+      undefined,
+      dock(run.page),
+      sendBy,
+    )
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     // A reply carried on behind a failure echoes its notice first.
     const echoed = turn && turn.userText !== text ? turn.userText.slice(0, 40) : text
@@ -903,6 +1832,48 @@ const steps = {
       step.answer === "allow" ? SAYS.allowed : SAYS.denied,
       failures,
     )
+  },
+
+  async listAnswer(run, step, failures) {
+    const text = prompt(run, STRESS.permission, step)
+    const seen = await send(run, run.main.id, text, failures)
+    // The conversation asks; the session list's Needs you card asks the same.
+    const listCard = run.page.locator(
+      `[data-list-group="needs-you"] .workspace-request-card:has([data-session-row="${run.main.id}"])`,
+    )
+    const shown = await listCard
+      .locator(".workspace-request")
+      .first()
+      .waitFor({ timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!shown) {
+      failures.push("the session list shows no request card for the waiting conversation")
+      return
+    }
+    const words = async (locator) =>
+      ((await locator.first().textContent()) ?? "").replace(/\s+/g, " ").trim()
+    const fromList = await words(listCard.locator(".workspace-approval-command"))
+    const fromPane = await words(
+      run.page.locator(`${css.agentApproval} .workspace-approval-command`),
+    )
+    if (fromList !== fromPane)
+      failures.push(
+        `the list's card reads "${fromList}", the conversation's "${fromPane}"`,
+      )
+    await listCard
+      .locator(`button[data-answer="${step.answer === "allow" ? "once" : "deny"}"]`)
+      .first()
+      .click()
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(
+      run.page,
+      step.answer === "allow" ? SAYS.allowed : SAYS.denied,
+      failures,
+    )
+    // Answered, the card goes with the row out of Needs you.
+    if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
+      failures.push("the answered card is still in Needs you")
   },
 
   async reviews(run, step, failures) {
@@ -947,6 +1918,44 @@ const steps = {
     const seen = await send(run, run.main.id, text, failures)
     await settled(run, run.main.id, seen, text, "failed", failures)
     await expectShown(run.page, SAYS.beforeFailure, failures)
+  },
+
+  async usageLimit(run, step, failures) {
+    const text = prompt(run, STRESS.limit, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const settledTurn = await settled(run, run.main.id, seen, text, "failed", failures)
+    if (!settledTurn.turn) return
+    const limit = settledTurn.turn.usageLimit
+    if (!limit || limit.provider !== "claude" || limit.recovery !== "unknown")
+      failures.push(
+        `the turn is not an unknown Claude usage limit: ${JSON.stringify(limit)}`,
+      )
+    if (settledTurn.turn.error)
+      failures.push(`a usage limit kept a diagnostic: ${settledTurn.turn.error}`)
+    const early = "Your last turn on this request ended early"
+    if ((await pageText(run.page)).includes(early))
+      failures.push("a usage limit resumed the turn")
+    await expectShown(run.page, "Usage limit reached", failures)
+    await expectShown(run.page, "Reset time unknown", failures)
+    const box = run.page.getByRole("checkbox", {
+      name: "Auto-continue this project's threads when limits reset",
+    })
+    await box.check()
+    if (
+      !(await waitFor(async () => {
+        const view = await run.client.conversation.read(run.main.id)
+        return view.usageLimitAutoContinue === true
+      }, 15_000))
+    )
+      failures.push("the gateway did not turn usage-limit continuation on")
+    await box.uncheck()
+    if (
+      !(await waitFor(async () => {
+        const view = await run.client.conversation.read(run.main.id)
+        return view.usageLimitAutoContinue === false
+      }, 15_000))
+    )
+      failures.push("the gateway did not turn usage-limit continuation off")
   },
 
   async switch(run, step, failures) {
@@ -1059,15 +2068,270 @@ const steps = {
     })
   },
 
+  async drift(run, step, failures) {
+    await run.exclusive(async () => {
+      await run.restartConsole.during(run.opened, async () => {
+        const before = failures.length
+        // The composer is already on screen. The window has come back only
+        // once its new session socket has received a frame.
+        let stop = () => {}
+        const recovered = new Promise((resolve) => {
+          const onSocket = (socket) => {
+            if (!socket.url().endsWith("/session")) return
+            const received = () => resolve(true)
+            stop = () => {
+              socket.off("framereceived", received)
+              run.page.off("websocket", onSocket)
+            }
+            socket.once("framereceived", received)
+          }
+          run.page.on("websocket", onSocket)
+          stop = () => run.page.off("websocket", onSocket)
+        })
+        const old = run.client
+        run.restarts += 1
+        const drifted = mkdtempSync(join(tmpdir(), "nessa-stress-drift-"))
+        const path = `/opt/homebrew/bin:${process.env.PATH ?? ""}`
+        try {
+          await run.stack.gateway.restart("SIGTERM", {
+            overlay: {
+              NESSA_AGENT_PATH: path,
+              PATH: path,
+              TMPDIR: drifted,
+            },
+            whileStopped: async () => moveStagedRuntime(run.stack.gateway.directory),
+          })
+          old.close()
+          run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          const back = await Promise.race([recovered, sleep(60_000).then(() => false)])
+          if (!back)
+            failures.push("the window did not come back after the agent path changed")
+        } finally {
+          stop()
+        }
+        return failures.length === before
+      })
+    })
+    // The existing conversation still takes a message, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async linking(run, step, failures) {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
-      for (const enabled of [true, false])
-        if (!(await switchLinking(run, enabled, failures))) return
+      if (!(await switchLinking(run, true, failures))) return
+      if (!(await announced(run, failures))) return
+      if (!(await pairFromWindow(run, failures))) return
+      // Away and back: the tab reads linking again, and it is still on.
+      await closeSettings(run.page)
+      await openLinkedDevices(run.page)
+      if (!(await switchLinking(run, false, failures))) return
       await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async github(run, step, failures) {
+    const github = run.stack.github
+    if (!github) {
+      failures.push("the stack was started without the fake GitHub")
+      return
+    }
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const signIn = join(namespace, "github", "sign-in.json")
+    const print = createHash("sha256").update(github.token).digest("hex").slice(0, 16)
+    const row = run.page.locator(css.github)
+    const state = () => row.getAttribute("data-github-state").catch(() => null)
+    // Each state the person sees, kept with the evidence.
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `github-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    // GitHub's avatar host, answered here: which pictures were asked for.
+    const avatars = []
+    const pictures = `${GITHUB_AVATARS}/**`
+    const answer = (route) => {
+      avatars.push(route.request().url())
+      return route.fulfill({ contentType: "image/png", body: FAKE_AVATAR })
+    }
+    await run.page.route(pictures, answer)
+    // Answered until the step ends: its Disconnect reopens the signed-in row.
+    try {
+      await run.exclusive(async () => {
+        const needsUnlock = (await run.client.vault.status()).state === "locked"
+        await openAccounts(run.page)
+        if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+        await unlockVault(run.page, {
+          screenshot: run.evidence
+            ? join(run.evidence, `vault-unlock-settings-${run.engine}.png`)
+            : undefined,
+          expectedContainer: "[data-settings-layers]",
+        })
+        if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
+          failures.push(`GitHub was ${await state()} before Connect`)
+          return
+        }
+        await shot("signed-out")
+        await row.getByRole("button", { name: names.githubConnect }).click()
+        await unlockVault(run.page)
+        const code = row.locator("[data-github-code]")
+        const shown = await waitFor(
+          async () =>
+            github.userCode() !== null &&
+            (await code.getAttribute("data-github-code").catch(() => null)) ===
+              github.userCode(),
+          30_000,
+        )
+        if (!shown) {
+          failures.push(
+            `the row did not show the code GitHub handed out (${github.userCode()})`,
+          )
+          return
+        }
+        await shot("connecting")
+        const open = await row.locator("[data-github-open]").getAttribute("href")
+        if (open !== github.verificationUri)
+          failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
+        // The person enters the code on GitHub: the gateway's next poll takes it.
+        github.approve()
+        const connected = await waitFor(
+          async () =>
+            (await state()) === "connected" &&
+            (await row.textContent()).includes(`@${FAKE_ACCOUNT.login}`) &&
+            (await row.locator(css.githubStatus).textContent()) === "Connected",
+          30_000,
+        )
+        if (!connected) {
+          failures.push(`the row is ${await state()} after GitHub approved the code`)
+          return
+        }
+        // The picture is GitHub's, asked for by the account's id: the page was
+        // answered above, so it loads here with nothing leaving the machine.
+        const avatar = run.page.locator(`${css.githubAvatar} img`)
+        const pictured = await waitFor(
+          () =>
+            avatar
+              .evaluate((image) => image.complete && image.naturalWidth > 0)
+              .catch(() => false),
+          10_000,
+        )
+        if (!pictured) failures.push("the row did not draw the account's picture")
+        if (!avatars.some((url) => url.includes(`/u/${FAKE_ACCOUNT.id}?`)))
+          failures.push(
+            `the picture was not asked for by id: ${avatars.join(", ") || "none"}`,
+          )
+        // At rest the actions are out of sight; the pointer or focus brings them.
+        const opacity = (selector) =>
+          row.locator(selector).evaluate((node) => getComputedStyle(node).opacity)
+        const shows = (actions) =>
+          waitFor(
+            async () =>
+              (await opacity(css.githubActions)) === (actions ? "1" : "0") &&
+              (await opacity(css.githubStatus)) === (actions ? "0" : "1"),
+            5_000,
+          )
+        await run.page.mouse.move(1, 1)
+        if (!(await shows(false))) failures.push("the actions show with the row at rest")
+        // Hidden is out of reach too: what is under Disconnect's spot at rest is not it.
+        const hit = await row
+          .getByRole("button", { name: names.githubDisconnect })
+          .evaluate((node) => {
+            const box = node.getBoundingClientRect()
+            const under = document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            )
+            return Boolean(under?.closest(".settings-github-actions"))
+          })
+        if (hit) failures.push("the hidden actions take the pointer at rest")
+        await shot("connected")
+        await row.hover()
+        if (!(await shows(true)))
+          failures.push("the actions did not show under the pointer")
+        await shot("connected-hover")
+        await run.page.mouse.move(1, 1)
+        if (!(await shows(false)))
+          failures.push("the actions still show once the pointer leaves")
+        // Both actions are in the tab order: Shift+Tab from Disconnect reaches
+        // Choose repositories, and Tab goes back.
+        const disconnect = row.getByRole("button", { name: names.githubDisconnect })
+        const focused = (locator) =>
+          locator.evaluate((node) => node === document.activeElement)
+        await disconnect.focus()
+        await run.page.keyboard.press("Shift+Tab")
+        if (!(await focused(row.locator("[data-github-repositories]"))))
+          failures.push("Shift+Tab from Disconnect did not reach Choose repositories")
+        await run.page.keyboard.press("Tab")
+        if (!(await focused(disconnect)))
+          failures.push("Tab from Choose repositories did not reach Disconnect")
+        if (!(await shows(true)))
+          failures.push("the actions did not show with focus in the row")
+        await shot("connected-focus")
+        const repositories = await row
+          .locator("[data-github-repositories]")
+          .getAttribute("href")
+        if (repositories !== github.installUrl)
+          failures.push(
+            `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+          )
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      if (existsSync(signIn)) failures.push("GitHub sign-in leaked into a plaintext file")
+      // A preceding restart replaces run.client; stack.client still names the
+      // original closed session. Read through this run's current connection.
+      const persisted = await run.client.github.status()
+      if (persisted.state !== "connected")
+        failures.push("the OS-held sign-in is unavailable")
+      if (run.stack.gateway.log().includes(github.token))
+        failures.push("the gateway logged the GitHub token")
+      // An agent opened now is started with the sign-in, for gh and for git.
+      await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
+      await githubAgent(
+        run,
+        step,
+        " connected",
+        `token=${print} git=${print}`,
+        failures,
+        true,
+      )
+      if (failures.length) return
+      await run.exclusive(async () => {
+        await openAccounts(run.page)
+        // The actions are out of reach until the pointer is over the row, as a person's is.
+        await row.hover()
+        await row.getByRole("button", { name: names.githubDisconnect }).click()
+        if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
+          failures.push(`the row is ${await state()} after Disconnect`)
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
+      await githubAgent(run, step, " disconnected", "token=none git=none", failures)
+      await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
+      // Each step of both is on record, and no record holds the token.
+      const audit = join(namespace, "conversations", "audit", "github")
+      const records = existsSync(audit) ? readdirSync(audit) : []
+      for (const event of [
+        "connect-requested",
+        "connected",
+        "disconnect-requested",
+        "disconnected",
+      ])
+        if (!records.some((name) => name.endsWith(`-${event}.json`)))
+          failures.push(`the audit has no ${event} record`)
+      if (
+        records.some((name) =>
+          readFileSync(join(audit, name), "utf8").includes(github.token),
+        )
+      )
+        failures.push("an audit record holds the GitHub token")
+    } finally {
+      await run.page.unroute(pictures, answer)
+    }
   },
 
   async upgrade(run, step, failures) {
@@ -1102,10 +2366,288 @@ const steps = {
         // The upgraded gateway still answers the conversation, in the
         // window: that answer comes over the window's new connection, so
         // the refused connections while it was down are the restart's.
-        if (failures.length === count) await steps.reply(run, step, failures)
+        if (failures.length === count) {
+          // Spend the original Send-click budget on browser recovery and the
+          // click together. The Node client above is a different connection.
+          const sendBy = Date.now() + 10_000
+          if (!(await run.restartConsole.readable(sendBy - Date.now())))
+            failures.push(
+              "the browser workspace did not recover before the upgraded Send",
+            )
+          else await steps.reply(run, step, failures, sendBy)
+        }
         return failures.length === count
       })
     })
+  },
+
+  async launch(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const removeKey = () =>
+        page.evaluate((key) => sessionStorage.removeItem(key), STARTING.key)
+      // The window opens while the host is still starting the gateway, as at
+      // every launch: the host holds its read until the gateway is up.
+      await page.evaluate((key) => sessionStorage.setItem(key, "1"), STARTING.key)
+      let covered
+      let askedWhileStarting
+      try {
+        await page.reload()
+        // Whatever the window shows meanwhile, it is never the startup
+        // screen: the gateway did not fail, it is starting.
+        covered = await page
+          .locator(css.startupScreen)
+          .waitFor({ timeout: LAUNCH_STARTING_MS })
+          .then(() => true)
+          .catch(() => false)
+        // And the window did ask while it was starting: the hold was met.
+        askedWhileStarting = await page.evaluate(
+          () => window.__fakeHostAsked.load_gateway_endpoint,
+        )
+      } finally {
+        // Up, whatever happened: a later reload must not find it starting.
+        // A page mid-navigation refuses the evaluate; the next one may not.
+        await removeKey().catch(() => removeKey().catch(() => {}))
+      }
+      if (covered) {
+        failures.push(
+          "the window showed the startup screen while the gateway was starting",
+        )
+        return
+      }
+      if (!(askedWhileStarting > 0)) {
+        failures.push("the window did not ask for the gateway while it was starting")
+        return
+      }
+      const started = Date.now()
+      const listed = await page
+        .locator(selectorFor.sessionListRowFor(run.main.id))
+        .waitFor({ timeout: LAUNCH_LISTED_MS })
+        .then(() => true)
+        .catch(() => false)
+      if (!listed) {
+        failures.push(
+          `the window did not list the main conversation within ${LAUNCH_LISTED_MS}ms of the gateway being up`,
+        )
+        return
+      }
+      log(`launch: listed ${Date.now() - started}ms after the gateway was up`)
+      if ((await page.locator(css.startupScreen).count()) > 0) {
+        failures.push("the startup screen covers the window after the gateway was up")
+        return
+      }
+      await unlockReloadedVault(run, page)
+      await openStressConversation(page, run.main.id, run.main.title)
+    })
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async menuPanel(run, step, failures) {
+    const page = await panelWindow(run)
+    try {
+      const strip = page.locator(css.panelTabs)
+      if (
+        !(await strip.waitFor({ timeout: 30_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("the panel drew no tab strip")
+        return
+      }
+      if ((await strip.getAttribute("data-variant")) !== "dots")
+        failures.push("the panel's tabs are not page dots")
+      // Messages, then the main conversation from its row: a chat opened
+      // from the list takes a dot, and its name leads the strip.
+      await page.locator(css.panelMessages).click()
+      const rowFor = (title) =>
+        page.locator(css.panelListRow).filter({ hasText: title }).first()
+      if (
+        !(await rowFor(run.main.title)
+          .waitFor({ timeout: 15_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      ) {
+        failures.push(
+          `the panel's Messages does not list ${JSON.stringify(run.main.title)}`,
+        )
+        return
+      }
+      const dotsBefore = await page.locator(css.panelDot).count()
+      await rowFor(run.main.title).click()
+      await panelNamed(page, run.main.title, failures)
+      const dots = await page.locator(css.panelDot).count()
+      if (dots !== dotsBefore + 1)
+        failures.push(`opening a chat left ${dots} dots, not ${dotsBefore + 1}`)
+      // The selected dot is the bar: wider than every other dot, once its
+      // width has settled.
+      const widths = () =>
+        page.locator(css.panelDot).evaluateAll((all) =>
+          all.map((dot) => ({
+            width: dot.getBoundingClientRect().width,
+            selected: dot.closest("[data-active]") !== null,
+          })),
+        )
+      const oneBar = (all) => {
+        const bar = all.filter((each) => each.selected)
+        return (
+          bar.length === 1 &&
+          all.every((each) => each.selected || each.width + 6 <= bar[0].width)
+        )
+      }
+      if (!(await waitFor(async () => oneBar(await widths()), 5_000)))
+        failures.push(
+          `the selected dot is not the one bar: ${JSON.stringify(await widths())}`,
+        )
+      // A message sent from the panel wears the chat accent and its rim.
+      const text = prompt(run, STRESS.reply, step, " from the panel")
+      const seen = await seenTurns(run, run.main.id)
+      const box = page.locator(css.panelComposer)
+      await box.click()
+      await page.keyboard.type(text)
+      await page.keyboard.press("Enter")
+      run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+      await settled(run, run.main.id, seen, text, "completed", failures)
+      const bubble = page.locator(css.sentBubble).filter({ hasText: text }).first()
+      if (
+        !(await bubble.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("the panel does not show the message it sent")
+      } else {
+        // Its colours are nessa_ui's to choose: the bubble must wear the chat
+        // accent and its rim, whatever values the theme gives them.
+        const paint = await bubble.evaluate((node) => {
+          const probe = document.createElement("span")
+          probe.style.background = "var(--nessa-chat-accent)"
+          probe.style.boxShadow = "var(--nessa-chat-accent-rim)"
+          node.parentElement.append(probe)
+          const want = getComputedStyle(probe)
+          const style = getComputedStyle(node)
+          const paint = {
+            background: style.backgroundColor,
+            accent: want.backgroundColor,
+            shadow: style.boxShadow,
+            rim: want.boxShadow,
+          }
+          probe.remove()
+          return paint
+        })
+        if (
+          paint.accent === "rgba(0, 0, 0, 0)" ||
+          paint.rim === "none" ||
+          paint.background !== paint.accent ||
+          !paint.shadow.includes(paint.rim)
+        )
+          failures.push(
+            `a sent bubble does not wear the chat accent and its rim: ${JSON.stringify(paint)}`,
+          )
+      }
+      // The panel has no workspace, so its reply is looked for on the page.
+      const echo = `${SAYS.echo}${text}`
+      if (
+        !(await page
+          .getByText(echo)
+          .first()
+          .waitFor({ timeout: 30_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      )
+        failures.push(`the panel does not show ${JSON.stringify(echo)}`)
+      // A chat archived from Messages leaves a row card with its avatar,
+      // and the card's Undo brings it back, in the list and the gateway.
+      const conversationId = randomUUID()
+      const first = prompt(run, STRESS.reply, step, " to archive")
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
+      run.checked.push(conversationId)
+      await settled(run, conversationId, new Set(), first, "completed", failures)
+      const title = await titleOf(run, conversationId)
+      await page.locator(css.panelMessages).click()
+      const row = rowFor(title)
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push(`the panel's Messages does not list ${JSON.stringify(title)}`)
+        return
+      }
+      await row.focus()
+      // From the keyboard: a pointer click races the row sliding open, and a
+      // list that redraws under it. Shift+F10 opens the actions and focuses
+      // the first; Tab walks them.
+      await page.keyboard.press("Shift+F10")
+      await waitFor(
+        () =>
+          page.evaluate(
+            () =>
+              document.activeElement?.getAttribute("data-slot") ===
+              "conversation-history-row-action",
+          ),
+        5_000,
+      )
+      const onArchive = () =>
+        page.evaluate(
+          (name) => document.activeElement?.getAttribute("aria-label") === name,
+          `Archive ${title}`,
+        )
+      for (let tabs = 0; tabs < 4 && !(await onArchive()); tabs++)
+        await page.keyboard.press("Tab")
+      if (!(await onArchive())) {
+        failures.push(
+          `Shift+F10 on ${JSON.stringify(title)} does not reach its Archive action`,
+        )
+        return
+      }
+      await page.keyboard.press("Enter")
+      const undoCard = page.locator(css.undoCard)
+      if (
+        !(await undoCard.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("archiving from the panel left no undo card")
+        return
+      }
+      if (!(await undoCard.innerText()).includes(title))
+        failures.push(`the undo card does not name ${JSON.stringify(title)}`)
+      if ((await undoCard.locator(css.randomAvatar).count()) !== 1)
+        failures.push("the undo card does not lead with the conversation's avatar")
+      const archived = async (want) =>
+        waitFor(async () => {
+          const { conversations } = await run.client.conversation.list({ archived: true })
+          return (
+            conversations.some((each) => each.conversationId === conversationId) === want
+          )
+        }, 15_000)
+      if (!(await archived(true)))
+        failures.push("the gateway did not archive the conversation")
+      await undoCard.getByRole("button", { name: /^Undo/ }).click()
+      if (!(await archived(false)))
+        failures.push("Undo did not unarchive the conversation")
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("Undo did not put the row back in the panel's Messages")
+      if (!(await waitFor(async () => (await undoCard.count()) === 0, 5_000)))
+        failures.push("the undo card stayed after Undo")
+    } finally {
+      await page.close()
+    }
   },
 
   async rail(run, step, failures) {
@@ -1117,18 +2659,184 @@ const steps = {
         failures.push("the window had no room for the side rail")
         return
       }
-      for (const [index, open] of [true, false, true].entries()) {
+      // Open, closed, open again. Each open sends its own phrase: settled
+      // counts copies of one phrase, and the first send is already there.
+      let opened = 0
+      let place
+      for (const open of [true, false, true]) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
-          await toggle.click()
+          failures.push(...(await footerThroughToggle(run.page)))
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
+        // The toggle stays under the pointer: opening or closing the rail
+        // moves what is beside it, never the toggle itself.
+        const box = await toggle.boundingBox()
+        const at = box && [box.x, box.y, box.width, box.height].map(Math.round).join()
+        place ??= at
+        if (at !== place)
+          failures.push(
+            `the rail's toggle moved to [${at}] with the rail ${open ? "open" : "closed"}, from [${place}]`,
+          )
         // The workspace still takes a message with the rail beside it.
-        if (index === 0 && failures.length === 0) await steps.reply(run, step, failures)
+        if (open && failures.length === 0) {
+          opened += 1
+          await steps.reply(
+            run,
+            opened === 1 ? step : { ...step, extra: " again" },
+            failures,
+          )
+        }
       }
+      await studioWithTheCorner(run.page, failures)
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.
       await setSideRail(run.page, false, failures)
       await aroundTheLights(run.page, "off", failures)
     })
+  },
+
+  async panel(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const panel = page.locator("#workspace-panel")
+      const grid = () =>
+        page.evaluate(
+          () =>
+            document.querySelector(".split-panes-grid")?.getBoundingClientRect().right ??
+            0,
+        )
+      const before = await grid()
+      await page.keyboard.press("Meta+Alt+KeyB")
+      const opened = await waitFor(
+        async () => (await panel.getAttribute("aria-hidden")) === null,
+        3000,
+      )
+      if (!opened) {
+        failures.push("⌥⌘B did not open the right panel")
+        return
+      }
+      await page.waitForTimeout(500)
+      // The panes give the panel its room; the conversation still takes a message.
+      const beside = await grid()
+      if (!(beside < before - 100))
+        failures.push(`the panes did not make room for the panel: ${before} → ${beside}`)
+      await steps.reply(run, step, failures)
+      await page.getByRole("button", { name: "Expand Panel" }).click()
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) !== null,
+          2000,
+        ))
+      )
+        failures.push("Expand Panel did not maximize it")
+      await expandedForItsChat(run, failures)
+      await page.getByRole("button", { name: "Expand Panel" }).click()
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) !== null,
+          2000,
+        ))
+      )
+        failures.push("Expand Panel did not maximize it again")
+      await page.keyboard.press("Escape")
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) === null,
+          2000,
+        ))
+      )
+        failures.push("Escape did not restore the maximized panel")
+      await page.keyboard.press("Meta+Alt+KeyB")
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("aria-hidden")) === "true",
+          3000,
+        ))
+      )
+        failures.push("⌥⌘B did not close the right panel")
+      await page.waitForTimeout(500)
+      const after = await grid()
+      if (Math.abs(after - before) > 1)
+        failures.push(
+          `the panes did not take the panel's room back: ${before} → ${after}`,
+        )
+    })
+  },
+
+  async onboarding(run, step, failures) {
+    await run.exclusive(async () => {
+      const asked = await replayOnboarding(run.page, run.evidence)
+      if (asked !== 1) {
+        failures.push(`Replay asked the host ${asked} times, not once`)
+        return
+      }
+      // The host opens the setup window for that ask; this page is that
+      // window, over the same gateway, as the real host builds it. Both
+      // agents are ready, so a click on either is a choice.
+      const page = await setupWindow(run, (page) =>
+        agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
+      )
+      try {
+        const heading = (name) => page.getByRole("heading", { name, exact: true })
+        const button = (name) => page.getByRole("button", { name, exact: true })
+        await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
+        await openedAsAGlow(page, failures)
+        await welcomedAtOnce(page, failures)
+        await page.screenshot({ path: join(run.evidence, "onboarding-welcome.png") })
+        // Welcome has nothing before it: no Back, and Close in its corner.
+        await button(names.setup.close).waitFor()
+        let corners = await setupCorners(page)
+        if (corners.back) failures.push("welcome shows a Back button")
+        if (!inCorner(corners.close, "right"))
+          failures.push(
+            `Close is not round in the top-right corner: ${JSON.stringify(corners.close)}`,
+          )
+        // Forward and back twice: each time the picker has Back in the
+        // top-left corner, and it returns to welcome.
+        for (let round = 0; round < 2; round += 1) {
+          await button(names.setup.getStarted).click()
+          await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+          await button(names.setup.back).waitFor()
+          corners = await setupCorners(page)
+          if (!inCorner(corners.back, "left"))
+            failures.push(
+              `Back is not round in the top-left corner: ${JSON.stringify(corners.back)}`,
+            )
+          if (!inCorner(corners.close, "right"))
+            failures.push(
+              `on the picker Close left its corner: ${JSON.stringify(corners.close)}`,
+            )
+          await button(names.setup.back).click()
+          await heading(names.setup.welcome).waitFor({ timeout: 10_000 })
+          if (await button(names.setup.back).count())
+            failures.push("back on welcome, the Back button is still shown")
+        }
+        // The picker lists the agents setup offers, each with its figure.
+        await button(names.setup.getStarted).click()
+        await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+        await pickerOffers(page, failures)
+        await page.screenshot({ path: join(run.evidence, "onboarding-picker.png") })
+        // Close leaves setup from the picker: one handoff, as left.
+        await button(names.setup.close).click()
+        const handed = await waitFor(
+          async () =>
+            (await page.evaluate(() => window.__fakeHostSetupFinishes.length)) > 0,
+          10_000,
+        )
+        const finishes = await page.evaluate(() => window.__fakeHostSetupFinishes)
+        if (!handed) failures.push("Close did not hand setup back to the host")
+        else if (finishes.length !== 1 || finishes[0].completed !== false)
+          failures.push(
+            `Close handed over ${JSON.stringify(finishes)}, not one left setup`,
+          )
+        if (await page.locator(".nessa-setup-window").count())
+          failures.push("setup is still on screen after Close")
+      } finally {
+        await page.close()
+      }
+      await finishedIntoTheMenuBar(run, failures)
+    })
+    // The window is still the window it was: a message sent there is answered.
+    if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
   async pool(run, step, failures) {
@@ -1326,6 +3034,150 @@ const steps = {
     }
   },
 
+  async tunnel(run, step, failures) {
+    const directory = tunnelDirectory(run)
+    const on = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      if (!(await switchLinking(run, true, failures))) return false
+      if (!(await switchTunnel(run, true, failures))) return false
+      await closeSettings(run.page)
+      return true
+    })
+    // Its own function, so a check that ends it early still turns it off.
+    const throughTunnel = async () => {
+      let worker
+      let owner
+      try {
+        const { address } = await run.client.pairing.tunnel()
+        const kept = keptTunnel(directory)
+        if (!address || !kept) {
+          failures.push(
+            `the ready tunnel is at ${address} with ${JSON.stringify(kept)} kept`,
+          )
+          return
+        }
+        // The gateway stops and starts again; cloudflared does not.
+        await run.exclusive(() =>
+          run.restartConsole.during(run.opened, async () => {
+            const old = run.client
+            run.restarts += 1
+            await run.stack.gateway.restart("SIGTERM")
+            old.close()
+            run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          }),
+        )
+        const again = await waitFor(async () => {
+          const read = await run.client.pairing.tunnel()
+          return read.status === "ready" ? read : null
+        }, 60_000)
+        if (again?.address !== address)
+          failures.push(
+            `after a restart the tunnel is at ${again?.address}, not ${address}`,
+          )
+        const after = keptTunnel(directory)
+        if (after?.pid !== kept.pid || !alive(kept.pid))
+          failures.push(
+            `the restarted gateway did not take cloudflared ${kept.pid} back: ${JSON.stringify(after)}`,
+          )
+        if (failures.length) return
+        // A paired machine that cannot reach the gateway directly dials it
+        // through the tunnel.
+        const through = tunnelConnections(directory)
+        owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+        worker = await startWorker({
+          owner,
+          address: run.nativeAddress,
+          agent: run.stack.agent,
+          launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+          label: `t${step.index}`,
+          tunnel: { address: UNREACHABLE, origin: address },
+          connected: async (name) =>
+            (await offers(run, (environments) => environments.includes(name))).includes(
+              name,
+            ),
+        })
+        if (tunnelConnections(directory) <= through)
+          failures.push("the worker connected, but not through the tunnel")
+        const conversationId = randomUUID()
+        await run.client.conversation.create({
+          conversationId,
+          agent: run.stack.agent,
+          environment: worker.name,
+        })
+        const text = prompt(run, STRESS.reply, step, " tunnel")
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.lease?.host !== worker.name)
+          failures.push(`its lease runs on ${view?.lease?.host}, not ${worker.name}`)
+        // Read at rest while its worker serves: the run's own rest check
+        // comes after the worker is gone.
+        if (failures.length === 0) failures.push(...(await atRest(run, [conversationId])))
+      } finally {
+        if (worker) {
+          if (run.evidence)
+            writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+          await worker.close()
+        }
+        owner?.close()
+      }
+    }
+    // Off again, whatever happened: the tunnel's program ends with it.
+    // A throw from the check still turns the tunnel off first: left on, the
+    // gateway would start a new program after the kill below, and nothing
+    // here would know of it.
+    let thrown = null
+    try {
+      if (on) await throughTunnel()
+    } catch (error) {
+      thrown = error
+    }
+    let kept = null
+    try {
+      kept = keptTunnel(directory)
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        const tunnelOn =
+          (await run.page
+            .locator(css.tunnel)
+            .getAttribute("data-tunnel-enabled")
+            .catch(() => null)) === "true"
+        if (tunnelOn && (await switchTunnel(run, false, failures)) && kept) {
+          const gone = await waitFor(async () => !alive(kept.pid), 15_000)
+          if (!gone)
+            failures.push(`cloudflared ${kept.pid} outlived the tunnel turned off`)
+        }
+        if (
+          (await run.page.locator(css.linked).getAttribute("data-linked")) === "on" &&
+          (await switchLinking(run, false, failures))
+        )
+          await closeSettings(run.page)
+      })
+    } finally {
+      // Nothing the step started outlives it: its own process group, so
+      // the gateway's end never reaches it.
+      const left = keptTunnel(directory) ?? kept
+      if (left && alive(left.pid)) {
+        failures.push(`cloudflared ${left.pid} was still running at the step's end`)
+        try {
+          process.kill(-left.pid, "SIGKILL")
+        } catch {
+          // Gone in the meantime.
+        }
+      }
+    }
+    if (thrown) throw thrown
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async delegate(run, step, failures) {
     const text = prompt(run, STRESS.delegate, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -1346,7 +3198,10 @@ const steps = {
       failures.push("the thread's report never reached the conversation that sent it")
     else if (report.status !== "completed")
       failures.push(`the report's turn ended ${report.status}`)
-    else await expectShown(run.page, SAYS.report, failures)
+    else {
+      await expectShown(run.page, SAYS.report, failures)
+      await reportLine(run, report, failures)
+    }
   },
 
   async await(run, step, failures) {
@@ -1423,6 +3278,7 @@ const steps = {
       )
       return
     }
+    await flatPanes(run.page, failures)
     // Asked in the composer of the pane beside, the focused one.
     const beside = await windowRead(
       run,
@@ -1457,6 +3313,7 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
+    if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
     await run.page.keyboard.press(keys.closePane)
     if (
@@ -1469,9 +3326,12 @@ const steps = {
       return
     }
     await run.page.keyboard.press(keys.toggleSidebar)
+    await channelShowsList(run.page, failures)
+    if (failures.length) return
     // The main conversation is the pane left. Not opened from its row: the
     // row beside it quotes the window, the main conversation's title with it.
-    // Asked from the main conversation's composer: it is the whole window now.
+    // Asked from the main conversation's composer: it is the whole window now,
+    // the session list shown again by the channel.
     await windowRead(
       run,
       run.main.id,
@@ -1482,6 +3342,7 @@ const steps = {
         said.you?.position === "full" &&
         said.you.focused === true &&
         said.windows?.length === 1 &&
+        said.windows[0].sessionList === "open" &&
         said.windows[0].panes.length === 1,
     )
   },
@@ -1501,6 +3362,71 @@ const steps = {
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async channel(run, step, failures) {
+    const notes = `Answer as the stress channel s${run.knobs.seed}.`
+    // In the run's own folder, removed with it: the rest check reads these
+    // channels' conversations again at the end, and an agent cannot be built
+    // in a folder that is gone.
+    const attached = mkdtempSync(join(run.stack.scratch, "channel-"))
+    const resource = join(attached, "brief.md")
+    writeFileSync(resource, "# Brief\n")
+    // Dragged onto the window: a file and a folder, as the host names them.
+    writeFileSync(join(attached, "dropped.md"), "# Dropped\n")
+    mkdirSync(join(attached, "dropped-kit"))
+    const dropped = [
+      { path: realpathSync(join(attached, "dropped.md")), kind: "file" },
+      { path: realpathSync(join(attached, "dropped-kit")), kind: "folder" },
+    ]
+    const chosen = mkdtempSync(join(run.stack.scratch, "chosen-"))
+    try {
+      // Made in a folder of its own, after a folder agents may not use.
+      const made = await makeChannel(run, failures, {
+        name: `stress-made-r${step.index}-s${run.knobs.seed}`,
+        refusedFolder: "/",
+        notes,
+        resource,
+        dropped,
+      })
+      if (made) {
+        if (!made.folderMade || !made.folder.includes(`/channels/${made.channelId}`))
+          failures.push(
+            `the channel made without a folder works in ${made.folder}, not one made for it`,
+          )
+        if (!existsSync(made.folder))
+          failures.push(`the made folder ${made.folder} is not there`)
+        await talkInChannel(
+          run,
+          step,
+          made,
+          failures,
+          notes,
+          dropped.map(({ path }) => path),
+        )
+      }
+      // Made in a folder chosen in the host's picker.
+      const there = await makeChannel(run, failures, {
+        name: `stress-chosen-r${step.index}-s${run.knobs.seed}`,
+        folder: chosen,
+      })
+      if (there) {
+        if (there.folderMade || there.folder !== realpathSync(chosen))
+          failures.push(
+            `the channel made in ${chosen} works in ${there.folder} (made: ${there.folderMade})`,
+          )
+        await talkInChannel(run, step, there, failures)
+      }
+    } finally {
+      // Back to the main conversation, in the default channel.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
   },
 
   async fresh(run, step, failures) {
@@ -1671,6 +3597,7 @@ const steps = {
       )
       return
     }
+    await unlockReloadedVault(run, run.page)
     await openStressConversation(run.page, run.main.id, run.main.title)
     const { permissionTargets } = await import("@nessa/client")
     const view = await readWithReviews(run.client, conversationId)
@@ -1802,6 +3729,186 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  /**
+   * A conversation switched to the other agent from the composer's picker,
+   * as a person does: the pick is only staged (taken back once, then picked
+   * again), and the next message sent makes the switch. Then forked from
+   * its row's More menu. Each is talked
+   * to after: the first turn of each new session is the one given the
+   * earlier turns (`SAYS.carried`), and it runs on the agent and model
+   * asked for. The window draws a line at the switch, and the fork opens
+   * on the copied turns and a line after them.
+   */
+  async handoff(run, step, failures) {
+    const other = otherAgent(run.stack.agent)
+    const target = catalog.models.find((model) => model.modelId === MODELS[other])
+    if (!target) throw new CannotRun(`the catalog has no ${MODELS[other]}`)
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " handoff")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    // Picking another provider's model only stages it: nothing is switched,
+    // and no line is drawn, until a message is sent. Picking the
+    // conversation's own model again takes the pick back.
+    const picker = dock(run.page).locator(css.modelChip)
+    const own = catalog.models.find((model) => model.modelId === before.model)
+    if (!own) throw new CannotRun(`the catalog has no ${before.model}`)
+    const line = run.page.locator(`${css.handoffLine}[data-handoff="switch"]`)
+    const unswitched = async (what) => {
+      if (
+        !(await waitFor(
+          async () =>
+            (await picker.getAttribute("aria-label"))?.includes(what.displayName),
+          5_000,
+        ))
+      )
+        failures.push(`the picker did not show ${what.displayName} once picked`)
+      const moved = await waitFor(async () => {
+        const view = await run.client.conversation.read(conversationId)
+        return view.model !== before.model || view.handoffs.length > 0
+      }, 2_000)
+      if (moved)
+        failures.push(
+          `picking ${what.displayName} switched the conversation before a send`,
+        )
+      if (await line.count())
+        failures.push(`picking ${what.displayName} drew a switch line before a send`)
+    }
+    await pickModel(run.page, picker, target)
+    await unswitched(target)
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-staged.png`),
+        scale: "css",
+      })
+    await pickModel(run.page, picker, own)
+    await unswitched(own)
+    await pickModel(run.page, picker, target)
+    await unswitched(target)
+    if (failures.length) return
+    const afterSwitch = prompt(run, STRESS.reply, step, " after switch")
+    const seen = await send(
+      run,
+      conversationId,
+      afterSwitch,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const switched = await waitFor(async () => {
+      const view = await run.client.conversation.read(conversationId)
+      return view.model === target.modelId &&
+        view.handoffs.filter((each) => each.kind === "switch").length === 1 &&
+        view.handoffs.some((each) => each.kind === "switch" && each.to?.agent === other)
+        ? view
+        : null
+    }, 30_000)
+    if (!switched) {
+      failures.push(`sending did not switch the conversation to ${other} once`)
+      return
+    }
+    if (
+      !(await line
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window drew no line where the conversation was switched")
+    const { turn: switchedTurn } = await settled(
+      run,
+      conversationId,
+      seen,
+      afterSwitch,
+      "completed",
+      failures,
+    )
+    carriedBy(switchedTurn, target.modelId, "the switch", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, afterSwitch)))
+      failures.push("the window does not show the reply after the switch")
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-switch.png`),
+        scale: "css",
+      })
+    // Forked from the row: the window opens the fork, on the copied turns.
+    const listed = new Set(
+      (await run.client.conversation.list({})).conversations.map(
+        (each) => each.conversationId,
+      ),
+    )
+    await choose(run.page, conversationId, "Fork")
+    const forkId = await waitFor(async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return conversations.find((each) => !listed.has(each.conversationId))
+        ?.conversationId
+    }, 15_000)
+    if (!forkId) {
+      failures.push("the gateway never listed the fork")
+      return
+    }
+    run.checked.push(forkId)
+    const forked = await run.client.conversation.read(forkId)
+    const copied = forked.handoffs.find((each) => each.kind === "fork")
+    if (forked.model !== target.modelId)
+      failures.push(`the fork runs ${forked.model}, not its source's ${target.modelId}`)
+    if (!copied || (copied.turns?.length ?? 0) !== 2)
+      failures.push(
+        `the fork copied ${copied?.turns?.length ?? "no"} turns, not the source's 2`,
+      )
+    if (forked.messages.length > 0) failures.push("the fork said something of its own")
+    if (
+      !(await run.page
+        .locator(`${css.handoffLine}[data-handoff="fork"]`)
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window did not open the fork on its copied turns")
+    await expectShown(run.page, `${SAYS.echo}${first}`, failures)
+    const inFork = prompt(run, STRESS.reply, step, " in fork")
+    const forkSeen = await send(run, forkId, inFork, failures, new Set())
+    const { turn: forkTurn } = await settled(
+      run,
+      forkId,
+      forkSeen,
+      inFork,
+      "completed",
+      failures,
+    )
+    // Its own first turn ran on the same model and was given the copied turns.
+    carriedBy(forkTurn, target.modelId, "the fork", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, inFork)))
+      failures.push("the window does not show the fork's own reply after the copied one")
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-fork.png`),
+        scale: "css",
+      })
+    // The source is as it was.
+    const source = await run.client.conversation.read(conversationId)
+    if (source.messages.length !== 2)
+      failures.push(`the fork changed its source: ${source.messages.length} turns`)
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
   async delete(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " delete")
@@ -1836,6 +3943,322 @@ const steps = {
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
+  async trace(run, step, failures) {
+    const text = prompt(run, STRESS.trace, step)
+    const seen = await send(run, run.main.id, text, failures)
+    await traceWhileLive(run, failures)
+    const { view, turn } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    if (!turn) return
+    // The gateway keeps every call of the turn with when it started and
+    // ended, and the input it was made with.
+    const tools = view.tools.filter((tool) => tool.executionId === turn.executionId)
+    if (tools.length !== TRACE_CALLS.length) {
+      failures.push(
+        `the trace turn kept ${tools.length} calls, not ${TRACE_CALLS.length}`,
+      )
+      return
+    }
+    for (const [index, tool] of tools.entries()) {
+      const call = TRACE_CALLS[index]
+      const name = `call ${index + 1} (${call.tool})`
+      if (tool.status !== call.status)
+        failures.push(`${name} is ${tool.status}, not ${call.status}`)
+      if (typeof tool.startedAtMs !== "number" || typeof tool.endedAtMs !== "number") {
+        failures.push(
+          `${name} kept no start or end: ${tool.startedAtMs}, ${tool.endedAtMs}`,
+        )
+        continue
+      }
+      if (tool.endedAtMs < tool.startedAtMs)
+        failures.push(
+          `${name} ended ${tool.startedAtMs - tool.endedAtMs} ms before it started`,
+        )
+      let input
+      try {
+        input = JSON.parse(tool.input)
+      } catch {
+        failures.push(`${name} kept no input: ${JSON.stringify(tool.input)}`)
+        continue
+      }
+      // A harness reports the arguments themselves (Claude) or its own
+      // record of the call, naming the tool (Codex): either way the input is
+      // this call's, not another's.
+      const own =
+        input && typeof input === "object" && "arguments" in input && "tool" in input
+          ? input.tool === call.tool && JSON.stringify(input.arguments)
+          : JSON.stringify(input)
+      if (own !== JSON.stringify(call.arguments))
+        failures.push(
+          `${name}'s input ${tool.input} is not ${JSON.stringify(call.arguments)}`,
+        )
+    }
+    // The pause after each call shows in the times, which are the session's
+    // own clock: the next call starts no sooner.
+    for (let index = 1; index < tools.length; index += 1) {
+      const gap = tools[index].startedAtMs - tools[index - 1].endedAtMs
+      if (gap < TRACE_PAUSE_MS - 100)
+        failures.push(
+          `call ${index + 1} started ${gap} ms after the one before, not after the pause`,
+        )
+    }
+    // The window draws the run as one line, folded once the agent wrote past
+    // it, that opens to a row per call, each with its bar and status.
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.trace}${text}` })
+    const line = message.locator('[data-slot="tool-trace-line"]')
+    const folded = await waitFor(
+      async () =>
+        (await line.count()) === 1 &&
+        (await line.getAttribute("aria-expanded")) === "false" &&
+        (await line.textContent()).includes(`Ran ${TRACE_CALLS.length} tools`),
+      15_000,
+    )
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `trace-${run.engine ?? "window"}-folded.png`),
+      })
+    if (!folded) {
+      failures.push(
+        `the window does not draw the run as one folded line: ${JSON.stringify(
+          (await line.count()) ? await line.textContent() : null,
+        )}`,
+      )
+      return
+    }
+    // The line stays where it was clicked, including when the reader is at the
+    // end (`tool-disclosure.ts`). It must not move up. A close at the end may
+    // move it down only as far as the browser clamps scrollTop.
+    const place = (locator) =>
+      locator.evaluate((element) => {
+        const scroller = element.closest(".workspace-transcript")
+        return {
+          top: element.getBoundingClientRect().top,
+          scroll: scroller instanceof HTMLElement ? scroller.scrollTop : 0,
+        }
+      })
+    const stayed = (before, after, what) => {
+      const up = before.top - after.top
+      const down = after.top - before.top
+      const scrollDelta = after.scroll - before.scroll
+      if (up > 1) failures.push(`${what} moved up ${up.toFixed(1)}px`)
+      if (down > 1 && scrollDelta > -down + 1)
+        failures.push(
+          `${what} moved down ${down.toFixed(1)}px while scroll moved ${scrollDelta.toFixed(1)}px`,
+        )
+    }
+    const disclosureSettled = () =>
+      run.page.waitForFunction(() => {
+        const scroller = document.querySelector(".workspace-transcript")
+        const moving = [
+          ...(scroller?.querySelectorAll("[data-slot='tool-trace']") ?? []),
+        ].some((trace) => {
+          const animations =
+            trace.getAnimations?.({ subtree: true }) ?? trace.getAnimations?.() ?? []
+          return animations.some((animation) => animation.playState === "running")
+        })
+        return (
+          Boolean(scroller) && !scroller.hasAttribute("data-disclosure-hold") && !moving
+        )
+      })
+    await line.scrollIntoViewIfNeeded()
+    const lineAt = await place(line)
+    await line.evaluate((element) => element.click())
+    await disclosureSettled()
+    stayed(lineAt, await place(line), "opening the run")
+    const rows = message.locator('[data-slot="tool-trace-step"]')
+    const opened = await waitFor(
+      async () =>
+        (await line.getAttribute("aria-expanded")) === "true" &&
+        (await rows.count()) === TRACE_CALLS.length,
+      5_000,
+    )
+    if (!opened) {
+      failures.push(
+        `the run opened to ${await rows.count()} rows, not ${TRACE_CALLS.length}`,
+      )
+      return
+    }
+    // Each bar starts where its call started on the shared axis, as a share
+    // of the run: a settled run's axis spans the first call's start to the
+    // last call's end (`ToolTrace`'s domain), so a clock read wrong — the
+    // wrong sign, seconds for milliseconds — moves the bars.
+    const drawn = await rows.evaluateAll((elements) =>
+      elements.map((row) => {
+        const bar = row.querySelector('[data-slot="tool-trace-bar"]')
+        const track = bar?.parentElement?.getBoundingClientRect()
+        const box = bar?.getBoundingClientRect()
+        return {
+          status: row.dataset.status,
+          at: bar && track.width ? (box.left - track.left) / track.width : null,
+          width: box?.width ?? 0,
+          height: box?.height ?? 0,
+          over: bar && track ? box.right - track.right : 0,
+        }
+      }),
+    )
+    const first = tools[0].startedAtMs
+    const span = Math.max(1, ...tools.map((tool) => tool.endedAtMs - first))
+    for (const [index, row] of drawn.entries()) {
+      if (row.status !== TRACE_CALLS[index].status)
+        failures.push(
+          `row ${index + 1} is drawn ${row.status}, not ${TRACE_CALLS[index].status}`,
+        )
+      const expected = (tools[index].startedAtMs - first) / span
+      if (row.at === null) failures.push(`row ${index + 1} has no bar on the time axis`)
+      else if (Math.abs(row.at - expected) > 0.03)
+        failures.push(
+          `row ${index + 1}'s bar starts ${(row.at * 100).toFixed(1)}% along the axis, not ${(expected * 100).toFixed(1)}%`,
+        )
+      // An instant call is still a round dot, never a hairline, and the
+      // last one stays inside the axis.
+      if (row.at !== null && row.width + 0.5 < row.height)
+        failures.push(
+          `row ${index + 1}'s bar is ${row.width.toFixed(1)} px wide, narrower than its ${row.height.toFixed(1)} px height`,
+        )
+      if (row.over > 0.5)
+        failures.push(
+          `row ${index + 1}'s bar ends ${row.over.toFixed(1)} px past the axis`,
+        )
+    }
+    // A call's card shows the input it was made with.
+    const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
+    const row = rows.nth(asked)
+    const rowAt = await place(row)
+    await row.evaluate((element) => element.click())
+    await disclosureSettled()
+    stayed(rowAt, await place(row), "opening the call")
+    const card = message.locator(`[id="${await row.getAttribute("aria-controls")}"]`)
+    await card.getByRole("tab", { name: "Input" }).click()
+    const value = String(Object.values(TRACE_CALLS[asked].arguments)[0])
+    const shown = await waitFor(
+      async () =>
+        (
+          await card.locator('[role="tabpanel"][data-state="active"]').textContent()
+        )?.includes(value),
+      5_000,
+    )
+    if (!shown) failures.push(`call ${asked + 1}'s card does not show its input ${value}`)
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `trace-${run.engine ?? "window"}-opened.png`),
+      })
+    // Folded again, as the person left it. The line does not jump up.
+    const foldAt = await place(line)
+    await line.evaluate((element) => element.click())
+    await disclosureSettled()
+    stayed(foldAt, await place(line), "closing the run")
+    if (
+      !(await waitFor(
+        async () => (await line.getAttribute("aria-expanded")) === "false",
+        5_000,
+      ))
+    )
+      failures.push("the run does not fold again")
+  },
+
+  async menu(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const menu = page.locator(css.menu)
+      const menuGone = () => menu.waitFor({ state: "detached", timeout: 5_000 })
+      // The pane's ⋯ menu: every row leads with its icon, one row height.
+      await page.locator(css.paneActions).first().click()
+      const pane = await menuRows(page)
+      if (run.evidence)
+        await page.screenshot({ path: join(run.evidence, `menu-${run.engine}-pane.png`) })
+      if (pane.length === 0) failures.push("the pane's ⋯ menu showed no rows")
+      for (const row of pane) {
+        if (!row.leads)
+          failures.push(`the pane menu's ${row.name} row leads with no icon`)
+        if (row.height !== MENU_ROW)
+          failures.push(
+            `the pane menu's ${row.name} row is ${row.height}px, not ${MENU_ROW}`,
+          )
+      }
+      await page.keyboard.press(keys.escape)
+      await menuGone()
+      // The overview's filter: the chosen choice's check before its number,
+      // the numbers in one column, and a number picks its choice.
+      const had = await page.evaluate((key) => {
+        try {
+          return JSON.parse(localStorage.getItem(key) ?? "null")
+        } catch {
+          return null
+        }
+      }, storage.overviewFilter)
+      await page.keyboard.press(keys.overview)
+      await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
+      const filter = page.locator(css.overviewFilter)
+      // The filter shows only over a list: a view that keeps every session
+      // out (an idle one under Ongoing) offers Show All instead.
+      if (!(await filter.isVisible())) {
+        await page.getByRole("button", { name: names.overviewShowAll }).click()
+        await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
+      }
+      const pick = async (key) => {
+        await filter.click({ timeout: 10_000 })
+        await page.keyboard.press(key)
+        await menuGone().catch(() =>
+          failures.push(`pressing ${key} left the filter open`),
+        )
+      }
+      await filter.click({ timeout: 10_000 })
+      const rows = await menuRows(page)
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `menu-${run.engine}-filter.png`),
+        })
+      const chosen = rows.filter((row) => row.checked)
+      if (chosen.length !== 2)
+        failures.push(
+          `the filter checked ${chosen.length} choices, not a scope and a span`,
+        )
+      for (const row of rows.filter((each) => each.radio)) {
+        if (!row.leads) failures.push(`the filter's ${row.name} row leads with no icon`)
+        if (row.shortcutRight !== rows.find((each) => each.radio)?.shortcutRight)
+          failures.push(`the filter's ${row.name} number is out of the column`)
+      }
+      for (const row of chosen)
+        if (!(row.checkRight !== null && row.checkRight <= row.shortcutLeft))
+          failures.push(`the filter's ${row.name} check is not before its number`)
+      await page.keyboard.press(keys.escape)
+      await menuGone()
+      // Any time, then Today: both keep this session (it changed just now)
+      // and so the filter on the page. Each number names its span on the chip.
+      for (const [key, label] of [
+        [overviewFilterKeys.today, "Today"],
+        [overviewFilterKeys.any, null],
+      ]) {
+        await pick(key)
+        const named = await waitFor(async () => {
+          const text = (await filter.textContent())?.trim() ?? ""
+          return label ? text.endsWith(`· ${label}`) : !text.includes("·")
+        }, 5_000)
+        if (!named) failures.push(`pressing ${key} did not choose its span in the filter`)
+      }
+      // Put the filter back as the person had it, the scope last: it may
+      // leave nothing listed, and the filter with it.
+      const keyFor = (choice, fallback) =>
+        typeof choice === "string" && Object.hasOwn(overviewFilterKeys, choice)
+          ? overviewFilterKeys[choice]
+          : overviewFilterKeys[fallback]
+      await pick(keyFor(had?.range, "any"))
+      await pick(keyFor(had?.scope, "ongoing"))
+      await page.keyboard.press(keys.escape)
+      await page.locator(css.overview).waitFor({ state: "detached", timeout: 10_000 })
+      await openStressConversation(page, run.main.id, run.main.title)
+      if (failures.length === 0) await steps.reply(run, step, failures)
+    })
   },
 
   async table(run, step, failures) {
@@ -2040,6 +4463,98 @@ const steps = {
   },
 }
 
+/** A menu row's height in nessa_ui's menu recipe, at the default scale. */
+const MENU_ROW = 30
+
+/**
+ * The open menu's rows as drawn: whether each leads with its icon, its
+ * height, whether it is checked, and where its check and shortcut sit.
+ */
+function menuRows(page) {
+  return page
+    .locator(css.menu)
+    .first()
+    .evaluate((menu) =>
+      [...menu.querySelectorAll('[role^="menuitem"]')].map((row) => {
+        const shortcut = row.querySelector('[data-slot$="menu-shortcut"]')
+        const check = row.querySelector('[data-slot$="menu-item-indicator"] svg')
+        const box = (element) => element?.getBoundingClientRect()
+        return {
+          name: row.textContent?.trim() ?? "",
+          leads: row.firstElementChild?.tagName.toLowerCase() === "svg",
+          height: Math.round(box(row).height),
+          radio: row.getAttribute("role") === "menuitemradio",
+          checked: row.getAttribute("aria-checked") === "true",
+          shortcut: shortcut?.textContent?.trim() ?? null,
+          shortcutLeft: shortcut ? Math.round(box(shortcut).left) : null,
+          shortcutRight: shortcut ? Math.round(box(shortcut).right) : null,
+          checkRight: check ? Math.round(box(check).right) : null,
+        }
+      }),
+    )
+}
+
+/**
+ * Two panes side by side are regions of one flat chat surface, not cards
+ * (`flatSurfaceFailures`): one hairline between them, mid-gutter.
+ */
+/**
+ * The window shows a thread's report as one line — the thread's chat as a
+ * pill with its title, and what it did — never the report's text or ids;
+ * pressed, the pill brings that chat to the front, in the focused pane.
+ */
+async function reportLine(run, report, failures) {
+  const thread = /^\[Thread report\] Thread (\S+) /.exec(report.userText)?.[1]
+  if (!thread) {
+    failures.push(`the report did not name its thread: ${report.userText.slice(0, 120)}`)
+    return
+  }
+  const line = run.page.locator('[data-role="thread-report"]').filter({
+    has: run.page.locator(`[data-chat-pill="${thread}"]`),
+  })
+  const shown = await line
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!shown) {
+    failures.push("the thread's report is not one line with the thread's pill")
+    return
+  }
+  const title = await titleOf(run, thread)
+  const said = (await line.first().innerText()).replace(/\s+/g, " ").trim()
+  if (!said.includes(title) || !said.endsWith("responded"))
+    failures.push(`the report line reads "${said}", not "${title} responded"`)
+  if (
+    /finished the turn you sent it|execution /.test(
+      await run.page.locator(css.pane).first().innerText(),
+    )
+  )
+    failures.push("the window shows the report's text, not just its line")
+  await line.first().locator(`[data-chat-pill="${thread}"]`).click()
+  // In front: the focused pane shows it, which its list row says.
+  const front = await waitFor(
+    async () =>
+      (await selectedStressConversation(run.page, await titleOf(run, thread))) === thread,
+    10_000,
+  )
+  if (!front)
+    failures.push("pressing the report's pill did not bring its chat to the front")
+  await openStressConversation(run.page, run.main.id, run.main.title)
+}
+
+async function flatPanes(page, failures) {
+  const now = async () => ({
+    panes: await page.locator(css.pane).count(),
+    hairlines: await page.locator(`${css.chat} ${css.paneEdge}[data-axis="x"]`).count(),
+    broken: await flatSurfaceFailures(page),
+  })
+  const holds = (state) =>
+    state.panes === 2 && state.hairlines === 1 && state.broken.length === 0
+  if (await waitFor(async () => holds(await now()), 10_000)) return
+  failures.push(`the panes are not one flat surface: ${JSON.stringify(await now())}`)
+}
+
 /**
  * Asks `conversationId`'s agent what the window shows, until what it says
  * meets `holds`, asked in the focused pane's composer. The window tells the
@@ -2103,10 +4618,818 @@ async function openLinkedDevices(page) {
   await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
 }
 
+/**
+ * Asks for setup again where a person does: Settings › Advanced › Setup, its
+ * Replay button. Resolves how many times the host was asked. Leaves Settings.
+ */
+async function replayOnboarding(page, evidence) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  await page.locator(css.settingsTab, { hasText: names.setupTab }).click()
+  if (evidence)
+    await page
+      .screenshot({ path: join(evidence, "onboarding-settings.png") })
+      .catch(() => {})
+  const before = await page.evaluate(() => window.__fakeHostReplays)
+  await page
+    .locator(selectorFor.settingRow("replay-onboarding"))
+    .getByRole("button", { name: names.replayOnboarding, exact: true })
+    .click()
+  await waitFor(
+    async () => (await page.evaluate(() => window.__fakeHostReplays)) > before,
+    5_000,
+  )
+  const asked = (await page.evaluate(() => window.__fakeHostReplays)) - before
+  await closeSettings(page)
+  return asked
+}
+
+/** A prior gateway restart seals the app's lease. A reloaded window asks
+ * again; answer through the UI before the next ordinary click, as a person does.
+ * The backend state, not an early isVisible snapshot, decides whether to wait. */
+async function unlockReloadedVault(run, page) {
+  if ((await run.client.vault.status()).state !== "locked") return
+  await page.locator('[data-vault-dialog="unlock"]').waitFor()
+  await unlockVault(page)
+  if ((await run.client.vault.status()).state !== "unlocked")
+    throw new Error("Reloaded window did not unlock its vault")
+}
+
+/** The menu-bar panel as the host opens it, over the run's gateway. */
+async function panelWindow(run) {
+  const page = await run.page.context().newPage()
+  await page.setViewportSize({ width: 420, height: 760 })
+  await page.addInitScript(gatewayHost, {
+    endpoint: run.stack.endpoint,
+    credential: run.stack.credential,
+    panel: true,
+  })
+  await page.goto(`${new URL(run.page.url()).origin}/index.html`)
+  return page
+}
+
+/** Waits until the panel's strip leads with `title`, the selected tab's name. */
+async function panelNamed(page, title, failures) {
+  const named = await waitFor(
+    async () =>
+      (
+        await page
+          .locator(css.panelCurrent)
+          .innerText()
+          .catch(() => "")
+      ).includes(title),
+    15_000,
+  )
+  if (!named)
+    failures.push(`the panel's strip does not lead with ${JSON.stringify(title)}`)
+}
+
+/**
+ * A setup window as the host opens it, over the run's gateway, recording
+ * each beat of its opening as it comes: the beat, and whether the window's
+ * heading could be seen by then.
+ */
+async function setupWindow(run, prepare) {
+  const page = await run.page.context().newPage()
+  // Before the page loads, so nothing it asks on its first frames gets past.
+  await run.stack.vault.install(page)
+  await prepare?.(page)
+  await page.addInitScript(gatewayHost, {
+    endpoint: run.stack.endpoint,
+    credential: run.stack.credential,
+    setup: true,
+  })
+  await page.addInitScript(() => {
+    window.__setupBeats = []
+    window.__setupLeft = false
+    new MutationObserver(() => {
+      const shell = document.querySelector(".nessa-setup-window")
+      if (shell?.hasAttribute("data-leaving")) window.__setupLeft = true
+      const beat = shell?.dataset.beat
+      if (!beat || window.__setupBeats.at(-1)?.beat === beat) return
+      // Seen as a person sees it: a pane held hidden or clear until the
+      // window opens is in the page from the first frame.
+      const heading = document.getElementById("nessa-setup-heading")
+      const headingSeen = Boolean(
+        heading?.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
+      )
+      // Where the window is drawn as the beat starts, transform included.
+      const { left, top, right, bottom } = shell.getBoundingClientRect()
+      const drawn = { left, top, right, bottom, width: innerWidth, height: innerHeight }
+      window.__setupBeats.push({ beat, headingSeen, drawn })
+    }).observe(document, { subtree: true, childList: true, attributes: true })
+    // The flight is the window's one Web Animation: the box it took off
+    // from and the keyframes and timing it was given, taken as it starts.
+    window.__setupFlights = []
+    const animate = Element.prototype.animate
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args)
+      if (this.classList.contains("nessa-setup-window")) {
+        const { left, top, width, height } = this.getBoundingClientRect()
+        window.__setupFlights.push({
+          from: { left, top, width, height },
+          frames: animation.effect.getKeyframes(),
+          duration: animation.effect.getComputedTiming().duration,
+        })
+      }
+      return animation
+    }
+  })
+  await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
+  await page.locator(".nessa-setup-window").waitFor()
+  await unlockVault(page)
+  return page
+}
+
+/**
+ * The welcome's words are all there as the window opens: the name is plain
+ * text, not letters typed in one at a time, and the line under it and its
+ * way on do not wait for it.
+ */
+async function welcomedAtOnce(page, failures) {
+  const read = () =>
+    page.evaluate(() => {
+      const heading = document.getElementById("nessa-setup-heading")
+      const seen = (element) =>
+        Boolean(
+          element?.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
+        )
+      const begin = [...document.querySelectorAll(".nessa-setup-pane button")].find(
+        (button) => button.textContent.trim() === "Get started",
+      )
+      return {
+        text: heading?.textContent,
+        letters: heading?.querySelectorAll("[data-slot=type-in-letter]").length ?? 0,
+        painted: heading?.querySelector("[data-slot=gradient-text]")?.textContent,
+        waiting: document.querySelectorAll(
+          ".nessa-setup-pane [data-typed], .nessa-setup-after",
+        ).length,
+        begin: seen(begin),
+      }
+    })
+  // The pane takes a moment to slide in; typing the name took seconds.
+  await waitFor(async () => (await read()).begin, 1_000)
+  const welcome = await read()
+  if (welcome.text !== names.setup.welcome)
+    failures.push(`the welcome reads ${JSON.stringify(welcome.text)} as it opens`)
+  if (welcome.letters || welcome.waiting)
+    failures.push(`the welcome is typed in: ${JSON.stringify(welcome)}`)
+  if (!welcome.begin) failures.push("Get started is not there as the welcome opens")
+  if (welcome.painted !== "Nessa")
+    failures.push(`the welcome paints ${JSON.stringify(welcome.painted)}, not the name`)
+}
+
+/**
+ * A summon the host reports lights the keys and lets setup be finished, and
+ * sends nothing through the light behind the window: the field stays as it
+ * was, settled, the whole time.
+ */
+async function summonedWithoutARing(page, failures, evidence) {
+  const field = page.locator(".nessa-setup-field")
+  await page.getByRole("button", { name: names.setup.finish[1], exact: true }).waitFor({
+    timeout: 10_000,
+  })
+  const listening = () =>
+    page.evaluate(() => window.__fakeHostListening("nessa://summoned"))
+  if (!(await waitFor(async () => (await listening()) > 0, 5_000))) {
+    failures.push("the summon step never listened for the host's summon")
+    return
+  }
+  if (
+    !(await waitFor(
+      async () => (await field.getAttribute("data-settled")) !== null,
+      5_000,
+    ))
+  )
+    failures.push("the light behind setup never settled on the summon step")
+  await field.evaluate((element) => {
+    window.__setupFieldStirred = 0
+    new MutationObserver(() => {
+      if (!element.hasAttribute("data-settled")) window.__setupFieldStirred++
+    }).observe(element, { attributes: true, attributeFilter: ["data-settled"] })
+  })
+  // The panel shows, then hides again: the lesson is learnt on the second.
+  await page.evaluate(() => window.__fakeHostEmit("nessa://summoned", true))
+  // Where a ring would be, just after the press.
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: join(evidence, "onboarding-summoned.png") })
+  await page.evaluate(() => window.__fakeHostEmit("nessa://summoned", false))
+  const taught = await waitFor(
+    async () =>
+      (await page
+        .getByRole("button", { name: names.setup.finish[0], exact: true })
+        .count()) > 0,
+    5_000,
+  )
+  if (!taught) failures.push("a summon the host reported did not teach the step")
+  // Longer than a ring took to cross the window.
+  await page.waitForTimeout(1_500)
+  const stirred = await page.evaluate(() => window.__setupFieldStirred)
+  if (stirred) failures.push(`a summon stirred the light behind setup ${stirred} times`)
+}
+
+/**
+ * The opening was a glow on the desktop that became the window: nothing
+ * dimmed what is behind setup, the beats came in order, and none of the
+ * window's words showed before the window had formed.
+ */
+async function openedAsAGlow(page, failures) {
+  const beats = await page.evaluate(() => window.__setupBeats)
+  const order = beats.map((entry) => entry.beat).join(",")
+  if (order !== "glow,fill,form,open")
+    failures.push(`setup opened as ${order}, not glow,fill,form,open`)
+  const early = beats.filter((entry) => entry.beat !== "open" && entry.headingSeen)
+  if (early.length)
+    failures.push(`the window's heading showed during the ${early[0].beat} beat`)
+  // Glow and fill draw the window past every edge of the screen.
+  for (const { beat, drawn } of beats.filter(
+    (entry) => entry.beat !== "open" && entry.beat !== "form",
+  ))
+    if (
+      drawn.left > 0 ||
+      drawn.top > 0 ||
+      drawn.right < drawn.width ||
+      drawn.bottom < drawn.height
+    )
+      failures.push(
+        `during ${beat} the light does not fill the screen: ${JSON.stringify(drawn)}`,
+      )
+  // Once open, the window has formed: its own size, in the middle.
+  const formed = () =>
+    page.locator(".nessa-setup-window").evaluate((shell) => {
+      const box = shell.getBoundingClientRect()
+      return {
+        scale: box.width / shell.offsetWidth,
+        dx: box.left + box.width / 2 - innerWidth / 2,
+        dy: box.top + box.height / 2 - innerHeight / 2,
+      }
+    })
+  const whole = (shape) =>
+    Math.abs(shape.scale - 1) < 0.005 && Math.abs(shape.dx) < 1 && Math.abs(shape.dy) < 1
+  if (!(await waitFor(async () => whole(await formed()), 3_000)))
+    failures.push(
+      `the open window did not form in the middle: ${JSON.stringify(await formed())}`,
+    )
+  const backdrop = await page.evaluate(() => ({
+    dim: document.querySelectorAll(".nessa-setup-dim").length,
+    sheet: getComputedStyle(document.querySelector(".nessa-setup-sheet")).backgroundColor,
+  }))
+  if (backdrop.dim || backdrop.sheet !== "rgba(0, 0, 0, 0)")
+    failures.push(`setup dims the desktop: ${JSON.stringify(backdrop)}`)
+}
+
+/**
+ * The picker lists Claude, Codex and a Local AI that cannot be chosen yet,
+ * and never OpenCode. The picture wears one agent's background with that
+ * agent's figure on it, the chosen agent's (Claude Code's mascot for Claude),
+ * and pointing at a row turns it over to that agent.
+ */
+async function pickerOffers(page, failures) {
+  const rows = await page
+    .getByRole("group", { name: "Agent" })
+    .locator(AGENT_ROWS)
+    .evaluateAll((buttons) =>
+      buttons.map((button) => ({
+        name: button.getAttribute("aria-label") ?? button.textContent,
+        disabled: button.getAttribute("aria-disabled") === "true",
+      })),
+    )
+  const named = rows.map((row) => row.name)
+  for (const agent of names.setup.agents)
+    if (!named.some((name) => name === agent || name.startsWith(`${agent},`)))
+      failures.push(`the picker does not list ${agent}: ${JSON.stringify(named)}`)
+  const local = rows.find((row) => row.name === names.setup.localAi)
+  if (!local?.disabled)
+    failures.push(`Local AI is not listed as coming: ${JSON.stringify(rows)}`)
+  if (named.some((name) => /opencode/i.test(name)))
+    failures.push(`the picker still offers OpenCode: ${JSON.stringify(named)}`)
+  // What the picture shows: the opaque background, then every figure on it.
+  const cards = () =>
+    page
+      .locator(".nessa-setup-art")
+      .evaluate((art) =>
+        [
+          art.querySelector("[data-slot='agent-backdrop'][data-shown]")?.dataset.agent,
+          ...[...art.querySelectorAll("[data-slot='agent-figure']")].map(
+            (figure) => figure.dataset.agent,
+          ),
+        ].join(","),
+      )
+  const resting = await cards()
+  if (resting !== "clawd,clawd")
+    failures.push(`the picture shows ${JSON.stringify(resting)}`)
+  // Pointing along the rows leaves the picture as it is: only a click
+  // changes it. Watched for a while, since a change would be a crossfade.
+  const codex = page.getByRole("button", { name: "Codex", exact: true })
+  await codex.hover()
+  const moved = await waitFor(
+    () => cards().then((shown) => shown !== "clawd,clawd"),
+    1_000,
+  )
+  if (moved)
+    failures.push(
+      `pointing at Codex turned the picture to ${JSON.stringify(await cards())}`,
+    )
+  await codex.click()
+  const chosen = await waitFor(
+    () => cards().then((shown) => shown === "codex,codex"),
+    5_000,
+  )
+  if (!chosen)
+    failures.push(
+      `clicking Codex did not turn the picture to it: ${JSON.stringify(await cards())}`,
+    )
+  await page.getByRole("button", { name: "Claude", exact: true }).hover()
+  if (await waitFor(() => cards().then((shown) => shown !== "codex,codex"), 1_000))
+    failures.push(
+      `pointing at Claude after choosing Codex turned the picture to ${JSON.stringify(await cards())}`,
+    )
+  await page.mouse.move(1, 1)
+}
+
+/**
+ * The gateway's machine probe, answered here: this stack's page is not an
+ * origin it answers. `readiness` is read on every ask, so a step can change
+ * what the machine has between asks.
+ */
+function agentsProbe(page, readiness) {
+  return page.route("**/onboarding/agents", (route) =>
+    route.fulfill({
+      // The gateway's own origin, not the page's: the ask is cross-origin.
+      headers: { "access-control-allow-origin": "*" },
+      json: {
+        agents: Object.entries(readiness()).map(([id, state]) => ({
+          id,
+          readiness: state,
+        })),
+      },
+    }),
+  )
+}
+
+/** The size the fake installer gives Codex's download. */
+const CODEX_ARCHIVE_BYTES = 45_000_000
+
+/**
+ * A gateway whose installer offers Codex and installs it on request, without
+ * fetching anything: the page's socket goes to the real gateway, and only
+ * the installer's two asks are answered here. `installed` says when the
+ * install has been asked for, so the machine probe can follow it.
+ */
+async function codexInstaller(page) {
+  const state = { installed: false, installs: 0 }
+  await page.routeWebSocket(
+    () => true,
+    (socket) => {
+      const server = socket.connectToServer()
+      const answer = (id, payload) => {
+        try {
+          socket.send(JSON.stringify({ type: "res", id, ok: true, payload }))
+        } catch {
+          // The window closed first: nothing is waiting for the answer.
+        }
+      }
+      socket.onMessage((message) => {
+        let frame
+        try {
+          frame = typeof message === "string" ? JSON.parse(message) : undefined
+        } catch {
+          // Not a request this fake answers: it goes to the gateway as sent.
+        }
+        if (frame?.type !== "req") frame = undefined
+        if (frame?.method === "agents.installOptions")
+          return answer(frame.id, {
+            agents: [
+              {
+                agent: "codex",
+                version: "0.0.0-stress",
+                archiveBytes: CODEX_ARCHIVE_BYTES,
+                installed: state.installed,
+              },
+            ],
+          })
+        if (frame?.method === "agents.install" && frame.params?.agent === "codex") {
+          state.installs += 1
+          // Long enough that the card is seen fetching.
+          return void setTimeout(() => {
+            state.installed = true
+            answer(frame.id, {
+              agent: "codex",
+              version: "0.0.0-stress",
+              downloaded: true,
+              cleanupPending: false,
+            })
+          }, 600)
+        }
+        server.send(message)
+      })
+      server.onMessage((message) => socket.send(message))
+    },
+  )
+  return state
+}
+
+/**
+ * An agent that is not installed but can be downloaded is a card with one
+ * Download button where its row would be, and nothing else on the picker
+ * talks about downloads. Its Download installs it, and the card becomes the
+ * agent's row.
+ */
+async function downloadCard(page, installer, evidence, failures) {
+  const group = page.getByRole("group", { name: "Agent" })
+  const card = group.getByRole("group", { name: names.setup.codexCard })
+  const download = card.getByRole("button", {
+    name: names.setup.codexDownload,
+    exact: true,
+  })
+  const shown = await waitFor(async () => (await download.count()) === 1, 15_000)
+  await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
+  if (!shown) {
+    failures.push("Codex, not installed but offered, is not shown as a download card")
+    return
+  }
+  if (await group.locator("button[aria-pressed]", { hasText: "Codex" }).count())
+    failures.push("Codex has both a download card and a row to pick")
+  for (const text of [/Check downloads/, /Download only the agents/, /^Installed$/])
+    if (await page.getByText(text).count()) failures.push(`the picker still says ${text}`)
+  // Pressed from the keyboard, so where the focus goes is part of the check.
+  await download.focus()
+  await page.keyboard.press("Enter")
+  // The installer holds its answer, so the card is seen fetching, with the
+  // focus still on its button.
+  const fetching = await waitFor(
+    () =>
+      card.evaluate(
+        (each) =>
+          each.dataset.downloadState === "fetching" &&
+          each.contains(document.activeElement),
+      ),
+    2_000,
+  )
+  if (!fetching) failures.push("Codex's card did not fetch with the focus kept on it")
+  const row = group.locator("button[aria-pressed]:not([aria-disabled='true'])", {
+    hasText: "Codex",
+  })
+  if (!(await waitFor(async () => (await row.count()) === 1, 15_000)))
+    failures.push("the installed Codex did not become a row to pick")
+  else {
+    if (await card.count()) failures.push("Codex's download card stayed after install")
+    // The focus the download held is handed to the row it became.
+    if (
+      !(await waitFor(
+        () => row.evaluate((each) => each === document.activeElement),
+        2_000,
+      ))
+    )
+      failures.push("the focus was not handed to Codex's row after install")
+  }
+  if (installer.installs !== 1)
+    failures.push(`Download asked the installer ${installer.installs} times, not once`)
+}
+
+/** The picker's agent rows, and not the buttons of a key form beside one. */
+const AGENT_ROWS = `button[aria-pressed], button[aria-label='${names.setup.localAi}']`
+
+/**
+ * Setup finished on a ready agent leaves by flying into the menu bar: the
+ * window lets go of its pane, the host is asked where its icon is, and the
+ * handoff that follows is a finish on that agent, made once the window has
+ * landed and gone.
+ *
+ * Which agents are ready is the gateway's machine probe, which this stack's
+ * page is not an origin it answers; the probe is answered here instead with
+ * Claude ready, so the step is about the finish rather than about the machine.
+ * Codex starts not installed, with a download on offer, so the same window
+ * shows its download card on the way.
+ */
+async function finishedIntoTheMenuBar(run, failures) {
+  let installer
+  const page = await setupWindow(run, async (page) => {
+    installer = await codexInstaller(page)
+    await agentsProbe(page, () => ({
+      claude: "ready",
+      codex: installer.installed ? "ready" : "not-installed",
+    }))
+  })
+  try {
+    const button = (name) => page.getByRole("button", { name, exact: true })
+    await page
+      .getByRole("heading", { name: names.setup.welcome, exact: true })
+      .waitFor({ timeout: 15_000 })
+    await button(names.setup.getStarted).click()
+    await downloadCard(page, installer, run.evidence, failures)
+    const ready = page
+      .getByRole("group", { name: "Agent" })
+      .locator("button[aria-pressed]:not([aria-disabled='true'])")
+    if (!(await waitFor(async () => (await ready.count()) > 0, 15_000))) {
+      const rows = await page
+        .getByRole("group", { name: "Agent" })
+        .locator(AGENT_ROWS)
+        .evaluateAll((all) => all.map((row) => row.getAttribute("aria-label")))
+      failures.push(`no agent became ready to choose in setup: ${JSON.stringify(rows)}`)
+      return
+    }
+    const chosen = (await ready.first().getAttribute("aria-label"))?.toLowerCase()
+    await ready.first().click()
+    await button(names.setup.continue).click()
+    await summonedWithoutARing(page, failures, run.evidence)
+    const finish = page.getByRole("button", {
+      name: new RegExp(`^(${names.setup.finish.join("|")})$`),
+    })
+    await finish.waitFor({ timeout: 10_000 })
+    await finish.click()
+    const handed = await waitFor(
+      async () => (await page.evaluate(() => window.__fakeHostSetupFinishes.length)) > 0,
+      10_000,
+    )
+    const { finishes, trayAsks, left, flights, tray } = await page.evaluate(() => ({
+      finishes: window.__fakeHostSetupFinishes,
+      trayAsks: window.__fakeHostTrayAsks,
+      left: window.__setupLeft,
+      flights: window.__setupFlights,
+      // Where the fake host says its icon is.
+      tray: { x: innerWidth - 80, y: 12 },
+    }))
+    if (!left) failures.push("finishing setup did not fly the window")
+    // Where the flight lands, measured from what it was given rather than
+    // from its frames: a loaded headless page draws few frames, and the
+    // flight's deadline can land setup before the last one. A box where the
+    // window took off, wearing the last keyframe, is drawn where the window
+    // ends up; its centre is on the icon, and it is a light the icon's size.
+    // How long it takes on screen in a production build is measured on a Mac.
+    if (flights.length !== 1)
+      failures.push(`the window flew ${flights.length} times, not once`)
+    else {
+      const [flight] = flights
+      const landing = await page.evaluate(({ from, frames }) => {
+        const last = frames.at(-1)
+        const probe = document.createElement("div")
+        Object.assign(probe.style, {
+          position: "fixed",
+          left: `${from.left}px`,
+          top: `${from.top}px`,
+          width: `${from.width}px`,
+          height: `${from.height}px`,
+          transform: last.transform,
+        })
+        document.body.append(probe)
+        const box = probe.getBoundingClientRect()
+        probe.remove()
+        return {
+          x: box.left + box.width / 2,
+          y: box.top + box.height / 2,
+          width: box.width,
+          height: box.height,
+          opacity: Number(last.opacity),
+          round: frames.slice(1).every((frame) => frame.borderRadius === "50%"),
+          offset: last.offset,
+        }
+      }, flight)
+      if (
+        Math.abs(landing.x - tray.x) > 1 ||
+        Math.abs(landing.y - tray.y) > 1 ||
+        Math.abs(landing.width - 17.6) > 0.5 ||
+        Math.abs(landing.height - 17.6) > 0.5 ||
+        landing.opacity !== 0 ||
+        !landing.round ||
+        flight.duration !== 900
+      )
+        failures.push(
+          `the flight lands ${JSON.stringify({ ...landing, duration: flight.duration })}, not a round 17.6 px light on ${JSON.stringify(tray)} over 900 ms`,
+        )
+    }
+    if (!handed) failures.push("finishing setup did not hand over to the host")
+    else if (
+      finishes.length !== 1 ||
+      finishes[0].completed !== true ||
+      finishes[0].agent !== chosen
+    )
+      failures.push(
+        `finishing handed over ${JSON.stringify(finishes)}, not one finish on ${chosen}`,
+      )
+    else if (finishes[0].windowShown)
+      failures.push("setup handed over while its window was still on screen")
+    if (trayAsks !== 1)
+      failures.push(
+        `the flight asked where the menu bar icon is ${trayAsks} times, not once`,
+      )
+  } finally {
+    await page.close()
+  }
+}
+
+/**
+ * Where setup's corner buttons are, against its window: which buttons are
+ * drawn, and for each its centre as fractions of the window's width and
+ * height, and whether it is round.
+ */
+function setupCorners(page) {
+  return page.evaluate((labels) => {
+    const frame = document.querySelector(".nessa-setup-window")?.getBoundingClientRect()
+    const at = (label) => {
+      const button = document.querySelector(`button[aria-label="${label}"]`)
+      if (!frame || !button) return null
+      const box = button.getBoundingClientRect()
+      return {
+        x: (box.left + box.width / 2 - frame.left) / frame.width,
+        y: (box.top + box.height / 2 - frame.top) / frame.height,
+        round:
+          Math.abs(box.width - box.height) < 0.5 &&
+          parseFloat(getComputedStyle(button).borderRadius) >= box.width / 2 - 0.5,
+      }
+    }
+    return { back: at(labels.back), close: at(labels.close) }
+  }, names.setup)
+}
+
+/** Whether a corner button sits in the window's top-left or top-right corner. */
+function inCorner(place, side) {
+  if (!place || !place.round || place.y > 0.15) return false
+  return side === "left" ? place.x < 0.15 : place.x > 0.85
+}
+
+/**
+ * Nessa's own shell tool as the gateway's managed `nessa` server: the
+ * `nessa-mcp` built beside the gateway, working in a directory of the run's.
+ */
+function shellServer(directory) {
+  const gateway = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
+  const command = join(dirname(gateway), "nessa-mcp")
+  if (!existsSync(command))
+    throw new CannotRun(
+      `build the shell tool first (cargo build -p nessa-mcp): ${command}`,
+    )
+  const workspace = join(directory, "shell-workspace")
+  mkdirSync(workspace)
+  return {
+    name: "nessa",
+    command,
+    args: ["--workspace", workspace, "--audit-directory", join(directory, "shell-audit")],
+  }
+}
+
+/** Opens Settings › Connections › Accounts, where the GitHub row is. */
+async function openAccounts(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.accounts }).click()
+}
+
+/**
+ * A new conversation's agent, opened now, says what GitHub sign-in it was
+ * started with; `said` is what it must say. A sign-in is read when an agent
+ * opens, so only a new one shows a change.
+ */
+async function githubAgent(run, step, extra, said, failures, shell = false) {
+  const conversationId = randomUUID()
+  run.checked.push(conversationId)
+  const text = prompt(run, shell ? STRESS.githubShell : STRESS.github, step, extra)
+  await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+  await run.client.conversation.submit(
+    run.client.conversation.prepare(conversationId, text),
+  )
+  const { turn } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  if (!turn) return
+  const answer = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const where = shell ? SAYS.githubShell : SAYS.github
+  if (answer !== `${where}${said}`)
+    failures.push(
+      `an agent started${extra} says ${JSON.stringify(answer)}${shell ? " from its shell tool" : ""}, not ${said}`,
+    )
+}
+
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */
 async function closeSettings(page) {
   await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
   await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+}
+
+/**
+ * With linking on, the gateway is found on the local network the way a phone
+ * that scanned the code finds it: a DNS-SD browse for `_nessa-link._tcp`
+ * hears it on its native port, with its gateway id. Resolves whether it did.
+ */
+async function announced(run, failures) {
+  const port = Number(run.nativeListen.split(":").pop())
+  let heard = []
+  for (
+    let attempt = 0;
+    attempt < 3 && !heard.some((each) => each.port === port);
+    attempt++
+  )
+    heard = await browse("_nessa-link._tcp.local", 3_000)
+  const gateway = heard.find((each) => each.port === port)
+  if (!gateway) {
+    failures.push(
+      `the gateway was not announced on port ${port}; heard ${JSON.stringify(heard)}`,
+    )
+    return false
+  }
+  if (!gateway.txt.gw) failures.push("the announcement carries no gateway id")
+  return Boolean(gateway.txt.gw)
+}
+
+/**
+ * Pair a device on the Linked devices tab, with linking on: the window's own
+ * sign-in opens a code, shown as a person pairing a phone sees it, never the
+ * card that says this sign-in cannot manage credentials. The code opens in a
+ * modal with the one signal orb, none of it drawn on the page; Escape hides
+ * the modal and leaves the code open, and Show code brings back the same
+ * code. The code enrolls the owner's phone with full access: the gateway
+ * holds it as that class. Cancel in the modal then closes it and Pair a
+ * device is offered again. Resolves whether all of that held.
+ */
+/** The class of a code that enrolls the owner's phone with full access. */
+const OWNER_PHONE_CLASS = "gateway-owner-conversation-read-write"
+
+async function pairFromWindow(run, failures) {
+  const { page } = run
+  const before = failures.length
+  const dialog = page.locator(css.pairingDialog)
+  const codeIn = async () =>
+    (await dialog.locator('[data-slot="pairing-code-value"]').innerText()).replace(
+      /\s+/g,
+      "",
+    )
+  await page.locator(selectorFor.linkedAction("pair")).click()
+  const shown = await waitFor(
+    async () =>
+      (await page.locator(css.linkedRefused).count()) > 0
+        ? "refused"
+        : (await dialog.locator(css.pairingCode).count()) > 0
+          ? "code"
+          : null,
+    10_000,
+  )
+  if (shown !== "code") {
+    failures.push(
+      shown === "refused"
+        ? "Pair a device was refused: the window's sign-in cannot manage credentials"
+        : "Pair a device opened no modal with a code",
+    )
+    return false
+  }
+  // The orb gathers in, then stays live: animated, not drawn still.
+  const orb = dialog.locator(css.signalOrb)
+  const live = await waitFor(
+    async () => (await orb.getAttribute("data-state").catch(() => null)) === "live",
+    5_000,
+  )
+  if (!live)
+    failures.push(
+      `the pairing orb was ${await orb.getAttribute("data-state").catch(() => "missing")}, not live`,
+    )
+  if (run.evidence)
+    await page
+      .screenshot({ path: join(run.evidence, `pairing-${run.engine}-modal.png`) })
+      .catch(() => {})
+  const code = await codeIn()
+  if (!code) failures.push("the pairing code shown was empty")
+  // A phone paired from the window acts as the owner, with no share per chat.
+  const classes = await run.client.pairing.pending().then(
+    ({ items }) => items.map((item) => item.class),
+    (error) => [String(error)],
+  )
+  if (classes.length !== 1 || classes[0] !== OWNER_PHONE_CLASS)
+    failures.push(
+      `the open code enrolls ${JSON.stringify(classes)}, not the owner's phone`,
+    )
+  // Settings is a fixed layer over the window: a modal portalled past it is
+  // in the page but drawn underneath it, unseen.
+  if (!(await dialog.evaluate((node) => Boolean(node.closest("[data-settings-layers]")))))
+    failures.push("the pairing modal is not inside Settings, so it is drawn under it")
+  const orbs = await dialog.locator(css.signalOrb).count()
+  if (orbs !== 1) failures.push(`the pairing modal drew ${orbs} signal orbs, not 1`)
+  if ((await page.locator(css.qrOrb).count()) > 0) failures.push("a QR orb was drawn")
+  if ((await page.locator(`${css.linked} ${css.pairingCode}`).count()) > 0)
+    failures.push("the pairing code was drawn on the tab, not only in the modal")
+  await page.keyboard.press("Escape")
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("Escape did not close the pairing modal"))
+  await page.locator(selectorFor.linkedAction("show")).click()
+  await dialog
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Show code did not open the pairing modal again"))
+  const again = await codeIn().catch(() => "")
+  if (again !== code)
+    failures.push(`Show code showed ${JSON.stringify(again)}, not the open code`)
+  await dialog.locator(selectorFor.linkedAction("cancel")).click()
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("the cancelled code's modal stayed open"))
+  await page
+    .locator(selectorFor.linkedAction("pair"))
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Pair a device was not offered again after cancelling"))
+  return failures.length === before
 }
 
 /**
@@ -2136,7 +5459,7 @@ async function switchLinking(run, enabled, failures) {
     const before = failures.length
     const old = run.client
     run.restarts += 1
-    await run.page.locator(`${css.linked} [role='switch']`).click()
+    await run.page.locator(css.linkingSwitch).click()
     const shown = await waitFor(
       async () =>
         (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
@@ -2154,7 +5477,7 @@ async function switchLinking(run, enabled, failures) {
     const saved = JSON.parse(readFileSync(config, "utf8")).native
     if (
       (saved?.enabled !== false) !== enabled ||
-      saved?.listenAddress !== run.nativeAddress
+      saved?.listenAddress !== run.nativeListen
     )
       failures.push(`config.json holds native ${JSON.stringify(saved)}`)
     if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
@@ -2170,6 +5493,102 @@ async function switchLinking(run, enabled, failures) {
  * `environments`), once `holds` is true of them; what they last were after
  * 30 s otherwise. A worker that connects or leaves changes them.
  */
+/**
+ * The `tunnel` step's stand-in cloudflared (`lib/fake-cloudflared.mjs`),
+ * written into `directory` with this node as its interpreter: the gateway
+ * starts it with no PATH, and one exec keeps the name it records.
+ */
+function fakeCloudflared(directory) {
+  const source = readFileSync(
+    new URL("./lib/fake-cloudflared.mjs", import.meta.url),
+    "utf8",
+  )
+  const program = join(directory, "cloudflared")
+  writeFileSync(program, `#!${process.execPath}\n${source.replace(/^#!.*\n/, "")}`)
+  chmodSync(program, 0o755)
+  return program
+}
+
+/** A direct address that refuses at once, so a dial goes beyond it. */
+const UNREACHABLE = "127.0.0.1:9"
+
+/** The gateway's `<namespace>/tunnel`: the kept record and the program's log. */
+function tunnelDirectory(run) {
+  return join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "tunnel")
+}
+
+/** The cloudflared shepherd keeps for the tunnel, as `{ pid }` from its record; `null` without one. */
+function keptTunnel(directory) {
+  try {
+    const record = JSON.parse(
+      readFileSync(join(directory, "kept", "cloudflared.json"), "utf8"),
+    )
+    return Number.isInteger(record.os_pid) ? { pid: record.os_pid } : null
+  } catch {
+    return null
+  }
+}
+
+/** Connections the stand-in cloudflared has carried, as its log counts them. */
+function tunnelConnections(directory) {
+  try {
+    return readFileSync(join(directory, "cloudflared.log"), "utf8")
+      .split("\n")
+      .filter((line) => /^connection \d+$/.test(line)).length
+  } catch {
+    return 0
+  }
+}
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === "EPERM"
+  }
+}
+
+/**
+ * Turns the web tunnel `enabled` with its switch on the Linked devices tab,
+ * already open with linking on. The gateway saves the change and starts
+ * itself again in the same process; the window comes back showing the
+ * tunnel ready, or off. Resolves whether all of that held. Called with
+ * nothing else in flight (`run.exclusive`).
+ */
+async function switchTunnel(run, enabled, failures) {
+  const gateway = run.stack.gateway
+  const pid = gateway.server.pid
+  const want = enabled ? "ready" : "off"
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await run.page.locator(css.tunnelSwitch).click()
+    const shown = await waitFor(async () => {
+      const group = run.page.locator(css.tunnel)
+      return (
+        (await group.getAttribute("data-tunnel-enabled")) === String(enabled) &&
+        (await group.getAttribute("data-tunnel-status")) === want
+      )
+    }, 60_000)
+    if (!shown) failures.push(`the window did not come back with the tunnel ${want}`)
+    else if (enabled && (await run.page.locator(css.tunnelAddress).count()) !== 1)
+      failures.push("the ready tunnel's address is not shown")
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const read = await run.client.pairing.tunnel()
+    if (read.enabled !== enabled || read.status !== want)
+      failures.push(`the gateway answers the tunnel ${JSON.stringify(read)}`)
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  return held
+}
+
 const offers = (run, holds) =>
   waitFor(async () => {
     const { environments } = await run.client.agents.list()
@@ -2451,7 +5870,13 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
-  const nativeAddress = `127.0.0.1:${await freePort()}`
+  if (knobs.inputFiles > 0) phoneFilesVerifier()
+  if (knobs.pairedCatalogues > 0) await preparePairedCatalogue()
+  // Linking listens on every interface, as Settings sets it up, so the
+  // gateway announces itself; clients on this machine dial it on loopback.
+  const nativePort = await freePort()
+  const nativeAddress = `127.0.0.1:${nativePort}`
+  const nativeListen = `0.0.0.0:${nativePort}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")
   writeFileSync(
@@ -2471,17 +5896,48 @@ async function startStack(options) {
       `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
     )
   }
+  // The `github` step's GitHub, on this machine, which the gateway reads its
+  // app from, and Nessa's own shell tool, where an agent's git and gh run.
+  let servers = []
+  try {
+    if (knobs.githubs > 0) servers = [shellServer(directory)]
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true })
+    throw error
+  }
+  const github = knobs.githubs > 0 ? await startFakeGithub() : null
+  const environment = {
+    ...(github
+      ? {
+          ...disposableGithubEnvironment(),
+          NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")),
+        }
+      : {}),
+    // The `tunnel` step's cloudflared (debug builds only).
+    NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
+  }
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
+      vault: true,
+      environment,
+      servers,
       as: "panel",
       scenario,
       evidence: options.evidence,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
-      // Off, at a port of its own: the `linking` step turns it on from Settings.
-      native: { enabled: false, listenAddress: nativeAddress },
+      // The agent a `handoff` step switches its conversation to.
+      others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
+      // Off, at a port of its own: the `linking` step turns it on from
+      // Settings. Its tunnel too, at a loopback port of its own.
+      native: {
+        enabled: false,
+        listenAddress: nativeListen,
+        tunnel: { enabled: false, ingress: `127.0.0.1:${await freePort()}` },
+      },
     })
   } catch (error) {
+    await github?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -2490,6 +5946,7 @@ async function startStack(options) {
     try {
       await close()
     } finally {
+      await github?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -2497,7 +5954,11 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    nativeListen,
+    github,
     scenario,
+    // Removed when the stack closes.
+    scratch: directory,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }
@@ -2514,6 +5975,7 @@ await main(
       let restartConsole
       const opened = await openPage(browser, {
         preparePage: async (page) => {
+          await stack.vault.install(page)
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
         },
         url: `${origin}/desktop.html`,
@@ -2522,7 +5984,12 @@ await main(
         initScripts: [
           [
             gatewayHost,
-            { endpoint: stack.endpoint, credential: stack.credential, notices: true },
+            {
+              endpoint: stack.endpoint,
+              credential: stack.credential,
+              notices: true,
+              starting: STARTING,
+            },
           ],
         ],
       })

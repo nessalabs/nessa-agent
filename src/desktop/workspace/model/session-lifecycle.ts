@@ -26,12 +26,12 @@ export interface Draft {
 /** The drafts retained by panes and document tabs; the same record when none was let go. */
 export function keepDrafts(
   drafts: Readonly<Record<string, Draft>>,
-  shown: ReadonlySet<string>,
+  kept: ReadonlySet<string>,
 ): Readonly<Record<string, Draft>> {
   const ids = Object.keys(drafts)
-  if (ids.every((id) => shown.has(id))) return drafts
+  if (ids.every((id) => kept.has(id))) return drafts
   return Object.fromEntries(
-    ids.filter((id) => shown.has(id)).map((id) => [id, drafts[id]]),
+    ids.filter((id) => kept.has(id)).map((id) => [id, drafts[id]]),
   )
 }
 

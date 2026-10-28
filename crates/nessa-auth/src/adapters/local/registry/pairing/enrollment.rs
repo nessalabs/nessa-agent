@@ -19,9 +19,9 @@ use crate::{
     },
     domain::{
         pairing::{
-            validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, InvitationId,
-            PairingError, PairingEvent, PairingInitiator, PairingPhase, PairingRecord,
-            PairingTransition, TerminalCause,
+            validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, ConsentClass,
+            InvitationId, PairingError, PairingEvent, PairingInitiator, PairingPhase,
+            PairingRecord, PairingTransition, TerminalCause,
         },
         AudienceId, CredentialId, Initiator, IssuanceCause, OrganizationId, PrincipalId,
     },
@@ -183,7 +183,7 @@ impl PairingStore for LocalCredentialStore {
         clock: &'a dyn Clock,
     ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
         Box::pin(async move {
-            if !record.intent().class().uses_pake() {
+            if record.signed_original() {
                 return Err(PairingStoreError::Domain(PairingError::Ineligible));
             }
             let mut slot = self
@@ -776,7 +776,7 @@ pub(super) fn validate_pairing_admission(
     // Owner-phone authorization, reads, staging, and publication keep the
     // original bootstrap issuer. Cancel and deny do not: a later credential of
     // the same principal may end the enrollment.
-    if require_original_issuer && !intent.class().uses_pake() {
+    if require_original_issuer && intent.class() == ConsentClass::OwnerPhoneReadWrite {
         for stored in &registry.pairings {
             let Some(request) = stored
                 .owner_phone_request()

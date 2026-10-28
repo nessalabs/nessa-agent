@@ -14,7 +14,10 @@ import {
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
-import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
+import {
+  conversationDeleteTimeoutMs,
+  conversationWorkspaceCreateTimeoutMs,
+} from "../application/agent-budgets.js"
 import { bounds, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
@@ -34,6 +37,7 @@ import type {
   ConversationReorderResult,
   ConversationRevokePermissionRuleResult,
   ConversationSetApprovalModeResult,
+  ConversationSetUsageLimitAutoContinueResult,
   ConversationSetModelResult,
   ConversationCapability,
   ConversationShareResult,
@@ -44,10 +48,12 @@ import type {
   PermissionRule,
   ImageAttachment,
   LinkedFile,
+  UploadedFileAttachment,
 } from "../generated/product.js"
 import {
   imageAttachmentsProblem,
   linkedFilesProblem,
+  uploadedFilesProblem,
 } from "../protocol/attachment-validate.js"
 import {
   conversationId,
@@ -62,6 +68,7 @@ import {
   conversationMutation,
   conversationReorder,
   conversationApprovalMode,
+  conversationUsageLimitAutoContinue,
   conversationModel,
   conversationShareResult,
   conversationShares,
@@ -99,6 +106,7 @@ export type ConversationActionOptions = {
 }
 /** Optional IDs and delivery mode, filled by the client preparation wrapper. */
 export type ConversationPrepareOptions = ConversationActionOptions & {
+  /** Original stored inputs. Files are placed where the agent executes. */ uploads?: readonly UploadedFileAttachment[]
   /** Reuse only for the same logical message. */ executionId?: string
   /** Queued by default; steering uses the agent's supported behavior. */ mode?:
     "queued" | "steering"
@@ -128,8 +136,14 @@ export type ConversationCreateOptions = ConversationActionOptions & {
   agent?: string
   /** Initial catalog model when a new conversation is created. */
   model?: string
-  /** Initial provider preset; omitted selects ask. */
+  /** Initial provider preset; omitted selects ask, or the channel's preset. */
   approvalMode?: ApprovalMode
+  /** The channel this conversation is in for its whole life: one
+   * `channels.list()` returned. Omitted is the default channel. Its agent,
+   * model and preset fill in what is omitted here. One the gateway does not
+   * name for this person is refused as `channel_not_found`, with `uncertain`
+   * false. */
+  channelId?: string
   /** The SSH destination this conversation's agent runs on for its whole
    * life: one `agents.list` returned under `environments`. Omitted runs it on
    * the gateway's own machine. One the gateway does not name is refused as
@@ -168,12 +182,47 @@ export type ConversationApi = {
     mode: ApprovalMode,
     options?: ConversationActionOptions,
   ) => Promise<ConversationSetApprovalModeResult>
+  /**
+   * Turn this gateway's usage-limit continuation preference on or off.
+   * The preference is shared by every conversation on this gateway.
+   * Turning it on schedules a continuation for each currently blocked
+   * eligible turn. Turning it off cancels open schedules.
+   */
+  setUsageLimitAutoContinue: (
+    enabled: boolean,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationSetUsageLimitAutoContinueResult>
   /** Change model within this provider. Acknowledgement describes the native effect boundary. */
   setModel: (
     conversationId: string,
     model: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationSetModelResult>
+  /**
+   * Carry the conversation on under another agent and model. The next message
+   * opens a new session of that agent, which is given the earlier turns as
+   * text; `read()` lists the switch in `handoffs`, where the transcript draws
+   * a line. Refused while a turn runs or waits, and for the agent the
+   * conversation already runs on (use `setModel`). `applied` is false when
+   * the switch was not made.
+   */
+  switchAgent: (
+    conversationId: string,
+    agent: string,
+    model: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /**
+   * Start a new conversation from a copy of `sourceConversationId`'s turns, on
+   * its agent, model, approval preset and environment. The source must be
+   * the caller's own. The new one's first `read()` lists the copied turns in
+   * `handoffs`. IDs are generated when
+   * options are omitted, and a retry of one request opens the same fork.
+   */
+  fork: (
+    sourceConversationId: string,
+    options?: Pick<ConversationCreateOptions, "conversationId" | "requestId">,
+  ) => Promise<ConversationCreateResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
   /**
@@ -195,7 +244,8 @@ export type ConversationApi = {
   /** Fill optional identities and capture a complete message before effects.
    * Text is at most 8 KiB UTF-8 and may be blank only beside an image/file.
    * Images are references returned by attachments staging, not original bytes;
-   * files are absolute paths on the gateway's machine. The shared published
+   * files are absolute paths on the gateway's machine. `options.uploads` names
+   * original stored files delivered into the execution environment. The shared published
    * attachment validators own their bounds. Caller lists and entries are copied.
    * Throws TypeError before create or admission when any argument is invalid.
    */
@@ -513,12 +563,17 @@ export type SubmissionInput = {
   readonly text: string
   readonly attachments?: readonly ImageAttachment[]
   readonly files?: readonly LinkedFile[]
+  readonly uploads?: readonly UploadedFileAttachment[]
 }
 declare const preparedSubmission: unique symbol
 /** Process-local immutable message and its captured control target. */
-export type PreparedSubmission = Omit<SubmissionInput, "attachments" | "files"> & {
+export type PreparedSubmission = Omit<
+  SubmissionInput,
+  "attachments" | "files" | "uploads"
+> & {
   readonly attachments: readonly Readonly<ImageAttachment>[]
   readonly files: readonly Readonly<LinkedFile>[]
+  readonly uploads: readonly Readonly<UploadedFileAttachment>[]
   readonly target: ExecutionTarget
   readonly [preparedSubmission]: true
 }
@@ -529,6 +584,7 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
   const { conversationId, text, mode } = input
   const attachments = input.attachments ?? []
   const linked = input.files ?? []
+  const inputUploads = input.uploads ?? []
   validConversationId(conversationId)
   if (mode !== "queued" && mode !== "steering")
     throw new TypeError("Invalid submission mode")
@@ -551,6 +607,22 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
     fileCount > bounds.maxMessageFiles
   )
     throw new TypeError("Invalid message files: too many files or not a list")
+  if (
+    !Array.isArray(inputUploads) ||
+    inputUploads.length + fileCount > bounds.maxMessageFiles
+  )
+    throw new TypeError("Invalid message uploads: too many files")
+  const uploads: Readonly<UploadedFileAttachment>[] = []
+  for (let index = 0; index < inputUploads.length; index++) {
+    const item = inputUploads[index]
+    uploads.push(
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.freeze({ ...item })
+        : item,
+    )
+  }
+  const uploadProblem = uploadedFilesProblem(uploads)
+  if (uploadProblem) throw new TypeError(`Invalid message uploads: ${uploadProblem}`)
   const images: Readonly<ImageAttachment>[] = []
   const files: Readonly<LinkedFile>[] = []
   for (let index = 0; index < imageCount; index++) {
@@ -574,7 +646,8 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
   const filesProblem = linkedFilesProblem(files)
   if (filesProblem) throw new TypeError(`Invalid message files: ${filesProblem}`)
   // The copied payload decides whether text may be blank, not a changing source.
-  if (images.length === 0 && files.length === 0) boundedText(text, "Message", 8192)
+  if (images.length === 0 && files.length === 0 && uploads.length === 0)
+    boundedText(text, "Message", 8192)
   else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)
     throw new TypeError("Message must contain at most 8192 UTF-8 bytes")
   const prepared = Object.freeze({
@@ -585,6 +658,7 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
     text,
     attachments: Object.freeze(images),
     files: Object.freeze(files),
+    uploads: Object.freeze(uploads),
     target: issueExecutionTarget(conversationId, executionId),
   }) as PreparedSubmission
   preparedValues.add(prepared)
@@ -670,6 +744,7 @@ export function createConversationApi(
       | readonly string[]
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
+      | readonly UploadedFileAttachment[]
       | readonly QuestionChoice[]
       | readonly ConversationQuestionChoice[]
       | ConversationToolPolicy
@@ -790,6 +865,8 @@ export function createConversationApi(
         options.approvalMode === undefined ? {} : { approvalMode: options.approvalMode }
       const environment =
         options.environment === undefined ? {} : { environment: options.environment }
+      const channelId =
+        options.channelId === undefined ? {} : { channelId: options.channelId }
       return mutate(
         ProductMethod.ConversationCreate,
         {
@@ -799,8 +876,14 @@ export function createConversationApi(
           ...model,
           ...approvalMode,
           ...environment,
+          ...channelId,
         },
         (value) => conversationId(value, id),
+        true,
+        false,
+        options.channelId !== undefined || options.environment === "boat:thread"
+          ? { atLeastMs: conversationWorkspaceCreateTimeoutMs }
+          : undefined,
       )
     },
     setModel: (id, model, options = {}) => {
@@ -814,6 +897,28 @@ export function createConversationApi(
         false,
       )
     },
+    switchAgent: (id, agent, model, options = {}) => {
+      validConversationId(id)
+      boundedText(model, "Model", 256)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      // The agent name is the gateway's to refuse, as for `create`.
+      return mutate(
+        ProductMethod.ConversationSwitchAgent,
+        { conversationId: id, requestId, agent, model },
+        (value) => conversationMutation(value, requestId),
+        false,
+      )
+    },
+    fork: (source, options = {}) => {
+      validConversationId(source)
+      const id = validConversationId(options.conversationId ?? newId())
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return mutate(
+        ProductMethod.ConversationFork,
+        { conversationId: id, requestId, sourceConversationId: source },
+        (value) => conversationId(value, id),
+      )
+    },
     setApprovalMode: (id, mode, options = {}) => {
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
@@ -822,6 +927,17 @@ export function createConversationApi(
         { conversationId: id, requestId, mode },
         (value) => conversationApprovalMode(value, requestId, mode),
         false,
+      )
+    },
+    setUsageLimitAutoContinue: async (enabled, options = {}) => {
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return conversationUsageLimitAutoContinue(
+        await session.request(ProductMethod.ConversationSetUsageLimitAutoContinue, {
+          requestId,
+          enabled,
+        }),
+        requestId,
+        enabled,
       )
     },
     list: async (options = {}) =>
@@ -869,6 +985,7 @@ export function createConversationApi(
         text,
         attachments,
         files,
+        uploads: options.uploads,
         mode: options.mode ?? "queued",
         executionId: options.executionId ?? newId(),
         requestId: options.requestId ?? newId(),
@@ -882,13 +999,22 @@ export function createConversationApi(
         attachments,
         files,
         mode,
+        uploads,
         target,
       } = preparedSubmissionFields(prepared)
       return mutate(
         mode === "steering"
           ? ProductMethod.ConversationSteer
           : ProductMethod.ConversationSend,
-        { conversationId, executionId, requestId, text, attachments, files },
+        {
+          conversationId,
+          executionId,
+          requestId,
+          text,
+          attachments,
+          files,
+          ...(uploads.length ? { uploads } : {}),
+        },
         (value) =>
           Object.freeze({
             ...conversationReceipt(value, executionId),

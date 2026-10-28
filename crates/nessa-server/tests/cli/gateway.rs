@@ -7,8 +7,13 @@ use std::{io::Write, net::TcpListener, thread};
 use tungstenite::{accept, Message};
 
 #[test]
-fn adapter_rejects_mismatched_request_ids_and_cross_principal_issuance() {
-    for mode in ["correlation", "cross-principal", "unsafe-expiry"] {
+fn adapter_bounds_unsolicited_notices_and_rejects_mismatched_request_ids_and_scope() {
+    for mode in [
+        "correlation",
+        "cross-principal",
+        "unsafe-expiry",
+        "notice-flood",
+    ] {
         let root = tempfile::tempdir().unwrap();
         let token = root.path().join("cli.token");
         nessa_local_storage::open(&token, nessa_local_storage::OpenMode::CreateNew)
@@ -33,6 +38,15 @@ fn adapter_rejects_mismatched_request_ids_and_cross_principal_issuance() {
             let issue: Value =
                 serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
             assert_eq!(issue["params"]["membership"]["role"], "member");
+            for _ in 0..if mode == "notice-flood" { 65 } else { 1 } {
+                socket
+                    .send(Message::Text(
+                        json!({"type":"event","event":"permission.review.waiting","payload":{}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .unwrap();
+            }
             let mut metadata = json!({"id":"issued","principalId":"browser","organizationId":"org","audienceId":"gateway","issuedAt":100,"expiresAt":200,"revokedAt":null,"grants":issue["params"]["grants"]});
             if mode == "cross-principal" {
                 metadata["principalId"] = json!("other");
@@ -58,7 +72,7 @@ fn adapter_rejects_mismatched_request_ids_and_cross_principal_issuance() {
         assert_eq!(
             error,
             match mode {
-                "correlation" => CliError::Correlation,
+                "correlation" | "notice-flood" => CliError::Correlation,
                 "cross-principal" | "unsafe-expiry" => CliError::ScopeMismatch,
                 _ => unreachable!(),
             }

@@ -289,10 +289,11 @@ impl<'a> ActiveInvocation<'a> {
         lifecycle: &'a SessionLifecycle,
         id: ExecutionId,
         configured: Arc<dyn AgentProvider>,
+        work: &WorkPermit,
     ) -> Result<Self, AgentError> {
         Ok(Self {
             lifecycle,
-            work_generation: lifecycle.start_execution(id, configured)?,
+            work_generation: lifecycle.start_execution(id, configured, work)?,
         })
     }
 }

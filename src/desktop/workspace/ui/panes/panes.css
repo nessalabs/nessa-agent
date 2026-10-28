@@ -7,7 +7,19 @@
  * motion reflows text. The workspace uses zero-duration layout flights (#914).
  * What a pane looks like is here.
  */
+/*
+ * The chat area is one flat surface, from the side columns to the window's
+ * edges and up behind the titlebar: the panes are regions of it, not cards
+ * floating on the window, so no card's rim or corner stands beside the
+ * window's controls. The panes keep their gutters — the window's edges and
+ * between each other, which the surface fills; beside a column, the gutter is
+ * that column's resize edge, outside the surface. A hairline down the middle
+ * of each gutter between two panes is all that divides them, and one down the
+ * surface's left edge sets it apart from the columns beside it.
+ */
 .workspace-chat {
+  /* The gutter between the surface's left edge and the panes. */
+  --workspace-chat-lead: 0px;
   display: flex;
   flex: 1;
   min-width: 0;
@@ -32,9 +44,8 @@
 .workspace:not([data-drag-card]) .workspace-pane[data-drag-lifted] {
   background: color-mix(in oklab, var(--foreground) 2%, transparent);
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
-  /* The slot snaps. Interpolating the resting blur shadow would paint a new
-     blur on the lift frame and keep painting it until the preview's own
-     rule takes over (`styles.test.ts`). */
+  /* The slot snaps: nothing of it is interpolated on the lift frame
+     (`styles.test.ts`). */
   transition: none;
 }
 
@@ -52,7 +63,7 @@
 /*
  * While panes travel — a flight (`data-split-flying`), or a drag's preview of
  * where a drop would put them (`data-drag-reflow`) — nothing inside them
- * repaints expensively: the glass blur and deep shadows wait until they have
+ * repaints expensively: the composer's glass blur and shadow wait until they have
  * landed. One set of rules for both, so a drop that hands a preview over to a
  * flight changes no style. A pane's two parts are named rather than matched
  * as `> *`: a rule whose subject is any element makes the browser restyle
@@ -70,7 +81,6 @@
 
 .workspace:is([data-split-measuring], [data-drag-reflow]) .workspace-pane,
 .workspace-pane[data-split-flying] {
-  box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
 }
 
@@ -100,6 +110,65 @@
   -webkit-user-select: none;
   user-select: none;
   transition: opacity var(--desktop-base) ease;
+}
+
+/*
+ * The top-right pane's header ends before the panel's toggle over the
+ * window's top-right corner (`.workspace-titlebar-trailing`) while the panel
+ * is closed; open, the panel holds that corner and its own tabs keep clear.
+ * `--ci` the last column and the top row is that pane.
+ */
+.workspace[data-panel="closed"] .workspace-pane-header {
+  padding-right: calc(
+    var(--desktop-control-inset) + max(0, 1 - (var(--cn) - 1 - var(--ci))) *
+      max(0, 1 - var(--ri)) * (var(--desktop-control-size) + var(--desktop-gutter))
+  );
+}
+
+/*
+ * In the window's corner, with nothing beside it, the header steps past the
+ * window controls — and so it does where a drag's preview would put it
+ * (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not where it
+ * would leave. A column's reopening clears `data-panes-alone` before the
+ * corner pane lands; keep the header's inset through that flight. The
+ * picture behind the header still reaches the window's edge.
+ */
+.workspace
+  .workspace-pane[data-split-flying]:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-header,
+.workspace[data-panes-alone]
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-header {
+  padding-left: var(--desktop-titlebar-safe-start);
+}
+
+/* With the side rail open the panes start after it: the header steps past
+   the window's controls by what is left of them past the rail. */
+.workspace-window[data-rail="open"]
+  .workspace
+  .workspace-pane[data-split-flying]:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-header,
+.workspace-window[data-rail="open"]
+  .workspace[data-panes-alone]
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-header,
+.workspace-window[data-rail="open"]
+  .workspace[data-panes-alone]
+  .workspace-widget-window
+  .workspace-pane-header {
+  padding-left: calc(var(--desktop-titlebar-safe-start) - var(--rail-width));
 }
 
 .split-panes-grid[data-split-multi] .workspace-pane-header {
@@ -180,6 +249,90 @@
   flex-direction: column;
 }
 
+/*
+ * A pane clips what it holds, and with no edge of its own that clip would show
+ * as a line wherever a shadow reached it. So the composer's lift stays inside
+ * the least room a pane leaves round it: 6px, in the shortest pane
+ * (`conversation.css`).
+ */
+.workspace-pane .desktop-composer {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 20%),
+    0 3px 8px -5px rgb(0 0 0 / 40%);
+}
+
+/* ——— Between panes ——— */
+
+/*
+ * The hairline that divides two panes, down the middle of the gutter between
+ * them (the edge that resizes them, `split-panes.css`). It runs on through the
+ * surface's own gutter to the window's edge where it meets one, so the
+ * regions read as one surface cut in two. Where it ends is the edge's own
+ * placement (`--cx`, `--cw`, which only the edge itself holds), so it is
+ * worked out there, as lengths its hairline inherits.
+ */
+@property --workspace-edge-start {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --workspace-edge-end {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+.workspace-chat .split-panes-pane-edge[data-axis="x"] {
+  --workspace-edge-start: var(--desktop-gutter);
+  --workspace-edge-end: var(--desktop-gutter);
+}
+
+/* A row's edge reaches the surface's side only from the first or last column. */
+.workspace-chat .split-panes-pane-edge[data-axis="y"] {
+  /* 1 where the row's edge meets the surface's side, 0 where it meets a column's edge. */
+  --workspace-edge-first: calc(1 - min(1, var(--cx) * 10000));
+  --workspace-edge-last: calc(1 - min(1, max(0, 1 - var(--cx) - var(--cw)) * 10000));
+  /* At a column's edge it runs on half a gutter, to that edge's hairline. */
+  --workspace-edge-start: calc(
+    var(--workspace-chat-lead) * var(--workspace-edge-first) + var(--desktop-gutter) / 2 *
+      (1 - var(--workspace-edge-first))
+  );
+  /* The panes reach the surface's right edge: there it stops with them. */
+  --workspace-edge-end: calc(
+    var(--desktop-gutter) / 2 * (1 - var(--workspace-edge-last))
+  );
+}
+
+.workspace-chat .split-panes-pane-edge::after {
+  content: "";
+  position: absolute;
+  background: var(--desktop-rim);
+  pointer-events: none;
+}
+
+.workspace-chat .split-panes-pane-edge[data-axis="x"]::after {
+  /* The window's height, as the panes beside it run: up through the
+     titlebar row, where it fades out as the columns' edges do, and down to
+     the bottom. */
+  top: 0;
+  bottom: 0;
+  left: calc(50% - 0.5px);
+  width: 1px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--desktop-titlebar-height) * 0.6),
+    black calc(var(--desktop-titlebar-height) + 48px)
+  );
+}
+
+.workspace-chat .split-panes-pane-edge[data-axis="y"]::after {
+  top: calc(50% - 0.5px);
+  right: calc(-1 * var(--workspace-edge-end));
+  left: calc(-1 * var(--workspace-edge-start));
+  height: 1px;
+}
+
 /* ——— Empty states ——— */
 
 /* Where the workspace's empty state sits (the kit's `EmptyState`, `styles.css`): the room the panes would take. */
@@ -204,7 +357,7 @@
 
 /*
  * The window (`widget-window.tsx`, ADR 326): a widget over the chat area, in
- * the chat area's own gutters, with a pane's glass. The panes stay laid out
+ * the chat area's own gutters, on its surface as a pane is. The panes stay laid out
  * beneath it — their size, scroll, caret and what is typed — unseen and out
  * of reach, so a pane command measures the room they really have and coming
  * back lays nothing out again. The session list beside it stays in reach.
@@ -232,6 +385,13 @@
 
 .workspace[data-panes-alone] .workspace-widget-window {
   left: 0;
+}
+
+/* And it ends before the panel's toggle, as the top-right pane's does. */
+.workspace[data-panel="closed"] .workspace-widget-window .workspace-pane-header {
+  padding-right: calc(
+    var(--desktop-control-inset) + var(--desktop-control-size) + var(--desktop-gutter)
+  );
 }
 
 .workspace-widget-window:hover .workspace-pane-actions {

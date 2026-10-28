@@ -32,6 +32,14 @@
     "listTargets": 2,
     "deliveryTimeoutMs": 10000
   },
+  "x-channelRules": {
+    "maxChannels": 1000,
+    "maxNameChars": 80,
+    "maxNotesBytes": 8192,
+    "maxResources": 32,
+    "maxResourceBytes": 16384,
+    "maxPathBytes": 4096
+  },
   "x-frameBytes": { "maxPayloadBytes": 65536 },
   "$defs": {
     "SessionChallenge": {
@@ -210,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 78,
+          "maxItems": 99,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -880,6 +888,47 @@
       },
       "required": ["digest", "mimeType", "size"]
     },
+    "UploadedFileAttachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One original stored file input. Placement is resolved where the agent executes; the original reference is retained for retries and restoration.",
+      "properties": {
+        "digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 of the bytes to be uploaded; the upload is refused unless the received bytes hash to it."
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 127,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+          "description": "Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864,
+          "description": "Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "x-utf8MaxBytes": 255,
+          "pattern": "^[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+$",
+          "description": "Original filename, at most 255 UTF-8 bytes. No separators or control characters; not a destination path."
+        }
+      },
+      "required": [
+        "digest",
+        "mimeType",
+        "size",
+        "name"
+      ]
+    },
     "LinkedFile": {
       "type": "object",
       "additionalProperties": false,
@@ -1062,6 +1111,96 @@
         "size"
       ]
     },
+    "AttachmentWriteParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Send one piece of an upload over the session itself, for a surface that cannot reach `PUT /attachments`, such as a phone over its native link. Pieces go in order, one at a time, each starting where the last ended: the piece at offset 0 starts the upload, and the one marked `last` ends it and answers with what the conversation now keeps. As with `PUT /attachments`, the ticket is the whole authority and the first piece spends it. An upload whose pieces stop for longer than the upload deadline is refused. A refused piece ends its upload: begin again for a new ticket.",
+      "properties": {
+        "ticket": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The secret single-use ticket `attachment.begin` answered with. Do not log it."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864,
+          "description": "First byte of this piece: 0 for the first, then the bytes of every piece before it."
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 43692,
+          "contentEncoding": "base64",
+          "description": "This piece's bytes, standard base64 with padding: at most 32768 bytes. Only a last piece may be empty."
+        },
+        "last": {
+          "type": "boolean",
+          "description": "Whether this piece ends the upload. Its answer carries the stored file."
+        }
+      },
+      "required": ["ticket", "offset", "data", "last"]
+    },
+    "AttachmentWriteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How much of the upload the gateway has taken, and after the last piece the file the conversation now keeps, which is what `conversation.send` refers to. As with `PUT /attachments`, for an image that is the normalized image, so its digest, type and size can differ from what was sent.",
+      "properties": {
+        "received": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes taken so far: where the next piece starts."
+        },
+        "digest": {
+          "type": ["string", "null"],
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "After the last piece: digest of what the conversation holds. Null before it."
+        },
+        "mimeType": {
+          "type": ["string", "null"],
+          "minLength": 3,
+          "maxLength": 127,
+          "description": "After the last piece: media type of what the conversation holds. Null before it."
+        },
+        "size": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "After the last piece: length in bytes of what the conversation holds. Null before it."
+        }
+      },
+      "required": ["received", "digest", "mimeType", "size"]
+    },
+    "ConversationUsageLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A provider usage limit on a failed turn. resetsAtMs is present only for a timed reset whose instant parsed. autoResuming is present only when this gateway has accepted a one-shot continuation for the turn.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["claude", "codex"],
+          "description": "The harness that reported the limit. OpenCode is not a value."
+        },
+        "recovery": {
+          "type": "string",
+          "enum": ["timed_reset", "user_action", "unknown"],
+          "description": "How the limit can end. timed_reset carries resetsAtMs. user_action needs the person and never carries a reset. unknown is a usage limit with no trustworthy reset."
+        },
+        "resetsAtMs": {
+          "type": "integer",
+          "minimum": 1704067200000,
+          "maximum": 4102444800000,
+          "description": "Absolute Unix milliseconds when a timed reset ends, kept only inside 2024-01-01 through 2100-01-01 UTC."
+        },
+        "autoResuming": {
+          "type": "boolean",
+          "description": "True only when a continuation for this turn is scheduled or being delivered and the gateway preference is on."
+        }
+      },
+      "required": ["provider", "recovery"]
+    },
     "ConversationMessage": {
       "type": "object",
       "additionalProperties": false,
@@ -1087,6 +1226,12 @@
           "x-maxTotalBytes": 10485760,
           "items": { "$ref": "#/$defs/ImageAttachment" },
           "description": "Images the user sent with this turn, in attachment order."
+        },
+        "uploads": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/UploadedFileAttachment" },
+          "description": "Original stored file inputs, in order; at most 64 MiB together. Omitted means none."
         },
         "files": {
           "type": "array",
@@ -1115,7 +1260,11 @@
         },
         "requiredWorkFailed": {
           "type": "boolean",
-          "description": "This failed authentication refusal also failed independent required work. The person-facing diagnostic stays in error. Absent for a pure refusal, and absent when the failure is not an authentication refusal."
+          "description": "This failed turn also failed independent required work, beside an authentication refusal or a usage limit. The person-facing diagnostic stays in error. Absent for a pure refusal or a pure usage limit."
+        },
+        "usageLimit": {
+          "$ref": "#/$defs/ConversationUsageLimit",
+          "description": "A provider usage limit on this failed turn. Absent when the turn did not end in one. autoResuming is present only after a continuation has been scheduled."
         },
         "steeringTarget": {
           "type": "string",
@@ -1164,6 +1313,12 @@
           "x-maxTotalBytes": 10485760,
           "items": { "$ref": "#/$defs/ImageAttachment" },
           "description": "Images waiting with this input, in attachment order."
+        },
+        "uploads": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/UploadedFileAttachment" },
+          "description": "Original stored file inputs, in order; at most 64 MiB together. Omitted means none."
         },
         "files": {
           "type": "array",
@@ -1487,7 +1642,7 @@
           "type": "string",
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
-          "description": "Exact tool arguments observed through a permission request, or empty when unavailable."
+          "description": "The call's input, one JSON object encoded: the arguments the agent reported with the call, or those its permission request asked with, whichever came last and fit. Empty when none was reported or none fit — never cut."
         },
         "mcp": {
           "$ref": "#/$defs/ConversationMcpTool",
@@ -1502,9 +1657,62 @@
         "nativeHooks": {
           "$ref": "#/$defs/NativeHooksChoice",
           "description": "The hooks choice of the process start this tool call ran under, saved with the call so it survives a gateway restart. Absent when that start recorded none: a harness without the choice, or a call saved before it was recorded. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on."
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the gateway first heard of the call, in Unix milliseconds, saved with the call so it survives a restart. Absent for a call saved before the time was recorded."
+        },
+        "endedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the gateway heard the call completed or failed, in Unix milliseconds. Absent while the call runs, for a call that never settled, and for a call saved before the time was recorded."
+        },
+        "changes": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/ConversationToolChange" },
+          "description": "The files the call changed, as the agent reported them and in its order, at most 16. The same changes are written into details as text; these are for a reader that draws them, and the first a view gives up for room, before any turn. Absent when the call reported none."
+        },
+        "changesCut": {
+          "type": "boolean",
+          "description": "The call changed files changes does not list: more than 16, one whose path is past its bound, or the list was given up for room. A reader totalling changes knows the total is not the call's. Absent when changes lists every file the call reported."
         }
       },
       "required": ["executionId", "toolId", "title", "kind", "status", "details", "input"]
+    },
+    "ConversationToolChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One file a tool call changed: its path, and its text before and after.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The file's path as the agent named it, unresolved. A change to a file whose path is longer than 4096 bytes is not listed, and changesCut says so."
+        },
+        "before": {
+          "type": "string",
+          "maxLength": 7000,
+          "x-utf8MaxBytes": 7000,
+          "description": "The text before the change, cut past 7000 bytes. Absent when the agent did not say — a file it created reads that way — which differs from an empty file."
+        },
+        "after": {
+          "type": "string",
+          "maxLength": 7000,
+          "x-utf8MaxBytes": 7000,
+          "description": "The text after the change, which may be empty, cut past 7000 bytes."
+        },
+        "cut": {
+          "type": "boolean",
+          "description": "A side was longer than 7000 bytes and is cut, so the two sides do not say the whole change."
+        }
+      },
+      "required": ["path", "after", "cut"]
     },
     "ConversationMcpTool": {
       "type": "object",
@@ -1645,6 +1853,12 @@
           "maxItems": 64,
           "description": "Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response."
         },
+        "handoffs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationHandoff" },
+          "maxItems": 256,
+          "description": "Switches to another agent or model, and the fork the conversation began as, in the order they were recorded; empty before any."
+        },
         "unreadable": {
           "type": "array",
           "items": { "$ref": "#/$defs/ConversationUnreadable" },
@@ -1686,9 +1900,20 @@
           "$ref": "#/$defs/ModelChange",
           "description": "Pending correlated model change; the confirmed selection remains authoritative."
         },
+        "usageLimitAutoContinue": {
+          "type": "boolean",
+          "description": "Whether this gateway schedules one continuation when a usage limit resets. The preference is the gateway's, shared by every conversation, and defaults to false. The card copies Auto-resuming only when a schedule for that turn has been accepted."
+        },
         "modelChangeEffect": {
           "$ref": "#/$defs/ModelChangeEffect",
           "description": "Native effect boundary of the last confirmed model change."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The conversation's selected catalog model, present whether or not an agent is open."
         }
       },
       "required": [
@@ -1708,10 +1933,12 @@
         "questions",
         "artifacts",
         "notes",
+        "handoffs",
         "unreadable",
         "unreadableTruncated",
         "approvalMode",
-        "approvalModes"
+        "approvalModes",
+        "model"
       ]
     },
     "ConversationArtifact": {
@@ -1806,6 +2033,13 @@
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
           "description": "Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, or peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 13,
+          "pattern": "^(default|ch_[a-z2-7]{10})$",
+          "description": "The channel the conversation is in for its whole life, one channel.list returns: its agent works in that channel's folder and is told the channel's notes and resources. Omitted, or default, is the default channel, whose folder is the gateway's configured workspace. A channel other than default runs on the gateway's own machine, so it is refused invalid_request beside an environment. channel_not_found when the caller has no such channel. Ignored when the conversation already exists, which stays in the channel it was created in."
         }
       },
       "required": ["conversationId", "requestId"]
@@ -1913,6 +2147,13 @@
         "archived": {
           "type": "boolean",
           "description": "Somebody archived the conversation and nothing has been said in it since."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "The channel the conversation was created in, one channel.list returns. Absent for a conversation in the default channel."
         }
       },
       "required": [
@@ -2057,6 +2298,12 @@
           "x-maxTotalBytes": 10485760,
           "items": { "$ref": "#/$defs/ImageAttachment" },
           "description": "Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone."
+        },
+        "uploads": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/UploadedFileAttachment" },
+          "description": "Original stored file inputs, in order; at most 64 MiB together. Omitted means none."
         },
         "files": {
           "type": "array",
@@ -2222,6 +2469,12 @@
           "items": { "$ref": "#/$defs/ImageAttachment" },
           "description": "Original submit or steer images, in attachment order. Omitted means an empty list, the same fingerprint as a send that carried none."
         },
+        "uploads": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/UploadedFileAttachment" },
+          "description": "Original stored file inputs, in order; at most 64 MiB together. Omitted means none."
+        },
         "files": {
           "type": "array",
           "maxItems": 10,
@@ -2252,6 +2505,13 @@
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
           "description": "Creation hint. Omitted when the original creation named no environment."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 13,
+          "pattern": "^(default|ch_[a-z2-7]{10})$",
+          "description": "Creation hint. Omitted when the original creation named no channel."
         }
       },
       "required": ["conversationId", "requestId", "operation"]
@@ -3010,7 +3270,7 @@
         },
         "environment": {
           "type": "string",
-          "enum": ["here", "ssh", "peer"],
+          "enum": ["here", "ssh", "peer", "boat"],
           "description": "Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files."
         },
         "host": {
@@ -3118,6 +3378,11 @@
       ],
       "description": "Runtime configuration selected by the gateway composition for this conversation."
     },
+    "ConversationNoticeKind": {
+      "type": "string",
+      "enum": ["review", "hook", "deadline"],
+      "description": "Which local decision a notice records. review is a declined review. hook is a permission-review hook that stopped the turn or closed the session. deadline is a deadline that settled its review. The three may share one decimal id."
+    },
     "ConversationPart": {
       "type": "object",
       "additionalProperties": false,
@@ -3150,7 +3415,11 @@
           "maxLength": 20,
           "x-utf8MaxBytes": 20,
           "pattern": "^[1-9][0-9]{0,19}$|^$",
-          "description": "Stable execution-scoped declined-review identity for a local notice; empty otherwise."
+          "description": "Decimal identity of a local notice; empty otherwise. A review notice uses the declined-review id. A hook notice and a deadline notice use the permission id. Those identities are independent, so one decimal may name each of them; noticeKind says which decision it is."
+        },
+        "noticeKind": {
+          "$ref": "#/$defs/ConversationNoticeKind",
+          "description": "Which local decision this notice is. Absent on every part that is not a local notice."
         },
         "messageId": {
           "type": "string",
@@ -4185,6 +4454,10 @@
         "attachment_capacity",
         "attachment_storage_unavailable",
         "attachment_cleanup_unavailable",
+        "upload_ticket_invalid",
+        "upload_failed",
+        "unsupported_image",
+        "image_too_large",
         "conversation_deleted",
         "conversation_erasure_incomplete",
         "mcp_app_unknown",
@@ -4209,9 +4482,10 @@
         "drive_policy_unenforceable",
         "revoked",
         "revoked_after_save",
-        "unavailable_after_save"
+        "unavailable_after_save",
+        "channel_not_found"
       ],
-      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now."
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created."
     },
     "ConversationAnswerOption": {
       "type": "object",
@@ -4517,6 +4791,44 @@
         }
       },
       "required": ["agent", "defaultModel", "models"]
+    },
+    "ConversationSetUsageLimitAutoContinueParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turn this gateway's usage-limit continuation preference on or off. The preference is shared by every conversation on this gateway. Turning it on schedules a continuation for each currently blocked eligible turn. Turning it off cancels open schedules.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "True schedules continuations when a usage limit names a future reset. False cancels open schedules. The default, before any command, is false."
+        }
+      },
+      "required": ["requestId", "enabled"]
+    },
+    "ConversationSetUsageLimitAutoContinueResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The preference now in effect for this gateway.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether continuations will be scheduled."
+        }
+      },
+      "required": ["requestId", "enabled"]
     },
     "AgentsSetNativeHooksParams": {
       "type": "object",
@@ -5544,8 +5856,8 @@
     },
     "PairingEnrollee": {
       "type": "string",
-      "enum": ["device", "gateway", "environment"],
-      "description": "Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side."
+      "enum": ["device", "ownerPhone", "gateway", "environment"],
+      "description": "Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner and reads what is shared with it. ownerPhone: the owner's own phone; its credential acts as the owner over every conversation the owner has, now and later, reading and writing as the owner phone purpose allows, with no per-conversation share. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side."
     },
     "PairingCreateParams": {
       "type": "object",
@@ -5847,6 +6159,115 @@
       },
       "required": ["enabled", "applies"]
     },
+    "PairingTunnelMode": {
+      "type": "string",
+      "enum": ["quick", "named"],
+      "description": "How the web tunnel is carried. quick: a free Cloudflare quick tunnel at a random trycloudflare.com address, which changes whenever cloudflared starts again (it is kept running across gateway restarts, so it changes only when cloudflared itself has to start again). named: a tunnel made in the person's Cloudflare account, at their own hostname, which never changes."
+    },
+    "PairingSetTunnelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turn the web tunnel on or off for this gateway, so a paired phone reaches it from anywhere. Needs native linking on. The gateway saves the choice in its config.json (the token in a private file beside its state, never in config.json) and, when the running gateway does not already match it, restarts itself to apply it. A field left out keeps what is saved.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "True turns the tunnel on; false turns it off and keeps its other settings. Sending the same request again changes nothing, so a retry is safe."
+        },
+        "mode": {
+          "$ref": "#/$defs/PairingTunnelMode",
+          "description": "Quick or named. Left out, the saved mode, or quick when none is saved."
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 270,
+          "description": "A named tunnel's public address, https://host or https://host:port, with no path. Left out, the saved one."
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "A named tunnel's token from Cloudflare's dashboard: printable ASCII with no spaces. Left out, the saved one. It is never sent back."
+        }
+      },
+      "required": ["enabled"]
+    },
+    "PairingSetTunnelResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of pairing.setTunnel.",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "The saved choice." },
+        "mode": { "$ref": "#/$defs/PairingTunnelMode", "description": "The saved mode." },
+        "applies": {
+          "$ref": "#/$defs/PairingLinkingApply",
+          "description": "How the saved choice takes effect."
+        }
+      },
+      "required": ["enabled", "mode", "applies"]
+    },
+    "PairingTunnelStatus": {
+      "type": "string",
+      "enum": ["off", "starting", "ready", "failed"],
+      "description": "Where the running gateway's tunnel stands. off: this run has no tunnel. starting: it is being started, or started again. ready: it answers at address. failed: the last attempt failed for failure; it is tried again."
+    },
+    "PairingTunnelResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of pairing.tunnel: the saved tunnel setting and the running tunnel. The token is never included.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the saved setting turns the tunnel on."
+        },
+        "mode": {
+          "$ref": "#/$defs/PairingTunnelMode",
+          "description": "The saved mode, quick when none is saved."
+        },
+        "hostname": {
+          "type": "string",
+          "maxLength": 270,
+          "description": "The saved named tunnel's address, when one is saved."
+        },
+        "hasToken": {
+          "type": "boolean",
+          "description": "Whether a named tunnel's token is saved."
+        },
+        "ingress": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "The loopback address the tunnel forwards to: where a named tunnel's public hostname must point in Cloudflare's dashboard, as http://<ingress>."
+        },
+        "status": {
+          "$ref": "#/$defs/PairingTunnelStatus",
+          "description": "The running tunnel's status."
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 270,
+          "description": "The running tunnel's public address, when it is ready."
+        },
+        "failure": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready."
+        }
+      },
+      "required": ["enabled", "mode", "hasToken", "ingress", "status"]
+    },
+    "ServerReachResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep.",
+      "properties": {
+        "tunnel": {
+          "type": ["string", "null"],
+          "maxLength": 270,
+          "description": "The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages."
+        }
+      },
+      "required": ["tunnel"]
+    },
     "PairingErrorCode": {
       "type": "string",
       "enum": [
@@ -5859,9 +6280,149 @@
         "pairing_busy",
         "pairing_unavailable",
         "pairing_address_in_use",
-        "pairing_audit_unavailable"
+        "pairing_audit_unavailable",
+        "pairing_linking_off",
+        "pairing_tunnel_incomplete"
       ],
-      "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which)."
+      "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking and pairing.setTunnel, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). pairing.setTunnel refuses with the same codes: pairing_busy and pairing_unavailable as above, pairing_address_in_use when the tunnel's loopback ingress cannot be bound, and pairing_audit_unavailable as above. pairing_linking_off: pairing.setTunnel cannot turn the tunnel on while native linking is off; nothing was saved. pairing_tunnel_incomplete: a named tunnel needs a hostname and a token, given or saved; nothing was saved."
+    },
+    "GithubAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The GitHub account a sign-in belongs to.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "GitHub's numeric id for the account, which never changes."
+        },
+        "login": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The account's login, which can change."
+        }
+      },
+      "required": ["id", "login"]
+    },
+    "GithubConnectState": {
+      "type": "string",
+      "enum": ["signed_out", "connecting", "connected"],
+      "description": "Where the gateway's GitHub sign-in stands. signed_out: no token is held, and agents are given none. connecting: a code is waiting for the person to enter it on GitHub. connected: a token is held and every agent opened from now on is given it."
+    },
+    "GithubConnectEnd": {
+      "type": "string",
+      "enum": [
+        "expired",
+        "denied",
+        "cancelled",
+        "rejected",
+        "unreachable",
+        "store_unavailable",
+        "audit_unavailable"
+      ],
+      "description": "Why the latest sign-in ended without signing in. expired: the code ran out before it was entered. denied: the person refused it on GitHub. cancelled: it was cancelled here. rejected: GitHub refused the Nessa app itself. unreachable: GitHub could not be reached. store_unavailable: the token could not be kept, or a kept one could not be read at startup. audit_unavailable: its record could not be kept, so the token was dropped."
+    },
+    "GithubCode": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The code a sign-in waits for.",
+      "properties": {
+        "userCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "What the person enters on GitHub."
+        },
+        "verificationUri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Where they enter it."
+        },
+        "expiresInSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Whole seconds left before the code expires, when this was answered."
+        }
+      },
+      "required": ["userCode", "verificationUri", "expiresInSeconds"]
+    },
+    "GithubLiveEvents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "repositories": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "gaps": { "type": "integer", "minimum": 0, "maximum": 16 }
+      },
+      "required": ["enabled", "repositories", "gaps"],
+      "description": "Live delivery is opted in for this gateway's signed-in GitHub account. Gaps report expired catch-up history; they are not acknowledged automatically."
+    },
+    "GithubLiveEventsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "acceptGaps": {
+          "type": "boolean",
+          "description": "Explicit acknowledgement of missing history, continue within retained events."
+        }
+      },
+      "required": ["enabled"]
+    },
+    "GithubConnection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its passphrase-protected local vault, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/GithubConnectState",
+          "description": "Where the sign-in stands."
+        },
+        "liveEvents": {
+          "$ref": "#/$defs/GithubLiveEvents",
+          "description": "Present when this build stage has a live relay configured."
+        },
+        "account": {
+          "$ref": "#/$defs/GithubAccount",
+          "description": "Present exactly when connected."
+        },
+        "code": {
+          "$ref": "#/$defs/GithubCode",
+          "description": "Present exactly when connecting."
+        },
+        "last": {
+          "$ref": "#/$defs/GithubConnectEnd",
+          "description": "When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect."
+        },
+        "unrecorded": {
+          "type": "boolean",
+          "const": true,
+          "description": "The gateway could not keep the last change in its audit, and that change still stands. With last: how the attempt ended. Connected: a sign-out that failed. Signed out with no last: the sign-out. Absent when it is on record, and with last audit_unavailable, which already says so."
+        },
+        "installUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Where the person chooses the repositories the Nessa app may use. A token reaches only those."
+        }
+      },
+      "required": ["state", "installUrl"]
+    },
+    "GithubErrorCode": {
+      "type": "string",
+      "enum": [
+        "github_not_configured",
+        "github_unreachable",
+        "github_rejected",
+        "github_storage_unavailable",
+        "github_audit_unavailable",
+        "github_live_unavailable",
+        "github_live_capacity",
+        "vault_locked"
+      ],
+      "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the encrypted local vault could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
     },
     "PeerEnrollParams": {
       "type": "object",
@@ -6305,6 +6866,103 @@
         }
       },
       "required": ["kind", "surface"]
+    },
+    "ConversationHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A point after which the conversation's agent ran in a new session that had not seen the turns before it: a switch to another agent or model (conversation.switchAgent), or the fork the conversation began as (conversation.fork). The first turn after it was given those turns as text. Show it as a line in the transcript, after the turn it follows.",
+      "properties": {
+        "handoffId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "description": "The conversation's own name for the handoff."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["switch", "fork"],
+          "description": "A switch to another agent or model, or the fork the conversation began as."
+        },
+        "atMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it was recorded, in milliseconds since the Unix epoch, on the gateway's clock."
+        },
+        "afterExecutionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The last turn the conversation held when it was recorded, which it is shown after; absent before any turn, as a fork always is."
+        },
+        "from": {
+          "$ref": "#/$defs/ConversationHandoffAgent",
+          "description": "A switch's agent and model before it; present exactly for a switch."
+        },
+        "to": {
+          "$ref": "#/$defs/ConversationHandoffAgent",
+          "description": "A switch's agent and model after it; present exactly for a switch."
+        },
+        "turns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationCarriedTurn" },
+          "maxItems": 256,
+          "description": "A fork's copied turns, oldest first, shown before everything the conversation said itself. Absent for a switch, and when the view left them all out."
+        },
+        "omittedTurns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "Copied turns left out, by the copy's own bounds or by this view's; absent when none were."
+        }
+      },
+      "required": ["handoffId", "kind", "atMs"]
+    },
+    "ConversationHandoffAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An agent and model a switch left or went to.",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "The agent, as agents.list names it; absent when the history's provider is one this gateway has no agent for."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The model, as the agent's catalog names it."
+        }
+      },
+      "required": ["model"]
+    },
+    "ConversationCarriedTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only.",
+      "properties": {
+        "said": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "What was said in the turn, when it said anything in text."
+        },
+        "reply": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The agent's final reply, when it gave one."
+        }
+      },
+      "required": []
     },
     "ConversationMessageParams": {
       "type": "object",
@@ -6892,6 +7550,71 @@
       },
       "required": ["conversationId", "requestId", "model"]
     },
+    "ConversationSwitchAgentParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Carry the conversation on under another agent, in a new session of it that is given the conversation's earlier turns as text with its next message; the transcript shows a handoff line where it happened. Refused busy while a turn runs or waits; refused invalid_request for the agent the conversation already runs on (use conversation.setModel). applied is false when the switch was not made, and the conversation stays on its agent.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "The agent to carry on under, as agents.list names it."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within that agent's catalog."
+        }
+      },
+      "required": ["conversationId", "requestId", "agent", "model"]
+    },
+    "ConversationForkParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a new conversation from a copy of another's turns, on the same agent, model, approval preset and environment. The new conversation's agent is given the copied turns as text with its first message, and its transcript shows them first. Idempotent for a retry of one request; the conversation identity is the caller's, as for conversation.create.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The new conversation, a fresh canonical lowercase hyphenated UUID."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "sourceConversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation to copy, which must be the caller's own."
+        }
+      },
+      "required": ["conversationId", "requestId", "sourceConversationId"]
+    },
     "ConversationSetModelResult": {
       "type": "object",
       "additionalProperties": false,
@@ -7092,6 +7815,228 @@
       },
       "required": ["arrangement", "sidebar", "sessionList", "showing", "columns"]
     },
+    "ChannelErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "forbidden",
+        "conversations_not_configured",
+        "channel_folder_not_found",
+        "channel_folder_not_a_directory",
+        "channel_folder_refused",
+        "channel_resource_not_found",
+        "channel_limit_reached",
+        "channel_request_conflict",
+        "channel_storage_unavailable",
+        "temporarily_unavailable"
+      ],
+      "description": "Why the gateway refused a channel method. invalid_request: a name, notes, path or model that is not one a channel holds (a relative path, or resources past x-channelRules.maxResourceBytes, among them), or an agent this gateway has no runtime for. forbidden: the access policy does not let the caller make or list channels; a paired device never may. conversations_not_configured: this gateway runs no conversations. channel_folder_not_found: the chosen folder does not exist. channel_folder_not_a_directory: the chosen folder is a file. channel_folder_refused: the chosen folder is one agents must not work in: the root of a drive, a system folder or one that holds a system folder, the home folder or one that holds it, or the gateway's own data folder, one that holds it, or anything inside it other than a folder under its channels folder. channel_resource_not_found: a file or folder to attach does not exist. channel_limit_reached: the caller keeps the most channels a person may (x-channelRules.maxChannels). channel_request_conflict: the requestId already made another channel; nothing was made. channel_storage_unavailable: the channel or its folder could not be saved or made; nothing was kept. temporarily_unavailable: the gateway is busy or stopping; ask again."
+    },
+    "Channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One channel as a list names it: where its conversations' agents work and what a new conversation in it starts with (agent, model, approval preset). Its notes and resources are told to its agents and are not listed.",
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 13,
+          "pattern": "^(default|ch_[a-z2-7]{10})$",
+          "description": "The channel's id: default for the default channel, else ch_ and ten base32 characters the gateway chose."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "x-utf8MaxBytes": 320,
+          "description": "What the channel is called."
+        },
+        "folder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The absolute folder its conversations' agents work in, resolved."
+        },
+        "folderMade": {
+          "type": "boolean",
+          "description": "The gateway made the folder, under its channels folder, because none was chosen. False for a chosen folder and for the default channel's."
+        },
+        "agent": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "The agent a new conversation in the channel starts on; null for the default channel, whose new conversations start on whatever the surface picks."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The model a new conversation in the channel starts on; null for the default channel."
+        },
+        "approvalMode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "The preset a new conversation in the channel starts with; ask for the default channel."
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the channel was made, in Unix milliseconds; 0 for the default channel."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+        },
+        "coordinatorConversationId": {
+          "type": ["string", "null"],
+          "description": "Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity."
+        }
+      },
+      "required": [
+        "channelId",
+        "name",
+        "folder",
+        "folderMade",
+        "agent",
+        "model",
+        "approvalMode",
+        "createdAtMs",
+        "coordinatorPlacement",
+        "threadPlacement",
+        "coordinatorConversationId"
+      ]
+    },
+    "ChannelCreateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Make a channel (channel.create). Repeating the same requestId with the same channel answers the channel it made; with another, channel_request_conflict. The folder is the one path a request may name, and only here: a conversation names its channel, never a folder.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320,
+          "x-utf8MaxBytes": 320,
+          "description": "What the channel is called: trimmed, 1 to x-channelRules.maxNameChars characters, no control characters."
+        },
+        "folder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "An existing absolute folder the channel's agents work in. Omitted, the gateway makes one under its channels folder, named by the channel's id."
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "The agent a new conversation in the channel starts on."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The model a new conversation in the channel starts on."
+        },
+        "approvalMode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "The preset a new conversation in the channel starts with; default ask."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "Notes every agent in the channel is told; omitted is none."
+        },
+        "resources": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "x-utf8MaxBytes": 4096
+          },
+          "description": "Existing absolute files and folders to attach, none twice, at most x-channelRules.maxResourceBytes of paths in all; omitted is none."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+        }
+      },
+      "required": ["requestId", "name", "agent", "model"]
+    },
+    "ChannelCreateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The channel channel.create made, or made earlier under the same requestId.",
+      "properties": { "channel": { "$ref": "#/$defs/Channel" } },
+      "required": ["channel"]
+    },
+    "ChannelListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which page of the caller's channels to list (channel.list). Empty for the first.",
+      "required": [],
+      "properties": {
+        "after": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "The cursor an earlier page returned: list the channels made after that one. An id the caller has no channel under is refused invalid_request."
+        }
+      }
+    },
+    "ChannelListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One page of the caller's channels (channel.list): the default channel first on the first page, then the rest in the order they were made.",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 1001,
+          "items": { "$ref": "#/$defs/Channel" },
+          "description": "This page's channels, as many as fit one frame. Only the first page holds the default channel, and only when the gateway has a workspace."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "False when the frame bound left some out: the later ones made, listed from cursor."
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "Present exactly when complete is false: the last channel on this page, to send back as after for the next one."
+        }
+      },
+      "required": ["channels", "complete"]
+    },
     "WorkspacePublishParams": {
       "type": "object",
       "additionalProperties": false,
@@ -7134,6 +8079,104 @@
         }
       },
       "required": ["revision", "applied"]
+    },
+    "VaultState": {
+      "type": "string",
+      "enum": ["unconfigured", "locked", "unlocked"],
+      "description": "The local vault state. Unlock belongs to the connection that proved its passphrase; closing its owner locks the vault."
+    },
+    "VaultStatus": {
+      "description": "The current state of the local encrypted vault; never includes secret contents.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/VaultState",
+          "description": "Whether protected local credentials are unconfigured, locked, or available to this app session."
+        }
+      },
+      "required": ["state"]
+    },
+    "VaultPassphraseParams": {
+      "description": "Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "passphrase": {
+          "type": "string",
+          "description": "Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json."
+        }
+      },
+      "required": ["passphrase"]
+    },
+    "VaultErrorCode": {
+      "type": "string",
+      "enum": [
+        "vault_unavailable",
+        "vault_locked",
+        "vault_passphrase_policy",
+        "vault_wrong_passphrase",
+        "vault_busy",
+        "vault_cooldown",
+        "vault_session_closed",
+        "vault_session_owned",
+        "vault_already_configured",
+        "vault_capacity",
+        "vault_audit_unavailable",
+        "vault_migration_unavailable"
+      ],
+      "description": "Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault."
+    },
+    "BoatSaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Boat infrastructure token. Never returned or logged."
+        }
+      },
+      "required": ["token"],
+      "description": "Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription."
+    },
+    "BoatErrorCode": {
+      "description": "Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
+      "type": "string",
+      "enum": [
+        "vault_locked",
+        "boat_not_configured",
+        "invalid_request",
+        "boat_storage_unavailable",
+        "boat_resource_missing",
+        "boat_unreachable",
+        "boat_worker_unavailable",
+        "boat_environment_blocks_credentials",
+        "boat_provisioning_uncertain",
+        "boat_cleanup_uncertain"
+      ]
+    },
+    "BoatStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["locked", "disconnected", "connected"],
+          "description": "Locked when the vault cannot be read, disconnected when no connection is saved, or connected after validation and encrypted persistence."
+        },
+        "environment": {
+          "type": "string",
+          "description": "The dedicated Boat environment saved with this connection; present only while connected."
+        },
+        "image": {
+          "type": "string",
+          "description": "The release-owned shared worker image saved with this connection; present only while connected."
+        }
+      },
+      "required": ["state"],
+      "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
     }
   }
 }

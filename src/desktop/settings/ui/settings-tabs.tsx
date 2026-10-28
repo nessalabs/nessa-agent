@@ -1,4 +1,6 @@
-import type { ComponentType } from "react"
+import { BoatRow } from "./boat-row"
+import { useState, type ComponentType } from "react"
+import { hasNativeHost, replayOnboarding } from "../../../host"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
 import { useIconFamilyPreference } from "../../adapters/icon-family-preference"
 import { useTintFromPicture } from "../../adapters/header-image"
@@ -42,11 +44,13 @@ import {
   ItemRow,
   PendingAction,
   Row,
+  RowAction,
   Segmented,
   SettingGroup,
   Toggle,
   usePrototype,
 } from "./settings-controls"
+import { GithubRow } from "./github-row"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
@@ -87,6 +91,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   "native-hooks": NativeHooksRows,
   data: DataTab,
   experimental: ExperimentalTab,
+  setup: SetupTab,
   about: AboutTab,
 }
 
@@ -273,13 +278,8 @@ function MotionTab() {
 /** A small drawing of each layout, so the choice is seen rather than read. */
 function LayoutSketch({ id }: { id: WorkspaceLayoutId }) {
   // Three columns: sidebar, session list, chat. Sessions in sidebar: a wider
-  // sidebar holding the sessions, then chat. Classic: sidebar, home, panel.
-  const columns =
-    id === "columns"
-      ? ["side", "list", "main"]
-      : id === "sidebar"
-        ? ["tree", "main"]
-        : ["side", "main", "panel"]
+  // sidebar holding the sessions, then chat.
+  const columns = id === "columns" ? ["side", "list", "main"] : ["tree", "main"]
   return (
     <span className="settings-choice-art settings-sketch" aria-hidden="true">
       {columns.map((kind, index) => (
@@ -486,12 +486,8 @@ function AgentsTab() {
 function AccountsTab() {
   return (
     <Group>
-      <Row id="nessa-account">
-        <PendingAction>Sign in…</PendingAction>
-      </Row>
-      <Row id="github">
-        <PendingAction>Connect…</PendingAction>
-      </Row>
+      <GithubRow />
+      <BoatRow />
     </Group>
   )
 }
@@ -555,6 +551,40 @@ function ExperimentalTab() {
       </Row>
       <Row id="side-rail">
         <Toggle checked={rail === "on"} onChange={(on) => setRail(on ? "on" : "off")} />
+      </Row>
+    </Group>
+  )
+}
+
+/**
+ * First-run setup, to see again. Only the desktop app has a setup window to
+ * open, so elsewhere the page says that instead of offering a button that
+ * could do nothing.
+ */
+function SetupTab() {
+  const [state, setState] = useState<"idle" | "opening" | "failed">("idle")
+  if (!hasNativeHost())
+    return (
+      <div className="settings-empty">
+        <DesktopIcon name="advanced" />
+        <p>Setup can be replayed in the Nessa app.</p>
+      </div>
+    )
+  const replay = () => {
+    setState("opening")
+    replayOnboarding().then(
+      () => setState("idle"),
+      () => setState("failed"),
+    )
+  }
+  return (
+    <Group
+      note={state === "failed" ? "Setup did not open. Try again in a moment." : undefined}
+    >
+      <Row id="replay-onboarding">
+        <RowAction disabled={state === "opening"} onClick={replay}>
+          Replay
+        </RowAction>
       </Row>
     </Group>
   )

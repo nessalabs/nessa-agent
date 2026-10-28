@@ -1,11 +1,12 @@
 //! A metadata file an older build wrote is brought forward at open and keeps
-//! its rows: version 6 (before `unfinished_turns`), and version 7 with or
-//! without `model_requests`, which #975 added without raising the version.
+//! its rows: version 6 (before `unfinished_turns`), version 7 with or
+//! without `model_requests`, which #975 added without raising the version,
+//! and version 8 (before `agent_switches`).
 //! `metadata_v6.sql` is version 6's definition exactly as that build shipped
 //! it (docs/adr/todo/202-versioned-local-datasets.md, "Migrations").
 use super::store::LocalConversationStore;
 use crate::conversation::application::{
-    ConversationListing, ConversationRepository, UnfinishedTurns,
+    ConversationListing, ConversationRepository, Reader, UnfinishedTurns,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{params, Connection};
@@ -88,7 +89,7 @@ async fn assert_kept(store: &LocalConversationStore) {
     let id = ConversationId::new(CONVERSATION).unwrap();
     let organization = OrganizationId::new("org").unwrap();
     let alice = PrincipalId::new("alice").unwrap();
-    let listed = ConversationListing::list(store, &organization, &alice, false, 10)
+    let listed = ConversationListing::list(store, &organization, &alice, false, 10, &Reader::Owner)
         .await
         .unwrap();
     assert_eq!(listed.unreadable, 0);
@@ -127,7 +128,7 @@ async fn a_version_6_file_is_upgraded_and_keeps_its_conversations() {
     assert_eq!(version(&path), 6);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -144,7 +145,7 @@ async fn a_version_7_file_from_before_model_requests_gains_that_table() {
     assert_eq!(version(&path), 7);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -154,15 +155,45 @@ async fn a_version_7_file_from_before_model_requests_gains_that_table() {
 async fn a_version_7_file_that_already_has_model_requests_is_raised_as_it_is() {
     let (_directory, path) = private_path();
     {
-        // A file the build after #975 wrote: today's tables, at version 7.
+        // A file the build after #975 wrote: today's tables but
+        // `agent_switches`, at version 7.
         drop(LocalConversationStore::open(&path).unwrap());
-        Connection::open(&path)
-            .unwrap()
-            .pragma_update(None, "user_version", 7)
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("DROP TABLE agent_switches")
             .unwrap();
+        connection.pragma_update(None, "user_version", 7).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
+    drop(store);
+    assert_eq!(shape(&path), current_shape());
+}
+
+/// A version 8 file, from before switches were journaled, gains
+/// `agent_switches` and keeps its conversations.
+#[tokio::test]
+async fn a_version_8_file_gains_the_agent_switch_journal() {
+    let (_directory, path) = private_path();
+    older_file(&path, true);
+    drop(LocalConversationStore::open(&path).unwrap());
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches")
+            .unwrap();
+        connection.pragma_update(None, "user_version", 8).unwrap();
+    }
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(version(&path), 9);
+    assert_kept(&store).await;
+    let id = ConversationId::new(CONVERSATION).unwrap();
+    assert_eq!(
+        ConversationRepository::pending_agent_switch(&store, &id)
+            .await
+            .unwrap(),
+        None
+    );
     drop(store);
     assert_eq!(shape(&path), current_shape());
 }

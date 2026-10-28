@@ -3,6 +3,11 @@
   display: contents;
 }
 
+/* What the maximized right panel covers (`workspace-layout.tsx`): only its inert state. */
+.workspace-covered {
+  display: contents;
+}
+
 /*
  * The Agents overview's layer (`ui/overview/overview-layer.tsx`): over the
  * session list and the panes, from where the list begins — past the sidebar
@@ -16,7 +21,9 @@
   top: 0;
   right: 0;
   bottom: 0;
-  left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
+  /* From the sidebar's own edge: the resize edge's gutter is under the
+     cover too, so no strip of what lies beneath shows beside the sidebar. */
+  left: calc(var(--desktop-gutter) + var(--workspace-sidebar-width));
   display: flex;
   padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter) 0;
   pointer-events: none;
@@ -24,6 +31,14 @@
 
 .workspace[data-sidebar="closed"] .workspace-overview-layer {
   left: 0;
+  padding-left: var(--desktop-gutter);
+}
+
+/* While the spare hold keeps the sidebar in the row, the layer keeps the
+   place it had, so the fold's attribute does not move it. */
+.workspace[data-spare-held][data-folding][data-sidebar="closed"]
+  .workspace-overview-layer {
+  left: calc(var(--desktop-gutter) + var(--workspace-sidebar-width));
   padding-left: var(--desktop-gutter);
 }
 

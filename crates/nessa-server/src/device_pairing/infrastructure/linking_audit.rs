@@ -1,4 +1,5 @@
-//! Durable evidence of each `pairing.setLinking` change, in
+//! Durable evidence of each `pairing.setLinking` and `pairing.setTunnel`
+//! change, in
 //! `<namespace>/conversations/audit/native-linking`: one private JSON file per
 //! record, named by its change and phase, published once and synced, as the
 //! MCP server settings' audit beside it is. The requested record and its
@@ -6,7 +7,7 @@
 //! `observedAtMs`, on the wall clock.
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingAuditUnavailable,
-    LinkingError, LinkingRestart,
+    LinkingError, LinkingRestart, LinkingSubject, TunnelSnapshot,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
@@ -27,10 +28,25 @@ impl DurableLinkingAudit {
     }
 }
 
+/// A tunnel setting as kept: its token by fingerprint only.
+fn snapshot(tunnel: &TunnelSnapshot) -> Value {
+    json!({
+        "enabled": tunnel.enabled,
+        "mode": tunnel.mode.as_str(),
+        "hostname": tunnel.hostname,
+        "tokenFingerprint": tunnel.token,
+    })
+}
+
 fn stored(record: &LinkingAuditRecord) -> Value {
-    let (phase, outcome) = match record.phase {
+    let (phase, outcome) = match &record.phase {
         LinkingAuditPhase::Requested => ("requested", Value::Null),
-        LinkingAuditPhase::Applied { applies, written } => (
+        LinkingAuditPhase::Applied {
+            applies,
+            written,
+            moved,
+            tunnel,
+        } => (
             "outcome",
             json!({
                 "outcome": "applied",
@@ -39,6 +55,14 @@ fn stored(record: &LinkingAuditRecord) -> Value {
                     LinkingApply::Restarting => "restarting",
                 },
                 "written": written,
+                "listenMoved": moved.map(|moved| json!({
+                    "from": moved.from.to_string(),
+                    "to": moved.to.to_string(),
+                })),
+                "tunnel": tunnel.as_ref().map(|tunnel| json!({
+                    "before": tunnel.before.as_ref().map(snapshot),
+                    "after": snapshot(&tunnel.after),
+                })),
             }),
         ),
         LinkingAuditPhase::Restart(end) => (
@@ -60,12 +84,21 @@ fn stored(record: &LinkingAuditRecord) -> Value {
                     LinkingError::AddressInUse => "address_in_use",
                     LinkingError::Unavailable => "unavailable",
                     LinkingError::AuditUnavailable => "audit_unavailable",
+                    LinkingError::LinkingOff => "linking_off",
+                    LinkingError::TunnelIncomplete => "tunnel_incomplete",
                 },
             }),
         ),
     };
-    json!({
-        "kind": "native_linking",
+    let (kind, mode) = match record.subject {
+        LinkingSubject::Linking => ("native_linking", Value::Null),
+        LinkingSubject::Tunnel { mode } => (
+            "native_tunnel",
+            mode.map_or(Value::Null, |mode| json!(mode.as_str())),
+        ),
+    };
+    let mut value = json!({
+        "kind": kind,
         "operationId": record.operation_id,
         "phase": phase,
         "enabled": record.enabled,
@@ -78,7 +111,11 @@ fn stored(record: &LinkingAuditRecord) -> Value {
             "principalId": record.caller.principal_id,
             "credentialId": record.caller.credential_id,
         },
-    })
+    });
+    if let (LinkingSubject::Tunnel { .. }, Value::Object(fields)) = (record.subject, &mut value) {
+        fields.insert("mode".into(), mode);
+    }
+    value
 }
 
 impl LinkingAudit for DurableLinkingAudit {
@@ -91,7 +128,11 @@ impl LinkingAudit for DurableLinkingAudit {
             LinkingAuditPhase::Restart(LinkingRestart::Cancelled) => "cancelled",
         };
         create_directory(&self.directory).map_err(|_| LinkingAuditUnavailable)?;
-        let id = format!("native-linking-{}-{phase}", record.operation_id);
+        let subject = match record.subject {
+            LinkingSubject::Linking => "native-linking",
+            LinkingSubject::Tunnel { .. } => "native-tunnel",
+        };
+        let id = format!("{subject}-{}-{phase}", record.operation_id);
         let mut value = stored(record);
         if let Value::Object(fields) = &mut value {
             fields.insert("recordId".into(), json!(id));
@@ -114,7 +155,7 @@ impl LinkingAudit for DurableLinkingAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device_pairing::application::LinkingCaller;
+    use crate::device_pairing::application::{LinkingCaller, ListenMoved};
 
     struct Fixed;
     impl Clock for Fixed {
@@ -136,6 +177,7 @@ mod tests {
                 principal_id: "owner".into(),
                 credential_id: "panel".into(),
             },
+            subject: LinkingSubject::Linking,
             enabled: true,
             running: false,
             phase: LinkingAuditPhase::Requested,
@@ -144,6 +186,11 @@ mod tests {
         record.phase = LinkingAuditPhase::Applied {
             applies: LinkingApply::Restarting,
             written: true,
+            moved: Some(ListenMoved {
+                from: "127.0.0.1:47650".parse().unwrap(),
+                to: "0.0.0.0:47650".parse().unwrap(),
+            }),
+            tunnel: None,
         };
         audit.record(&record).unwrap();
         assert_eq!(
@@ -164,11 +211,87 @@ mod tests {
         assert_eq!(outcome["outcome"]["applies"], "restarting");
         assert_eq!(outcome["observedAtMs"], 7);
         assert_eq!(outcome["outcome"]["written"], true);
+        assert_eq!(outcome["outcome"]["listenMoved"]["from"], "127.0.0.1:47650");
+        assert_eq!(outcome["outcome"]["listenMoved"]["to"], "0.0.0.0:47650");
         record.phase = LinkingAuditPhase::Restart(LinkingRestart::Exec);
         audit.record(&record).unwrap();
         assert_eq!(
             read("native-linking-op-exec.json")["outcome"]["restart"],
             "exec"
         );
+    }
+
+    #[test]
+    fn a_tunnel_change_is_its_own_kind_with_its_mode() {
+        use crate::tunnel::application::TunnelMode;
+        let directory = tempfile::tempdir().unwrap();
+        let audit = DurableLinkingAudit::new(directory.path().join("audit"), Arc::new(Fixed));
+        let record = LinkingAuditRecord {
+            operation_id: "op".into(),
+            caller: LinkingCaller {
+                organization_id: "org".into(),
+                principal_id: "owner".into(),
+                credential_id: "panel".into(),
+            },
+            subject: LinkingSubject::Tunnel {
+                mode: Some(TunnelMode::Named),
+            },
+            enabled: true,
+            running: false,
+            phase: LinkingAuditPhase::Refused(LinkingError::TunnelIncomplete),
+        };
+        audit.record(&record).unwrap();
+        let outcome: Value = serde_json::from_slice(
+            &std::fs::read(directory.path().join("audit/native-tunnel-op-outcome.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(outcome["kind"], "native_tunnel");
+        assert_eq!(outcome["mode"], "named");
+        assert_eq!(outcome["outcome"]["reason"], "tunnel_incomplete");
+    }
+
+    #[test]
+    fn a_tunnel_outcome_keeps_its_setting_before_and_after() {
+        use crate::device_pairing::application::TunnelReplaced;
+        use crate::tunnel::application::TunnelMode;
+        let directory = tempfile::tempdir().unwrap();
+        let audit = DurableLinkingAudit::new(directory.path().join("audit"), Arc::new(Fixed));
+        let snapshot = |hostname: &str, token: &str| TunnelSnapshot {
+            enabled: true,
+            mode: TunnelMode::Named,
+            hostname: Some(hostname.into()),
+            token: Some(token.into()),
+        };
+        let record = LinkingAuditRecord {
+            operation_id: "op".into(),
+            caller: LinkingCaller {
+                organization_id: "org".into(),
+                principal_id: "owner".into(),
+                credential_id: "panel".into(),
+            },
+            subject: LinkingSubject::Tunnel { mode: None },
+            enabled: true,
+            running: true,
+            phase: LinkingAuditPhase::Applied {
+                applies: LinkingApply::Restarting,
+                written: true,
+                moved: None,
+                tunnel: Some(TunnelReplaced {
+                    before: Some(snapshot("https://old.example.com", "0011223344556677")),
+                    after: snapshot("https://new.example.com", "8899aabbccddeeff"),
+                }),
+            },
+        };
+        audit.record(&record).unwrap();
+        let outcome: Value = serde_json::from_slice(
+            &std::fs::read(directory.path().join("audit/native-tunnel-op-outcome.json")).unwrap(),
+        )
+        .unwrap();
+        let tunnel = &outcome["outcome"]["tunnel"];
+        assert_eq!(tunnel["before"]["hostname"], "https://old.example.com");
+        assert_eq!(tunnel["before"]["tokenFingerprint"], "0011223344556677");
+        assert_eq!(tunnel["after"]["hostname"], "https://new.example.com");
+        assert_eq!(tunnel["after"]["tokenFingerprint"], "8899aabbccddeeff");
+        assert_eq!(tunnel["after"]["mode"], "named");
     }
 }

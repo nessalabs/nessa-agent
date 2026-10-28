@@ -22,6 +22,8 @@ import { namesItsTab, setting, type SettingId } from "../model/settings-catalogu
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
 import { type WorkspaceLayoutId, workspaceLayouts } from "../../model/workspace-layout"
 import { tooltip } from "../../ui/tooltip"
+import { IconButton, IconLink } from "../../ui/icon-button"
+import type { DesktopIconRole } from "../../ui/icons"
 
 /**
  * The pieces every Settings tab is built from, over the UI kit's settings
@@ -138,14 +140,11 @@ export function Group({
  * catalogue, and so does whether it is available yet, and in which layout
  * it applies — elsewhere its control is disabled and the row says where.
  */
-/** Where a setting applies, said on its row in any other layout: "Three columns only", "Not in Classic". */
+/** Where a setting applies, said on its row in any other layout: "Three columns only". */
 function appliesIn(layouts: readonly WorkspaceLayoutId[]): string {
   const label = (id: WorkspaceLayoutId) =>
     workspaceLayouts.find((each) => each.id === id)?.label ?? id
-  const outside = workspaceLayouts.filter((each) => !layouts.includes(each.id))
-  return outside.length === 1 && layouts.length > 1
-    ? `Not in ${outside[0].label}`
-    : `${layouts.map(label).join(" or ")} only`
+  return `${layouts.map(label).join(" or ")} only`
 }
 
 export function Row({ id, children }: { id: SettingId; children?: ReactNode }) {
@@ -482,6 +481,85 @@ export function PendingAction({ children }: { children: ReactNode }) {
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * A button that runs its row's action, described by its row's line. With
+ * `icon`, it is the window's icon button, named and tipped by `children`.
+ */
+export function RowAction({
+  children,
+  onClick,
+  disabled,
+  icon,
+}: {
+  children: ReactNode
+  onClick: () => void
+  /** Resting for now, such as while the action it started is in flight. */
+  disabled?: boolean
+  icon?: DesktopIconRole
+}) {
+  const description = useContext(RowDescription)
+  const available = useContext(RowAvailable)
+  if (icon && typeof children === "string")
+    return (
+      <IconButton
+        icon={icon}
+        label={children}
+        disabled={!available || disabled === true}
+        aria-describedby={description}
+        onClick={onClick}
+      />
+    )
+  return (
+    <button
+      type="button"
+      className="settings-button"
+      disabled={!available || disabled === true}
+      aria-describedby={description}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}
+
+/**
+ * A link that leaves the window, drawn as its row's button and described by
+ * its row's line. Data attributes pass through for checks to find it. With
+ * `icon`, it is the window's icon button, named and tipped by `children`.
+ */
+export function RowLink({
+  children,
+  href,
+  icon,
+  ...data
+}: {
+  children: ReactNode
+  href: string
+  icon?: DesktopIconRole
+} & { readonly [attribute: `data-${string}`]: string | boolean | undefined }) {
+  const description = useContext(RowDescription)
+  if (icon && typeof children === "string")
+    return (
+      <IconLink
+        icon={icon}
+        label={children}
+        href={href}
+        aria-describedby={description}
+        {...data}
+      />
+    )
+  return (
+    <a
+      className="settings-button settings-button-link"
+      href={href}
+      aria-describedby={description}
+      {...data}
+    >
+      {children}
+    </a>
   )
 }
 

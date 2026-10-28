@@ -88,6 +88,7 @@ fn fixture_with_agents(
     );
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
@@ -190,7 +191,7 @@ impl ConversationAgentSource for CreationReadinessSource {
         mode: ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a> {
         Box::pin(async move {
-            let mut configured = self.original.resolve_for(agent, model, mode).await?;
+            let mut configured = self.original.resolve_for(agent, model, mode, None).await?;
             configured.readiness = Some(self.readiness.clone());
             Ok(Some(configured))
         })

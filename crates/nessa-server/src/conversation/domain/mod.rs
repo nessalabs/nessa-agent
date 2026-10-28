@@ -14,6 +14,7 @@
 mod command_policy;
 mod entities;
 mod receiver;
+mod scheduled_message;
 mod value_objects;
 pub use command_policy::{program_name, CommandPolicy};
 pub use entities::{Conversation, ConversationRefusal};
@@ -21,12 +22,20 @@ pub use receiver::{
     PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,
     ReceiverTransitionError,
 };
+pub use scheduled_message::{
+    observed_limit_index, plan_continuation, ContinuationCause, ContinuationPlan, InvocationLimit,
+    ObservedUsageLimit, OpenContinuation,
+};
 pub use value_objects::{
-    Capabilities, Capability, CommandHosts, ConversationDeletion, DeletionContradiction,
-    PaneContent, PanePlace, ProviderSessionErasure, ProviderSessionLink, ShareAccess,
-    ShareAccessError, ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
-    ToolSource, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,
-    WindowShowing, WorkspaceWindow,
+    Capabilities, Capability, Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId,
+    ChannelName, ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest,
+    ChannelResources, CommandHosts, ConversationDeletion, DeletionContradiction, PaneContent,
+    PanePlace, ProviderSessionErasure, ProviderSessionLink, ShareAccess, ShareAccessError,
+    ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
+    WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal, WindowShowing,
+    WorkspacePlacement, WorkspaceWindow, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS,
+    MAX_CHANNEL_NOTES_BYTES, MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES,
+    MAX_CHANNEL_RESOURCES, MAX_CHANNEL_RESOURCE_BYTES,
 };
 
 #[cfg(test)]

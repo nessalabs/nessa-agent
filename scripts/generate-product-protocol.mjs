@@ -191,6 +191,42 @@ const mcpServerRules = {}
   }
 }
 
+// A channel's bounds, owned by the gateway's channel value objects and
+// published as schema data so its prose and a client name the same numbers:
+// each value must equal the constant it names, or generation fails.
+const channelRules = {}
+{
+  const rules = schema["x-channelRules"]
+  const owners = {
+    maxChannels: "MAX_CHANNELS_PER_OWNER",
+    maxNameChars: "MAX_CHANNEL_NAME_CHARS",
+    maxNotesBytes: "MAX_CHANNEL_NOTES_BYTES",
+    maxResources: "MAX_CHANNEL_RESOURCES",
+    maxResourceBytes: "MAX_CHANNEL_RESOURCE_BYTES",
+    maxPathBytes: "MAX_CHANNEL_PATH_BYTES",
+  }
+  if (!rules || Object.keys(rules).length !== Object.keys(owners).length)
+    throw new Error("Channel rules must name exactly the gateway's bounds")
+  const source = readFileSync(
+    resolve(root, "crates/nessa-server/src/conversation/domain/value_objects/channel.rs"),
+    "utf8",
+  )
+  for (const [name, constant] of Object.entries(owners)) {
+    const owned = Number(
+      source
+        .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+        .replaceAll("_", ""),
+    )
+    if (
+      !Object.hasOwn(rules, name) ||
+      !Number.isSafeInteger(owned) ||
+      rules[name] !== owned
+    )
+      throw new Error(`x-channelRules.${name} drifted from the gateway's ${constant}`)
+    channelRules[name] = owned
+  }
+}
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -565,6 +601,9 @@ const bounds = {
   maxMessageImages: arrayBound("attachments", "ImageAttachment", "maxItems"),
   maxMessageImageBytes: arrayBound("attachments", "ImageAttachment", "x-maxTotalBytes"),
   maxUploadBytes: schema.$defs.AttachmentBeginParams.properties.size.maximum,
+  maxUploadedFileNameBytes:
+    schema.$defs.UploadedFileAttachment.properties.name["x-utf8MaxBytes"],
+  uploadedFileNamePattern: schema.$defs.UploadedFileAttachment.properties.name.pattern,
   maxMessageFiles: arrayBound("files", "LinkedFile", "maxItems"),
   maxFilePathBytes: linked.path["x-utf8MaxBytes"],
   filePathPattern: linked.path.pattern,
@@ -772,6 +811,9 @@ ts += `${doc(
 ts += `${doc(
   "The SDK's rules for a stored MCP server, as x-mcpServerRules publishes them: at most maxServers servers, the managed one included; a name of 1 to nameMaxBytes bytes; at most maxArgs arguments of at most argMaxBytes bytes each; a variable name of 1 to environmentNameMaxBytes bytes. The gateway refuses past them (mcp_servers_invalid); a client may refuse early by reading these.",
 )}export const mcpServerRules = ${JSON.stringify(mcpServerRules)} as const\n`
+ts += `${doc(
+  "A channel's bounds, as x-channelRules publishes them: at most maxChannels per person; a name of 1 to maxNameChars characters once trimmed; notes of at most maxNotesBytes bytes; at most maxResources files and folders of at most maxResourceBytes bytes of paths in all; each path at most maxPathBytes bytes. The gateway refuses past them (invalid_request, channel_limit_reached); a client may refuse early by reading these.",
+)}export const channelRules = ${JSON.stringify(channelRules)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`

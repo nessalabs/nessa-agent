@@ -42,7 +42,11 @@ fn print_limits() -> Result<(), RunError> {
     let config = super::runtime_config::RuntimeConfig::load(&directory)?;
     let limits = config.limits()?;
     let session = config.session()?;
-    let document = crate::limits::effective_json(&limits, &session);
+    let review_wait = config
+        .agents
+        .as_ref()
+        .map_or(super::agent::REVIEW_WAIT, |agents| agents.review_wait());
+    let document = crate::limits::effective_json(&limits, &session, review_wait);
     let mut bytes = serde_json::to_vec(&document)
         .map_err(|error| RunError::RuntimeConfig(error.to_string()))?;
     bytes.push(b'\n');
@@ -91,9 +95,23 @@ impl CompositionRoot {
                 credential_file,
                 ttl_seconds,
             } => super::cli::online(true, credential_file, ttl_seconds),
+            Command::VaultSession => super::vault_session::serve(),
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
             Command::Limits => print_limits(),
+            Command::GithubConnect {
+                repository,
+                accept_gap,
+                passphrase_stdin,
+            } => super::github_relay::connect(repository, accept_gap, passphrase_stdin).await,
+            Command::GithubEvents {
+                repository,
+                passphrase_stdin,
+            } => super::github_relay::events(repository, passphrase_stdin).await,
+            Command::GithubDisconnect {
+                repository,
+                passphrase_stdin,
+            } => super::github_relay::disconnect(repository, passphrase_stdin).await,
             Command::EnvProtocol => {
                 writeln!(std::io::stdout(), "{}", crate::env::LEASE_PROTOCOL)?;
                 Ok(())
@@ -124,12 +142,14 @@ impl CompositionRoot {
             Command::EnvDial {
                 address,
                 relay,
+                tunnel,
                 drain_deadline_ms,
                 enroll_code_file,
             } => {
                 super::env_dial_command::dial_in(
                     &address,
                     relay.as_ref(),
+                    tunnel.as_ref(),
                     drain_deadline_ms.map(std::time::Duration::from_millis),
                     enroll_code_file.as_deref(),
                 )
@@ -313,7 +333,9 @@ impl CompositionRoot {
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"
                 );
-                Some(bound)
+                Some(bound.with_announcer(
+                    crate::device_pairing::infrastructure::platform_announcer(),
+                ))
             }
             None => None,
         };
@@ -353,6 +375,11 @@ impl CompositionRoot {
         .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?
         .map_err(RunError::Serve)?;
 
+        let _github_relay = product
+            .github
+            .as_ref()
+            .and_then(|github| github.live.clone())
+            .and_then(|live| super::github_relay::start(&config, live));
         let shutdown_product = product.clone();
         let mut router = http::router(product).layer(Extension(endpoint_identity));
         if let Some(identity) = &desktop_identity {
@@ -427,6 +454,8 @@ impl CompositionRoot {
         if let Some(service) = conversations.clone() {
             let retries = service.clone();
             tokio::spawn(async move { retries.run_failure_retries().await });
+            let continuations = service.clone();
+            tokio::spawn(async move { continuations.run_scheduled_messages().await });
             // Idle agents nobody watches are stopped after
             // `limits.agentIdleSeconds`; their conversations stay open (#998).
             let parking = service.clone();

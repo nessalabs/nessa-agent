@@ -34,6 +34,9 @@ const QUIET: Duration = Duration::from_millis(750);
 #[path = "subscriptions/events.rs"]
 mod events;
 
+#[path = "subscriptions/paired_lists.rs"]
+mod paired_lists;
+
 /// A socket whose writes the test can hold: while the gate is shut, a flush
 /// does not finish, so the connection's one writer is stuck on that frame.
 #[derive(Default)]
@@ -287,20 +290,6 @@ impl crate::conversation::application::DriveToolAudit for AcceptingDriveToolAudi
     }
 }
 
-fn conversation_service(
-    storage: &Arc<RecordStorage>,
-    metadata: &Arc<LocalConversationStore>,
-    provider: &Arc<ProviderFactory>,
-) -> Arc<ConversationService> {
-    conversation_service_with_repository(
-        storage,
-        metadata,
-        provider,
-        metadata.clone(),
-        Arc::new(AcceptingModeAudit),
-    )
-}
-
 fn conversation_service_with_repository(
     storage: &Arc<RecordStorage>,
     metadata: &Arc<LocalConversationStore>,
@@ -308,8 +297,27 @@ fn conversation_service_with_repository(
     repository: Arc<dyn ConversationRepository>,
     mode_audit: Arc<dyn ConversationModeAudit>,
 ) -> Arc<ConversationService> {
+    conversation_service_with_summaries(
+        storage,
+        metadata,
+        provider,
+        repository,
+        mode_audit,
+        metadata.clone(),
+    )
+}
+
+fn conversation_service_with_summaries(
+    storage: &Arc<RecordStorage>,
+    metadata: &Arc<LocalConversationStore>,
+    provider: &Arc<ProviderFactory>,
+    repository: Arc<dyn ConversationRepository>,
+    mode_audit: Arc<dyn ConversationModeAudit>,
+    summaries: Arc<dyn crate::conversation::application::ConversationSummaries>,
+) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
+ input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             // Agents that can change approval mode (row S20).
             agents: mode_agents(
@@ -322,7 +330,7 @@ fn conversation_service_with_repository(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
-            summaries: metadata.clone(),
+            summaries,
             listing: metadata.clone(),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
@@ -409,6 +417,15 @@ fn composed_catalog() -> AgentsListResult {
 
 impl SubscriptionFixture {
     async fn new() -> Self {
+        Self::with_summaries(|metadata| metadata.clone()).await
+    }
+
+    async fn with_summaries(
+        summaries: impl FnOnce(
+            &Arc<LocalConversationStore>,
+        )
+            -> Arc<dyn crate::conversation::application::ConversationSummaries>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -420,7 +437,14 @@ impl SubscriptionFixture {
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let provider = Arc::new(ProviderFactory::default());
-        let service = conversation_service(&storage, &metadata, &provider);
+        let service = conversation_service_with_summaries(
+            &storage,
+            &metadata,
+            &provider,
+            metadata.clone(),
+            Arc::new(AcceptingModeAudit),
+            summaries(&metadata),
+        );
         let (state, authority) = fixture(MembershipRole::Member);
         grants(&authority, &["conversation.write", "server.read"]);
         // A writer that may be held past a delivery timeout without the
@@ -1135,6 +1159,7 @@ async fn a_revoked_grant_ends_the_subscription_before_the_next_batch() {
             caller(&fixture.session, "after-revoke".into()),
             "turn-1".into(),
             SubmittedMessage {
+ uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },
@@ -1182,6 +1207,7 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
             caller(&fixture.session, "while-full".into()),
             "turn-1".into(),
             SubmittedMessage {
+ uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },
@@ -2072,7 +2098,7 @@ impl SubscriptionFixture {
     }
 
     /// `conversation.list`, `.observe` and `.subscribeList` all answer
-    /// `forbidden`, so no list row or cursor reaches a device.
+    /// `forbidden`, so no list row or cursor reaches a peer.
     async fn assert_lists_refused(&self) {
         for method in ["conversation.list", "conversation.observe"] {
             let reply = self.call(method, json!({})).await;
@@ -2133,9 +2159,8 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
-    // The socket's lists are the owner's: a device lists through its
-    // catalogue, so it is refused them, whatever it was granted.
-    fixture.assert_lists_refused().await;
+    // A device starts with an empty grant-scoped list.
+    assert!(fixture.listed().await.is_empty());
     let shared = fixture
         .call(
             "conversation.shares",
@@ -2166,13 +2191,13 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["ok"], true, "{read}");
-    fixture.assert_lists_refused().await;
+    assert_eq!(fixture.listed().await.len(), 1);
 }
 
 /// A linked device holds `conversation.read`, the grant pairing mints, and
 /// not `conversation.write`. It follows a conversation that grant shares
 /// with it. An ungranted id is `conversation_not_found`. Its list
-/// subscription stays refused.
+/// subscription uses the same grant scope.
 #[tokio::test]
 async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
     let fixture = SubscriptionFixture::new().await;
@@ -2203,7 +2228,7 @@ async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
     let (stopped, _) = client.reply("stop").await;
     assert_eq!(stopped["ok"], true, "{stopped}");
     client.close().await;
-    fixture.assert_lists_refused().await;
+    assert_eq!(fixture.listed().await.len(), 1);
 }
 
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a session whose receiver
@@ -2214,7 +2239,7 @@ async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
 /// grantor's conversations. Ungranted, both answer `conversation_not_found`.
 /// Granted, a conversation that is not the binding owner's still answers
 /// `conversation_not_found`: a grant reads only its grantor's conversations
-/// (`grant.read`). Its lists are refused, as a device's are. A paired
+/// (`grant.read`). Its lists are refused by the peer catalogue policy. A paired
 /// reader is admitted on `conversation.read` before that share check.
 #[tokio::test]
 async fn a_binding_owned_by_another_principal_reads_only_its_grantors_grants() {
@@ -2740,7 +2765,7 @@ async fn share_answers_its_revision_and_refuses_a_stale_expected_one() {
 
 /// Row J1: a device holding a Comment or a Drive grant reads on the
 /// socket exactly as one holding Read (G12): `conversation.read` and a view
-/// subscription are admitted and the owner's lists are refused.
+/// subscription and grant-scoped lists are admitted.
 #[tokio::test]
 async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
     use crate::conversation::application::ShareGrantTransition;
@@ -2761,7 +2786,9 @@ async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
         let mut client = fixture.connect();
         client.subscribe("subscribe", &fixture.id).await;
         client.close().await;
-        fixture.assert_lists_refused().await;
+        let listed = fixture.call("conversation.list", json!({})).await;
+        assert_eq!(listed["ok"], true, "{listed}");
+        assert_eq!(listed["payload"]["conversations"].as_array().unwrap().len(), 1);
         fixture.grant_to(ShareGrantTransition::Revoke).await;
         let read = fixture
             .call(

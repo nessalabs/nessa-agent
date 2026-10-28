@@ -308,6 +308,7 @@ async fn gateway_child() {
             listen_address: address,
             relay,
             advertised_address: None,
+            tunnel: None,
         },
         NativeInputs {
             namespace: root.to_path_buf(),
@@ -347,7 +348,7 @@ async fn gateway_child() {
     // `conversations_not_configured`.
     let semantic =
         (mode == "semantic").then(|| super::semantic::prepare(storage.clone(), metadata.clone()));
-    let follows = matches!(mode.as_str(), "live" | "preparing-head")
+    let follows = matches!(mode.as_str(), "live" | "preparing-head" | "catalogue")
         .then(|| super::semantic::reader(storage.clone(), metadata.clone()));
     let mut state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
@@ -406,6 +407,23 @@ async fn gateway_child() {
             .with_conversations(corpus.service.clone())
             .with_agents_catalog(super::semantic::catalog());
     }
+    // `NESSA_TUNNEL_PROGRAM`: the web tunnel is on, quick, with that program
+    // standing in for cloudflared, as the stress check runs it.
+    #[cfg(unix)]
+    let prepared = match std::env::var_os("NESSA_TUNNEL_PROGRAM") {
+        Some(_) => prepared.with_tunnel(crate::composition::tunnel::prepare(
+            root,
+            &crate::composition::runtime_config::TunnelConfig {
+                ingress: std::net::TcpListener::bind("127.0.0.1:0")
+                    .unwrap()
+                    .local_addr()
+                    .unwrap(),
+                mode: crate::tunnel::application::TunnelMode::Quick,
+                hostname: None,
+            },
+        )),
+        None => prepared,
+    };
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)
         .await
         .unwrap();
@@ -536,6 +554,9 @@ async fn gateway_child() {
                     });
                     context = next;
                 }
+                if mode == "phone-files" {
+                    changes.push(stored_phone_file(&setup.owner));
+                }
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
@@ -546,6 +567,10 @@ async fn gateway_child() {
             }
             drop(lease);
         }
+    }
+    if mode == "catalogue" {
+        super::catalogue::serve(&setup, metadata).await;
+        return;
     }
     if mode == "live" {
         tokio::spawn(live_control(
@@ -782,4 +807,49 @@ pub(super) async fn share_with_devices(
         .unwrap();
         assert!(receipt.applied);
     }
+}
+
+/// Stored metadata for the native reader; this fixture claims no file delivery.
+fn stored_phone_file(owner: &str) -> SessionChange {
+    use nessa_sdk::application::agent_execution::{
+        executions::{ExecutionRequest, SubmissionMode},
+        permissions::ActionContext,
+        sessions::{InvocationRecord, SubmissionAcknowledgement},
+    };
+    use nessa_sdk::domain::{
+        agent_execution::{
+            executions::{ExecutionId, Initiation},
+            prompts::{UploadedFileReference, UserMessage},
+        },
+        common::value_objects::{MediaType, Sha256Digest},
+    };
+    let reference = UploadedFileReference::new(
+        Sha256Digest::from_bytes([7; 32]),
+        MediaType::parse("application/pdf").unwrap(),
+        12,
+        "native-report.pdf".into(),
+    )
+    .unwrap();
+    SessionChange::InputAccepted(Box::new(InvocationRecord {
+        target_event_offset: None,
+        submission: SubmissionMode::Immediate,
+        request: ExecutionRequest {
+            execution_id: ExecutionId::new("phone-file").unwrap(),
+            user_message: UserMessage::new(None, vec![], vec![], vec![reference]).unwrap(),
+            estimated_input_tokens: 1,
+            reserved_output_tokens: 1,
+        },
+        actor: ActionContext::new(owner, "native-fixture", "phone-file").unwrap(),
+        initiation: Initiation::owner(),
+        notes: vec![],
+        handoff: None,
+        acknowledgement: SubmissionAcknowledgement::Pending,
+        events: vec![],
+        scheduling: vec![],
+        cancellation: None,
+        provider_report: None,
+        local_cancellation: None,
+        local_outcome: None,
+        result: None,
+    }))
 }

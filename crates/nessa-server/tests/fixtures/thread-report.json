@@ -1,0 +1,54 @@
+{
+  "about": "A thread report's first line, as the gateway writes it (thread_reports.rs, report_text) and the desktop reads it (src/desktop/workspace/model/thread-report.ts). Both tests check this file, so neither can change the header without the other.",
+  "cases": [
+    {
+      "child": "00000000-0000-4000-8000-000000000001",
+      "execution": "2ec24cf3-5c1a-4c63-8f7e-1f0c6c6a9b10",
+      "outcome": "completed",
+      "reply": "Hello from the other side.",
+      "header": "[Thread report] Thread 00000000-0000-4000-8000-000000000001 finished the turn you sent it (execution 2ec24cf3-5c1a-4c63-8f7e-1f0c6c6a9b10): completed."
+    },
+    {
+      "child": "00000000-0000-4000-8000-000000000002",
+      "execution": "turn-7",
+      "outcome": "interrupted",
+      "reply": null,
+      "header": "[Thread report] Thread 00000000-0000-4000-8000-000000000002 finished the turn you sent it (execution turn-7): interrupted."
+    },
+    {
+      "child": "00000000-0000-4000-8000-000000000003",
+      "execution": "e-3",
+      "outcome": "failed",
+      "reply": null,
+      "header": "[Thread report] Thread 00000000-0000-4000-8000-000000000003 finished the turn you sent it (execution e-3): failed."
+    },
+    {
+      "child": "00000000-0000-4000-8000-000000000004",
+      "execution": "e-4",
+      "outcome": "cancelled",
+      "reply": "Stopped early.",
+      "header": "[Thread report] Thread 00000000-0000-4000-8000-000000000004 finished the turn you sent it (execution e-4): cancelled."
+    },
+    {
+      "child": "00000000-0000-4000-8000-000000000005",
+      "execution": "e-5",
+      "outcome": "refused",
+      "reply": null,
+      "header": "[Thread report] Thread 00000000-0000-4000-8000-000000000005 finished the turn you sent it (execution e-5): refused."
+    },
+    {
+      "child": "00000000-0000-4000-8000-000000000006",
+      "execution": "e-6",
+      "outcome": "output_limit",
+      "reply": "A long answer",
+      "header": "[Thread report] Thread 00000000-0000-4000-8000-000000000006 finished the turn you sent it (execution e-6): output_limit."
+    },
+    {
+      "child": "00000000-0000-4000-8000-000000000007",
+      "execution": "e-7",
+      "outcome": "request_limit",
+      "reply": null,
+      "header": "[Thread report] Thread 00000000-0000-4000-8000-000000000007 finished the turn you sent it (execution e-7): request_limit."
+    }
+  ]
+}

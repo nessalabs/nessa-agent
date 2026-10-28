@@ -63,6 +63,8 @@ impl LeaseRevision {
 pub enum EnvironmentRef {
     /// This gateway's own process and machine.
     Here,
+    /// A per-thread workspace on the owner's Boat account.
+    Boat,
     /// The machine this OpenSSH destination reaches.
     Ssh(SshDestination),
     /// The paired environment that proves this key when it dials in.
@@ -83,6 +85,8 @@ impl EnvironmentRef {
     pub fn named(name: &str) -> Result<Self, ExecutionError> {
         if name == Self::HERE {
             Ok(Self::Here)
+        } else if name == "boat:thread" {
+            Ok(Self::Boat)
         } else if name.starts_with(PeerEnvironment::PREFIX) {
             PeerEnvironment::parse(name).map(Self::Peer)
         } else {
@@ -94,6 +98,7 @@ impl EnvironmentRef {
     pub fn name(&self) -> String {
         match self {
             Self::Here => Self::HERE.to_owned(),
+            Self::Boat => "boat:thread".to_owned(),
             Self::Ssh(host) => host.as_str().to_owned(),
             Self::Peer(peer) => peer.name(),
         }

@@ -6,6 +6,7 @@ import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { approve, deny, retryReview } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
@@ -42,6 +43,21 @@ const foldedLines = 4
  * a message to send as the person, whole. While an answer is on its way the
  * buttons rest; a failed answer says why.
  */
+/**
+ * What an approval's command reads as, the one rule for every card that
+ * shows it: an agent's tool call, read whole, is read for its script (a
+ * shell tool's command, re-lined only where every quote and operator was
+ * followed), the tool it calls and its other input (`approval-gist.ts`);
+ * anything else is shown as sent.
+ */
+export function approvalGist(approval: Approval): CommandGist | undefined {
+  return approval.origin.kind === "agent" &&
+    approval.ask === "tool" &&
+    shownWhole(approval)
+    ? commandGist(approval.command)
+    : undefined
+}
+
 export const ApprovalCard = memo(function ApprovalCard({
   sessionId,
   approval,
@@ -52,14 +68,13 @@ export const ApprovalCard = memo(function ApprovalCard({
   model: ModelRef
 }) {
   const dispatch = useWorkspaceDispatch()
-  const answer = useWorkspaceSelector((state) =>
+  // The source drops the answer with the session. The card stays until the box goes.
+  const answerLive = useWorkspaceSelector((state) =>
     selectAnswer(state, sessionId, approval.id),
   )
+  const answer = useRememberedValue(sessionId, answerLive)
   const waiting = answering(answer, approval.id)
-  const gist =
-    approval.origin.kind === "agent" && approval.ask === "tool" && shownWhole(approval)
-      ? commandGist(approval.command)
-      : undefined
+  const gist = approvalGist(approval)
   return (
     <div
       className="workspace-approval"
@@ -156,8 +171,8 @@ function repeatsCommand(approval: Approval, gist: CommandGist | undefined): bool
 }
 
 /**
- * The deadline, quietly: the seconds left beside a ring that empties as they
- * run out. In the last ten seconds it says what will happen ("Denies in
+ * The deadline, quietly: the time left (seconds, or minutes:seconds past a
+ * minute) beside a ring that empties as it runs out. In the last ten seconds it says what will happen ("Denies in
  * 6s"). The whole sentence (`deadlinePendingLine`) is its accessible name
  * and its tooltip.
  */
@@ -168,7 +183,9 @@ function DeadlineRing({ deadline }: { deadline: ApprovalDeadline }) {
   const ending = left <= endingSeconds
   const verb = deadline.effect === "allow" ? "Allows" : "Denies"
   const words = !ending
-    ? `${left}s`
+    ? left > 60
+      ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`
+      : `${left}s`
     : left > 0
       ? `${verb} in ${left}s`
       : deadline.effect === "allow"
@@ -319,23 +336,30 @@ function CopyCommand({ command }: { command: string }) {
   }, [said])
   if (!write) return null
   return (
-    <IconButton
-      icon={said === "copied" ? "check" : "copy"}
-      label={
-        said === "copied"
-          ? "Copied"
-          : said === "refused"
-            ? "Couldn’t Copy"
-            : "Copy Command"
-      }
-      className="workspace-approval-copy"
-      size="sm"
-      onClick={() =>
-        void write(command).then(
-          () => setSaid("copied"),
-          () => setSaid("refused"),
-        )
-      }
-    />
+    <>
+      <IconButton
+        icon={said === "copied" ? "check" : said === "refused" ? "close" : "copy"}
+        label={
+          said === "copied"
+            ? "Copied"
+            : said === "refused"
+              ? "Couldn’t Copy"
+              : "Copy Command"
+        }
+        className="workspace-approval-copy"
+        data-said={said}
+        size="sm"
+        onClick={() =>
+          void write(command).then(
+            () => setSaid("copied"),
+            () => setSaid("refused"),
+          )
+        }
+      />
+      {/* Said aloud, and a refusal in words beside the button: the icon alone is not enough. */}
+      <span className="workspace-approval-copy-said" role="status">
+        {said === "refused" ? "Couldn’t copy" : said === "copied" ? "Copied" : ""}
+      </span>
+    </>
   )
 }

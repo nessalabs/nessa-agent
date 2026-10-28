@@ -63,6 +63,7 @@ async fn startup_model_evidence(reconcile_before_start: bool) {
             caller("work"),
             "owed-model".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Finish the admitted A work".into(),
                 ..SubmittedMessage::default()
             },
@@ -85,7 +86,7 @@ async fn startup_model_evidence(reconcile_before_start: bool) {
     let configured = first
         .inner
         .agents
-        .resolve_model(record.agent().unwrap(), "second-model")
+        .resolve_model(record.agent().unwrap(), "second-model", None)
         .await
         .unwrap();
     let target = live.lease.model_provider(configured.provider).unwrap();

@@ -14,6 +14,10 @@
       "params": null,
       "grant": "server.read"
     },
+    "server.reach": {
+      "params": null,
+      "grant": "server.read"
+    },
     "credential.issue": {
       "params": "CredentialIssueParams",
       "grant": "credential.manage"
@@ -130,6 +134,10 @@
       "params": "AttachmentBeginParams",
       "grant": "conversation.write"
     },
+    "attachment.write": {
+      "params": "AttachmentWriteParams",
+      "grant": "conversation.write"
+    },
     "agents.list": {
       "params": null,
       "grant": "server.read"
@@ -149,6 +157,10 @@
     "conversation.setApprovalMode": {
       "params": "ConversationSetApprovalModeParams",
       "grant": "conversation.write"
+    },
+    "conversation.setUsageLimitAutoContinue": {
+      "params": "ConversationSetUsageLimitAutoContinueParams",
+      "grant": "credential.manage"
     },
     "agents.installOptions": {
       "params": null,
@@ -254,6 +266,34 @@
       "params": "PairingSetLinkingParams",
       "grant": "credential.manage"
     },
+    "pairing.setTunnel": {
+      "params": "PairingSetTunnelParams",
+      "grant": "credential.manage"
+    },
+    "pairing.tunnel": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.liveEvents": {
+      "params": "GithubLiveEventsParams",
+      "grant": "credential.manage"
+    },
+    "github.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.connect": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.cancel": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.disconnect": {
+      "params": null,
+      "grant": "credential.manage"
+    },
     "peer.enroll": {
       "params": "PeerEnrollParams",
       "grant": "credential.manage"
@@ -306,6 +346,14 @@
       "params": "WorkspacePublishParams",
       "grant": "conversation.write"
     },
+    "channel.create": {
+      "params": "ChannelCreateParams",
+      "grant": "conversation.write"
+    },
+    "channel.list": {
+      "params": "ChannelListParams",
+      "grant": "conversation.write"
+    },
     "conversation.subscribeEvents": {
       "params": "ConversationSubscribeEventsParams",
       "grant": "conversation.write"
@@ -317,6 +365,42 @@
     "conversation.setModel": {
       "params": "ConversationSetModelParams",
       "grant": "conversation.write"
+    },
+    "conversation.switchAgent": {
+      "params": "ConversationSwitchAgentParams",
+      "grant": "conversation.write"
+    },
+    "conversation.fork": {
+      "params": "ConversationForkParams",
+      "grant": "conversation.write"
+    },
+    "vault.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "vault.setup": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.unlock": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.lock": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.save": {
+      "params": "BoatSaveParams",
+      "grant": "credential.manage"
+    },
+    "boat.disconnect": {
+      "params": null,
+      "grant": "credential.manage"
     }
   },
   "events": {

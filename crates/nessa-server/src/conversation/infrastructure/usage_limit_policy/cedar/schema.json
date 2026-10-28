@@ -1,0 +1,56 @@
+{
+  "NessaUsageLimit": {
+    "commonTypes": {
+      "Grant": {
+        "type": "Record",
+        "attributes": {
+          "action": { "type": "String", "required": true },
+          "resourceId": { "type": "String", "required": true },
+          "organizationId": { "type": "String", "required": true }
+        },
+        "additionalAttributes": false
+      }
+    },
+    "entityTypes": {
+      "Caller": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organizationId": { "type": "String", "required": true },
+            "role": { "type": "String", "required": true },
+            "active": { "type": "Boolean", "required": true },
+            "grants": {
+              "type": "Set",
+              "element": { "type": "Grant" },
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Gateway": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": { "type": "String", "required": true },
+            "organizationId": { "type": "String", "required": true }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "preference.set": {
+        "appliesTo": {
+          "principalTypes": ["Caller"],
+          "resourceTypes": ["Gateway"],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      }
+    }
+  }
+}

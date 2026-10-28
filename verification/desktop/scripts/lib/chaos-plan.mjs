@@ -103,6 +103,7 @@ const WEIGHTS = {
   archive: 3,
   rename: 3,
   read: 8,
+  usageContinue: 2,
 }
 
 function weighted(next) {
@@ -146,6 +147,7 @@ export function actions(knobs) {
       else if (kind === "stop") action.which = next() < 0.6 ? "running" : "queued"
       else if (kind === "archive") action.undo = next() < 0.5
       else if (kind === "rename") action.title = pick(TITLES)
+      else if (kind === "usageContinue") action.enabled = next() < 0.5
       out.push(action)
     }
   }

@@ -5,7 +5,8 @@
  */
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
@@ -929,4 +930,64 @@ test("a tool step with times makes that many calls at once and saves every resul
     .map((note) => note.params.update.content?.text)
     .filter((text) => typeof text === "string" && text.startsWith("Saved"))
   assert.deepEqual(said, ["Saved 3 results."])
+})
+
+test("the stress check's scenario is one the agent runs, its trace calling tools the server has", async () => {
+  const { stressScenario, TRACE_CALLS } = await import("./scenarios/stress.mjs")
+  const { TOOLS } = await import("./server.mjs")
+  // A scenario the agent refuses ends its process before the first turn,
+  // which the stress check only sees as a conversation that cannot open.
+  assert.doesNotThrow(() => parseScenario(stressScenario()))
+  for (const call of TRACE_CALLS) assert.ok(Object.hasOwn(TOOLS, call.tool), call.tool)
+})
+
+test("a turn that names the credentials is told the GitHub sign-in as fingerprints", async (t) => {
+  const scenario = {
+    turns: [
+      {
+        steps: [
+          {
+            do: "text",
+            chunks: ["token=${credentials.githubToken} git=${credentials.gitPassword}"],
+          },
+          { do: "end" },
+        ],
+      },
+    ],
+  }
+  const home = mkdtempSync(join(tmpdir(), "scripted-scenario-home-"))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  // No user or system git config of this machine answers for github.com.
+  const bare = {
+    HOME: home,
+    XDG_CONFIG_HOME: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GH_TOKEN: "",
+  }
+  // As the gateway hands a signed-in agent its sign-in (`github/infrastructure/launch.rs`).
+  const signedIn = {
+    ...bare,
+    GH_TOKEN: "ghu_scripted",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
+    GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
+    GIT_CONFIG_VALUE_1:
+      '!f() { test "$1" = get && test -n "$GH_TOKEN" && echo username=x-access-token && echo "password=$GH_TOKEN"; }; f',
+  }
+  const said = async (env) => {
+    const agent = start("claude", scenario, env)
+    const opened = await agent.request("session/new", claudeOpen)
+    const turn = await agent.request("session/prompt", {
+      sessionId: opened.result.sessionId,
+      prompt: [{ type: "text", text: "who" }],
+    })
+    agent.child.stdin.end()
+    assert.equal(await exited(agent.child, 5000), true)
+    assert.deepEqual(turn.result, { stopReason: "end_turn" })
+    return turn.notes.map((note) => note.params?.update?.content?.text ?? "").join("")
+  }
+  const print = createHash("sha256").update("ghu_scripted").digest("hex").slice(0, 16)
+  assert.equal(await said(signedIn), `token=${print} git=${print}`)
+  assert.equal(await said(bare), "token=none git=none")
 })

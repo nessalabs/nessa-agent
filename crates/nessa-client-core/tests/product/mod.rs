@@ -472,7 +472,7 @@ fn actual_tls_record_fragment_bytes_survive_nonterminal_poll_errors() {
     }
     impl ProductConnector for Connector {
         fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-            let connected = LocalProductConnector.connect(address, timeout)?;
+            let connected = LocalProductConnector::default().connect(address, timeout)?;
             Ok(ConnectedProduct {
                 stream: Box::new(Fragment {
                     enabled: self.enabled.clone(),
@@ -544,7 +544,7 @@ fn close_during_held_connector_interrupts_original_socket_before_tls() {
         fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
             self.started.send(()).unwrap();
             receive(&self.held.lock().unwrap());
-            LocalProductConnector.connect(address, timeout)
+            LocalProductConnector::default().connect(address, timeout)
         }
     }
     let identity = Arc::new(NativeIdentity::generate(&mut OsEntropy).unwrap());
@@ -664,7 +664,7 @@ fn first_physical_timeout_survives_stop_while_socket_cleanup_is_held() {
     }
     impl ProductConnector for Connector {
         fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-            let connected = LocalProductConnector.connect(address, timeout)?;
+            let connected = LocalProductConnector::default().connect(address, timeout)?;
             Ok(ConnectedProduct {
                 stream: Box::new(HeldCleanup {
                     inner: connected.stream,
@@ -989,7 +989,7 @@ fn injected_wake_panic_after_admission_returns_the_ticket() {
         endpoint.pin,
         "credential".into(),
         "phone-instance".into(),
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         Arc::new(fixtures::Time(Instant::now())),
         Arc::new(PanicWake {
             armed: armed.clone(),
@@ -1040,7 +1040,7 @@ fn injected_wake_revision_panic_is_a_typed_open_failure() {
         endpoint.pin,
         "credential".into(),
         "phone-instance".into(),
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         Arc::new(fixtures::Time(Instant::now())),
         Arc::new(PanicRevision {
             inner: ThreadProductWake::default(),
@@ -1094,7 +1094,7 @@ fn injected_wake_wait_panic_settles_the_ticket_and_events() {
         endpoint.pin,
         "credential".into(),
         "phone-instance".into(),
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         Arc::new(fixtures::Time(Instant::now())),
         Arc::new(PanicWait {
             armed: armed.clone(),
@@ -1147,7 +1147,7 @@ fn injected_clock_panic_is_worker_panicked_and_admits_nothing() {
         endpoint.pin,
         "credential".into(),
         "phone-instance".into(),
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         Arc::new(PanicClock {
             armed: armed.clone(),
             inner: fixtures::Time(Instant::now()),
@@ -1219,7 +1219,7 @@ fn injected_interrupt_panic_stays_inside_stop_and_close_still_joins() {
     struct Connector;
     impl ProductConnector for Connector {
         fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-            let connected = LocalProductConnector.connect(address, timeout)?;
+            let connected = LocalProductConnector::default().connect(address, timeout)?;
             Ok(ConnectedProduct {
                 stream: Box::new(Stream {
                     inner: connected.stream,
@@ -1271,7 +1271,7 @@ fn late_installed_interrupt_panic_upgrades_the_stored_cancel() {
         fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
             self.started.send(()).unwrap();
             receive(&self.held.lock().unwrap());
-            let connected = LocalProductConnector.connect(address, timeout)?;
+            let connected = LocalProductConnector::default().connect(address, timeout)?;
             Ok(ConnectedProduct {
                 stream: connected.stream,
                 interrupt: Arc::new(PanicInterrupt),
@@ -1360,7 +1360,7 @@ fn injected_shutdown_panic_upgrades_the_stored_cancel() {
     struct Connector;
     impl ProductConnector for Connector {
         fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-            let connected = LocalProductConnector.connect(address, timeout)?;
+            let connected = LocalProductConnector::default().connect(address, timeout)?;
             Ok(ConnectedProduct {
                 stream: Box::new(Stream {
                     inner: connected.stream,
@@ -1494,7 +1494,7 @@ fn queued_expiry_after_prior_factual_response_is_not_dispatched_and_session_surv
         endpoint.pin,
         "credential".into(),
         "phone-instance".into(),
-        Arc::new(LocalProductConnector),
+        Arc::new(LocalProductConnector::default()),
         clock,
         wake.clone(),
         ProductLimits::new(3, 1, MAX_PROTECTED_RESPONSE_BYTES, 5, 50, 2_000, 500).unwrap(),
@@ -1583,7 +1583,7 @@ fn first_physical_failure_survives_stop_before_error_payload_release() {
     }
     impl ProductConnector for Connector {
         fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-            let connected = LocalProductConnector.connect(address, timeout)?;
+            let connected = LocalProductConnector::default().connect(address, timeout)?;
             Ok(ConnectedProduct {
                 stream: Box::new(Stream {
                     inner: connected.stream,

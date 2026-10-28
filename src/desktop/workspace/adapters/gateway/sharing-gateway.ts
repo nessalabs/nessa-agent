@@ -116,6 +116,10 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.AttachmentCapacity]: "other",
   [ConversationErrorCode.AttachmentStorageUnavailable]: "other",
   [ConversationErrorCode.AttachmentCleanupUnavailable]: "other",
+  [ConversationErrorCode.UploadTicketInvalid]: "other",
+  [ConversationErrorCode.UploadFailed]: "other",
+  [ConversationErrorCode.UnsupportedImage]: "other",
+  [ConversationErrorCode.ImageTooLarge]: "other",
   [ConversationErrorCode.ConversationErasureIncomplete]: "other",
   [ConversationErrorCode.McpAppUnknown]: "other",
   [ConversationErrorCode.McpServerMismatch]: "other",
@@ -135,6 +139,8 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.MessageQuotaExceeded]: "other",
   // A Drive turn's grant moved. Sharing does not send or steer, so these
   // are not a share or an unshare.
+  // A channel is named only when a conversation is made.
+  [ConversationErrorCode.ChannelNotFound]: "other",
   [ConversationErrorCode.Revoked]: "other",
   [ConversationErrorCode.RevokedAfterSave]: "other",
   [ConversationErrorCode.UnavailableAfterSave]: "other",
@@ -253,8 +259,9 @@ function choicesOf([session, credentials, catalog]: Awaited<
 >): SharingChoices {
   return {
     targets: credentials.credentials.flatMap((credential) => {
+      // The owner's phone already reads every chat; a share would add nothing.
       const device = linkedDeviceOf(credential, session.credentialId)
-      return device ? [device] : []
+      return device && !device.fullAccess ? [device] : []
     }),
     commandHosts: catalog.commandHosts,
     limits: toolPolicyBounds,

@@ -1,0 +1,141 @@
+{
+  "sourceCommit": "33e4da2ea35272e41648fa33f7f9a06d4773f93e",
+  "scope": "Agent-switch integration with durable usage-limit invalidation and pending-switch submission admission.",
+  "focusedValidation": [
+    {
+      "package": "nessa-server",
+      "target": "lib",
+      "filter": "handoff_tests",
+      "passed": 11,
+      "failed": 0
+    },
+    {
+      "package": "nessa-server",
+      "target": "lib",
+      "filter": "scheduled_messages",
+      "passed": 97,
+      "failed": 0
+    }
+  ],
+  "clippy": {
+    "packages": [
+      "nessa-local-storage",
+      "nessa-auth",
+      "nessa-server",
+      "nessa-protocol",
+      "nessa-client-core",
+      "nessa-device-client",
+      "nessa-sdk"
+    ],
+    "allTargets": true,
+    "denyWarnings": true,
+    "exitCode": 0,
+    "completed": true
+  },
+  "causalCoverage": [
+    {
+      "test": "an_agent_switch_invalidates_the_original_limit_before_applying",
+      "cases": [
+        "preference enabled with an existing schedule",
+        "preference disabled with no schedule row",
+        "preference enabled with scheduling bound only after the blocked turn"
+      ],
+      "verified": [
+        "Saved handoff invalidates the original blocked turn before Applied metadata.",
+        "Enabling the preference or switching back does not rearm that original limit.",
+        "The agent invalidation receipt and audit retain the original request identity and agent_changed cause."
+      ]
+    },
+    {
+      "test": "a_pending_agent_switch_retries_invalidation_as_its_original_request",
+      "cases": [
+        "invalidation write fails after the handoff is saved",
+        "restart and read open the requested agent while invalidation still fails",
+        "invalidation commits but the Applied metadata write fails",
+        "recovery is driven by a submission from another surface",
+        "an old completed switch is replayed after a later blocked turn"
+      ],
+      "verified": [
+        "Failed invalidation leaves the original switch Pending.",
+        "The post-resolution barrier returns typed Metadata failure without saving or dispatching the new execution.",
+        "A committed invalidation receipt survives an Applied metadata failure with one original receipt and audit.",
+        "Recovery uses the saved original principal, surface and request rather than the recovering caller.",
+        "Replaying the old request preserves the later blocked turn."
+      ]
+    },
+    {
+      "test": "model_and_agent_invalidations_have_separate_request_namespaces",
+      "verified": [
+        "The same request ID can independently identify one model change and one agent switch.",
+        "Selection kind separates both receipt lookup and the database primary key.",
+        "The agent invalidation records the agent_changed cancellation cause.",
+        "Replaying an agent receipt does not invalidate a newer blocked turn."
+      ]
+    }
+  ],
+  "requestIdentity": {
+    "type": "SelectionRequest",
+    "fields": ["change", "id"],
+    "kindOwner": "SelectionChange",
+    "durableKey": ["conversation", "selection_kind", "request_id"],
+    "originalActorSource": "Saved model request or agent-switch request, including live completion and restart recovery.",
+    "apiGroupingChangedBehavior": false
+  },
+  "mutationProbePhase": "The four behavioral probes preceded the API-only SelectionRequest grouping and stricter typed Metadata assertions. Each probe restored the exact original source bytes with fresh modification times. The final focused suites and Clippy then passed on the restored, grouped API committed as sourceCommit.",
+  "mutationProbes": [
+    {
+      "name": "agent-switch-invalidation-omitted",
+      "condition": "Bypass the held-switch invalidation call before Applied metadata.",
+      "test": "an_agent_switch_invalidates_the_original_limit_before_applying",
+      "expected": "RED",
+      "observed": "RED",
+      "passed": 0,
+      "failed": 1,
+      "failureAssertion": "Original agent-switch invalidation receipt lookup returned QueryReturnedNoRows.",
+      "restoredExactSource": true
+    },
+    {
+      "name": "pending-switch-admission-barrier-omitted",
+      "condition": "Remove pending-switch settlement after resolving the live or restarted opening.",
+      "test": "a_pending_agent_switch_retries_invalidation_as_its_original_request",
+      "expected": "RED",
+      "observed": "RED",
+      "passed": 0,
+      "failed": 1,
+      "failureAssertion": "refused.is_err() failed: new work was admitted while the original invalidation still failed.",
+      "restoredExactSource": true
+    },
+    {
+      "name": "selection-kind-lookup-omitted",
+      "condition": "Remove selection_kind from receipt lookup and remove its matching SQL argument.",
+      "test": "model_and_agent_invalidations_have_separate_request_namespaces",
+      "expected": "RED",
+      "observed": "RED",
+      "passed": 0,
+      "failed": 1,
+      "failureAssertion": "The assertion that the conversation has no open schedule failed; the newer agent-limit row remained open.",
+      "restoredExactSource": true
+    },
+    {
+      "name": "selection-kind-primary-key-omitted",
+      "condition": "Collapse the receipt primary key to conversation and request_id.",
+      "test": "model_and_agent_invalidations_have_separate_request_namespaces",
+      "expected": "RED",
+      "observed": "RED",
+      "passed": 0,
+      "failed": 1,
+      "failureAssertion": "The second-kind invalidation returned Metadata instead of succeeding because the request identity collided.",
+      "restoredExactSource": true
+    }
+  ],
+  "restoration": {
+    "allFourProbesRestored": true,
+    "finalFocusedSuitesPassed": true,
+    "finalClippyPassed": true,
+    "formatCheckPassed": true,
+    "diffCheckPassed": true
+  },
+  "limitations": [
+    "Focused backend results and interface review are recorded here; full integration, frontend, browser and stress results are separate evidence."
+  ]
+}

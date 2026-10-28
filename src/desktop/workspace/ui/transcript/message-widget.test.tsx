@@ -49,7 +49,7 @@ const plugin: NativeWidgetPlugin = {
   id: "cards",
   name: "Cards",
   useWidget: () => ({ kind: "ready", title: "A card" }),
-  views: { pane: Card, inline: Card },
+  views: { panel: Card, inline: Card },
 }
 
 const reply = (id: string): MessageValue => ({

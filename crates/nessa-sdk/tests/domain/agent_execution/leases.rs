@@ -404,13 +404,14 @@ fn a_peer_environment_name_reads_back_as_its_key() {
     }
 }
 
-/// Every environment name reads one way: here, a paired environment, or an
+/// Every environment name reads one way: here, Boat, a paired environment, or an
 /// SSH destination, which holds no `:`; and each writes back as read.
 #[test]
 fn an_environment_name_names_one_environment() {
     let peer = PeerEnvironment::new([0xab; PeerEnvironment::KEY_BYTES]);
     for (name, environment) in [
         ("here".to_owned(), EnvironmentRef::Here),
+        ("boat:thread".to_owned(), EnvironmentRef::Boat),
         (
             "me@devbox".to_owned(),
             EnvironmentRef::Ssh(SshDestination::new("me@devbox").unwrap()),
@@ -420,6 +421,18 @@ fn an_environment_name_names_one_environment() {
         assert_eq!(EnvironmentRef::named(&name), Ok(environment.clone()));
         assert_eq!(environment.name(), name);
     }
+    // Boat is one channel-selected thread target, not an arbitrary VM selector
+    // or an SSH destination with an alias for the same serialized identity.
+    for name in ["boat:thread", "boat:other"] {
+        assert_eq!(
+            SshDestination::new(name),
+            Err(ExecutionError::InvalidSshDestination)
+        );
+    }
+    assert_eq!(
+        EnvironmentRef::named("boat:other"),
+        Err(ExecutionError::InvalidSshDestination)
+    );
     assert_eq!(
         EnvironmentRef::named("peer:ab"),
         Err(ExecutionError::InvalidPeerEnvironment)

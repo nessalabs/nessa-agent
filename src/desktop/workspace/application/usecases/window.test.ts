@@ -3,7 +3,7 @@ import { percents } from "../../model/shown-window"
 import { roomyGrid, testIndex } from "../../testing"
 import { initialWorkspace } from "../workspace-state"
 import { showContent, toggleSessionList, toggleSidebar } from "./navigation"
-import { createDraft, openBeside, openWidget } from "./panes"
+import { createDraft, openBeside } from "./panes"
 import { indexLoaded } from "./updates"
 import { arrangementShown, shownWindow } from "./window"
 
@@ -73,12 +73,8 @@ describe("what the window shows", () => {
     expect(shownWindow(drafted)?.columns[1].panes[0].item).toEqual({ kind: "draft" })
   })
 
-  it("names a widget in a pane and a widget over the panes", () => {
+  it("names a widget over the panes", () => {
     const widget = { plugin: "files", id: "readme" }
-    const inPane = openWidget(inColumns(), { widget, room: roomyGrid })
-    expect(
-      shownWindow(inPane)?.columns.flatMap((c) => c.panes.map((p) => p.item)),
-    ).toContainEqual({ kind: "widget", widget })
     const over = showContent(inColumns(), { content: { widget } })
     expect(shownWindow(over)?.showing).toEqual({ kind: "widget", widget })
     expect(shownWindow(showContent(inColumns(), { content: "agents" }))?.showing).toEqual(

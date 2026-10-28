@@ -214,7 +214,8 @@ To preview the native desktop with the browser's sample conversations and approv
 run `VITE_NESSA_SAMPLE_WORKSPACE=1 pnpm app`. This uses an in-memory workspace;
 the option is accepted only by development builds in the dev or ci stage.
 
-For a focused Rust host test, disable the embedded production feature so a test does
+For a
+focused Rust host test, disable the embedded production feature so a test does
 not require `dist/` and pass test-harness flags after `--`:
 
 ```bash

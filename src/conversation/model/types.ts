@@ -2,6 +2,7 @@ import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 import type { PublishedFile } from "./held-files"
 import type { Note } from "./notes"
+import type { UsageLimitNotice } from "./usage-limit"
 
 export type ConversationTranscriptState =
   "not_loaded" | "partial" | "complete_empty" | "complete" | "stale" | "unknown"
@@ -56,7 +57,7 @@ export type ConversationLease = {
   revision?: number
   /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
    * `peer` a paired machine that dials the gateway. */
-  environment?: "here" | "ssh" | "peer"
+  environment?: "here" | "ssh" | "peer" | "boat"
   /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
    * `environment` is `ssh` or `peer`. */
   host?: string
@@ -109,7 +110,7 @@ export type ConversationSelection = {
  */
 export function linksFilesHere(conversation: {
   selection?: ConversationSelection
-  remote?: { lease?: { environment?: "here" | "ssh" | "peer" } }
+  remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
 }): boolean {
   const environment = conversation.remote?.lease?.environment
   return (
@@ -169,6 +170,8 @@ export type CommandFailure =
   | "approval-request-conflict"
   | "turn-running"
   | "conversations-not-configured"
+  /** The channel a new conversation named is not one of the person's. */
+  | "channel-not-found"
   | "agent-startup-deadline"
   /** No lease was granted: the sandbox the agent runs in could not be given. */
   | "sandbox-unavailable"
@@ -334,6 +337,8 @@ export type AgentPart = {
   text: string
   toolId: string
   noticeId: string
+  /** Which local decision a notice is. A review, a hook, and a deadline may share one decimal. */
+  noticeKind?: "review" | "hook" | "deadline"
 }
 
 export type AssistantTurn = {
@@ -344,6 +349,8 @@ export type AssistantTurn = {
    * The person-facing diagnostic stays in `status`.
    */
   requiredWorkFailed?: boolean
+  /** A provider usage limit on this failed turn. */
+  usageLimit?: UsageLimitNotice
   parts: AgentPart[]
   executionId?: string
   id: string
@@ -422,6 +429,11 @@ type ConversationState = {
     unreadableTruncated?: boolean
     /** The committed approval mode in this gateway view. */
     approvalMode: ApprovalMode
+    /**
+     * Whether this gateway schedules a continuation when a usage limit resets.
+     * Absent when the view did not say. The checkbox reads this, not a turn.
+     */
+    usageLimitAutoContinue?: boolean
     /** The modes this conversation's agent can honour. */
     approvalModes: ApprovalModeChoice[]
     /** A requested mode is not confirmed while this durable change is pending. */

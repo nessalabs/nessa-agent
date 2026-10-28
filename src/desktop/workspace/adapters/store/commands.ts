@@ -34,6 +34,7 @@ export const {
   toggleShowAll,
   toggleSidebar,
   toggleSessionList,
+  searchList,
   resizeSidebar,
   resizeSessionList,
   fitToWindow,
@@ -48,6 +49,8 @@ export const {
   deleteAsked,
   deleteClosed,
   arrangementShown,
+  panelTabShown: showPanelTab,
+  panelTabClosed: closePanelTab,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
@@ -84,6 +87,7 @@ export {
   pinSession,
   providerLoginAvailable,
   renameSession,
+  forkSession,
   resendMessage,
   retryReview,
   sendMessage,
@@ -105,4 +109,17 @@ export {
   shareSession,
 } from "./sharing-commands"
 export { chooseAccess, type AccessOutcome } from "./access-commands"
+export { setUsageLimitAutoContinue } from "./usage-limit-commands"
 export { changeModel } from "./model-commands"
+export {
+  addChannelResources,
+  answerChannelStep,
+  askChannelStep,
+  chooseChannelFolder,
+  closeChannelCreation,
+  createChannel,
+  draftChannel,
+  openChannelCreation,
+  removeChannelResource,
+  watchChannelDrops,
+} from "./channel-commands"

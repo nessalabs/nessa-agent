@@ -1077,6 +1077,7 @@ fn seed(
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
         };
         let mut binding = lease.load().await.unwrap().binding().clone();
@@ -1158,6 +1159,7 @@ fn turn_record(turn: usize) -> (InvocationRecord, String, String) {
         actor: ActionContext::new("bench", "bench", format!("turn-{turn}")).unwrap(),
         initiation: Initiation::owner(),
         notes: Vec::new(),
+        handoff: None,
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: vec![
             ExecutionEvent::new(

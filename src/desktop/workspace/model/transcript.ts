@@ -17,16 +17,28 @@ import type {
   Note,
   ImageReferencePart,
   LinkedFileReferencePart,
+  UploadedFileReferencePart,
+  UsageLimitNotice,
 } from "../../../conversation"
 
 export type StepKind = "read" | "edit" | "run" | "search"
+export type StepStatus = "pending" | "running" | "completed" | "failed" | "stopped"
+export type StepDiff = {
+  readonly filename: string
+  readonly from: string
+  readonly to: string
+  /** Only the start of the file was kept, on either side. */
+  readonly cut?: boolean
+}
 
 export type Part =
   | { readonly kind: "text"; readonly text: string }
   /** Sent inputs retain references, distinct from files the agent published. */
   | {
       readonly kind: "attachments"
-      readonly content: readonly (ImageReferencePart | LinkedFileReferencePart)[]
+      readonly content: readonly (
+        ImageReferencePart | LinkedFileReferencePart | UploadedFileReferencePart
+      )[]
     }
   | {
       readonly kind: "step"
@@ -36,6 +48,22 @@ export type Part =
       /** Lines added and removed, for an edit. */
       readonly added?: number
       readonly removed?: number
+      /** The tool call, the same across its updates. */
+      readonly id?: string
+      /**
+       * Where the call is. A call its turn ended under before it settled is
+       * `stopped`. Absent where nothing said; read as finished once the turn is.
+       */
+      readonly status?: StepStatus
+      /** When it started and settled, in Unix milliseconds on this device's clock. */
+      readonly startedAtMs?: number
+      readonly endedAtMs?: number
+      /** What the call was given: the agent's arguments, as JSON text. */
+      readonly input?: string
+      /** What the call gave back. */
+      readonly output?: string
+      /** What an edit changed: the file before and after. */
+      readonly diff?: StepDiff
     }
   | { readonly kind: "code"; readonly code: string }
   | { readonly kind: "list"; readonly items: readonly string[] }
@@ -151,11 +179,16 @@ export interface QuestionChoice {
 
 /**
  * One row of a conversation: a message from the person or the agent, a
- * note somebody left in it (`NoteMessage`), or a saved record this read
- * could not apply (`UnreadableMessage`).
+ * note somebody left in it (`NoteMessage`), a saved record this read
+ * could not apply (`UnreadableMessage`), or the line where its agent ran
+ * on in a new session (`HandoffMessage`).
  */
 export type Message =
-  TurnMessage | NoteMessage | UnreadableMessage | UnreadableOverflowMessage
+  | TurnMessage
+  | NoteMessage
+  | UnreadableMessage
+  | UnreadableOverflowMessage
+  | HandoffMessage
 
 /** A message the person or the agent said in a turn. */
 export interface TurnMessage {
@@ -170,7 +203,7 @@ export interface TurnMessage {
    * Set on the agent's reply while its turn still runs or waits to, as the
    * source reported the turn. Absent once the turn ended, however it ended:
    * a settled reply folds each run of its steps into one line
-   * (`workSummary`, `ui/transcript/tool-steps.tsx`).
+   * (`ui/transcript/tool-steps.tsx`).
    */
   readonly working?: true
   /**
@@ -189,6 +222,11 @@ export interface TurnMessage {
    * The pane keeps `terminal` beside the sign-in card when this is set.
    */
   readonly requiredWorkFailed?: boolean
+  /**
+   * A provider usage limit on this turn. The pane shows the card for the
+   * latest turn that carries one, and hides a pure limit's failed mark.
+   */
+  readonly usageLimit?: UsageLimitNotice
   /**
    * The MCP App that wrote a message of the person's on their behalf
    * (`ui/message`, #390); absent when the person wrote it.
@@ -235,6 +273,44 @@ export interface UnreadableMessage {
   readonly terminal?: never
   readonly executionId?: never
   readonly requiredWorkFailed?: never
+}
+
+/**
+ * Where the conversation's agent ran on in a new session that was given the
+ * turns before it as text: a switch to another agent and model, or the fork
+ * the conversation began as. Drawn as one line across the transcript
+ * (`HandoffLine`). Nothing the window sends is one of these.
+ */
+export interface HandoffMessage {
+  readonly id: string
+  readonly role: "handoff"
+  readonly at: number
+  readonly parts: readonly Part[]
+  readonly handoff: Handoff
+  readonly note?: never
+  readonly unreadable?: never
+  readonly observedInput?: never
+  readonly delivery?: never
+  readonly app?: never
+  /** A handoff is not a turn, so it has no ending the gateway reported. */
+  readonly terminal?: never
+  readonly executionId?: never
+  readonly requiredWorkFailed?: never
+}
+
+/**
+ * A handoff as the transcript draws it. A switch names the agent and model
+ * either side of it; a fork, whose copied turns are drawn above it, says how
+ * many it left out.
+ */
+export type Handoff =
+  | { readonly kind: "switch"; readonly from: HandoffAgent; readonly to: HandoffAgent }
+  | { readonly kind: "fork"; readonly omittedTurns: number }
+
+/** An agent and model a switch left or went to; no agent for a provider Nessa has none for. */
+export interface HandoffAgent {
+  readonly agent?: string
+  readonly model: string
 }
 
 /**
@@ -370,7 +446,7 @@ export interface TranscriptLease {
   readonly state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
   /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
    * `peer` a paired machine that dials the gateway. */
-  readonly environment?: "here" | "ssh" | "peer"
+  readonly environment?: "here" | "ssh" | "peer" | "boat"
   /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
    * `environment` is `ssh` or `peer`. */
   readonly host?: string
@@ -385,7 +461,11 @@ export interface TranscriptLease {
     | "agent_unavailable"
 }
 
-/** What a running agent is doing, and since when; absent while its reply streams in. */
+/**
+ * What a running agent is doing, and since when; absent while its reply
+ * streams in. A live tool run already shows the agent at work, so the
+ * transcript draws this only where none does (`shownActivity`).
+ */
 export interface Activity {
   readonly label: string
   readonly since: number
@@ -409,6 +489,11 @@ export interface Transcript {
   readonly history?: HistoryExtent
   /** A provider's typed authentication refusal on the latest turn. */
   readonly authenticationRefusal?: string
+  /**
+   * Whether this gateway schedules a continuation when a usage limit resets.
+   * Shared by every conversation. Absent when the source did not say.
+   */
+  readonly usageLimitAutoContinue?: boolean
   /**
    * Questions the agent is waiting on, as the view listed them. Empty when
    * it asked none that could be shown.
@@ -495,16 +580,43 @@ export function groupSteps(
 }
 
 /**
- * What a settled run of steps is called when it is one line: how many tools
- * it ran and, first, whether it touched the person's files. Only the kinds a
- * step says are counted; a search or a command is a tool, not a read.
+ * Whether the step run `steps` is over: its turn has ended (`working` is
+ * false), or the agent has gone on past it (`last` is false) with none of its
+ * calls still at work — a call can run on in the background while the agent
+ * writes. A run not over is drawn live, as the turn's "Working" trace.
  */
-export function workSummary(steps: readonly StepPart[]): string {
-  const count = `Ran ${steps.length} tool${steps.length === 1 ? "" : "s"}`
-  const read = steps.filter((step) => step.step === "read").length
-  const edited = steps.filter((step) => step.step === "edit").length
-  const bits = [read && `${read} read`, edited && `${edited} edited`].filter(Boolean)
-  return bits.length ? `${count} · ${bits.join(", ")}` : count
+export function runSettled(
+  steps: readonly StepPart[],
+  last: boolean,
+  working: boolean,
+): boolean {
+  return (
+    !working ||
+    (!last &&
+      steps.every((step) => step.status !== "pending" && step.status !== "running"))
+  )
+}
+
+/**
+ * The live row to draw after `messages`: `activity`, unless one of them holds
+ * a tool run still at work. That run's trace already says the agent is
+ * working, for how long, and — open — on which call; a second line would say
+ * it twice. Its folded line still reads "Working", so nothing goes quiet.
+ */
+export function shownActivity(
+  messages: readonly Message[],
+  activity: Activity | null,
+): Activity | null {
+  if (!activity) return null
+  const live = messages.some((message) => {
+    if (!("working" in message) || message.working !== true) return false
+    const groups = groupSteps(message.parts)
+    return groups.some(
+      (group, index) =>
+        Array.isArray(group) && !runSettled(group, index === groups.length - 1, true),
+    )
+  })
+  return live ? null : activity
 }
 
 export type InlineRun =

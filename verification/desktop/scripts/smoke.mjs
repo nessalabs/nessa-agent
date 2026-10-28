@@ -9,7 +9,7 @@
 import { attempt } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys } from "./lib/selectors.mjs"
+import { content, css, keys, names } from "./lib/selectors.mjs"
 import {
   contentIs,
   focusComposer,
@@ -34,8 +34,8 @@ Checks, per engine and layout:
   draft-unlisted   ⌘N adds no row to the lists until something is sent
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
-  settings         ⌘, opens Settings; Advanced says what it is for, with no tab strip, and
-                   offers one preview switch, off; its Back button closes it and the panes return
+  settings         ⌘, opens Settings; Advanced offers Experimental and Setup,
+                   preview switches and the browser's setup hint; Back returns to panes
   overview         on a fresh profile the sidebar offers "Agents"; ⌘0 shows the
                    overview and the keyboard lands on its row; Escape returns to the
                    panes (focus.mjs covers Escape before it lands)
@@ -154,8 +154,7 @@ await main(meta, async ({ options, rep, url }) => {
         if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
         // Advanced › Experimental: the home of previews, each a switch — the
         // subagents preview (on unless turned off) and the side rail (off until
-        // turned on). One tab is nothing to choose between, so no strip; its dek
-        // says what the page is for.
+        // turned on). Setup is the other tab; the dek says what Advanced is for.
         await page.locator(css.settingsCategory, { hasText: "Advanced" }).click()
         await page
           .locator(css.settingsHeading, { hasText: "Advanced" })
@@ -183,9 +182,10 @@ await main(meta, async ({ options, rep, url }) => {
             dek: css.settingsDek,
           },
         )
-        if (advanced.tabs.length !== 0)
+        const expectedTabs = [names.experimental, names.setupTab]
+        if (advanced.tabs.join() !== expectedTabs.join())
           failures.push(
-            `Advanced shows tabs ${JSON.stringify(advanced.tabs)}, expected no strip for its one tab`,
+            `Advanced shows tabs ${JSON.stringify(advanced.tabs)}, expected ${JSON.stringify(expectedTabs)}`,
           )
         if (!advanced.dek)
           failures.push("Advanced has no line under its title saying what it is for")
@@ -195,6 +195,23 @@ await main(meta, async ({ options, rep, url }) => {
         if (advanced.offered.join() !== "true,false")
           failures.push(
             `Experimental's switches are ${JSON.stringify(advanced.offered)}, expected subagents on, the side rail off`,
+          )
+        await page.locator(css.settingsTab, { hasText: names.setupTab }).click()
+        const replay = page.getByRole("button", {
+          name: names.replayOnboarding,
+          exact: true,
+        })
+        // This fixture is a browser, with no native setup window. Native Replay
+        // and its pending/refusal states are held by setup-tab.test.tsx.
+        advanced.replayOffered = (await replay.count()) !== 0
+        advanced.setupHint = await page
+          .getByText(names.setupBrowserHint, { exact: true })
+          .waitFor({ state: "visible", timeout: 3000 })
+          .then(() => true)
+          .catch(() => false)
+        if (advanced.replayOffered || !advanced.setupHint)
+          failures.push(
+            "Advanced › Setup does not show its browser-only fallback without Replay",
           )
         await leaveSettings(page)
         const gone = await page

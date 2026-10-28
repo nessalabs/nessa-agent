@@ -11,6 +11,9 @@ export function useAgentDownloads(source: AgentInstallations, onChanged?: () => 
   const [offers, setOffers] = React.useState<readonly InstallationOffer[]>()
   const [pending, setPending] = React.useState<InstallableAgent>()
   const [outcome, setOutcome] = React.useState<InstallationOutcome>()
+  // Whose download the outcome is, so a surface that shows each agent apart
+  // can put it with the right one.
+  const [attempted, setAttempted] = React.useState<InstallableAgent>()
   const [unavailable, setUnavailable] = React.useState(false)
   const active = React.useRef(true)
   const working = React.useRef(false)
@@ -33,6 +36,7 @@ export function useAgentDownloads(source: AgentInstallations, onChanged?: () => 
     working.current = false
     setPending(undefined)
     setOutcome(undefined)
+    setAttempted(undefined)
     setOffers(undefined)
     void refresh()
     const unsubscribe = source.subscribe(() => void refresh())
@@ -48,6 +52,7 @@ export function useAgentDownloads(source: AgentInstallations, onChanged?: () => 
     const generation = lifetime.current
     working.current = true
     setPending(agent)
+    setAttempted(agent)
     setOutcome(undefined)
     let result: InstallationOutcome
     try {
@@ -61,15 +66,17 @@ export function useAgentDownloads(source: AgentInstallations, onChanged?: () => 
     setOutcome(result)
     // A lost acknowledgement or busy worker may still own installation.
     // Require a fresh check before offering another attempt.
-    if (result.status === "failed" && ["busy", "not-confirmed"].includes(result.reason))
+    if (result.status === "failed" && ["busy", "not-confirmed"].includes(result.reason)) {
+      revision.current += 1
       setOffers(undefined)
-    else await refresh()
+    } else await refresh()
     if (active.current && generation === lifetime.current) onChanged?.()
   }
   return {
     offers,
     pending,
     outcome,
+    attempted,
     unavailable,
     refresh: () => void refresh(),
     install: (agent: InstallableAgent) => void install(agent),

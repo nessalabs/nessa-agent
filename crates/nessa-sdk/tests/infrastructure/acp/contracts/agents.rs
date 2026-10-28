@@ -1022,6 +1022,15 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
     .await
     .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
+    assert_eq!(
+        agent
+            .invoke(
+                prompt("initial-context-work"),
+                Submitter::owner(close_action())
+            )
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
     agent.close(close_action()).await.unwrap();
     // Preparation returns before Agent polls its reader. Failed startups must
     // therefore release their reserved slots without relying on a reader poll.
@@ -1052,7 +1061,7 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
     );
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.path().join("saved-session")).unwrap()).unwrap();
-    assert_eq!(saved["history"].as_array().unwrap().len(), 1);
+    assert_eq!(saved["history"].as_array().unwrap().len(), 2);
     let launches: Vec<i32> =
         serde_json::from_slice(&std::fs::read(root.path().join("launches")).unwrap()).unwrap();
     assert_eq!(launches.len(), 26);
@@ -1193,5 +1202,80 @@ async fn unsigned_codex_startup_settles_queued_input_without_provider_report_and
             .wait()
             .await,
         Err(auth)
+    );
+}
+
+#[tokio::test]
+async fn claude_replaces_only_uninvoked_context_and_requires_resume_after_work() {
+    let _process_slot = process_test_slot().await;
+    let (root, provider) = test_acp_binding("uninvoked-context", 16);
+    let provider = Arc::new(provider);
+    let storage_root = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
+    let id = SessionId::new("uninvoked-native-context").unwrap();
+    let open = || {
+        let storage = storage.clone();
+        let provider = provider.clone();
+        let id = id.clone();
+        async move {
+            let manager = SessionManager::open(
+                Some(id),
+                storage,
+                Arc::new(crate::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+            )
+            .await
+            .unwrap();
+            attached_agent(provider, manager).await
+        }
+    };
+    let first = open().await.unwrap();
+    let first_context = first
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .provider_context;
+    first.close(close_action()).await.unwrap();
+    drop(first);
+    assert!(!root.path().join("saved-session").exists());
+    let second = open().await.unwrap();
+    let before_work = second.session_manager().snapshot().await.unwrap();
+    assert_ne!(before_work.provider_context, first_context);
+    assert!(before_work.invocations.is_empty());
+    assert_eq!(
+        second
+            .invoke(prompt("first-work"), Submitter::owner(close_action()))
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    let used_context = second
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .provider_context;
+    second.close(close_action()).await.unwrap();
+    drop(second);
+    let third = open().await.unwrap();
+    let restored = third.session_manager().snapshot().await.unwrap();
+    assert_eq!(restored.provider_context, used_context);
+    assert_eq!(restored.invocations.len(), 1);
+    assert!(root.path().join("resume-observed").exists());
+    third.close(close_action()).await.unwrap();
+    drop(third);
+    // Losing real provider history is not permission to silently start over.
+    std::fs::remove_file(root.path().join("saved-session")).unwrap();
+    let error = open()
+        .await
+        .err()
+        .expect("used context must resume successfully");
+    assert!(matches!(error, AgentError::Provider { code: -32002, .. }));
+    let committed = storage.read_committed(id).await.unwrap().unwrap();
+    let saved = committed.snapshot().unwrap();
+    assert_eq!(saved.provider_context, used_context);
+    assert_eq!(saved.invocations.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
+        "2"
     );
 }

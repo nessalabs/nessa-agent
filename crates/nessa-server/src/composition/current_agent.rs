@@ -66,8 +66,8 @@ use crate::{
     },
     conversation::{
         application::{
-            ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationError,
-            ConversationFuture, ProviderSessionEraser,
+            AgentPlace, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
+            ConversationError, ConversationFuture, ProviderSessionEraser,
         },
         domain::ProviderSessionErasure,
     },
@@ -324,6 +324,7 @@ impl CurrentAgentResolver {
                     return Ok(None);
                 };
                 Ok(Some(ConversationAgent {
+                    workspace: built.workspace,
                     provider: built.provider,
                     execution_audit: built.execution_audit,
                     reserved_output_tokens: source
@@ -579,6 +580,95 @@ impl AgentProbe for CurrentAgentResolver {
     }
 }
 
+impl CurrentAgentResolver {
+    /// This resolver, building every agent to work in `place.folder` and to
+    /// be told `place.instructions`. Nothing built for the configured
+    /// workspace is reused: not a fixed agent's default provider, and not
+    /// OpenCode's warm-up, which was prepared there.
+    fn placed(&self, place: &AgentPlace) -> Self {
+        let mut placed = self.clone();
+        placed.config.workspace = place.folder.clone();
+        placed.config.channel_instructions = Some(place.instructions.clone());
+        placed
+    }
+
+    async fn resolve_placed(
+        self,
+        agent: AgentId,
+        model: String,
+        mode: ConversationApprovalMode,
+    ) -> Result<Option<ConversationAgent>, ConversationError> {
+        let selected = match mode {
+            ConversationApprovalMode::Ask => ApprovalMode::Ask,
+            ConversationApprovalMode::Auto => ApprovalMode::Auto,
+            ConversationApprovalMode::Full => ApprovalMode::Full,
+        };
+        if agent == AgentId::Opencode {
+            if self.opencode.configured().is_none() {
+                return Ok(None);
+            }
+            if mode != ConversationApprovalMode::Ask {
+                return Err(ConversationError::ApprovalModeUnavailable);
+            }
+            let permit = self
+                .slots
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| ConversationError::Unavailable)?;
+            let source = self.clone();
+            let observed = tokio::time::timeout(
+                RESOLUTION_DEADLINE,
+                tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    source.observe_opencode().provider
+                }),
+            )
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+            .map_err(|_| ConversationError::Unavailable)??;
+            return match observed {
+                Some(value) if value.provider.identity().model_id() != model => {
+                    Err(ConversationError::ModelUnavailable)
+                }
+                other => Ok(other),
+            };
+        }
+        let managed = self.managed_adapters.contains(&agent);
+        if !managed && !self.fixed.contains_key(&agent) {
+            return Ok(None);
+        }
+        let offered = match agent {
+            AgentId::Claude => ClaudeAcpProvider::approval_modes(&model),
+            AgentId::Codex => CodexAcpProvider::approval_modes(&model),
+            AgentId::Opencode => unreachable!(),
+        };
+        if !offered.iter().any(|choice| choice.id == selected) {
+            return Err(ConversationError::ApprovalModeUnavailable);
+        }
+        if managed {
+            return self.resolve_managed(agent, model, selected).await;
+        }
+        let readiness = self
+            .fixed
+            .get(&agent)
+            .expect("configured fixed agent")
+            .readiness
+            .clone();
+        let mut configured = tokio::task::spawn_blocking(move || {
+            agent::provider_for_fixed(agent, &self.config, &model, selected, &self.provider)
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
+        .map_err(|error| {
+            tracing::warn!(%error, "a channel's conversation model could not be composed");
+            ConversationError::ModelUnavailable
+        })?;
+        configured.readiness = readiness;
+        Ok(Some(configured))
+    }
+}
+
 impl ConversationAgentSource for CurrentAgentResolver {
     fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_> {
         if self.managed_adapters.contains(&agent) {
@@ -668,6 +758,19 @@ impl ConversationAgentSource for CurrentAgentResolver {
             Ok(Some(configured))
         })
     }
+
+    fn resolve_in<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+        place: &'a AgentPlace,
+    ) -> ConversationAgentFuture<'a> {
+        Box::pin(
+            self.placed(place)
+                .resolve_placed(agent, model.to_owned(), mode),
+        )
+    }
 }
 
 /// OpenCode's current generation, asked to delete its own record of a session.
@@ -691,6 +794,41 @@ impl CurrentAgentEraser {
             launched: crate::conversation::infrastructure::LaunchedDeletions::default(),
         }
     }
+
+    /// Build the current binding of this agent, as `resolver` builds it, and
+    /// ask it to delete `session`.
+    async fn erase_with(
+        &self,
+        resolver: Arc<CurrentAgentResolver>,
+        session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+    ) -> Result<ProviderSessionErasure, ConversationError> {
+        let agent = self.agent;
+        let permit = resolver
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        let eraser = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            if agent == AgentId::Opencode {
+                resolver.opencode_session_eraser()
+            } else {
+                let runtime = resolver
+                    .config
+                    .runtime(agent)
+                    .ok_or(ConversationError::AgentNotConfigured)?;
+                resolver
+                    .managed_provider(agent, &runtime.model, ApprovalMode::Ask)
+                    .map(|built| built.map(|value| value.session_eraser))
+            }
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)??
+        .ok_or(ConversationError::AgentNotConfigured)?;
+        self.launched.push(eraser.clone());
+        eraser.erase(session).await
+    }
 }
 
 impl ProviderSessionEraser for CurrentAgentEraser {
@@ -698,35 +836,15 @@ impl ProviderSessionEraser for CurrentAgentEraser {
         &self,
         session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
     ) -> ConversationFuture<'_, ProviderSessionErasure> {
-        Box::pin(async move {
-            let agent = self.agent;
-            let resolver = self.resolver.clone();
-            let permit = resolver
-                .slots
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|_| ConversationError::Unavailable)?;
-            let eraser = tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                if agent == AgentId::Opencode {
-                    resolver.opencode_session_eraser()
-                } else {
-                    let runtime = resolver
-                        .config
-                        .runtime(agent)
-                        .ok_or(ConversationError::AgentNotConfigured)?;
-                    resolver
-                        .managed_provider(agent, &runtime.model, ApprovalMode::Ask)
-                        .map(|built| built.map(|value| value.session_eraser))
-                }
-            })
-            .await
-            .map_err(|_| ConversationError::Unavailable)??
-            .ok_or(ConversationError::AgentNotConfigured)?;
-            self.launched.push(eraser.clone());
-            eraser.erase(session).await
-        })
+        Box::pin(self.erase_with(self.resolver.clone(), session))
+    }
+    fn erase_in(
+        &self,
+        session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+        place: AgentPlace,
+    ) -> ConversationFuture<'_, ProviderSessionErasure> {
+        let placed = Arc::new(self.resolver.placed(&place));
+        Box::pin(self.erase_with(placed, session))
     }
     fn settled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(self.launched.settled())

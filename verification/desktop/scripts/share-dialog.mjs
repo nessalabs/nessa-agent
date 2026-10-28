@@ -8,6 +8,8 @@
  * a revoke, a change refused because another window changed the grant and
  * started again from what it holds, a list held while it predates this
  * window's own change, focus kept in the dialog and given back,
+ * including to the session list when the same session is also pinned
+ * under a folded sidebar,
  * and the panel within the window. Chromium and WebKit.
  *
  * The page is the dev server's, opened with `?gateway` so it uses the browser
@@ -478,6 +480,9 @@ Per engine, against a scripted product session:
             Try Again reads it, with no reason after
   focus     Tab stays in the dialog; Escape closes it and focus comes back
             to the session's row
+  focus-pinned
+            the same for a pinned session, listed once under the list's
+            Pinned group, never in the sidebar: focus comes back to that row
   fit-N     at 1200 and 420 wide the panel is inside the window and the page does not scroll sideways`,
 }
 
@@ -920,6 +925,103 @@ await main(meta, async ({ options, rep, url }) => {
             : `Tab left the dialog at step ${trail.indexOf(false) + 1}`,
           back.row ? null : `focus came back to ${back.what}, not the session's row`,
         ].filter(Boolean),
+      }
+    })
+
+    // The sample workspace can pin. The gateway keeps no pin, so this case
+    // cannot be the scripted product session the other checks use.
+    await attempt(rep, { engine, name: "focus-pinned" }, async () => {
+      const opened = await openPage(browser, {
+        url,
+        layout: "columns",
+        width: 1200,
+        height: 900,
+      })
+      const { page } = opened
+      try {
+        // A session not pinned yet: the sample pins some, which lead the list.
+        const row = page
+          .locator(
+            `.workspace-list [data-list-group]:not([data-list-group="pinned"]) [data-session-row]`,
+          )
+          .first()
+        await row.waitFor({ timeout: 15_000 })
+        const id = await row.getAttribute("data-session-row")
+        if (!id) throw new Error("the session list row named no session")
+        await row.click({ button: "right" })
+        await need(page, css.menu, "the session's menu")
+        await page.getByRole("menuitem", { name: "Pin", exact: true }).click()
+        // Pinned, the row moves to the list's Pinned group, and is drawn there only.
+        await page.waitForFunction(
+          (sessionId) =>
+            document.querySelector(
+              `[data-list-group="pinned"] [data-session-row="${CSS.escape(sessionId)}"]`,
+            ) !== null &&
+            document.querySelectorAll(`[data-session-row="${CSS.escape(sessionId)}"]`)
+              .length === 1,
+          id,
+        )
+        const listRow = page.locator(selectorFor.sessionListRowFor(id))
+        await listRow.click({ button: "right" })
+        await need(page, css.menu, "the session's menu")
+        await page.locator(css.menuItem, { hasText: names.share }).click()
+        await page.waitForSelector(`${css.shareDialog}[data-share-state="read"]`, {
+          timeout: 10_000,
+        })
+        const trail = []
+        for (let index = 0; index < 40; index++) {
+          await page.keyboard.press("Tab")
+          trail.push(
+            await page.evaluate(
+              (selector) =>
+                document.querySelector(selector)?.contains(document.activeElement),
+              css.shareDialog,
+            ),
+          )
+        }
+        await page.keyboard.press("Escape")
+        await page.waitForSelector(css.shareDialog, { state: "detached", timeout: 5_000 })
+        await page
+          .waitForFunction(
+            (sessionId) => {
+              const active = document.activeElement
+              return (
+                active?.closest(
+                  `.workspace-list [data-session-row="${CSS.escape(sessionId)}"]`,
+                ) !== null && active !== document.body
+              )
+            },
+            id,
+            { timeout: 3_000 },
+          )
+          .catch(() => {})
+        const back = await page.evaluate((sessionId) => {
+          const active = document.activeElement
+          const selector = `[data-session-row="${CSS.escape(sessionId)}"]`
+          return {
+            list:
+              active?.closest(
+                `.workspace-list [data-list-group="pinned"] ${selector}`,
+              ) !== null,
+            sidebarCopy:
+              document.querySelector(`.workspace-sidebar ${selector}`) !== null,
+            what: active ? active.outerHTML.slice(0, 160) : null,
+          }
+        }, id)
+        return {
+          back,
+          failures: [
+            trail.every(Boolean)
+              ? null
+              : `Tab left the dialog at step ${trail.indexOf(false) + 1}`,
+            back.sidebarCopy ? "the sidebar lists the pinned session" : null,
+            back.list
+              ? null
+              : `focus came back to ${back.what}, not the session list's row`,
+          ].filter(Boolean),
+        }
+      } finally {
+        await opened.close()
       }
     })
 

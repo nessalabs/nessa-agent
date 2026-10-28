@@ -497,11 +497,13 @@ impl Fixture {
         let execution_audit = Arc::new(ExecutionRecords::default());
         let service = ConversationService::with_mcp_apps(
             ConversationDependencies {
+ input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: ConversationAgents::new(
                     HashMap::from([(
                         AgentId::Claude,
                         ConversationAgent {
+                workspace: None,
                             provider: Arc::new(Provider::new(provider.clone())),
                             execution_audit: execution_audit.clone(),
                             reserved_output_tokens: 4096,
@@ -560,6 +562,7 @@ impl Fixture {
                 as_owner("send"),
                 "send".into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "show me".into(),
                     ..SubmittedMessage::default()
                 },
@@ -663,6 +666,7 @@ impl Fixture {
                 self.caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: text.into(),
                     ..SubmittedMessage::default()
                 },

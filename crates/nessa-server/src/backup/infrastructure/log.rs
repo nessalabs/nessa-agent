@@ -219,6 +219,16 @@ fn read_log(path: &Path, key: MacKey) -> Result<DeletionLog, ()> {
     super::deletion_decode::decode_inventory(canonical).map_err(|_| ())
 }
 
+/// Authenticate a deletion-inventory file that carries its own mac line.
+pub(crate) fn authenticate_inventory(text: &str, key: MacKey) -> Result<DeletionLog, ()> {
+    let (canonical, mac_hex) = split_mac(text)?;
+    let expected = key.mac(canonical).map_err(|_| ())?;
+    if expected.hex() != mac_hex {
+        return Err(());
+    }
+    super::deletion_decode::decode_inventory(canonical).map_err(|_| ())
+}
+
 fn split_mac(text: &str) -> Result<(&str, &str), ()> {
     let mac_at = text.rfind("\nmac ").ok_or(())?;
     let canonical = &text[..mac_at + 1];

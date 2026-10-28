@@ -1,4 +1,4 @@
-import { DesktopIcon } from "../../../ui/icons"
+import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,9 +9,11 @@ import {
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
+  MenuShortcut,
 } from "../../../ui/menu"
 import { tooltip } from "../../../ui/tooltip"
 import {
+  choiceKey,
   filterLabel,
   rangeLabels,
   ranges,
@@ -19,12 +21,25 @@ import {
   scopes,
   sessionTags,
   type AgentsFilter,
+  type AgentsRange,
+  type AgentsScope,
 } from "../../model/overview/filter"
+
+const choiceIcons: Readonly<Record<AgentsScope | AgentsRange, DesktopIconRole>> = {
+  ongoing: "ongoing",
+  all: "sessionList",
+  any: "anyTime",
+  today: "today",
+  week: "lastWeek",
+  month: "lastMonth",
+}
 
 /**
  * What the overview lists, chosen beside its title: a quiet chip that names
  * the choice, opening the window's own menu — Ongoing or All, a span of time,
- * and tags, which sessions do not carry yet and the menu says so.
+ * and tags, which sessions do not carry yet and the menu says so. Each
+ * choice carries its number, and pressing it picks the choice and closes
+ * the menu.
  */
 export function FilterMenu({
   filter,
@@ -46,7 +61,21 @@ export function FilterMenu({
           <DesktopIcon name="chevronDown" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={6}>
+      <DropdownMenuContent
+        align="start"
+        sideOffset={6}
+        onKeyDown={(event) => {
+          if (event.metaKey || event.ctrlKey || event.altKey || !/^\d$/.test(event.key))
+            return
+          // Ahead of the menu's own type-to-find, which would read the digit.
+          event.preventDefault()
+          // The row the number names, chosen as a click chooses it: the same
+          // pick, blink and close.
+          event.currentTarget
+            .querySelector<HTMLElement>(`[aria-keyshortcuts="${event.key}"]`)
+            ?.click()
+        }}
+      >
         <MenuRadioGroup
           value={filter.scope}
           onValueChange={(scope) => {
@@ -55,8 +84,10 @@ export function FilterMenu({
           }}
         >
           {scopes.map((scope) => (
-            <MenuRadioItem key={scope} value={scope}>
+            <MenuRadioItem key={scope} value={scope} aria-keyshortcuts={choiceKey(scope)}>
+              <DesktopIcon name={choiceIcons[scope]} />
               {scopeLabels[scope]}
+              <MenuShortcut aria-hidden>{choiceKey(scope)}</MenuShortcut>
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
@@ -70,15 +101,20 @@ export function FilterMenu({
           }}
         >
           {ranges.map((range) => (
-            <MenuRadioItem key={range} value={range}>
+            <MenuRadioItem key={range} value={range} aria-keyshortcuts={choiceKey(range)}>
+              <DesktopIcon name={choiceIcons[range]} />
               {rangeLabels[range]}
+              <MenuShortcut aria-hidden>{choiceKey(range)}</MenuShortcut>
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
         <MenuSeparator />
         <MenuLabel>Tags</MenuLabel>
         {sessionTags.length === 0 ? (
-          <MenuItem disabled>No tags yet</MenuItem>
+          <MenuItem disabled>
+            <DesktopIcon name="tag" />
+            No tags yet
+          </MenuItem>
         ) : (
           sessionTags.map((tag) => (
             <MenuCheckboxItem
@@ -93,6 +129,7 @@ export function FilterMenu({
                 })
               }
             >
+              <DesktopIcon name="tag" />
               {tag.label}
             </MenuCheckboxItem>
           ))

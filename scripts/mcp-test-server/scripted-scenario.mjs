@@ -37,11 +37,14 @@
  *
  * A tool step calls `mcptest` unless it names another of the session's MCP
  * servers (`server`, such as the gateway's own `nessa-agents`). With `save`,
- * its result's `structuredContent` is kept under that name for the rest of
- * the turn, and a result that is an error fails the turn. A string anywhere
+ * its result's `structuredContent` (or, without one, a JSON object its
+ * first text block holds) is kept under that name for the rest of the turn, and a result that is an error fails the turn. A string anywhere
  * in a later step's arguments or text that is `${name.path}` is replaced by
  * that saved value's field, so one call can name what an earlier call made.
- * `${prompt.text}` is the prompt the turn answers. With `times`, the same
+ * `${prompt.text}` is the prompt the turn answers; `${session.cwd}` and
+ * `${session.systemPrompt}` are the folder the session was opened in and the
+ * system prompt it was given (Claude's `_meta.systemPrompt`; empty for a
+ * harness that takes none). With `times`, the same
  * call is made that many times at once, as a model's parallel calls are;
  * `save` then keeps every result in order, an error's `structuredContent`
  * included (a call the server refused outright is saved as
@@ -508,9 +511,27 @@ async function callTool(step, ctx, existing) {
   if (step.save) {
     if (result?.isError === true)
       return { fail: `${step.tool} failed: ${resultText(result)}` }
-    ctx.saved.set(step.save, result?.structuredContent ?? null)
+    ctx.saved.set(step.save, result?.structuredContent ?? textObject(result))
   }
   return null
+}
+
+/**
+ * A result with no `structuredContent` whose first text block is a JSON
+ * object, such as Nessa's own shell tool's: that object, or null.
+ */
+function textObject(result) {
+  const block = Array.isArray(result?.content)
+    ? result.content.find(
+        (each) => each?.type === "text" && typeof each.text === "string",
+      )
+    : undefined
+  try {
+    const value = JSON.parse(block?.text ?? "")
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null
+  } catch {
+    return null
+  }
 }
 
 /** `step`'s call made `step.times` times at once, each its own announced call. */

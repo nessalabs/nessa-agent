@@ -514,6 +514,7 @@ export function App({
             className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
           >
             <ChatTabs
+              variant="dots"
               wrapTab={(tab, node) =>
                 // The update and the list have no title to rename and no agent
                 // to describe, so the conversation menu does not belong on them.
@@ -592,6 +593,9 @@ export function App({
                   onOpenPaste={openPaste}
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
+                  onUsageLimitAutoContinue={(enabled) =>
+                    chat.setUsageLimitAutoContinue(enabled)
+                  }
                 />
 
                 {attachments.viewed && (

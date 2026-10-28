@@ -17,6 +17,7 @@ diagramLinks:
   Attachments: "gateway-attachments"
   MCP: "mcp"
   Auth: "auth"
+  Events: "gateway-external-events"
 ---
 
 # Local gateway
@@ -38,6 +39,8 @@ flowchart TB
     Attachments[Attachment ownership]
     MCP[MCP sessions and apps]
     Auth[Identity and access]
+    Events[Optional inbound event router]
+    Events -->|durable submit| Conversations
     Product -->|fresh admission| Auth
     Product --> Conversations
     Product --> Reads
@@ -48,6 +51,10 @@ flowchart TB
 
 ## Browse this area
 
+- [External event admission](external-events.md)
 - [Attachments and content](attachments/README.md)
 - [Conversation identity and deletion](conversation.md)
 - [Bounded physical history reads](record-reads.md)
+
+[Channel workspaces](channel-workspaces.md) describes independent Local/Boat
+placement, durable VM assignments, approved local access and main-chat replacement.

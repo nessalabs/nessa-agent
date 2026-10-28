@@ -31,6 +31,13 @@
 //!
 //! A note someone left in the conversation goes with the turn that takes it,
 //! ahead of the message and not part of what it says.
+//!
+//! ```text
+//! CarriedTurn(said, reply)* --> CarriedHistory --> UserMessage (what goes with it)
+//! ```
+//!
+//! The earlier turns a native session has not seen, after a fork or an agent
+//! switch, go with the first turn that runs in it, ahead of the message.
 mod prompt;
 pub use prompt::{
     PromptContribution, PromptContributionView, PromptSource, PromptSourceKind, PromptText,
@@ -40,8 +47,14 @@ pub use prompt::{
 mod app_message;
 pub use app_message::{AppModelContext, McpAppSource, MessageSender};
 
+mod carried_history;
+pub use carried_history::{CarriedHistory, CarriedTurn};
+
 mod note_context;
 pub use note_context::{NoteAuthor, NoteContext};
 
 mod user_message;
 pub use user_message::{ImageReference, LinkedFile, UserMessage};
+
+mod uploaded_file;
+pub use uploaded_file::UploadedFileReference;

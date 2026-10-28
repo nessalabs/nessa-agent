@@ -1,0 +1,11 @@
+{
+  "uid": 1000,
+  "checked": [
+    {
+      "path": "/",
+      "uid": 65534,
+      "mode": "755"
+    }
+  ],
+  "error": "NessaPrivateFileUnsafeError"
+}

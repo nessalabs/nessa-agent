@@ -77,14 +77,17 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | `src/pairing/client.rs` | Native enrollment, strict pinned status and retry, pending-state publication and one retained physical worker. Shared framing and enrollment socket policy come from `nessa-protocol::pairing`. |
 | `src/retained/device.rs` | Library composition of that physical worker and the existing purge policy; immutable admission-scoped status/purge results and durable purge receipt lookup. No CLI or second worker. |
 | `src/retained.rs`, `src/retained/saved.rs`, `src/retained/subscribe.rs` | Public bounded owner/granted checkpoint read over the existing driver, plus typed saved scope/page/transcript/progress projections delegating to the same SQLite and passive-view owners. `subscribe` follows one conversation with `conversation.subscribe` on a new pinned session to the same gateway and does not write a checkpoint. No CLI or additional receiver. |
+| `src/retained/phone.rs` | Publication lease and catalogue presence. A stamp reads only the lease instance, receiver, and generation it was bound under. A later session does not accept an earlier stamp. Presence is one stored row or fence; a missing row is not a tombstone. |
+| `src/retained/artifact.rs` | One held-file fetch through the existing range owner. A file already at the output is a local match and is not asked. Gateway freshness is a digest-matched part. Busy retries wait on an injected `Pause`; `ThreadPause` is the operating-system wait. |
 | `src/read_only_sync/domain/` | Immutable attributed cache reset requests; a held file named as the view names it, and its ranges. |
 | `src/read_only_sync/application/` | Cache policy and typed evidence, finite records/catalogue drivers, saved-read/reset/purge ports, protected connection policy, bounded watch loop, and the held-file fetch (ranges, at least one asked every time, busy retries, size and digest before keeping). |
 | `src/read_only_sync/infrastructure/cache/` | One private SQLite owner for catalogue values, physical records, SDK checkpoints, progress and purge/reset receipts. |
 | `src/read_only_sync/infrastructure/gateway/` | Protected pinned session, codecs, sources (`artifact.read` ranges included), and operation deadline/cancellation adapter. Its post-I/O/first-cause policy differs from enrollment's phase/wake socket. |
 | `src/read_only_sync/infrastructure/held_file.rs` | The output and the `OUT.<key>.part` a fetch assembles in (keyed on conversation, digest, media type and size), held by one fetch at a time, re-read and checked from disk, synced and hard-linked at `OUT` (the link refuses anything there); an existing `OUT` looked at without following links. |
 | `src/read_only_sync/entrypoint/` | Argument contract and JSON output over supplied handles. |
-| `src/composition/` | Private profile, device/status admission, protected session and cache construction, independent wall/monotonic adapters and the retry pause, `fetch` (an existing output answered before dialling, then one held file into its part), immutable command diagnostic facade, and executable input/output. |
+| `src/composition/` | Private profile, device/status admission, protected session and cache construction, independent wall/monotonic adapters, `fetch` (an existing output answered before dialling, then one held file into its part), immutable command diagnostic facade, and executable input/output. The held-file retry pause is `retained::ThreadPause`, re-exported here. |
 | `examples/read_only_sync.rs` | Standalone executable using `composition::run_read_only_example`. |
+| `examples/weak_link_measure.rs` | Prints the #262 schedule report: one real record source, paced and unpaced, reopened. |
 | `tests/protected/` | Shared physical deadline/first-cause and cancellation evidence for the protected byte stream. |
 | `tests/product/` | Real pinned TLS opening, idle/partial traffic, original request IDs, permit retention, typed deadlines/failures and independent physical drain. |
 | `tests/outbox/` | Phone outbox ordering, canonical bytes, and product-frame evidence, included by the library with `#[path]`. `departure.rs` selects initial-read and lease orderings; `lease_wait.rs` tests real SQLite bounded lock refusal. |
@@ -102,3 +105,7 @@ phase budgets and wire versions are unchanged by the crate extraction.
 Build the example with `cargo build -p nessa-client-core --example read_only_sync`.
 See [the example design](../../docs/design/read-only-sync-example.md) for its
 commands and separate captured-check/durable-progress contract.
+
+`src/local_product.rs` owns the bounded numeric-loopback authenticated product
+transport shared by local command consumers. The connection closes on drop;
+consumers own command interpretation and the gateway rechecks policy.

@@ -1,4 +1,9 @@
-import { bounds, type ImageAttachment, type LinkedFile } from "../generated/product.js"
+import {
+  bounds,
+  type ImageAttachment,
+  type LinkedFile,
+  type UploadedFileAttachment,
+} from "../generated/product.js"
 import { canonicalBase64 } from "./passive-read-validate.js"
 
 /**
@@ -293,4 +298,47 @@ export function artifactReadRange(
   if (bytes.byteLength !== length)
     throw new Error("Artifact read response is not the range asked for")
   return bytes
+}
+
+/** Stored non-image inputs use the upload contract plus the published name rule. */
+export function uploadedFilesProblem(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length > bounds.maxMessageFiles)
+    return "uploads must be a bounded list"
+  let total = 0
+  for (const file of value) {
+    if (
+      !file ||
+      typeof file !== "object" ||
+      Array.isArray(file) ||
+      ["digest", "mimeType", "size", "name"].some((key) => !Object.hasOwn(file, key)) ||
+      Object.keys(file).some(
+        (key) => !["digest", "mimeType", "size", "name"].includes(key),
+      )
+    )
+      return "invalid uploaded file"
+    const problem = storedAttachmentProblem({
+      digest: file.digest,
+      mimeType: file.mimeType,
+      size: file.size,
+    })
+    if (problem) return problem
+    if (
+      typeof file.name !== "string" ||
+      !/\P{White_Space}/u.test(file.name) ||
+      new TextEncoder().encode(file.name).byteLength > bounds.maxUploadedFileNameBytes ||
+      !new RegExp(bounds.uploadedFileNamePattern, "u").test(file.name)
+    )
+      return "invalid uploaded filename"
+    total += file.size
+  }
+  return total > bounds.maxUploadBytes
+    ? "uploaded files exceed the message byte budget"
+    : undefined
+}
+/** Validate the uploaded references of a bounded gateway message. */
+export function uploadedFiles(value: unknown, what: string): UploadedFileAttachment[] {
+  const files = value === undefined ? [] : value
+  const problem = uploadedFilesProblem(files)
+  if (problem) throw new Error(`Invalid ${what}: ${problem}`)
+  return files as UploadedFileAttachment[]
 }

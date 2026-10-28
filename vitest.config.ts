@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
-import { defineConfig } from "vitest/config"
+import { configDefaults, defineConfig } from "vitest/config"
 
 import {
   linkedSourceRoot,
@@ -37,7 +37,15 @@ export default defineConfig({
     alias: viteAliases(resolve(linkedSourceRoot)),
   },
   test: {
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "packages/**/*.test.ts"],
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "packages/**/*.test.ts",
+      "verification/conversation/**/*.test.ts",
+      "verification/conversation/**/*.test.tsx",
+    ],
+    // This deployment runs Node's test runner with a real local Workers runtime.
+    exclude: [...configDefaults.exclude, "packages/github-webhooks/**"],
     environment: "node",
     setupFiles: ["src/test/match-media.ts"],
     deps: {

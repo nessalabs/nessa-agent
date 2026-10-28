@@ -14,7 +14,6 @@ import {
   useState,
 } from "react"
 import { IconButton } from "../../../ui/icon-button"
-import { IdentityFooter } from "./identity-footer"
 import "./side-rail.css"
 
 /** One 28px control with the window's 10px control edge on each side. */
@@ -140,6 +139,7 @@ export function SideRail({
       aria-hidden={!open || undefined}
       style={{ "--rail-index": index } as CSSProperties}
     >
+      <span className="side-rail-pill" aria-hidden="true" />
       <div className="side-rail-items">
         <span className="side-rail-lens" aria-hidden="true" />
         {railItems.map((item, i) => (
@@ -216,11 +216,6 @@ export function RailView({ item }: { item: RailItem }) {
   return (
     <section key={item.id} className="rail-view" aria-label={item.name}>
       <RailLoading name={item.name} />
-      {item.studio === false ? null : (
-        <div className="rail-view-foot">
-          <IdentityFooter />
-        </div>
-      )}
     </section>
   )
 }
