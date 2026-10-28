@@ -262,3 +262,62 @@ vault/relay contracts and the newly shipped provider-input contract together.
 Fresh scoped integration/ownership review, affected checks, real worker verification
 and hosted CI must refer to this combined source. Earlier source-specific evidence
 remains historical and is not relabeled as validation of a later runtime.
+
+
+## Daybreak defensive review follow-up — before editing
+
+The fresh review at `079798f614e59f28848a27af8121befef5ee0349` found three
+security gaps despite all twelve CI checks passing. The current source is not
+approved to merge. The initial report is retained separately; the following
+invariants govern the fixes and their closing review.
+
+| Boundary | Required result and evidence |
+| --- | --- |
+| Boat environment admission | One complete admitted posture: agent credentials only, no GitHub/general/sandbox passthrough, environment contents, secret files, repository/setup injection, or unrecognized credential configuration. Check the current provider state at allocation and reconnection; bind received VM identity/version to the admitted snapshot before Nessa commands or MCP grants. Retain the actual target, refusal cause and cleanup observation on mismatch, including interrupted/failed audit or cleanup; never silently replace it. Existing unverified receipts must refuse authority while preserving their VM identity. Provider-side mutation during a name-based create remains a trust boundary, not an impossible atomicity claim. Hostile configuration/drift/receipt and cleanup tests must falsify the previous behavior. |
+| Relay credential lifetime | The credential port preserves the existing zeroizing, redacted token type. Obtain credentials only for actual page requests and release the request-scoped copy before persistence or idle watching; do not keep an ordinary String across a renewal cycle. Test token rotation across requests/wake-up and no token acquisition while idle. |
+| Relay inbound allocation | A shared bounded decoder covers success and body-bearing refusal responses. WebSocket frame/message limits derive from the accepted changed notification and RFC control-frame bound before allocation/assembly. Test oversized chunked 409/410, oversized/fragmented watch messages, and normal changed/ping behavior without weakening the HTTPS-only production constructor. |
+
+The Boat admission/receipt design is being reviewed before its implementation.
+No source or test assertion is relaxed to obtain a green CI result. Cloudflare
+Free and the deployed service stay unchanged. Known pane-root issue #1184 and
+local audit-retention follow-up #1185 remain separately tracked.
+
+### Boat admission design resolution
+
+Provider documentation defines `credentialProfileId: null` as the sandbox owner's
+default profile, and `proxyAiCredentials` as applicable only when safe-for-third-
+parties is enabled ([credential profiles](https://docs.boat.dev/ai-credentials.md#environments),
+[environment access](https://docs.boat.dev/environments/access.md#ai-credentials)).
+The existing intentionally credential-bearing agent posture therefore requires
+explicit null/default and false/proxy; absent values and named profiles refuse.
+The [published v1 schema](https://docs.boat.dev/openapi/boat-v1.yaml) defines
+immutable environment versions and the VM's frozen environment/version receipt.
+
+Create performs admission, then reads the concrete VM and rechecks the same
+provider environment identity before publishing Assigned. An observed mismatch
+publishes Refused with the actual target before cleanup. Reconnect repeats
+admission and receipt verification before resume and again before SDK open.
+A later reconnect refusal needs `Provisioning -> Assigned -> Refused` (three
+records); the design review's two-record proposal only covered create-time
+refusals. Refused is terminal; old receipts are read only as Unverified and never
+upgraded, rewritten or executed. All legal histories retain their original target.
+Failed storage/audit and uncertain cleanup are reported together; provider
+immutability remains a trust assumption, not a claim of atomic provider-side
+configuration selection or physical erasure.
+
+Recovery distinguishes a disposable new allocation from a saved workspace.
+A reconnect admission refusal must preserve existing VM data: record the refusal
+and retain the target, never invoke automatic deletion. Only a failed allocation
+in the current admitted creation task requests rollback. Evidence must distinguish
+retention from unconfirmed/confirmed cleanup; a repeated refusal returns the saved
+target and disposition without replaying cleanup. A complete bounded create body
+with a valid VM ID retains that ID even if another typed field is malformed.
+
+The provider's v1 create contract says `ready` is an idempotent replay. Its
+retained target cannot be treated as disposable, including after receipt-save
+failure or refusal at the first connection. Only a valid `sandbox.created`
+acknowledgement in `provisioning` selects rollback; an unknown acknowledgement
+retains its named target without granting authority. Receipt/audit evidence
+carries that disposition. Raw personal-scope API metadata also confirmed that
+environment `access` is a ResourceAccess object and `effective` contains the four
+computed credential flags; the fixture pins both, separately from VM string access.
