@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "05bb0383823d28e37f563ba28cea72fa9c6de9a3"
+sourceRevision: "fbda77dedf894eb87580f563e24bbd804b10731f"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -34,6 +34,7 @@ sources:
   - crates/nessa-server/src/github_relay/infrastructure/selection.rs
   - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
   - crates/nessa-server/src/product/github.rs
+  - crates/nessa-server/tests/product/socket/vault.rs
   - crates/nessa-server/src/github/application/connections.rs
   - src/desktop/settings/ui/github-row.tsx
   - src/desktop/settings/ui/github-live-help.tsx
@@ -174,6 +175,11 @@ Escape dismisses help and returns focus without closing Settings.
 
 The connection is owned by the gateway, so its windows see the same setting.
 Disabling removes the local selection and inbox in one audited transaction.
+A GitHub command waiting behind another command keeps the vault unlock generation
+it entered with. If the vault locks and unlocks during that wait, the queued
+command refuses before it can change the newer sign-in or live-event selection.
+The dispatcher regression holds a queued disconnect, restores an encrypted
+credential under the next unlock, and checks that credential remains.
 Disconnect waits for that cleanup before deleting the token. An already-returning
 page is rejected by the removed binding's generation. A cleanup failure leaves
 the selection intact and refuses sign-out. Cloud retention remains shared with
