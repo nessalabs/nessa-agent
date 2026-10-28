@@ -3927,3 +3927,205 @@ impl commands::CreationStorage for PausedMutationObservation {
 
 #[path = "parent_stop/confirmed_recovery.rs"]
 mod confirmed_recovery;
+
+/// Poll the real supervised Stop and ordinary submit against a queued export.
+/// A current-thread idle checkpoint establishes that the spawned Stop has run
+/// before the writer is queued; it is not an elapsed-time scheduling guess.
+#[test]
+fn owned_stop_export_and_submission_share_one_admission_order() {
+    let armed = Arc::new(AtomicBool::new(false));
+    let parked = Arc::new(Notify::new());
+    let checkpoint = parked.clone();
+    let checkpoint_armed = armed.clone();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .on_thread_park(move || {
+            if checkpoint_armed.swap(false, Ordering::SeqCst) {
+                checkpoint.notify_one();
+            }
+        })
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        for caller_lost in [false, true] {
+            let bound = Duration::from_secs(5);
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("data");
+            let provider = Arc::new(ProviderFactory::default());
+            provider.turn_cancel.store(true, Ordering::SeqCst);
+            let policy = Arc::new(ObservedPolicy::default());
+            let (service, storage, metadata) = fixture_admitted_by(
+                &root,
+                provider.clone(),
+                crate::conversation_test_support::in_process_environment(),
+                policy.clone(),
+            );
+            bind(&service, &storage, &root, true).await;
+            let parent = id();
+            opened(&service, &provider, &parent).await;
+            let held = hold_turn(&service, &provider, &parent, "order-parent").await;
+            let other = id();
+            service
+                .create(
+                    other.clone(),
+                    caller("order-other"),
+                    RequestedConversation::default(),
+                )
+                .await
+                .unwrap();
+            let other_live = service
+                .resolve(&other, &caller("order-other"))
+                .await
+                .unwrap();
+            other_live.join_attachment_owner().await.unwrap();
+            drop(other_live);
+
+            let initial_reader = service.inner.admission.clone().read_owned().await;
+            let initial_thread = service.inner.thread_admission.clone().lock_owned().await;
+            let mut submission = Box::pin(service.submit_command(
+                storage.clone(),
+                other.clone(),
+                caller("order-submit"),
+                Initiation::owner(),
+                false,
+                "order-submit".into(),
+                message("independent"),
+                SubmissionMode::Queue,
+            ));
+            assert!(futures_util::poll!(&mut submission).is_pending());
+            armed.store(true, Ordering::SeqCst);
+            tokio::time::timeout(bound, parked.notified())
+                .await
+                .expect("the actual supervised submission queues for thread admission first");
+            // SQLite metadata may yield before Stop spawns its supervisor. Observe
+            // its real access-policy boundary before waiting for runtime idleness.
+            let asked = policy.asked();
+            let mut stop = tokio::spawn({
+                let service = service.clone();
+                let storage = storage.clone();
+                let parent = parent.clone();
+                async move {
+                    service
+                        .stop_command(storage, parent, caller("order-stop"), "order-parent".into())
+                        .await
+                }
+            });
+            tokio::time::timeout(bound, async {
+                while policy.asked() == asked {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the actual Stop passes its existing target-access boundary");
+            armed.store(true, Ordering::SeqCst);
+            tokio::time::timeout(bound, parked.notified())
+                .await
+                .expect("the actual supervised Stop reaches its pending lock acquisition");
+            if caller_lost {
+                // Abort only the outer observer, while the admitted supervisor
+                // still waits for thread admission. No replacement command is
+                // issued until the original owner reaches provider cancellation.
+                stop.abort();
+            }
+            let mut export = Box::pin(service.hold_for_export());
+            assert!(futures_util::poll!(&mut export).is_pending());
+            drop(initial_thread);
+            drop(initial_reader);
+            let mut stop_result = None;
+            let mut submit_result = None;
+            let stalled = tokio::time::timeout(bound, async {
+                futures_util::join!(
+                    async {
+                        stop_result = Some((&mut stop).await);
+                    },
+                    async {
+                        submit_result = Some(submission.as_mut().await);
+                    },
+                    async {
+                        drop(export.as_mut().await.unwrap());
+                    },
+                );
+            })
+            .await
+            .is_err();
+            // Only the test-owned writer is cancelled. Both production owners
+            // finish their real cleanup before the negative control fails.
+            drop(export);
+            if stalled {
+                tokio::time::timeout(bound, async {
+                    futures_util::join!(
+                        async {
+                            if stop_result.is_none() {
+                                stop_result = Some((&mut stop).await);
+                            }
+                        },
+                        async {
+                            if submit_result.is_none() {
+                                submit_result = Some(submission.as_mut().await);
+                            }
+                        },
+                    );
+                })
+                .await
+                .expect("cancelling the test writer releases actual owners");
+            }
+            drop(stop);
+            drop(submission);
+            let observed = stop_result.unwrap();
+            let receipt = if caller_lost {
+                assert!(observed.unwrap_err().is_cancelled());
+                tokio::time::timeout(bound, async {
+                    while provider.cancel_turns.lock().unwrap().is_empty() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("the original supervisor cancels without a replacement command");
+                tokio::time::timeout(
+                    bound,
+                    service.stop_command(
+                        storage.clone(),
+                        parent.clone(),
+                        caller("order-stop"),
+                        "order-parent".into(),
+                    ),
+                )
+                .await
+                .unwrap()
+                .unwrap()
+            } else {
+                observed.unwrap().unwrap()
+            };
+            assert_eq!(
+                receipt.binding().actor(),
+                &caller("order-stop").actor().unwrap()
+            );
+            assert_eq!(receipt.outcome(), Some(MutationOutcome::Cancelled));
+            assert!(submit_result.unwrap().is_ok());
+            let retry = service
+                .stop_command(
+                    storage.clone(),
+                    parent.clone(),
+                    caller("order-stop"),
+                    "order-parent".into(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(retry, receipt, "the original Stop receipt is retained");
+            assert_eq!(
+                provider.cancel_turns.lock().unwrap().as_slice(),
+                ["order-parent"]
+            );
+            assert!(service.inner.thread_admission.try_lock().is_ok());
+            assert!(service.inner.admission.try_write().is_ok());
+            drop(held);
+            tokio::time::timeout(bound, retire(service, storage, metadata))
+                .await
+                .unwrap();
+            assert!(
+                !stalled,
+                "owned Stop/export/ordinary submission form an admission cycle"
+            );
+        }
+    });
+}

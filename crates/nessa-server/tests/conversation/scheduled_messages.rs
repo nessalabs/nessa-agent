@@ -4305,3 +4305,218 @@ async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
         "only real person receipts reauthorize report delivery; spelling and text confer no origin"
     );
 }
+
+// One real resolved SDK owner competes at the actual resume/export/delivery
+// entry points. The existing scheduled fixture refuses its stale target after
+// admission; this does not claim provider dispatch or the historical #1030 cause.
+
+#[derive(Default)]
+struct AdmissionOrderMarks(
+    Mutex<HashMap<ConversationId, crate::conversation::application::UnfinishedMark>>,
+);
+
+impl crate::conversation::application::UnfinishedTurns for AdmissionOrderMarks {
+    fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.lock().unwrap().insert(
+            id.clone(),
+            crate::conversation::application::UnfinishedMark {
+                conversation_id: id.clone(),
+                failures: 0,
+                retry_at_ms: None,
+            },
+        );
+        Box::pin(async { Ok(()) })
+    }
+    fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.lock().unwrap().remove(id);
+        Box::pin(async { Ok(()) })
+    }
+    fn defer(
+        &self,
+        id: &ConversationId,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()> {
+        self.0.lock().unwrap().insert(
+            id.clone(),
+            crate::conversation::application::UnfinishedMark {
+                conversation_id: id.clone(),
+                failures,
+                retry_at_ms: Some(retry_at_ms),
+            },
+        );
+        Box::pin(async { Ok(()) })
+    }
+    fn marked(
+        &self,
+    ) -> ConversationFuture<'_, Vec<crate::conversation::application::UnfinishedMark>> {
+        let marks = self.0.lock().unwrap().values().cloned().collect();
+        Box::pin(async move { Ok(marks) })
+    }
+}
+
+#[tokio::test]
+async fn recovery_export_and_scheduled_delivery_share_one_admission_order() {
+    use futures_util::task::{waker_ref, ArcWake};
+    use std::task::Context;
+
+    struct RecoveryWake(AtomicUsize);
+    impl ArcWake for RecoveryWake {
+        fn wake_by_ref(owner: &Arc<Self>) {
+            owner.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let bound = Duration::from_secs(5);
+    let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+    let store = Arc::new(RecordingStore::new(true));
+    let service = delivering(&clock, &store, "owner");
+    // These are different conversations: the thread guard is global. The
+    // existing delivery fixture's stale target must still complete its normal
+    // begin_submit/refusal cleanup once admitted. No nonexistent SDK owner is
+    // substituted for recovery's real resolved one.
+    let id = ConversationId::new("22222222-2222-4222-8222-222222222222").unwrap();
+    service
+        .create(
+            id.clone(),
+            caller_as("create-admission-order"),
+            RequestedConversation {
+                model: Some("test".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let live = service
+        .resolve(&id, &caller_as("resolve-admission-order"))
+        .await
+        .unwrap();
+    tokio::time::timeout(bound, live.join_attachment_owner())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!live.agent.awaits_close());
+    assert!(matches!(
+        live.agent.attachment_status().phase(),
+        nessa_sdk::application::agent_execution::agents::AttachmentPhase::Attached
+            | nessa_sdk::application::agent_execution::agents::AttachmentPhase::Absent
+    ));
+    // Observe the same full slot precondition without widening the private
+    // resumption helper's production visibility for this test.
+    {
+        let slots = service.inner.conversations.lock().await;
+        assert!(slots.get(&id).is_some_and(|slot| {
+            !slot.stopping.load(Ordering::SeqCst)
+                && matches!(slot.value.get(), Some(Ok(open)) if Arc::ptr_eq(open, &live))
+        }));
+    }
+    assert!(live.agent.is_idle().await);
+    let marks = Arc::new(AdmissionOrderMarks::default());
+    service.bind_unfinished_turns(
+        marks.clone(),
+        crate::conversation::application::FailureBackoff::default(),
+    );
+    service.mark_unfinished(&id).await.unwrap();
+
+    let initial = service.inner.admission.clone().write_owned().await;
+    let wake = Arc::new(RecoveryWake(AtomicUsize::new(0)));
+    let waker = waker_ref(&wake);
+    let mut context = Context::from_waker(&waker);
+    let mut recovery = Box::pin(service.resume_owed(&id, live.clone()));
+    assert!(std::future::Future::poll(recovery.as_mut(), &mut context).is_pending());
+    let recovery_owned_thread_before_delivery = service.inner.thread_admission.try_lock().is_err();
+    // Writer FIFO is essential to the reported cycle: queue this writer after
+    // recovery's reader and before delivery's reader.
+    let mut export = Box::pin(service.hold_for_export());
+    assert!(futures_util::poll!(&mut export).is_pending());
+    let mut delivery = Box::pin(service.deliver_due_scheduled());
+    assert!(futures_util::poll!(&mut delivery).is_pending());
+    let thread_owned_after_delivery_poll = service.inner.thread_admission.try_lock().is_err();
+    assert_eq!(store.submits.load(Ordering::SeqCst), 0);
+    wake.0.store(0, Ordering::SeqCst);
+    drop(initial);
+    // The release synchronously wakes a queued reader. This distinguishes an
+    // actual admission waiter from an earlier attachment-owner/SDK wait.
+    let reached_admission = wake.0.load(Ordering::SeqCst) > 0;
+
+    let mut recovery_result = None;
+    let mut delivery_done = false;
+    let finished = tokio::time::timeout(bound, async {
+        futures_util::join!(
+            async {
+                recovery_result = Some(recovery.as_mut().await);
+            },
+            async {
+                let held = export.as_mut().await.unwrap();
+                drop(held); // The export cut ends; do not hold it over join!
+            },
+            async {
+                delivery.as_mut().await;
+                delivery_done = true;
+            },
+        )
+    })
+    .await;
+    let stalled = finished.is_err();
+    // Cancellation here belongs only to the test's export waiter. In the
+    // negative control it breaks writer preference so real delivery and
+    // recovery can finish and release their own actual guards before failure.
+    drop(export);
+    if stalled {
+        tokio::time::timeout(bound, async {
+            futures_util::join!(
+                async {
+                    if recovery_result.is_none() {
+                        recovery_result = Some(recovery.as_mut().await);
+                    }
+                },
+                async {
+                    if !delivery_done {
+                        delivery.as_mut().await;
+                        delivery_done = true;
+                    }
+                },
+            )
+        })
+        .await
+        .expect("test-owned writer cancellation permits real cleanup");
+    }
+    drop(recovery);
+    drop(delivery);
+    let no_thread_owner = service.inner.thread_admission.try_lock().is_ok();
+    let no_admission_owner = service.inner.admission.try_write().is_ok();
+    let submitted = store.submits.load(Ordering::SeqCst);
+    tokio::time::timeout(bound, service.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(live);
+
+    assert!(
+        reached_admission,
+        "recovery must reach admission, not an earlier attachment wait"
+    );
+    assert_eq!(
+        recovery_result,
+        Some(true),
+        "the real idle marked owner completes reconciliation"
+    );
+    assert!(
+        delivery_done,
+        "the actual scheduled delivery future completes"
+    );
+    assert_eq!(
+        submitted, 1,
+        "scheduled admission actually crosses begin_submit once"
+    );
+    assert!(
+        no_thread_owner && no_admission_owner,
+        "actual owners release their guards"
+    );
+    assert!(
+        thread_owned_after_delivery_poll,
+        "one real branch must hold thread admission"
+    );
+    assert!(!stalled,
+        "recovery/export/delivery admission cycle: recovery_owned_thread_before_delivery={recovery_owned_thread_before_delivery}, thread_owned_after_delivery_poll={thread_owned_after_delivery_poll}, reached_admission={reached_admission}");
+}

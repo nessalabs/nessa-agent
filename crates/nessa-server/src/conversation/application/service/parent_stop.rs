@@ -143,8 +143,8 @@ impl ConversationService {
             .map_err(MutationFailure::Target)?;
         let service = self.clone();
         tokio::spawn(async move {
-            let _service_admission = service.admit().await.map_err(|_| unavailable())?;
             let admission = service.inner.thread_admission.clone().lock_owned().await;
+            let _service_admission = service.admit().await.map_err(|_| unavailable())?;
             let selection = service
                 .select_stop(storage.clone(), &id, &caller, base)
                 .await?;

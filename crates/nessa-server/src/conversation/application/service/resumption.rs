@@ -329,10 +329,10 @@ impl ConversationService {
         // waits for this agent's history to be let go.
         let waiting = Arc::downgrade(&live);
         drop(live);
+        let _threads = self.inner.thread_admission.clone().lock_owned().await;
         let Ok(_admission) = self.admit().await else {
             return false;
         };
-        let _threads = self.inner.thread_admission.clone().lock_owned().await;
         let _submissions = self.inner.mode_changes.lock(id).await;
         let Some(live) = waiting.upgrade() else {
             return false;

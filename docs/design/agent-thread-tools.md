@@ -235,6 +235,26 @@ A create/send/stop already admitted by the command coordinator retains its
 supervised receipt/audit lifecycle even when its answer is lost. Cancellation
 is not a claim that an external effect was rolled back.
 
+## Service admission order
+
+Commands that serialize owned-thread work acquire the existing thread-admission
+mutex before shared service admission. An export takes exclusive service
+admission. Recovery and recursive Stop use the same order as submission,
+preparation, report delivery and scheduled delivery; an admitted reader must not
+wait for a thread owner whose reader is queued behind an export writer.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Recovery reader, export writer and scheduled delivery compete | Recovery queues for thread admission before requesting its reader; all three owners settle within the existing five-second test bound | `recovery_export_and_scheduled_delivery_share_one_admission_order` |
+| An ordinary command waits for thread admission before supervised Stop, then export queues | Stop waits for thread admission before requesting its reader; submission and export settle, and Stop retains its exact receipt and single cancellation | `owned_stop_export_and_submission_share_one_admission_order` |
+| The outer Stop caller disconnects while its supervisor waits for thread admission | The original supervisor reaches provider cancellation before any replacement command; retry joins its actor and receipt without cancelling twice | `owned_stop_export_and_submission_share_one_admission_order`, lost-caller case |
+
+The guards retain their existing lifetimes. Recovery keeps its weak live handle
+while waiting and rechecks the slot after admission. Stop releases thread
+admission after capturing its durable selection and retains service admission
+through the selected effects. Cancelling an observer does not release a
+supervised operation's owners.
+
 ## Ordering and regression evidence
 
 | Order or failure | Behavior and test home |
