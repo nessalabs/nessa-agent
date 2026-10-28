@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn background_matches_both_current_provider_inputs_and_rejects_contradictions() {
-    let task = BackgroundTaskId::new("task-1".into()).unwrap();
-    let command = BackgroundCommand::new("printf result".into(), 120).unwrap();
+    let task = BackgroundTaskId::new("task-1").unwrap();
+    let command = BackgroundCommand::new("printf result", 120).unwrap();
     let arguments = json!({"taskId":"task-1","command":"printf result"});
     let envelope = |arguments: Value| json!({"server":BACKGROUND_SERVER,"tool":BACKGROUND_START,"arguments":arguments});
     for valid in [
