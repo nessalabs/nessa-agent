@@ -670,16 +670,20 @@ async function aroundTheLights(page, rail, failures) {
         near(now.at.railTop, now.at.barBottom) &&
         near(now.at.railWidth, 64) &&
         near(now.at.item, now.at.railWidth / 2) &&
-        // A floating pill below the window bar, clear of the traffic
-        // lights and the window's edges, holding the items and the toggle.
+        // A narrow floating pill below the window bar, clear of the traffic
+        // lights and the window's edges, holding the items and the toggle,
+        // on the sidebar's material.
         now.at.pill !== null &&
+        near(now.at.pill.width, 36) &&
+        now.at.railFill === now.at.sidebarFill &&
         now.at.pill.top >= now.at.barBottom - 0.5 &&
         now.at.pill.left > 0 &&
         now.at.pill.bottom < now.at.windowBottom &&
         now.at.pill.radius >= now.at.pill.width / 2 - 0.5 &&
         near(now.at.pill.left + now.at.pill.width / 2, now.at.item) &&
         now.at.itemTop > now.at.pill.top &&
-        now.at.toggleBottom < now.at.pill.bottom
+        // The corner row (the toggle and "nessa Studio") stands below it.
+        now.at.toggleTop >= now.at.pill.bottom
       : near(now.at.workspace, 0)) &&
     // The toggle is nessa's mark: in the footer's mark slot, right before
     // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
@@ -753,9 +757,23 @@ function railLayout(page) {
               : null
           })(),
           itemTop: box(item)?.top ?? NaN,
+          // The fill each paints last (the sidebar's sits under its washes).
+          railFill: (() => {
+            const shape = document.querySelector(rail)
+            return shape ? getComputedStyle(shape).backgroundColor : null
+          })(),
+          sidebarFill: (() => {
+            const probe = document.createElement("div")
+            probe.style.background = "var(--desktop-sidebar-material)"
+            document.querySelector(frame)?.append(probe)
+            const fill = getComputedStyle(probe).backgroundColor
+            probe.remove()
+            return fill
+          })(),
           item: middle(item),
           toggle: box(toggle)?.left ?? NaN,
           toggleBottom: box(toggle)?.bottom ?? NaN,
+          toggleTop: box(toggle)?.top ?? NaN,
           toggleMiddle: box(toggle)
             ? [
                 box(toggle).left + box(toggle).width / 2,

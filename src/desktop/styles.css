@@ -83,6 +83,9 @@ body {
     var(--desktop-window-controls-inset) + var(--desktop-titlebar-cluster) + 8px
   );
   --desktop-pane-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
+  /* The sidebar's material: one tone lighter (dark) or darker (light) than
+     the window. The side rail stands on it too, so the two read as one. */
+  --desktop-sidebar-material: color-mix(in oklab, var(--foreground) 3.5%, var(--background));
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
 
   /*

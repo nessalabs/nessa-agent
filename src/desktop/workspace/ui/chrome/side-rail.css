@@ -2,6 +2,7 @@
 .workspace-window {
   --rail-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --rail-gap: 6px;
+  --rail-pill-pad: 4px;
   /*
    * Where the rail's controls stand from the window's edge: on the sidebar's
    * icon column, so the toggle in the closed rail's corner stands under
@@ -51,29 +52,39 @@
 .side-rail[data-open] {
   width: var(--rail-width);
   opacity: 1;
+  /* The sidebar's material, so the rail and the sidebar beside it are one
+     surface with no seam between them. */
+  background: var(--desktop-sidebar-material);
 }
 
 /*
  * Open, the rail is a floating pill (as Outlook's is): it starts below the
  * window bar, so nothing of it runs under or around the traffic lights, and
- * stands a gutter clear of the window's edges. It is centred on the items'
- * column and holds the toggle in the bottom corner.
+ * stands clear of the window's edges. It is centred on the items' column
+ * and keeps one `--rail-pill-pad` around them. It ends one gutter above the
+ * corner row, so the toggle and "nessa Studio" stand below it, never in it.
  */
 .side-rail-pill {
   position: absolute;
   top: var(--desktop-titlebar-height);
-  bottom: var(--desktop-gutter);
-  left: calc(var(--rail-column) - var(--desktop-gutter));
-  width: calc(var(--desktop-control-size) + 2 * var(--desktop-gutter));
+  bottom: calc(2 * var(--desktop-gutter) + 13px + var(--desktop-control-size));
+  left: calc(var(--rail-column) - var(--rail-pill-pad));
+  width: calc(var(--desktop-control-size) + 2 * var(--rail-pill-pad));
   border-radius: var(--desktop-radius-pill);
   background: var(--desktop-pane-fill);
   box-shadow: var(--desktop-card-rim);
 }
 
+/* Beside the open rail the sidebar drops its top wash: the wash is shaped
+   to the sidebar alone and would draw a seam where the two meet. */
+.workspace-window[data-rail="open"] .workspace-sidebar {
+  --sidebar-wash: linear-gradient(transparent, transparent);
+}
+
 .side-rail-items {
   position: relative;
-  /* One gutter inside the pill's top, as its sides keep. */
-  margin-top: var(--desktop-gutter);
+  /* One pad inside the pill's top, as its sides keep. */
+  margin-top: var(--rail-pill-pad);
   margin-left: var(--rail-column);
   display: flex;
   flex-direction: column;
