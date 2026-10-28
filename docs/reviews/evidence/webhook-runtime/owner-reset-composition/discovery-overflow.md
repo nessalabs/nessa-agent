@@ -63,8 +63,12 @@ seconds while commands, unshare, revoke and cleanup still succeeded. Runtime
 bytes were restored to SHA256
 `3b0e938590a069bbad0b148dc8e7033dd3ec24832eaf71366f245b33125641c4`.
 The positive fixture now also asserts zero cursor rows before recovery.
-Restored qualification, finding closure and final CI remain pending. No merge or external review
-publication is established by this document.
+The final restored selection at `0d98a91d287a99096192a2ff941dd2b88e0572a3`
+passed 297/297 with zero failures or ignored tests in20.31seconds.
+[Independent E1 closure](discovery-review.md) leaves no findings in the bounded
+affected review. Required locked eight-package all-target Clippy with `-D warnings` passed
+in2m01s against the restored source. New exact-head CI remains pending. No merge
+or submitted GitHub approval is established by this document.
 
 The restored-environment frontend run passed formatting, lint, types, architecture
 and protocol controls, then reported 5,467 Vitest passes and two private-file
