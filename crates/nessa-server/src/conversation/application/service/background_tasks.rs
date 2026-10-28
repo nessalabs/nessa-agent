@@ -39,6 +39,7 @@ use tokio::sync::{watch, Mutex};
 type Key = (ConversationId, BackgroundTaskId);
 struct Owner {
     stop: watch::Sender<Option<TaskStop>>,
+    delivery_withdrawn: watch::Sender<bool>,
     finished: watch::Receiver<Option<Result<(), BackgroundTaskError>>>,
 }
 pub(super) struct BackgroundTasks {
@@ -378,6 +379,7 @@ impl ConversationService {
     ) {
         let key = (record.source.conversation.clone(), record.id.clone());
         let (stop, stopped) = watch::channel(record.lifecycle.stop().cloned());
+        let (delivery_withdrawn, withdrawal) = watch::channel(false);
         let (finished, completion) = watch::channel(None);
         {
             let mut owners = tasks.owners();
@@ -388,17 +390,19 @@ impl ConversationService {
                 key.clone(),
                 Owner {
                     stop,
+                    delivery_withdrawn,
                     finished: completion,
                 },
             );
         }
         let service = self.clone();
         tokio::spawn(async move {
-            let answer =
-                AssertUnwindSafe(service.run_background_task(&tasks, record, execute, stopped))
-                    .catch_unwind()
-                    .await
-                    .unwrap_or(Err(BackgroundTaskError::CleanupUnverified));
+            let answer = AssertUnwindSafe(
+                service.run_background_task(&tasks, record, execute, stopped, withdrawal),
+            )
+            .catch_unwind()
+            .await
+            .unwrap_or(Err(BackgroundTaskError::CleanupUnverified));
             finished.send_replace(Some(answer.clone()));
             // Keep failed owners joinable: subsequent retirement cannot claim
             // success merely because the failed worker already returned.
@@ -414,6 +418,7 @@ impl ConversationService {
         mut record: BackgroundRecord,
         execute: bool,
         stop: watch::Receiver<Option<TaskStop>>,
+        withdrawal: watch::Receiver<bool>,
     ) -> Result<(), BackgroundTaskError> {
         if execute {
             let outcome = tasks
@@ -477,7 +482,8 @@ impl ConversationService {
         if self.inner.retirement.get().is_none()
             && record.lifecycle.delivery() == TaskDelivery::Waiting
         {
-            self.deliver_background_task(tasks, &record).await?;
+            self.deliver_background_task(tasks, &record, withdrawal)
+                .await?;
         }
         if record
             .lifecycle
@@ -493,11 +499,15 @@ impl ConversationService {
         &self,
         tasks: &BackgroundTasks,
         record: &BackgroundRecord,
+        mut withdrawal: watch::Receiver<bool>,
     ) -> Result<(), BackgroundTaskError> {
         let text = completion_text(record, self.inner.limits.max_input_bytes);
         let delivery = loop {
             if self.inner.retirement.get().is_some() {
                 return Ok(());
+            }
+            if *withdrawal.borrow() {
+                break TaskDelivery::Discarded;
             }
             // A durable receipt wins even if the original reply or subsequent
             // delivery-state save was lost. Configuration changes must not
@@ -519,20 +529,33 @@ impl ConversationService {
                     return Err(BackgroundTaskError::Conflict);
                 }
             }
-            let response = self
-                .submit_as(
-                    record.source.conversation.clone(),
-                    record.source.caller.clone(),
-                    record.continuation_id(),
-                    SubmittedMessage {
-                        text: text.clone(),
-                        ..Default::default()
-                    },
-                    SubmissionMode::Queue,
-                    Writer::Internal,
-                )
-                .await
-                .map_err(super::SubmitFailure::into_error);
+            let submission = self.submit_as(
+                record.source.conversation.clone(),
+                record.source.caller.clone(),
+                record.continuation_id(),
+                SubmittedMessage {
+                    text: text.clone(),
+                    ..Default::default()
+                },
+                SubmissionMode::Queue,
+                Writer::Internal,
+            );
+            // Deletion owns a durable tombstone before withdrawal. Its cleanup
+            // join must not wait behind an export writer for fresh admission.
+            let mut retired = self.inner.retired.subscribe();
+            if *retired.borrow() {
+                return Ok(());
+            }
+            let response = tokio::select! {
+                biased;
+                _ = async {
+                    while !*withdrawal.borrow_and_update() {
+                        if withdrawal.changed().await.is_err() { break; }
+                    }
+                } => break TaskDelivery::Discarded,
+                _ = retired.changed() => return Ok(()),
+                response = submission => response.map_err(super::SubmitFailure::into_error),
+            };
             match response {
                 Ok(_) => break TaskDelivery::Delivered,
                 Err(ConversationError::NotFound | ConversationError::Deleted) => {
@@ -668,6 +691,13 @@ impl ConversationService {
         };
         let waiting = {
             let _writes = tasks.writes.lock().await;
+            if let Some(conversation) = conversation {
+                for ((id, _), owner) in tasks.owners().iter() {
+                    if id == conversation {
+                        owner.delivery_withdrawn.send_replace(true);
+                    }
+                }
+            }
             match tasks.store.pending().await {
                 Ok(records) => {
                     for record in records.into_iter().filter(|record| {

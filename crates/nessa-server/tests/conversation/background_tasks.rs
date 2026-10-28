@@ -51,6 +51,9 @@ struct Runner {
     released: Notify,
     stopped: AtomicUsize,
     shutdowns: AtomicUsize,
+    hold_cleanup: std::sync::atomic::AtomicBool,
+    cleanup_entered: Notify,
+    release_cleanup: Notify,
 }
 impl BackgroundRunner for Runner {
     fn run(
@@ -68,6 +71,10 @@ impl BackgroundRunner for Runner {
             };
             if cancelled {
                 self.stopped.fetch_add(1, Ordering::SeqCst);
+                if self.hold_cleanup.load(Ordering::SeqCst) {
+                    self.cleanup_entered.notify_one();
+                    self.release_cleanup.notified().await;
+                }
             }
             outcome(if cancelled {
                 TaskCause::Cancelled
@@ -776,5 +783,69 @@ async fn background_start_reuses_admission_when_export_has_queued() {
     assert_eq!(runner.runs.load(Ordering::SeqCst), 1);
     drop(cut);
     release.send(()).unwrap();
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn background_deletion_does_not_join_admission_blocked_delivery() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata, tasks, runner) = setup(&root, provider.clone()).await;
+    runner.hold_cleanup.store(true, Ordering::SeqCst);
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let release = turn(
+        &service,
+        &provider,
+        &target,
+        "start",
+        vec![update("one", "delete-export", "make")],
+    )
+    .await;
+    start(&service, &target, "delete-export", "make")
+        .await
+        .unwrap();
+    runner.started.notified().await;
+    release.send(()).unwrap();
+    let deleting_service = service.clone();
+    let deleting_target = target.clone();
+    let deleting = tokio::spawn(async move {
+        deleting_service
+            .delete(deleting_target, caller("delete-export"))
+            .await
+    });
+    runner.cleanup_entered.notified().await;
+    let mut export = Box::pin(service.hold_for_export());
+    assert!(futures_util::poll!(export.as_mut()).is_pending());
+    runner.release_cleanup.notify_one();
+    let answer = tokio::time::timeout(Duration::from_secs(5), deleting)
+        .await
+        .expect("deletion must not join delivery behind export")
+        .unwrap();
+    match answer {
+        Ok(_) => (),
+        Err(ConversationError::DeletionIncomplete(failures)) => {
+            assert!(failures.background_tasks.is_none(), "{failures:?}")
+        }
+        Err(error) => panic!("unexpected deletion failure: {error:?}"),
+    }
+    assert!(tasks
+        .read(&target, &BackgroundTaskId::new("delete-export").unwrap())
+        .await
+        .unwrap()
+        .is_none());
+    let cut = tokio::time::timeout(Duration::from_secs(5), export)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(cut);
+    assert_eq!(runner.stopped.load(Ordering::SeqCst), 1);
+    assert!(!provider
+        .messages
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|message| matches!(message.sender(), MessageSender::Internal)));
     retire(service, storage, metadata).await;
 }

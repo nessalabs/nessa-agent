@@ -59,6 +59,7 @@ The ordinary shell tool retains its current behavior. No native shell feature fl
 | T28 | Export or retirement queues while background start holds admission | One admission owner spans authorization and task admission; no nested read behind a queued writer |
 | T29 | Task identity contract changes | Product schema publishes the bounds and pattern consumed by Rust, MCP and the client |
 | T30 | Stored JSON disagrees with indexed identity or retained state | Refuse restoration and reads before target selection, resumption or capacity decisions |
+| T31 | Deletion joins cleanup while export queues before continuation admission | Withdraw pending continuation independently of first process-stop intent; settle delivery without taking another admission read |
 
 Tests belong beside their owning domain, application, infrastructure and public protocol boundaries. Conversation stress covers start, agent turn completion, task completion, one internal continuation and settlement of the original waterfall entry. The real harness spike is supporting evidence only; it does not replace these production tests.
 
@@ -86,3 +87,12 @@ record. The revised boundary passes one held admission into shared authorization
 Storage uses one checked row decoder, validates all rows when opening before
 indexed recovery, and rejects disagreement without rewriting evidence. Task ID
 syntax is published from the product schema for every consumer.
+
+The third review exposed a second ownership coupling: process cleanup was joined
+through a worker that also waited for model-delivery admission. Deletion now
+withdraws that delivery wait after its durable tombstone. This withdrawal is
+separate from the process's first stop cause, so a later deletion cannot rewrite
+an earlier explicit cancellation. Gateway retirement also interrupts a waiting
+submission while preserving its pending delivery record. Discarded delivery means
+no further delivery is attempted; it does not claim a previously unacknowledged
+submission never reached the model.
