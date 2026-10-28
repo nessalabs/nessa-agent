@@ -578,7 +578,9 @@ export interface ConversationPending {
 }
 /** The source conversation and turn whose agent wrote a message or note. Origin does not grant owner authority. */
 export interface ConversationAgentSource {
+  /** Canonical ID of the conversation in which the sending agent ran. */
   conversationId: string
+  /** ID of the source turn or the child turn a report concerns. */
   executionId: string
 }
 /** The MCP App that wrote a turn on the person's behalf (mcp.sendMessage): the tool call whose UI it is, and the MCP server and tool that call was to. */

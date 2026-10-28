@@ -1354,13 +1354,15 @@
           "type": "string",
           "minLength": 36,
           "maxLength": 36,
-          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical ID of the conversation in which the sending agent ran."
         },
         "executionId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "x-utf8MaxBytes": 256
+          "x-utf8MaxBytes": 256,
+          "description": "ID of the source turn or the child turn a report concerns."
         }
       },
       "required": ["conversationId", "executionId"]
