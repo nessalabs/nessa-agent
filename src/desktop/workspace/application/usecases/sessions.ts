@@ -15,7 +15,9 @@ import { knownToSource } from "../../model/revision"
 import { sameModel, type ModelRef } from "../../model/workspace-index"
 import { startSession } from "../../model/session-lifecycle"
 import { messageText, type TurnMessage } from "../../model/transcript"
+import { paneCount, removePane } from "../../../split-panes/model/pane-layout"
 import {
+  channelOf,
   draftOf,
   entry,
   forgetSession,
@@ -23,9 +25,11 @@ import {
   paneShowingSession,
   sessionOf,
   without,
+  withPanes,
   withSession,
   type WorkspaceState,
 } from "../workspace-state"
+import { draftHome } from "./panes"
 
 /**
  * A session the source has not begun is the window's own: while a message
@@ -188,9 +192,9 @@ function mayBegin(state: WorkspaceState, sessionId: string): boolean {
 
 /**
  * The person let a message the source refused go. A session the source never
- * began, left with nothing to begin it, was never a session: its pane goes
- * back to the new session's home it came from, under the same id, and it
- * leaves the lists.
+ * began, left with nothing to begin it, was never a session: an open document
+ * returns to its draft home under the same id, visible or hidden. With no
+ * document tab, it leaves the window.
  */
 export function unsentDiscarded(
   state: WorkspaceState,
@@ -208,16 +212,34 @@ export function unsentDiscarded(
   )
     return discarded
   const model = modelForNextTurn(discarded, sessionId) ?? session.model
+  const home = channelOf(discarded, session.channelId)
+    ? { channelId: session.channelId, model }
+    : draftHome(discarded, {})
   // The access chosen for it goes back with the home, as its model does.
   const access = entry(discarded.accessChoices, sessionId)
+  const text = entry(discarded.composerText, sessionId)
   const unlisted = forgetSession(discarded, sessionId)
-  return discarded.panes && paneShowingSession(discarded.panes, sessionId)
+  if (!home) {
+    const panes = unlisted.panes
+    const showing = panes && paneShowingSession(panes, sessionId)
+    if (!panes || !showing) return unlisted
+    return withPanes(
+      unlisted,
+      paneCount(panes) > 1 ? removePane(panes, showing.key) : null,
+    )
+  }
+  return discarded.sessionTabs.includes(sessionId)
     ? {
         ...unlisted,
+        sessionTabs: discarded.sessionTabs,
         drafts: {
           ...unlisted.drafts,
-          [sessionId]: { id: sessionId, channelId: session.channelId, model },
+          [sessionId]: { id: sessionId, ...home },
         },
+        composerText:
+          text === undefined
+            ? unlisted.composerText
+            : { ...unlisted.composerText, [sessionId]: text },
         accessChoices:
           access?.state === "chosen"
             ? { ...unlisted.accessChoices, [sessionId]: access }

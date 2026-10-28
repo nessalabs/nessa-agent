@@ -549,17 +549,12 @@ async function setSideRail(page, on, failures) {
 
 /**
  * The expanded right panel is the chat in front's: its own tabs, or with
- * nothing open its note, no tab strip for the chats and no toggles for the
- * columns it covers. ⌘N docks it before the new session opens, so the
+ * nothing open its note, and no toggles for the columns it covers. ⌘N docks it before the new session opens, so the
  * session is in front, in sight — never under the panel. The chat is
  * brought back, docked.
  */
 async function expandedForItsChat(run, failures) {
   const page = run.page
-  if (
-    await page.locator('[role="tablist"]:not(#workspace-panel [role="tablist"])').count()
-  )
-    failures.push("the window draws a tab strip for the chats")
   const panel = page.locator("#workspace-panel")
   if (
     !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
@@ -671,30 +666,12 @@ async function aroundTheLights(page, rail, failures) {
     (rail === "open"
       ? near(now.at.workspace, now.at.railWidth) &&
         near(now.at.railTop, now.at.barBottom) &&
-        near(now.at.railWidth, 64) &&
-        near(now.at.item, now.at.railWidth / 2) &&
-        // A narrow floating pill below the window bar, clear of the traffic
-        // lights and the window's edges, holding the items and the toggle,
-        // on the sidebar's material.
-        now.at.pill !== null &&
-        near(now.at.pill.width, 36) &&
-        now.at.railFill === now.at.sidebarFill &&
-        now.at.pill.top >= now.at.barBottom - 0.5 &&
-        now.at.pill.left > 0 &&
-        now.at.pill.bottom < now.at.windowBottom &&
-        now.at.pill.radius >= now.at.pill.width / 2 - 0.5 &&
-        near(now.at.pill.left + now.at.pill.width / 2, now.at.item) &&
-        now.at.itemTop > now.at.pill.top &&
-        // The corner row (the toggle and "nessa Studio") stands below it.
-        now.at.toggleTop >= now.at.pill.bottom
+        near(now.at.railWidth, 48) &&
+        near(now.at.item, now.at.toggleMiddle?.[0])
       : near(now.at.workspace, 0)) &&
-    // The toggle is nessa's mark: in the footer's mark slot, right before
-    // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
     (rail === "off" ||
-      (now.at.slot && now.at.toggleMiddle
-        ? near(now.at.toggleMiddle[0], now.at.slot[0]) &&
-          near(now.at.toggleMiddle[1], now.at.slot[1])
-        : near(now.at.toggle, now.at.itemColumn)))
+      (near(now.at.toggle, now.at.itemColumn) &&
+        near(now.at.toggleBottom, now.at.windowBottom - now.at.itemColumn)))
   if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
   const now = await railLayout(page)
   failures.push(
@@ -3349,22 +3326,6 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
-    // One header per chat, in the titlebar's row — beside the session list,
-    // and with the panes alone at the window's edge.
-    await headersLand(run.page, "beside the session list", failures)
-    await run.page.keyboard.press(keys.toggleSessionList)
-    await waitFor(
-      async () =>
-        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 1,
-      5_000,
-    )
-    await headersLand(run.page, "with the panes alone", failures)
-    await run.page.keyboard.press(keys.toggleSessionList)
-    await waitFor(
-      async () =>
-        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 0,
-      5_000,
-    )
     if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
     await run.page.keyboard.press(keys.closePane)
@@ -3501,10 +3462,27 @@ const steps = {
         clients.push(await connectClient(run.stack.gateway, INSTANCE, "panel"))
       for (let n = 0; n < FRESH_BURST; n += 1)
         burst.push(startedBeside(run, clients[n % FRESH_CLIENTS], step, n, failures))
-      await run.page.keyboard.press(keys.newSession)
+      const tabs = run.page.getByRole("tablist", { name: "Open views" })
+      const previous = await tabs
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")
+      await run.page.getByRole("button", { name: /^New Tab/ }).click()
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
       await home.locator(css.field).fill(text)
+      const draft = await tabs
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")
+      if (previous) {
+        await tabs.locator(`[data-session-tab="${previous}"] [role="tab"]`).click()
+        await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
+        if ((await home.locator(css.field).inputValue()) !== text)
+          failures.push(
+            "switching workspace tabs lost the new conversation's first message",
+          )
+      }
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
         () => selectedStressConversation(run.page, text),
@@ -4577,107 +4555,6 @@ async function reportLine(run, report, failures) {
   if (!front)
     failures.push("pressing the report's pill did not bring its chat to the front")
   await openStressConversation(run.page, run.main.id, run.main.title)
-}
-
-/**
- * `oneHeaderPerChat` once the panes come to rest after a column folds or
- * opens: what it measures is read again until it holds, or the columns'
- * motion has had its time; what still fails then is the step's.
- */
-async function headersLand(page, when, failures) {
-  let last = []
-  await waitFor(async () => {
-    last = []
-    await oneHeaderPerChat(page, when, last)
-    return last.length === 0
-  }, 5_000)
-  failures.push(...last)
-}
-
-/**
- * The chats have no tabs (C1): no tab strip, and each pane has one header —
- * its name, menu and close — in the titlebar's row, none of it on the
- * window's controls (the cluster on the left, the panel's own on the
- * right), and its picture up to the window's top edge, behind them.
- */
-async function oneHeaderPerChat(page, when, failures) {
-  const state = await page.evaluate(
-    ({ titlebar, pane, header }) => {
-      const box = (e) => {
-        const b = e.getBoundingClientRect()
-        return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }
-      }
-      const shown = (e) => e.getClientRects().length > 0
-      return {
-        // Any tab list outside the right panel would be tabs for the chats.
-        strip: [...document.querySelectorAll('[role="tablist"]')].filter(
-          (list) => !list.closest("#workspace-panel"),
-        ).length,
-        bar: document.querySelector(titlebar).getBoundingClientRect().height,
-        controls: [
-          ...document.querySelectorAll(
-            `${titlebar} .workspace-titlebar-navigation button, ${titlebar} .workspace-titlebar-trailing button`,
-          ),
-        ]
-          .filter(shown)
-          .map(box),
-        panes: [...document.querySelectorAll(pane)].map((each) => ({
-          headers: [...each.querySelectorAll(header)].map((h) => ({
-            box: box(h),
-            parts: [...h.querySelectorAll("button, .workspace-pane-name")]
-              .filter(shown)
-              .map(box),
-          })),
-          box: box(each),
-          scroll: {
-            top: each.scrollTop,
-            left: each.scrollLeft,
-            height: each.scrollHeight,
-            viewport: each.clientHeight,
-            overflow: getComputedStyle(each).overflow,
-          },
-          picture: [...each.querySelectorAll(".desktop-header, .desktop-header-image")]
-            .filter(shown)
-            .map(box)[0],
-        })),
-      }
-    },
-    { titlebar: css.titlebar, pane: css.pane, header: css.paneHeader },
-  )
-  const overlaps = (a, b) =>
-    a.left < b.right - 1 &&
-    b.left < a.right - 1 &&
-    a.top < b.bottom - 1 &&
-    b.top < a.bottom - 1
-  if (state.strip) failures.push(`${when}: a tab strip is drawn for the chats`)
-  for (const [at, pane] of state.panes.entries()) {
-    const name = `${when}, pane ${at + 1}`
-    if (pane.scroll.top !== 0 || pane.scroll.left !== 0)
-      failures.push(`${name}: its root scrolled: ${JSON.stringify(pane.scroll)}`)
-    if (pane.headers.length !== 1) {
-      failures.push(`${name}: ${pane.headers.length} headers, not one`)
-      continue
-    }
-    const [header] = pane.headers
-    if (header.box.top < -1 || header.box.bottom > state.bar + 1)
-      failures.push(
-        `${name}: its header is not in the titlebar row: ${JSON.stringify({ header: header.box, pane: pane.box, scroll: pane.scroll })}`,
-      )
-    for (const part of header.parts)
-      for (const control of state.controls)
-        if (overlaps(part, control))
-          failures.push(
-            `${name}: its header sits on a window control: ${JSON.stringify({ part, control })}`,
-          )
-    if (
-      pane.picture &&
-      (pane.picture.top > 0.5 || pane.picture.left > pane.box.left + 0.5)
-    )
-      failures.push(
-        `${name}: its picture does not reach the window's top and its pane's left: ${JSON.stringify({ picture: pane.picture, pane: pane.box })}`,
-      )
-  }
-  return state
 }
 
 async function flatPanes(page, failures) {

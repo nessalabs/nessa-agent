@@ -44,7 +44,7 @@ export type StageMismatch = {
   readonly requested: string
 }
 
-/** Original source diagnostic, retained independently of recovery policy. */
+/** Specific failure detail from the source or a local preflight refusal. */
 export interface FailureDiagnostic {
   readonly message: string
   readonly code?: string

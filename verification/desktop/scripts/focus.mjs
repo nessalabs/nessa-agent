@@ -354,17 +354,18 @@ async function answerOnceInOverview(page) {
 }
 
 /**
- * One press answers one request on a pane's card: Allow Once by a held ↩,
- * with words typed and not sent, which the held key must not send; Deny and
- * Always Allow each by a double click.
+ * One press answers one request on a pane's card: a once choice by a held ↩,
+ * with words typed and not sent, which the held key must not send; deny and
+ * always choices each by a double click. Sample cards use different labels,
+ * so the choices are identified by their published data-answer attribute.
  */
 async function answerOnceOnCard(page) {
   const failures = []
   const trail = []
-  for (const [name, answer] of [
-    ["Allow Once, held ↩", "held"],
-    [names.denyOnce, "double"],
-    [names.alwaysAllow, "double"],
+  for (const [name, answer, choice] of [
+    ["Allow Once, held ↩", "held", "once"],
+    [names.denyOnce, "double", "deny"],
+    [names.alwaysAllow, "double", "always"],
   ]) {
     const before = await requestsNow(page)
     let card = null
@@ -379,32 +380,24 @@ async function answerOnceOnCard(page) {
     if (!card) throw new CannotRun("no sample session is still waiting on an approval")
     const composer = page.locator(`${css.focusedPane} ${css.field}`).first()
     await composer.fill("keep these words")
-    let choice = names.allowOnce
     if (answer === "held") {
       // The pick's caret lands in the composer a frame or two after it: let
       // it, then put the keyboard on Allow Once, and hold ↩ only once it is there.
       await settled(page)
       await frames(page, 3)
-      const allow = card.getByRole("button", { name: names.allowOnce })
+      const allow = card.locator('button[data-answer="once"]').first()
       await allow.focus()
       const onAllow = await until(
         page,
-        (name) => document.activeElement?.textContent?.trim() === name,
-        names.allowOnce,
+        (expected) => document.activeElement?.getAttribute("data-answer") === expected,
+        choice,
         1000,
       )
       if (!onAllow) throw new CannotRun("the keyboard would not stay on Allow Once")
       for (let i = 0; i < 5; i++) await page.keyboard.down(keys.enter)
       await page.keyboard.up(keys.enter)
     } else {
-      // Providers name their choices. The card marks the semantic answer so
-      // this check still exercises permanent allow when its caption differs.
-      const button =
-        name === names.alwaysAllow
-          ? card.locator(css.approvalAlways).first()
-          : card.getByRole("button", { name, exact: true })
-      choice = (await button.getAttribute("aria-label")) ?? (await button.innerText())
-      await button.dblclick()
+      await card.locator(`button[data-answer="${choice}"]:visible`).first().dblclick()
     }
     // Counted in the overview once the answer has had its effect, and for a
     // while after, in case a second one was taken.
@@ -1217,6 +1210,44 @@ async function boundKeys(page) {
   }
 }
 
+/** A document shortcut takes the caret from the old tab into its new pane. */
+async function tabShortcutFocus(page, layout) {
+  await need(page, css.composer, "a composer")
+  await hideColumns(page, layout)
+  const tabs = page.getByRole("tablist", { name: "Open views" })
+  const selected = () => tabs.locator('[role="tab"][aria-selected="true"]')
+  const trail = []
+  const failures = []
+  for (const [name, key] of [
+    ["New Session", keys.newSession],
+    ["Split Right", keys.newSessionBeside],
+  ]) {
+    const old = selected()
+    await old.focus()
+    const oldTab = await old.locator("..").getAttribute("data-session-tab")
+    const expected = expectedPaneFocus(
+      { keys: await order(page), ...(await state(page)) },
+      name === "Split Right" ? "new" : "same",
+    )
+    await page.keyboard.press(key)
+    const settlement = await paneFocusSettled(page, expected, 5_000)
+    const now = await state(page)
+    const problem = inComposer(now)
+    const oldSelected =
+      (await tabs
+        .locator(`[data-session-tab="${oldTab}"] [role="tab"]`)
+        .getAttribute("aria-selected")) === "true"
+    trail.push({ step: name, oldTab, oldSelected, settlement, ...now })
+    if (problem || oldSelected || !settlement.converged) {
+      const active = await page.evaluate(() =>
+        document.activeElement?.outerHTML.slice(0, 400),
+      )
+      failures.push(`${name}: ${problem ?? "focus did not settle"}; ${active}`)
+    }
+  }
+  return { trail, failures }
+}
+
 await main(meta, async ({ options, rep, url }) => {
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts) {
@@ -1326,6 +1357,14 @@ await main(meta, async ({ options, rep, url }) => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
           return await boundKeys(fresh.page)
+        } finally {
+          await fresh.close()
+        }
+      })
+      await attempt(rep, { name: "focus-tab-shortcuts", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          return await tabShortcutFocus(fresh.page, layout)
         } finally {
           await fresh.close()
         }

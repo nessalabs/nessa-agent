@@ -16,8 +16,8 @@ import {
 import { IconButton } from "../../../ui/icon-button"
 import "./side-rail.css"
 
-/** One 28px control on the sidebar's icon column (`--rail-column`, 18px), with as much on its other side. */
-export const SIDE_RAIL_WIDTH = 64
+/** One 28px control with the window's 10px control edge on each side. */
+export const SIDE_RAIL_WIDTH = 48
 
 export interface RailItem {
   readonly id: string

@@ -575,7 +575,6 @@ export interface WorkspaceWindowModel {
   panelWidth: number
   onTogglePanel: () => void
   onTogglePanelMaximized: () => void
-  onNewSession: () => void
   onPanelDragStart: () => void
   onPanelDragMove: (delta: number) => void
 }
@@ -623,7 +622,6 @@ export function useWorkspaceWindow({
   const dispatch = useWorkspaceDispatch()
   const onToggleSidebar = useCallback(() => dispatch(toggleSidebar()), [dispatch])
   const onToggleSessionList = useCallback(() => dispatch(toggleSessionList()), [dispatch])
-  const onNewSession = useCallback(() => dispatch(newSession()), [dispatch])
   const onRevealSidebar = useCallback(
     () => dispatch(toggleSidebar({ open: true })),
     [dispatch],
@@ -677,7 +675,6 @@ export function useWorkspaceWindow({
     panelWidth: chrome.panelWidth,
     onTogglePanel: chrome.togglePanel,
     onTogglePanelMaximized: chrome.toggleMaximized,
-    onNewSession,
     ...panelDrag,
     ...dragging,
   }

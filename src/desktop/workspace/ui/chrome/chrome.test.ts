@@ -44,7 +44,7 @@ it("keeps the below-titlebar action painted only while the folding row is held",
   const sidebarRule = [...(sheet.sheet?.cssRules ?? [])].find(
     (rule) => "selectorText" in rule && rule.selectorText === ".workspace-sidebar",
   ) as CSSStyleRule | undefined
-  expect(sidebarRule?.style.getPropertyValue("padding")).toMatch(
+  expect(sidebarRule?.style.getPropertyValue("padding-top")).toMatch(
     /^var\(--desktop-titlebar-height\)/,
   )
   for (const element of [bar, button, icon]) expect(visibility(element)).toBe("visible")

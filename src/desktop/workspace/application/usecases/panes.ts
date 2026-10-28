@@ -16,6 +16,7 @@ import {
   paneByKey,
   paneCount,
   removePane,
+  singlePane,
   showInPane,
   splitPane,
   equalizePanes as equalizeLayout,
@@ -45,7 +46,6 @@ import {
   channelOf,
   draftOf,
   keptDraftIn,
-  letGoOfDrafts,
   focusedChannel,
   itemIn,
   modelForNextTurn,
@@ -122,7 +122,8 @@ function openItem(
   { item, pane }: { item: PaneItem; pane?: PaneKey },
 ): WorkspaceState {
   const panes = state.panes
-  if (!panes || !showable(state, item)) return state
+  if (!showable(state, item)) return state
+  if (!panes) return withPanes(opened(state, item), singlePane(paneItemKey(item)))
   const next = showInPane(panes, pane ?? panes.focused, paneItemKey(item))
   if (next === panes && !paneShowingItem(panes, item)) return state
   return withPanes(opened(state, item), next)
@@ -324,7 +325,10 @@ export function createDraft(
 /** The channel a new session starts in: the one being looked at, else the focused session's. */
 function draftChannel(state: WorkspaceState): string | undefined {
   if (channelOf(state, state.view.channelId)) return state.view.channelId
-  return focusedChannel(state) ?? state.channels[0]?.id
+  const focused = focusedChannel(state)
+  return (
+    (focused && channelOf(state, focused) ? focused : undefined) ?? state.channels[0]?.id
+  )
 }
 
 /**
@@ -334,7 +338,7 @@ function draftChannel(state: WorkspaceState): string | undefined {
  * None when there is no channel or no model to start on — a new session
  * runs on a model, and with none, none starts.
  */
-function draftHome(
+export function draftHome(
   state: WorkspaceState,
   { channelId, model }: { channelId?: string; model?: ModelRef },
 ): { channelId: string; model: ModelRef } | undefined {
@@ -375,10 +379,11 @@ export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
 }
 
 /**
- * Closes a pane; its neighbour takes the room, and a draft in it is let go,
- * typed in or not. The last pane cannot close: it goes back to a new
- * session's home under `draftId` (`homeAfterLast`), in its conversation's
- * channel. Showing a home already, nothing changes (`canClosePane`).
+ * Closes a pane; its neighbour takes the room. A draft in the closed pane
+ * remains in its document tab until that tab is closed. The last pane cannot
+ * close: it goes back to a new session's home under `draftId`
+ * (`homeAfterLast`), in its conversation's channel. Showing a home already,
+ * nothing changes (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,
@@ -387,12 +392,7 @@ export function closePane(
   const panes = state.panes
   const shown = panes && paneByKey(panes, pane)
   if (!panes || !shown) return state
-  const item = itemIn(shown)
-  if (paneCount(panes) > 1)
-    return withPanes(
-      item?.kind === "session" ? letGoOfDrafts(state, [item.sessionId]) : state,
-      removePane(panes, pane),
-    )
+  if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
   const home = homeAfterLast(state, itemIn(shown))
   if (!home || !draftId) return state
   return createDraft(state, { draftId, ...home, target: pane })

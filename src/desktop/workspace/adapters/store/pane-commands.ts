@@ -258,3 +258,10 @@ export function openChannel({
     )
   }
 }
+
+/** Closing a document may leave the last pane on a fresh draft. */
+export function closeSessionTab({ sessionId }: { sessionId: string }): WorkspaceCommand {
+  return (dispatch, _getState, { newId }) => {
+    dispatch(workspaceActions.sessionTabClosed({ sessionId, draftId: newId() }))
+  }
+}

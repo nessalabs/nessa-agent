@@ -25,8 +25,7 @@
      cover too, so no strip of what lies beneath shows beside the sidebar. */
   left: calc(var(--desktop-gutter) + var(--workspace-sidebar-width));
   display: flex;
-  padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter)
-    var(--desktop-gutter);
+  padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter) 0;
   pointer-events: none;
 }
 

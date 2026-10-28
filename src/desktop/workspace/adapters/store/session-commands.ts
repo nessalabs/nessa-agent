@@ -24,10 +24,13 @@ import { knownToSource } from "../../model/revision"
 import {
   answerOf,
   answering,
+  channelOf,
+  draftOf,
   entry,
   modelForNextTurn,
   onScreen,
   sessionOf,
+  type WorkspaceState,
 } from "../../application/workspace-state"
 import { accessToStart } from "../../application/usecases/access"
 import type { WorkspaceCommand } from "./commands"
@@ -43,6 +46,14 @@ const {
   sendFailed,
 } = workspaceActions
 
+/** Local drafts and unconfirmed sessions still need a channel in the current index. */
+function hasCurrentHome(state: WorkspaceState, sessionId: string): boolean {
+  const draft = draftOf(state, sessionId)
+  const session = sessionOf(state, sessionId)
+  const local = draft ?? (session && !knownToSource(session) ? session : undefined)
+  return !local || Boolean(channelOf(state, local.channelId))
+}
+
 /**
  * Asks the source to take a message already in the outbox. While the source
  * has not spoken of the session — it began here, at revision 0 — the message
@@ -56,11 +67,24 @@ function deliver(
   initiator: Initiator,
 ): WorkspaceCommand<Promise<SendOutcome>> {
   return async (dispatch, getState, { workspace }) => {
-    const session = sessionOf(getState().workspace, sessionId)
+    const state = getState().workspace
+    const session = sessionOf(state, sessionId)
     if (!session) return "not-asked"
-    const access = knownToSource(session)
-      ? undefined
-      : accessToStart(getState().workspace, sessionId)
+    // The index may have removed a local session's channel while the model
+    // step yielded. Check at the effect boundary, not only at command entry.
+    if (!hasCurrentHome(state, sessionId)) {
+      dispatch(
+        sendFailed({
+          sessionId,
+          messageId: message.id,
+          reason: "unavailable",
+          model,
+          diagnostic: { message: "This channel is no longer available." },
+        }),
+      )
+      return "not-asked"
+    }
+    const access = knownToSource(session) ? undefined : accessToStart(state, sessionId)
     // Captured by this message: a pick after it is the newer word, not this one.
     if (access) dispatch(accessCaptured({ sessionId, mode: access }))
     try {
@@ -129,8 +153,14 @@ export function sendMessage({
 }): WorkspaceCommand<Promise<SendOutcome>> {
   return async (dispatch, getState, { now, newId }) => {
     const content = text.trim()
-    const model = modelForNextTurn(getState().workspace, sessionId)
-    if (!content || !model || modelChanging(getState().workspace, sessionId))
+    const state = getState().workspace
+    const model = modelForNextTurn(state, sessionId)
+    if (
+      !content ||
+      !model ||
+      !hasCurrentHome(state, sessionId) ||
+      modelChanging(state, sessionId)
+    )
       return "not-asked"
     const message: Message = {
       id: newId(),
@@ -192,7 +222,13 @@ export function resendMessage({
       (message) => message.id === messageId && message.delivery?.state === "failed",
     )
     const model = modelForNextTurn(state, sessionId)
-    if (!refused || !model || modelChanging(state, sessionId)) return "not-asked"
+    if (
+      !refused ||
+      !model ||
+      !hasCurrentHome(state, sessionId) ||
+      modelChanging(state, sessionId)
+    )
+      return "not-asked"
     dispatch(messageResent({ sessionId, messageId }))
     return dispatch(deliverOnStagedModel(sessionId, refused, model, initiator))
   }

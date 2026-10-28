@@ -180,13 +180,13 @@ describe("new sessions", () => {
     expect(drawn(state)).toEqual([["a"], ["new"]])
   })
 
-  it("lets a draft go once no pane shows it", () => {
+  it("keeps a draft document when its pane changes or closes", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const replaced = openSession(drafted, { sessionId: "c" })
-    expect(replaced.drafts).toEqual({})
+    expect(replaced.drafts.new).toBeDefined()
     const beside = createDraft(loaded(), { draftId: "new", beside: "right", room: roomy })
     const closed = closePane(beside, { pane: keyOf(beside, "new") })
-    expect(closed.drafts).toEqual({})
+    expect(closed.drafts.new).toBeDefined()
   })
 
   it("does not reuse an id already in use", () => {
@@ -226,11 +226,13 @@ describe("a draft with something typed in it", () => {
     expect(blank.composerText.new).toBe("half a thought")
   })
 
-  it("is let go with its pane's close", () => {
+  it("stays in its document tab after its pane closes", () => {
     const two = openBeside(typed(), { sessionId: "b", room: roomy })
     const closed = closePane(two, { pane: keyOf(two, "new") })
-    expect(closed.drafts).toEqual({})
-    expect(closed.composerText).toEqual({})
+    expect(closed.drafts.new).toBeDefined()
+    expect(closed.composerText.new).toBe("half a thought")
+    expect(closed.sessionTabs).toContain("new")
+    expect(drawn(openSession(closed, { sessionId: "new" }))).toEqual([["new"]])
   })
 })
 

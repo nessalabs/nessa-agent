@@ -336,8 +336,8 @@ Experimental turns it on; the rail stands beside the workspace in
 
 - [ ] **The panes are one flat surface, not cards.** The chat area reaches the
   window's top, right and bottom edges; no pane draws a fill, rim or shadow of
-  its own; a 1px hairline mid-gutter divides two panes, a column's from the
-  window's top to its bottom, a row's to the surface's side or the column's
+  its own; a 1px hairline mid-gutter divides two panes, a column's from below
+  the continuous window toolbar to the window's bottom, a row's to the surface's side or the column's
   hairline. Focus changes no pane's fill or elevation (the unfocused header
   dims). Both themes, beside and stacked. _Check:_ `columns.mjs --only pane-level`;
   `conversation-stress` step `window`.
@@ -356,27 +356,26 @@ Experimental turns it on; the rail stands beside the workspace in
   out first; rain, the lit layer, and steam lay out on the frame after.
   Drag previews must also retain content; verify
   these with the drag and focus checks when changing their motion.
-- [ ] **No two columns overlap**, and nothing sits under the rail, in any
+- [ ] **Content columns do not overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents
-  overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
+  overview, at 1440, 1000 and 760 wide. The overview covers the sidebar's
+  gutter to hide the underlying resize edge. _Check:_ `columns.mjs --only no-overlap`
   (Chromium and WebKit, both layouts).
-- [ ] **Each pane's header is the window's top row**: New Session is in the
-  window toolbar only in the layout without a session list (the session list's
-  head holds it otherwise); ⌘N still opens a new conversation; each pane's one
-  header sits in the toolbar's row; the frameless sidebar wash extends to the
-  window top.
+- [ ] **Conversation cards clear the window toolbar**: New Session
+  is absent from the window toolbar; ⌘N still opens a new conversation, and
+  conversation cards begin below the toolbar; the frameless sidebar wash
+  extends to the window top.
   Sidebar content clears the toolbar, with no card rim behind the traffic lights.
   Sidebar and session-list toggles are adjacent, followed by Back and Forward.
   The 48px rail starts its icons
-  below the controls on every host. The toggle stays at the bottom-left control
-  edge, including when both side columns are closed, and a folded rail has a
-  reserved slot beside "nessa Studio" in the
-  sidebar footer. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
+  below the controls on every host. The toggle keeps its bottom-left mark slot, including when both side
+  columns are closed, with "nessa Studio" beside it and centred on the same row. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
   ⌥⌘S change nothing behind it. Its opaque view covers the workspace cards and
   chat controls all the way to the top edge. One top sidebar toggle folds and
-  reopens the rail in Notes, Calendar, Browser and Files.
+  reopens the rail in Notes, Calendar, Browser and Files. The empty top bar
+  remains a native window drag surface.
   _Check:_ `columns.mjs --only rail-view-inert`.
 - [ ] **An item's view opens empty, and a slow load shows only text**: no
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
@@ -404,6 +403,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   Wait for the command's expected pane membership, destination, focus mark and
   composer together, with finite motion finished, within the existing 3 s
   settlement budget. The old pane's caret cannot complete a new-pane command.
+- [ ] **A document tab gives the caret to a new session** when ⌘N or ⇧⌘N
+  deselects it. Arrow selection keeps focus in the selected tab; a shortcut
+  must land in the new focused pane's composer after its finite motion.
+  _Check:_ `focus.mjs` (`focus-tab-shortcuts`) and
+  `src/desktop/workspace/adapters/dom/focus.test.tsx`.
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
@@ -766,7 +770,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   so; its destructive call waits on a review in the conversation's
   permissions, its origin the app, shown in the window, and the app shows
   the answer to the review's Allow and to its Deny (the card does not offer
-  Always Allow); closing the panel tab of a mount with a
+  Always Allow); the panel tab's close control remains clickable beneath the
+  window toolbar's empty drag strip, and closing a mount with a
   call waiting withdraws the review, the window's card for it goes once it is
   withdrawn, and the inline mount stays. _#349
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
@@ -1016,8 +1021,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **Any pane's menu chooses the header picture.** From a conversation
   pane's "…" menu, Choose Header Picture… opens the file dialog and the
   picture chosen shows in the panes' bands; a new session's home draws it from
-  its pane's top edge, behind the title row — in the window's corner with
-  nothing beside it too, behind the window's controls;
+  its pane's top edge, behind the pane title row — in the window's corner with
+  nothing beside it too, immediately below the continuous window toolbar;
   Use Night Scene, offered only with a picture, takes it back; a file that is
   not an image is refused with why, in that pane's header (issue #320).
   _Check:_ `responsive.mjs --only header-picture`, and `safe-area.mjs`.
@@ -2334,26 +2339,24 @@ logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
 
-### One header per chat; tabs only in the right panel
+### Conversation document tabs and the right panel (#1077)
 
-- `columns.mjs --only chat-layout` (Chromium and WebKit): with the side columns
-  folded and two panes side by side, rail open and closed, no tab strip is drawn
-  for the chats; each pane has one header in the titlebar's row, none of it on
-  the window's controls (the cluster on the left, the panel's toggle on the
-  right); each pane's picture reaches the window's top edge; and with the rail
-  closed the left pane's composer starts past the corner mark.
-- `widgets.mjs` and `subagents.mjs`: a card's Open adds a tab to its chat's
-  panel, never a pane, the caret in its body; Open in Window and Back to Panel;
-  Escape inside the panel steps back and never closes the tab; closing the last
-  tab hands the caret to the chat's composer.
-- `safe-area.mjs`: nothing but a header's picture is painted under the window's
-  controls.
-- The `window` conversation-stress step holds one header per chat in the
-  titlebar row and the picture to the top edge, beside the session list and
-  with the panes alone; the `panel` step holds the expanded panel to its own
-  tabs or note, with ⌘N docking it.
-- By hand: the traffic lights over the corner pane's picture on a Mac, windowed
-  and fullscreen.
+- `columns.mjs --only window-tabs,shell-chrome` (Chromium and WebKit) checks
+  document selection, closure, keyboard navigation, and the titlebar around
+  the right-panel controls at three widths in both layouts. Switching retains
+  unsent text and the neighboring split. Selecting an already visible document
+  focuses its pane. Home/End select and reveal tabs; Tab reaches the strip from
+  Agents and reaches Close Tab to dismiss a draft. At narrow widths, New Tab and
+  Split Right remain clickable.
+- `widgets.mjs` and `subagents.mjs` check that a widget opens as a tab inside
+  its chat's right panel, keeps its conversation document, and takes focus
+  into the widget body. Open in Window, Back to Panel, and Escape keep their
+  existing paths.
+- The `fresh` conversation-stress step switches document tabs before sending
+  a first message through the gateway. The `panel` step checks the expanded
+  right panel and ⌘N docking it before a new session opens.
+- By hand: inspect native traffic-light clearance and the panel controls with
+  the window both windowed and fullscreen.
 
 ### Pending action ownership (#1087)
 

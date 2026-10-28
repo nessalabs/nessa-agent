@@ -589,26 +589,28 @@ export async function hoverPeekEdge(page, y, within = css.workspace) {
  * What breaks the flat chat surface (`panes.css`), as it stands now: the
  * surface reaches the window's top, right and bottom and is filled; no pane
  * draws a fill or shadow of its own; each column hairline is 1px, mid-gutter
- * between two panes, from the window's top to its bottom; each row hairline
+ * between two panes, from below the window toolbar to its bottom; each row hairline
  * is 1px and ends at the surface's side, the window's edge or a column
  * hairline. Empty when it holds. Its own `::after` is read, so the computed
  * ends are the engine's, not this script's.
  */
 export function flatSurfaceFailures(page) {
   return page.evaluate(
-    ({ chat, pane, edge }) => {
+    ({ chat, pane, edge, titlebar }) => {
       const failures = []
       const near = (a, b) => Math.abs(a - b) <= 1
       const clear = "rgba(0, 0, 0, 0)"
       const surface = document.querySelector(chat)
       if (!surface) return ["no chat surface"]
       const s = surface.getBoundingClientRect()
+      const toolbarBottom =
+        document.querySelector(titlebar)?.getBoundingClientRect().bottom ?? s.top
       if (!near(s.top, 0) || !near(s.right, innerWidth) || !near(s.bottom, innerHeight))
         failures.push(
           `the surface stops short of the window: ${JSON.stringify(s.toJSON())} in ${innerWidth}x${innerHeight}`,
         )
-      // The surface is the window's own ground — clear, so the header art
-      // runs up to the window's top edge — never a card: no rim, no corner.
+      // The surface is the window's own ground — clear behind the toolbar —
+      // never a card: no rim, no corner.
       const surfaceStyle = getComputedStyle(surface)
       if (surfaceStyle.boxShadow !== "none" || parseFloat(surfaceStyle.borderRadius) > 0)
         failures.push(`the surface draws a card: ${surfaceStyle.boxShadow}`)
@@ -651,9 +653,9 @@ export function flatSurfaceFailures(page) {
           failures.push(`a ${l.axis} hairline is not drawn: ${JSON.stringify(l)}`)
       }
       for (const l of columns) {
-        if (!near(l.start, 0) || !near(l.end, innerHeight))
+        if (!near(l.start, toolbarBottom) || !near(l.end, innerHeight))
           failures.push(
-            `a column hairline runs ${l.start}…${l.end}, not the window's height`,
+            `a column hairline runs ${l.start}…${l.end}, not from the toolbar to the window's bottom`,
           )
         const before = panes.filter((p) => p.right <= l.middle)
         const after = panes.filter((p) => p.left >= l.middle)
@@ -706,6 +708,6 @@ export function flatSurfaceFailures(page) {
       }
       return failures
     },
-    { chat: css.chat, pane: css.pane, edge: css.paneEdge },
+    { chat: css.chat, pane: css.pane, edge: css.paneEdge, titlebar: css.titlebar },
   )
 }
