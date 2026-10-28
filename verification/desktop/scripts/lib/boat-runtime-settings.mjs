@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { waitFor } from "./gateway-stack.mjs"
 import { css, keys, names } from "./selectors.mjs"
+import { unlockRequestedVault } from "./vault.mjs"
 
 /** Settings › Connections › Accounts. Shared by runtime and subscription checks. */
 export async function openAccounts(page) {
@@ -38,6 +39,9 @@ export async function channelRuntimeSettings(run, channel, failures) {
     failures.push("invalid runtime choices changed the saved default")
   try {
     await openAccounts(page)
+    // Accounts also reads protected GitHub status. A prior listener restart
+    // seals the app lease; answer that independent request through the UI.
+    await unlockRequestedVault(client, page)
     const global = page.locator(css.boatRuntimeSettings)
     await global.locator("select").selectOption("14400")
     await global.getByRole("button", { name: "Save VM settings", exact: true }).click()

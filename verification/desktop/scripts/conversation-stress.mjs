@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { channelRuntimeSettings, openAccounts } from "./lib/boat-runtime-settings.mjs"
-import { unlockVault } from "./lib/vault.mjs"
+import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
 /**
  * The conversation stress check: a person using one conversation for many
  * rounds through the real gateway and the desktop window, with the scripted
@@ -2213,18 +2213,22 @@ const steps = {
         await run.page.mouse.move(1, 1)
         if (!(await shows(false)))
           failures.push("the actions still show once the pointer leaves")
-        // Both actions are in the tab order: Shift+Tab from Disconnect reaches
-        // Choose repositories, and Tab goes back.
+        // Both actions are in the control tab order: the engine's backward
+        // chord reaches Choose repositories, and its forward chord returns.
         const disconnect = row.getByRole("button", { name: names.githubDisconnect })
         const focused = (locator) =>
           locator.evaluate((node) => node === document.activeElement)
         await disconnect.focus()
-        await run.page.keyboard.press("Shift+Tab")
+        await run.page.keyboard.press(`Shift+${keys.nextControl[run.engine]}`)
         if (!(await focused(row.locator("[data-github-repositories]"))))
-          failures.push("Shift+Tab from Disconnect did not reach Choose repositories")
-        await run.page.keyboard.press("Tab")
+          failures.push(
+            "backward control navigation from Disconnect did not reach Choose repositories",
+          )
+        await run.page.keyboard.press(keys.nextControl[run.engine])
         if (!(await focused(disconnect)))
-          failures.push("Tab from Choose repositories did not reach Disconnect")
+          failures.push(
+            "forward control navigation from Choose repositories did not reach Disconnect",
+          )
         if (!(await shows(true)))
           failures.push("the actions did not show with focus in the row")
         await shot("connected-focus")
@@ -2394,7 +2398,7 @@ const steps = {
         failures.push("the startup screen covers the window after the gateway was up")
         return
       }
-      await unlockReloadedVault(run, page)
+      await unlockRequestedVault(run.client, page)
       await openStressConversation(page, run.main.id, run.main.title)
     })
     if (failures.length === 0) await steps.reply(run, step, failures)
@@ -2739,7 +2743,8 @@ const steps = {
         await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
         await openedAsAGlow(page, failures)
         await welcomedAtOnce(page, failures)
-        await page.screenshot({ path: join(run.evidence, "onboarding-welcome.png") })
+        if (run.evidence)
+          await page.screenshot({ path: join(run.evidence, "onboarding-welcome.png") })
         // Welcome has nothing before it: no Back, and Close in its corner.
         await button(names.setup.close).waitFor()
         let corners = await setupCorners(page)
@@ -2772,7 +2777,8 @@ const steps = {
         await button(names.setup.getStarted).click()
         await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
         await pickerOffers(page, failures)
-        await page.screenshot({ path: join(run.evidence, "onboarding-picker.png") })
+        if (run.evidence)
+          await page.screenshot({ path: join(run.evidence, "onboarding-picker.png") })
         // Close leaves setup from the picker: one handoff, as left.
         await button(names.setup.close).click()
         const handed = await waitFor(
@@ -3017,26 +3023,32 @@ const steps = {
         // The gateway stops and starts again; cloudflared does not.
         await run.exclusive(() =>
           run.restartConsole.during(run.opened, async () => {
+            const before = failures.length
             const old = run.client
             run.restarts += 1
             await run.stack.gateway.restart("SIGTERM")
             old.close()
             run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+            const again = await waitFor(async () => {
+              const read = await run.client.pairing.tunnel()
+              return read.status === "ready" ? read : null
+            }, 60_000)
+            if (again?.address !== address)
+              failures.push(
+                `after a restart the tunnel is at ${again?.address}, not ${address}`,
+              )
+            const after = keptTunnel(directory)
+            if (after?.pid !== kept.pid || !alive(kept.pid))
+              failures.push(
+                `the restarted gateway did not take cloudflared ${kept.pid} back: ${JSON.stringify(after)}`,
+              )
+            if (!(await run.restartConsole.readable(10_000)))
+              failures.push(
+                "the window did not regain a readable session after tunnel restart",
+              )
+            return failures.length === before
           }),
         )
-        const again = await waitFor(async () => {
-          const read = await run.client.pairing.tunnel()
-          return read.status === "ready" ? read : null
-        }, 60_000)
-        if (again?.address !== address)
-          failures.push(
-            `after a restart the tunnel is at ${again?.address}, not ${address}`,
-          )
-        const after = keptTunnel(directory)
-        if (after?.pid !== kept.pid || !alive(kept.pid))
-          failures.push(
-            `the restarted gateway did not take cloudflared ${kept.pid} back: ${JSON.stringify(after)}`,
-          )
         if (failures.length) return
         // A paired machine that cannot reach the gateway directly dials it
         // through the tunnel.
@@ -3555,7 +3567,7 @@ const steps = {
       )
       return
     }
-    await unlockReloadedVault(run, run.page)
+    await unlockRequestedVault(run.client, run.page)
     await openStressConversation(run.page, run.main.id, run.main.title)
     const { permissionTargets } = await import("@nessa/client")
     const view = await readWithReviews(run.client, conversationId)
@@ -4658,17 +4670,6 @@ async function replayOnboarding(page, evidence) {
   return asked
 }
 
-/** A prior gateway restart seals the app's lease. A reloaded window asks
- * again; answer through the UI before the next ordinary click, as a person does.
- * The backend state, not an early isVisible snapshot, decides whether to wait. */
-async function unlockReloadedVault(run, page) {
-  if ((await run.client.vault.status()).state !== "locked") return
-  await page.locator('[data-vault-dialog="unlock"]').waitFor()
-  await unlockVault(page)
-  if ((await run.client.vault.status()).state !== "unlocked")
-    throw new Error("Reloaded window did not unlock its vault")
-}
-
 /** The menu-bar panel as the host opens it, over the run's gateway. */
 async function panelWindow(run) {
   const page = await run.page.context().newPage()
@@ -4826,7 +4827,7 @@ async function summonedWithoutARing(page, failures, evidence) {
   await page.evaluate(() => window.__fakeHostEmit("nessa://summoned", true))
   // Where a ring would be, just after the press.
   await page.waitForTimeout(300)
-  await page.screenshot({ path: join(evidence, "onboarding-summoned.png") })
+  if (evidence) await page.screenshot({ path: join(evidence, "onboarding-summoned.png") })
   await page.evaluate(() => window.__fakeHostEmit("nessa://summoned", false))
   const taught = await waitFor(
     async () =>
@@ -5057,7 +5058,8 @@ async function downloadCard(page, installer, evidence, failures) {
     exact: true,
   })
   const shown = await waitFor(async () => (await download.count()) === 1, 15_000)
-  await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
+  if (evidence)
+    await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
   if (!shown) {
     failures.push("Codex, not installed but offered, is not shown as a download card")
     return
