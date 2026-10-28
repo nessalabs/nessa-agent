@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: "72f9ac1c986d7abebda55a4ae6a9603c960a377d"
+sourceRevision: "5b2bd93bc5eb0c983614329f0ba8e602ba83d095"
 summary: A channel independently places its main agent and new threads on Local or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
