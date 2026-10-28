@@ -175,6 +175,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
     if let Some(terms) = terms {
         view.environment = Some(match &terms.environment {
             EnvironmentRef::Here => ConversationLeaseEnvironment::Here,
+            EnvironmentRef::Boat => ConversationLeaseEnvironment::Boat,
             EnvironmentRef::Ssh(host) => {
                 view.host = Some(host.as_str().to_owned());
                 ConversationLeaseEnvironment::Ssh

@@ -175,6 +175,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn request(folder: Option<&str>) -> ChannelRequest {
     ChannelRequest {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder: folder.map(path),
         defaults: ChannelDefaults {

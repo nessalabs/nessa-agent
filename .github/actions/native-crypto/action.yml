@@ -1,0 +1,14 @@
+name: Native cryptography build prerequisites
+description: Select complete native Perl for vendored OpenSSL on Windows.
+runs:
+  using: composite
+  steps:
+    - uses: shogo82148/actions-setup-perl@3b59bd33efdae98406a9bc4b75a4aa041e11993a
+      with:
+        perl-version: '5.40'
+    - shell: pwsh
+      run: |
+        $taskPerl = (Get-Command perl -ErrorAction Stop).Source
+        & $taskPerl -MLocale::Maketext::Simple -MIPC::Cmd -e 'print "Complete Perl verified\n"'
+        if ($LASTEXITCODE -ne 0) { throw "Incomplete Perl cannot build vendored OpenSSL" }
+        "OPENSSL_SRC_PERL=$taskPerl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

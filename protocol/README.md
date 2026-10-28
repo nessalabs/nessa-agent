@@ -13,6 +13,7 @@ HTTP `/health` reports process liveness only.
 | [schemas/v1/](schemas/v1/) | Shared payloads, frames, and shortcut documents |
 | [defaults/](defaults/) | Bundled shortcut defaults, the stage → gateway port table, and the Nessa GitHub App (`github-app.json`) |
 | [fixtures/v1/](fixtures/v1/) | Validated shared wire examples |
+| [fixtures/github-relay-gap.json](fixtures/github-relay-gap.json) | Retention-gap receipt shared by Worker and native HTTP-to-inbox contract tests |
 
 ```sh
 pnpm protocol:generate

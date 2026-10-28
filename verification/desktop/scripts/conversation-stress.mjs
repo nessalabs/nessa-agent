@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { unlockVault } from "./lib/vault.mjs"
 /**
  * The conversation stress check: a person using one conversation for many
  * rounds through the real gateway and the desktop window, with the scripted
@@ -268,6 +269,7 @@ import {
   FAKE_AVATAR,
   GITHUB_AVATARS,
   startFakeGithub,
+  disposableGithubEnvironment,
 } from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
@@ -1433,6 +1435,21 @@ async function makeChannel(
   } else {
     await flow.getByRole("button", { name: "Make one for me" }).click()
   }
+  if (!(await asking("placement"))) return null
+  // Both choices must remain independent, and Local must not allocate a VM.
+  const coordinatorLocation = flow.getByLabel("Main agent location")
+  const workerLocation = flow.getByLabel("New threads location")
+  await coordinatorLocation.selectOption("boat")
+  if ((await workerLocation.inputValue()) !== "local")
+    failures.push("changing coordinator placement also changed worker placement")
+  await coordinatorLocation.selectOption("local")
+  await workerLocation.selectOption("boat")
+  if ((await coordinatorLocation.inputValue()) !== "local")
+    failures.push("changing worker placement also changed coordinator placement")
+  await workerLocation.selectOption("local")
+  await photograph(`${name}-3-placement`)
+  await flow.locator(".new-channel-placement").focus()
+  await page.keyboard.press(keys.enter)
   if (!(await asking("model"))) return null
   await photograph(`${name}-3-model`)
   await page.keyboard.press(keys.enter)
@@ -1488,6 +1505,15 @@ async function makeChannel(
   const { channels } = await run.client.channels.list()
   const listed = channels.find((channel) => channel.name === name)
   if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  if (
+    listed &&
+    (listed.coordinatorPlacement !== "local" ||
+      listed.threadPlacement !== "local" ||
+      !listed.coordinatorConversationId)
+  )
+    failures.push(
+      `the channel ${name} did not retain its Local placements and main identity`,
+    )
   return listed ?? null
 }
 
@@ -2158,13 +2184,22 @@ const steps = {
     // Answered until the step ends: its Disconnect reopens the signed-in row.
     try {
       await run.exclusive(async () => {
+        const needsUnlock = (await run.client.vault.status()).state === "locked"
         await openAccounts(run.page)
+        if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+        await unlockVault(run.page, {
+          screenshot: run.evidence
+            ? join(run.evidence, `vault-unlock-settings-${run.engine}.png`)
+            : undefined,
+          expectedContainer: "[data-settings-layers]",
+        })
         if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
           failures.push(`GitHub was ${await state()} before Connect`)
           return
         }
         await shot("signed-out")
         await row.getByRole("button", { name: names.githubConnect }).click()
+        await unlockVault(run.page)
         const code = row.locator("[data-github-code]")
         const shown = await waitFor(
           async () =>
@@ -2268,11 +2303,12 @@ const steps = {
         await closeSettings(run.page)
       })
       if (failures.length) return
-      if (!existsSync(signIn)) failures.push("the sign-in was not saved")
-      else if ((lstatSync(signIn).mode & 0o077) !== 0)
-        failures.push(
-          `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
-        )
+      if (existsSync(signIn)) failures.push("GitHub sign-in leaked into a plaintext file")
+      // A preceding restart replaces run.client; stack.client still names the
+      // original closed session. Read through this run's current connection.
+      const persisted = await run.client.github.status()
+      if (persisted.state !== "connected")
+        failures.push("the OS-held sign-in is unavailable")
       if (run.stack.gateway.log().includes(github.token))
         failures.push("the gateway logged the GitHub token")
       // An agent opened now is started with the sign-in, for gh and for git.
@@ -2423,6 +2459,7 @@ const steps = {
         failures.push("the startup screen covers the window after the gateway was up")
         return
       }
+      await unlockReloadedVault(run, page)
       await openStressConversation(page, run.main.id, run.main.title)
     })
     if (failures.length === 0) await steps.reply(run, step, failures)
@@ -3582,6 +3619,7 @@ const steps = {
       )
       return
     }
+    await unlockReloadedVault(run, run.page)
     await openStressConversation(run.page, run.main.id, run.main.title)
     const { permissionTargets } = await import("@nessa/client")
     const view = await readWithReviews(run.client, conversationId)
@@ -4720,6 +4758,17 @@ async function replayOnboarding(page, evidence) {
   return asked
 }
 
+/** A prior gateway restart seals the app's lease. A reloaded window asks
+ * again; answer through the UI before the next ordinary click, as a person does.
+ * The backend state, not an early isVisible snapshot, decides whether to wait. */
+async function unlockReloadedVault(run, page) {
+  if ((await run.client.vault.status()).state !== "locked") return
+  await page.locator('[data-vault-dialog="unlock"]').waitFor()
+  await unlockVault(page)
+  if ((await run.client.vault.status()).state !== "unlocked")
+    throw new Error("Reloaded window did not unlock its vault")
+}
+
 /** The menu-bar panel as the host opens it, over the run's gateway. */
 async function panelWindow(run) {
   const page = await run.page.context().newPage()
@@ -4757,6 +4806,7 @@ async function panelNamed(page, title, failures) {
 async function setupWindow(run, prepare) {
   const page = await run.page.context().newPage()
   // Before the page loads, so nothing it asks on its first frames gets past.
+  await run.stack.vault.install(page)
   await prepare?.(page)
   await page.addInitScript(gatewayHost, {
     endpoint: run.stack.endpoint,
@@ -4800,6 +4850,8 @@ async function setupWindow(run, prepare) {
     }
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
+  await page.locator(".nessa-setup-window").waitFor()
+  await unlockVault(page)
   return page
 }
 
@@ -5970,7 +6022,10 @@ async function startStack(options) {
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
   const environment = {
     ...(github
-      ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
+      ? {
+          ...disposableGithubEnvironment(),
+          NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")),
+        }
       : {}),
     // The `tunnel` step's cloudflared (debug builds only).
     NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
@@ -5978,6 +6033,7 @@ async function startStack(options) {
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
+      vault: true,
       environment,
       servers,
       as: "panel",
@@ -6033,6 +6089,7 @@ await main(
       let restartConsole
       const opened = await openPage(browser, {
         preparePage: async (page) => {
+          await stack.vault.install(page)
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
         },
         url: `${origin}/desktop.html`,

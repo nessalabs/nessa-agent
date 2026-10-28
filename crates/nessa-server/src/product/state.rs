@@ -188,6 +188,11 @@ pub struct ProductRouteState {
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// Shared vault; each socket attaches a distinct non-owning lease.
+    pub(crate) vault: Option<Arc<super::VaultRoutes>>,
+    #[cfg(unix)]
+    pub(crate) workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
+    pub(crate) vault_lease: Option<nessa_vault::application::Lease>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -325,6 +330,10 @@ impl ProductRouteState {
             native_linking: None,
             tunnel: None,
             github: None,
+            vault: None,
+            vault_lease: None,
+            #[cfg(unix)]
+            workspaces: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -415,6 +424,21 @@ impl ProductRouteState {
     /// Register what turns native linking on or off from Settings.
     pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
         self.native_linking = Some(linking);
+        self
+    }
+
+    /// Register channel workspace allocation.
+    #[cfg(unix)]
+    pub(crate) fn with_workspaces(
+        mut self,
+        workspaces: Arc<crate::workspaces::application::Workspaces>,
+    ) -> Self {
+        self.workspaces = Some(workspaces);
+        self
+    }
+    /// Register the reusable vault independently of provider configuration.
+    pub fn with_vault(mut self, vault: Arc<super::VaultRoutes>) -> Self {
+        self.vault = Some(vault);
         self
     }
 

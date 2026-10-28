@@ -30,7 +30,9 @@ export function conversationLeaseStatus(
         // The environment no longer held it: a host's connection went away,
         // or this gateway started again.
         case "lost":
-          return lease.environment === "ssh" || lease.environment === "peer"
+          return lease.environment === "ssh" ||
+            lease.environment === "peer" ||
+            lease.environment === "boat"
             ? "Ended when the connection to its host was lost"
             : "Ended when Nessa restarted"
         case "stopped":
@@ -91,6 +93,7 @@ const PEER = "peer:"
  * read alike.
  */
 export function environmentPlace(name: string): string {
+  if (name === "boat:thread") return "Boat workspace"
   return isPairedEnvironment(name)
     ? `Paired machine ${name.slice(PEER.length, PEER.length + 8)}`
     : name
@@ -110,6 +113,8 @@ export function conversationLeasePlace(
   lease: Pick<ConversationLease, "environment" | "host">,
 ): string | undefined {
   switch (lease.environment) {
+    case "boat":
+      return "Boat workspace"
     case "here":
       return "This computer"
     case "ssh":

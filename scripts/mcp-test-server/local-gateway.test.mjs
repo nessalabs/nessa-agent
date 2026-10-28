@@ -23,7 +23,13 @@ import { dirname, join } from "node:path"
 import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { SERVER, repoRoot, startLocalGateway, toolPrompt } from "./local-gateway.mjs"
+import {
+  SERVER,
+  repoRoot,
+  startLocalGateway,
+  toolPrompt,
+  signedOutEnvironment,
+} from "./local-gateway.mjs"
 
 const scratch = mkdtempSync(join(tmpdir(), "nessa-local-gateway-test-"))
 after(() => rmSync(scratch, { recursive: true, force: true }))
@@ -274,13 +280,40 @@ test("a signed-out gateway is started with no credential and a home of its own",
   assert.deepEqual(
     names.filter(
       (name) =>
-        !["PATH", "HOME", "TMPDIR", "RUST_LOG", "ANTHROPIC_API_KEY"].includes(name),
+        ![
+          "PATH",
+          "HOME",
+          "TMPDIR",
+          "RUST_LOG",
+          "ANTHROPIC_API_KEY",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "XDG_RUNTIME_DIR",
+        ].includes(name),
     ),
     [],
   )
   // Not signed out, it is this process's environment.
   const live = await seen({})
   for (const name of planted) assert.equal(live.env[name], "planted", name)
+})
+
+test("signed-out gateways retain only the scoped OS-service addresses", (t) => {
+  const keys = ["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "OPENAI_API_KEY"]
+  const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  t.after(() => {
+    for (const key of keys) {
+      if (original[key] === undefined) delete process.env[key]
+      else process.env[key] = original[key]
+    }
+  })
+  process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/tmp/disposable-session-bus"
+  process.env.XDG_RUNTIME_DIR = "/tmp/disposable-runtime"
+  process.env.OPENAI_API_KEY = "planted-provider-credential"
+  const env = signedOutEnvironment("/tmp/disposable-gateway", null)
+  assert.equal(env.DBUS_SESSION_BUS_ADDRESS, process.env.DBUS_SESSION_BUS_ADDRESS)
+  assert.equal(env.XDG_RUNTIME_DIR, process.env.XDG_RUNTIME_DIR)
+  assert.equal(env.OPENAI_API_KEY, undefined)
+  assert.equal(env.HOME, "/tmp/disposable-gateway/home")
 })
 
 /** The live Codex turn asked with `toolPrompt`'s single-tool wording (#500). */

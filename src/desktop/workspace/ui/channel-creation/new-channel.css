@@ -348,6 +348,38 @@
   min-inline-size: 0;
 }
 
+.new-channel-placement {
+  display: grid;
+  gap: 14px;
+  max-width: 420px;
+  padding: 12px 0;
+}
+.new-channel-placement label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+}
+.new-channel-placement select {
+  min-width: 120px;
+  padding: 7px 10px;
+  border: 1px solid var(--desktop-hairline);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+.new-channel-placement select:focus-visible {
+  outline: var(--nessa-focus-outline-width) solid var(--ring);
+  outline-offset: var(--nessa-focus-outline-offset);
+}
+.new-channel-placement p {
+  margin: 0;
+  color: var(--desktop-faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /*
  * The drop target: while files are dragged over the window as it asks for
  * them, the whole flow takes them. A dashed rim inside its edge and one

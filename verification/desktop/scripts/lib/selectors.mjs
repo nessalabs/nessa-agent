@@ -304,6 +304,8 @@ export const css = {
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  githubLive: "[data-github-live]",
+  githubLiveHelp: "[data-github-live] button[popovertarget]",
   github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
   githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
   githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus

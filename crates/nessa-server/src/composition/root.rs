@@ -95,9 +95,23 @@ impl CompositionRoot {
                 credential_file,
                 ttl_seconds,
             } => super::cli::online(true, credential_file, ttl_seconds),
+            Command::VaultSession => super::vault_session::serve(),
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
             Command::Limits => print_limits(),
+            Command::GithubConnect {
+                repository,
+                accept_gap,
+                passphrase_stdin,
+            } => super::github_relay::connect(repository, accept_gap, passphrase_stdin).await,
+            Command::GithubEvents {
+                repository,
+                passphrase_stdin,
+            } => super::github_relay::events(repository, passphrase_stdin).await,
+            Command::GithubDisconnect {
+                repository,
+                passphrase_stdin,
+            } => super::github_relay::disconnect(repository, passphrase_stdin).await,
             Command::EnvProtocol => {
                 writeln!(std::io::stdout(), "{}", crate::env::LEASE_PROTOCOL)?;
                 Ok(())
@@ -361,6 +375,11 @@ impl CompositionRoot {
         .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?
         .map_err(RunError::Serve)?;
 
+        let _github_relay = product
+            .github
+            .as_ref()
+            .and_then(|github| github.live.clone())
+            .and_then(|live| super::github_relay::start(&config, live));
         let shutdown_product = product.clone();
         let mut router = http::router(product).layer(Extension(endpoint_identity));
         if let Some(identity) = &desktop_identity {

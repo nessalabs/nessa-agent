@@ -146,7 +146,7 @@ async fn paired_lists_start_empty_without_grants() {
 async fn paired_lists_keep_channel_ids_without_widening_their_scope() {
     use crate::conversation::application::ChannelStore;
     use crate::conversation::domain::{
-        Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes,
+        Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName, ChannelNotes,
         ChannelParts, ChannelPath, ChannelResources,
     };
     use crate::conversation::infrastructure::{LocalChannelFolders, LocalChannelStore};
@@ -186,6 +186,7 @@ async fn paired_lists_keep_channel_ids_without_widening_their_scope() {
                             model: ConversationModelId::new("test").unwrap(),
                             mode: ConversationApprovalMode::Ask,
                         },
+                        execution: ChannelExecution::default(),
                         notes: ChannelNotes::new("").unwrap(),
                         resources: ChannelResources::new(Vec::new()).unwrap(),
                     },

@@ -58,6 +58,7 @@ fn stored(n: u8, notes: &str) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         crate::conversation::domain::ChannelParts {
+            execution: crate::conversation::domain::ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{n}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/data/channels/{n}"))))
@@ -93,7 +94,8 @@ fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
         json!({
             "channelId": "default", "name": "Conversations", "folder": absolute("/work/default"),
             "folderMade": false, "agent": null, "model": null, "approvalMode": "ask",
-            "createdAtMs": 0
+            "createdAtMs": 0,
+            "coordinatorPlacement": "local", "threadPlacement": "local", "coordinatorConversationId": null
         })
     );
     assert_eq!(wire["channels"][1]["agent"], "claude");
@@ -121,6 +123,7 @@ fn long(index: u16) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         crate::conversation::domain::ChannelParts {
+            execution: crate::conversation::domain::ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{index}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/{}", "f".repeat(4000)))))

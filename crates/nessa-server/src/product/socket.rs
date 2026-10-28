@@ -911,10 +911,15 @@ type RefreshCheck<'a> = Pin<
     >,
 >;
 
-async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
-where
+async fn run_authenticated<S>(
+    socket: S,
+    mut state: ProductRouteState,
+    session: AuthenticatedSession,
+) where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
+    // This guard belongs to the connection loop, never a cloned request state.
+    let mut vault_session = super::vault::ConnectionVault::attach(&mut state, &session);
     let (sink, mut incoming) = socket.split();
     // The socket's one event numbering, continued by its subscription frames
     // and its review notices in the order the writer sends them.
@@ -1402,6 +1407,9 @@ where
             app_calls.push(task.abort_handle());
         }
         requests.push(task);
+    }
+    if let Some(owner) = vault_session.as_mut() {
+        owner.close();
     }
     // Dropping the slot unsent lets the writer finish once the lanes drain.
     match close {
@@ -1967,6 +1975,8 @@ async fn dispatch_authorized(
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
+        method if method.starts_with("boat.") => super::boat::dispatch(state, frame).await,
+        method if method.starts_with("vault.") => super::vault::dispatch(state, frame).await,
         method if method.starts_with("github.") => {
             super::github::dispatch(state, session, frame).await
         }
@@ -2726,6 +2736,9 @@ mod tests {
     }
     mod review_notice_audit {
         include!("../../tests/product/socket/review_notice_audit.rs");
+    }
+    mod vault_tests {
+        include!("../../tests/product/socket/vault.rs");
     }
     pub(super) mod host_fixture {
         include!("../../tests/product/socket/host_fixture.rs");

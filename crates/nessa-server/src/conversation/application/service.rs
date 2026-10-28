@@ -1660,10 +1660,23 @@ impl ConversationService {
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
+        let channel_environment = channel.as_ref().and_then(|channel| {
+            match if id == channel.coordinator_id() {
+                channel.execution().coordinator
+            } else {
+                channel.execution().threads
+            } {
+                crate::conversation::domain::WorkspacePlacement::Local => None,
+                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
+            }
+        });
         service
             .inner
             .environment
-            .place(&id, requested.environment.as_deref())
+            .place(
+                &id,
+                requested.environment.as_deref().or(channel_environment),
+            )
             .await?;
         service.place_in_channel(&id, channel.as_ref()).await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
@@ -5892,7 +5905,14 @@ impl ConversationService {
                 }
             }
             self.forget_thread_reports_of(&id).await;
-            self.forget_channel_of(&id).await;
+            // Retiring a channel main publishes its replacement. That transition
+            // requires confirmed history erasure and participates in deletion
+            // retries; a failed channel commit must not finish the tombstone.
+            if failures.history.is_none() && !failures.history_leased_elsewhere {
+                if let Err(error) = self.forget_channel_of(&id).await {
+                    failures.summary.get_or_insert(error);
+                }
+            }
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);

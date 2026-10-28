@@ -1,0 +1,516 @@
+{
+  "sourceRevision": "34a6c508da0285108bcab82012c8da97487e5f71",
+  "command": "pnpm test:e2e:scripted -- --channel bundled --evidence /tmp/nessa-github-relay-scripted",
+  "mode": "dev",
+  "engines": ["chromium", "webkit"],
+  "verdict": "pass",
+  "checks": {
+    "resize-observers": {
+      "ok": true,
+      "results": [
+        {
+          "name": "fit-after-delivery",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "viewportChanges": 30,
+          "nativeErrorCount": 0
+        },
+        {
+          "name": "fit-after-delivery",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "sidebar",
+          "viewportChanges": 30,
+          "nativeErrorCount": 0
+        },
+        {
+          "name": "fit-after-delivery",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "viewportChanges": 30,
+          "nativeErrorCount": 0
+        },
+        {
+          "name": "fit-after-delivery",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "sidebar",
+          "viewportChanges": 30,
+          "nativeErrorCount": 0
+        }
+      ]
+    },
+    "mcp-apps-gateway": {
+      "ok": true,
+      "results": [
+        {
+          "name": "setup",
+          "ok": true,
+          "timings": {
+            "gatewayMs": 3934,
+            "devServerMs": 2358,
+            "agentTurnMs": 1205
+          }
+        },
+        {
+          "name": "renders",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "cards": 1,
+            "frames": 1
+          }
+        },
+        {
+          "name": "hidden",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "allow",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "review": {
+              "arrivedMs": 20
+            }
+          }
+        },
+        {
+          "name": "deny",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "review": {
+              "arrivedMs": 256
+            }
+          }
+        },
+        {
+          "name": "release",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "pointerMoves": 1,
+            "withdrawn": true,
+            "withdrawnMs": 123,
+            "cardGone": true,
+            "cardGoneAfterWithdrawnMs": 1,
+            "paneLive": true
+          }
+        },
+        {
+          "name": "message",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "pointerMoves": 1,
+            "inputStarted": true,
+            "allowed": true,
+            "arrived": 1
+          }
+        },
+        {
+          "name": "context",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "console",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "renders",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "cards": 1,
+            "frames": 1
+          }
+        },
+        {
+          "name": "hidden",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns"
+        },
+        {
+          "name": "allow",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "review": {
+              "arrivedMs": 5
+            }
+          }
+        },
+        {
+          "name": "deny",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "review": {
+              "arrivedMs": 264
+            }
+          }
+        },
+        {
+          "name": "release",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "pointerMoves": 1,
+            "withdrawn": true,
+            "withdrawnMs": 75,
+            "cardGone": true,
+            "cardGoneAfterWithdrawnMs": 24,
+            "paneLive": true
+          }
+        },
+        {
+          "name": "message",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "pointerMoves": 1,
+            "inputStarted": true,
+            "allowed": true,
+            "arrived": 1
+          }
+        },
+        {
+          "name": "context",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns"
+        }
+      ]
+    },
+    "gateway-window": {
+      "ok": true,
+      "results": [
+        {
+          "name": "setup",
+          "ok": true,
+          "timings": {
+            "gatewayMs": 306,
+            "devServerMs": 2300,
+            "agentTurnMs": 1200
+          }
+        },
+        {
+          "name": "handshake",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": [
+            {
+              "answer": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        {
+          "name": "lists",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "listed": true,
+            "sample": 0,
+            "asked": {
+              "load_gateway_endpoint": 1,
+              "load_surface_credential": 1
+            }
+          }
+        },
+        {
+          "name": "opens",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "messages": [
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "live",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "before": 2,
+            "messages": [
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              }
+            ],
+            "reloaded": false
+          }
+        },
+        {
+          "name": "apps",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": {
+            "frames": 1
+          }
+        },
+        {
+          "name": "handshakes",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns",
+          "observedMetrics": [
+            {
+              "answer": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        {
+          "name": "console",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "handshake",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": [
+            {
+              "answer": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        {
+          "name": "lists",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "listed": true,
+            "sample": 0,
+            "asked": {
+              "load_gateway_endpoint": 1,
+              "load_surface_credential": 1
+            }
+          }
+        },
+        {
+          "name": "opens",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "messages": [
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "live",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "before": 4,
+            "messages": [
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              },
+              {
+                "inside": true
+              }
+            ],
+            "reloaded": false
+          }
+        },
+        {
+          "name": "apps",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": {
+            "frames": 1
+          }
+        },
+        {
+          "name": "handshakes",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns",
+          "observedMetrics": [
+            {
+              "answer": {
+                "ok": true
+              }
+            }
+          ]
+        },
+        {
+          "name": "console",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns"
+        }
+      ]
+    },
+    "scripted-scenarios": {
+      "ok": true,
+      "results": [
+        {
+          "name": "permission",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "allow",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "fail",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "cancel",
+          "ok": true,
+          "timings": {},
+          "engine": "chromium",
+          "layout": "columns"
+        },
+        {
+          "name": "permission",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns"
+        },
+        {
+          "name": "allow",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns"
+        },
+        {
+          "name": "fail",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns"
+        },
+        {
+          "name": "cancel",
+          "ok": true,
+          "timings": {},
+          "engine": "webkit",
+          "layout": "columns"
+        }
+      ]
+    }
+  }
+}

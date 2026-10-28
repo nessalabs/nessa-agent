@@ -41,6 +41,50 @@ fn with_stand_ins(mut config: AcpConfig) -> AcpConfig {
     config
 }
 
+struct RemoteRelay;
+impl HarnessMcpRelay for RemoteRelay {
+    fn command(
+        &self,
+        program: &std::path::Path,
+        arguments: &[String],
+    ) -> Option<(PathBuf, Vec<String>)> {
+        if program != std::path::Path::new("/bin/stand-in") {
+            return None;
+        }
+        Some(("/remote/relay".into(), arguments.to_vec()))
+    }
+}
+
+#[test]
+fn hosted_stand_ins_require_an_explicit_relay_and_keep_only_its_mapped_commands() {
+    let (root, config, _) = test_acp_configuration("stand-ins", 16);
+    let mut config = with_stand_ins(config);
+    let mut servers = config.mcp_servers.current().to_vec();
+    servers.push(StdioMcpServer {
+        name: "local-only".into(),
+        command: "/local/private-command".into(),
+        args: vec![],
+    });
+    config.mcp_servers = McpServerList::fixed(servers);
+    let unrelayed = config.on_host(root.path().into(), None);
+    assert!(unrelayed.mcp_servers.current().is_empty());
+    let hosted = config.on_host(root.path().into(), Some(&RemoteRelay));
+    let mapped = hosted.mcp_servers.current();
+    assert_eq!(mapped.len(), 2);
+    assert!(mapped
+        .iter()
+        .all(|server| server.command == std::path::Path::new("/remote/relay")));
+    let session = SessionId::new("remote-conversation").unwrap();
+    let (opened, held) = hosted.stand_ins.opened(Some(&session));
+    assert_eq!(
+        held.unwrap().environment(),
+        &[("NESSA_MCP_SESSION".into(), "the-token".into())]
+    );
+    assert!(!format!("{opened:?}").contains("the-token"));
+    assert!(hosted.environment.is_empty());
+    assert!(hosted.credential_environment.is_empty());
+}
+
 /// The entries the fixture recorded for `method` (`new` or `resume`).
 fn recorded(root: &tempfile::TempDir, method: &str) -> Value {
     let path = root.path().join(format!("mcp-servers-{method}"));

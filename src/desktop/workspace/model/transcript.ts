@@ -446,7 +446,7 @@ export interface TranscriptLease {
   readonly state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
   /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
    * `peer` a paired machine that dials the gateway. */
-  readonly environment?: "here" | "ssh" | "peer"
+  readonly environment?: "here" | "ssh" | "peer" | "boat"
   /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
    * `environment` is `ssh` or `peer`. */
   readonly host?: string

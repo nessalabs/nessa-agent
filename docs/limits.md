@@ -86,6 +86,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | command.max_cwd_bytes | fixed | 1024 | CommandWork::MAX_CWD_BYTES | a `run` whose working directory is longer is refused before anything is recorded |
 | mcp.built_in_calls | fixed | 8 | built-in MCP server MAX_BUILT_IN_CALLS | a tool call past this many running on one stand-in's connection is answered with an error |
 | agent_tools.waiting_reads | fixed | 4 | MAX_EVENT_READERS in crates/nessa-server/src/conversation/application/agent_tools.rs | a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it |
+| boat.retained_environments | fixed | 256 | MAX_RETAINED_ENVIRONMENTS in crates/nessa-server/src/conversation/application/placement.rs | when full, release only environments with no opening caller, command or lease owner; if all are retained, refuse new opens as unavailable rather than grow or evict active work |
 | agent_tools.source_admissions | fixed | 8 | MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-server/src/conversation/application/agent_tools.rs | an agent tool call past this many detached admissions retained by one source conversation is refused unavailable; other sources are not counted against it |
 | mcp.built_in_line_bytes | fixed | 65536 | built-in MCP server MAX_BUILT_IN_LINE_BYTES | a message longer than this ends the stand-in's connection |
 

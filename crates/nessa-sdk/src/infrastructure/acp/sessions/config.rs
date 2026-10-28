@@ -5,7 +5,7 @@ use super::StandInSessions;
 use crate::application::agent_execution::{
     agents::AgentError,
     permissions::{ConfiguredRefusal, PermissionRules, ReviewNotices},
-    providers::{ExecutableUseSnapshot, UserImageSource},
+    providers::{ExecutableUseSnapshot, HarnessMcpRelay, UserImageSource},
 };
 use crate::domain::agent_execution::permissions::{
     PermissionDeadlinePolicy, PermissionOfferPolicy,
@@ -587,14 +587,31 @@ impl AcpConfig {
 
     /// This configuration for a harness a host starts, working in `workspace`
     /// there. What names this machine is left behind: its account's variables,
-    /// its credentials (open credentials included) and the MCP servers whose
-    /// stand-ins reach this process.
+    /// its provider credentials (open credentials included). MCP stand-ins are
+    /// absent unless the host explicitly maps them through its relay; only those
+    /// mapped commands retain the scoped per-open MCP grant.
     /// The host supplies its own executable, variables and credentials, so
     /// `executable`, `staged_runtime_arguments`, and `arguments` are never
     /// launched from here. This
     /// machine's filesystem says nothing about the host's paths, so none
     /// resolves and every read review there is the deny class.
-    pub(crate) fn on_host(&self, workspace: PathBuf) -> Self {
+    pub(crate) fn on_host(&self, workspace: PathBuf, relay: Option<&dyn HarnessMcpRelay>) -> Self {
+        let mcp_servers = relay.map(|relay| {
+            McpServerList::fixed(
+                self.mcp_servers
+                    .current()
+                    .iter()
+                    .filter_map(|server| {
+                        let (command, args) = relay.command(&server.command, &server.args)?;
+                        Some(StdioMcpServer {
+                            name: server.name.clone(),
+                            command,
+                            args,
+                        })
+                    })
+                    .collect(),
+            )
+        });
         Self {
             environment: BTreeMap::new(),
             runtime_environment: BTreeMap::new(),
@@ -602,8 +619,12 @@ impl AcpConfig {
             open_credentials: OpenCredentials::none(),
             workspace,
             workspace_paths: Arc::new(crate::infrastructure::workspace_paths::UnresolvedPaths),
-            mcp_servers: McpServerList::none(),
-            stand_ins: StandInSessions::none(),
+            mcp_servers: mcp_servers.unwrap_or_else(McpServerList::none),
+            stand_ins: if relay.is_some() {
+                self.stand_ins.clone()
+            } else {
+                StandInSessions::none()
+            },
             ..self.clone()
         }
     }

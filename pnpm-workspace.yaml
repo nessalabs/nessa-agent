@@ -4,6 +4,7 @@ packages:
 # pnpm 11 reads build settings from here rather than package.json.
 allowBuilds:
   esbuild: true
+  workerd: true
 
 onlyBuiltDependencies:
   - esbuild

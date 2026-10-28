@@ -632,11 +632,11 @@ impl AgentProvider for LeaseFence {
     }
     /// A worker of the pool restores only a context it opened itself: one
     /// saved on another worker is not there.
-    fn restores_saved_context(&self, saved: &ExecutionSessionId) -> bool {
-        self.context.as_ref().map_or_else(
-            || self.inner.restores_saved_context(saved),
-            |context| context.holds(saved),
-        )
+    fn restores_saved_context(&self, saved: &ExecutionSessionId, has_invocations: bool) -> bool {
+        self.context
+            .as_ref()
+            .is_none_or(|context| context.holds(saved))
+            && self.inner.restores_saved_context(saved, has_invocations)
     }
     fn model_change_context(&self) -> Option<String> {
         self.inner

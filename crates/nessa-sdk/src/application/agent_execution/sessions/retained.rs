@@ -248,6 +248,7 @@ fn command_terms(terms: &CommandTerms) -> usize {
     let environment = match &terms.environment {
         EnvironmentRef::Here => 0,
         EnvironmentRef::Ssh(host) => host.as_str().len(),
+        EnvironmentRef::Boat => "boat:thread".len(),
         EnvironmentRef::Peer(_) => PeerEnvironment::PREFIX.len() + 2 * PeerEnvironment::KEY_BYTES,
     };
     terms

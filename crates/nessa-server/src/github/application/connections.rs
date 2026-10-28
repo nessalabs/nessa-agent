@@ -1,12 +1,10 @@
 //! The one GitHub sign-in this gateway holds, and every change to it.
 //!
-//! Every change — a connect, a cancel, a disconnect, and an attempt
-//! finishing — takes `changes` first, so each sees the state the one before
-//! it left. A read (`status`, `token`) takes only the state and never waits
-//! on GitHub. An attempt's poll is a task of its own; what it finds is applied
-//! only while that same attempt is still the one waiting
-//! (`a_cancelled_attempts_late_approval_is_dropped`). The orderings are the
-//! table in `docs/design/github-connect.md`.
+//! All state changes serialize within their captured vault generation. A new
+//! generation never waits for a departed generation's provider request. Cached state and storage work carry
+//! their immutable vault generation. One compare-and-publish boundary admits
+//! cache changes, and terminal operations take ownership before awaiting audit.
+//! The ordering tables are in `docs/design/github-connect.md` and ADR 1152.
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -14,8 +12,8 @@ use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use super::ports::{
-    ApiFailure, DeviceCode, EndCause, GithubApi, GithubAudit, GithubAuditEvent, GithubAuditRecord,
-    GithubCaller, GithubTokenStore, PollAnswer,
+    ApiFailure, AuditUnavailable, DeviceCode, EndCause, GithubAccess, GithubApi, GithubAudit,
+    GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubTokenStore, PollAnswer,
 };
 use crate::github::domain::{AccessToken, ConnectEnd, GithubSignIn, GithubStatus};
 use crate::timer::{within, Moment, Timer};
@@ -40,11 +38,12 @@ pub struct GithubConnections {
 }
 
 struct Inner {
+    access: Arc<dyn GithubAccess>,
     api: Arc<dyn GithubApi>,
     store: Arc<dyn GithubTokenStore>,
     audit: Arc<dyn GithubAudit>,
     timer: Arc<dyn Timer>,
-    changes: tokio::sync::Mutex<()>,
+    changes: Mutex<Option<(u64, Arc<tokio::sync::Mutex<()>>)>>,
     state: Mutex<State>,
 }
 
@@ -55,7 +54,16 @@ enum State {
         unrecorded: bool,
     },
     Connecting(Attempt),
+    /// Completion owns the terminal operation; this immutable projection keeps
+    /// status pending until both durable receipts arrive. It owns no poll task.
+    Saving {
+        generation: u64,
+        user_code: String,
+        verification_uri: String,
+        expires_at: Moment,
+    },
     Connected {
+        generation: u64,
         sign_in: GithubSignIn,
         /// A failed sign-out of it is not in the audit.
         unrecorded: bool,
@@ -63,6 +71,15 @@ enum State {
 }
 
 impl State {
+    fn generation(&self) -> Option<u64> {
+        match self {
+            Self::SignedOut { .. } => None,
+            Self::Connecting(attempt) => Some(attempt.generation),
+            Self::Saving { generation, .. } | Self::Connected { generation, .. } => {
+                Some(*generation)
+            }
+        }
+    }
     /// Signed out, with the end of the latest attempt (if any) on record.
     fn signed_out(last: Option<ConnectEnd>) -> Self {
         Self::SignedOut {
@@ -73,6 +90,7 @@ impl State {
 }
 
 struct Attempt {
+    generation: u64,
     operation_id: String,
     caller: GithubCaller,
     user_code: String,
@@ -88,16 +106,25 @@ impl GithubConnections {
     #[cfg(any(unix, test))]
     pub(crate) async fn load(
         api: Arc<dyn GithubApi>,
+        access: Arc<dyn GithubAccess>,
         store: Arc<dyn GithubTokenStore>,
         audit: Arc<dyn GithubAudit>,
         timer: Arc<dyn Timer>,
     ) -> Self {
-        let state = match store.load().await {
-            Ok(Some(sign_in)) => State::Connected {
-                sign_in,
-                unrecorded: false,
-            },
-            Ok(None) => State::signed_out(None),
+        let generation = access.generation();
+        let saved = match generation {
+            Some(generation) => store.load(generation).await,
+            None => Ok(None),
+        };
+        let state = match saved {
+            Ok(Some(sign_in)) if generation.is_some() && access.generation() == generation => {
+                State::Connected {
+                    generation: generation.expect("checked above"),
+                    sign_in,
+                    unrecorded: false,
+                }
+            }
+            Ok(_) => State::signed_out(None),
             Err(_) => {
                 tracing::error!("the GitHub sign-in could not be read; signed out this run");
                 State::signed_out(Some(ConnectEnd::StoreUnavailable))
@@ -105,34 +132,97 @@ impl GithubConnections {
         };
         Self {
             inner: Arc::new(Inner {
+                access,
                 api,
                 store,
                 audit,
                 timer,
-                changes: tokio::sync::Mutex::new(()),
+                changes: Mutex::new(None),
                 state: Mutex::new(state),
             }),
         }
     }
 
-    /// Where the sign-in stands now.
+    /// Project current state, retiring a stale cache first. Retirement may perform
+    /// one blocking cleanup audit when a pending sign-in belongs to an old vault.
     pub fn status(&self) -> GithubStatus {
         self.inner.status()
     }
 
-    /// The token agents are given now, when signed in.
+    /// Project a token only from the current unlock generation. Like `status`,
+    /// this can perform one blocking stale-attempt cleanup audit.
     pub fn token(&self) -> Option<AccessToken> {
-        match &*self.inner.state.lock().unwrap() {
+        if self.inner.retire_stale().is_err() {
+            tracing::error!("GitHub vault cleanup audit failed");
+        }
+        let state = self.inner.state.lock().unwrap();
+        if state.generation() != self.inner.access.generation() {
+            return None;
+        }
+        match &*state {
             State::Connected { sign_in, .. } => Some(sign_in.token.clone()),
             _ => None,
         }
+    }
+
+    /// Restore encrypted persistence after an explicit vault unlock. No provider call.
+    pub async fn restore(&self) -> Result<(), GithubError> {
+        let generation = self
+            .inner
+            .access
+            .generation()
+            .ok_or(GithubError::StoreUnavailable)?;
+        let _change = self.inner.change_in(generation).await?;
+        self.inner
+            .retire_stale()
+            .map_err(|_| GithubError::AuditUnavailable)?;
+        if self.inner.state.lock().unwrap().generation() == Some(generation) {
+            return Ok(());
+        }
+        let saved = match self.inner.store.load(generation).await {
+            Ok(saved) => saved,
+            Err(_) => {
+                self.inner.publish(
+                    generation,
+                    State::signed_out(Some(ConnectEnd::StoreUnavailable)),
+                );
+                return Err(GithubError::StoreUnavailable);
+            }
+        };
+        self.inner
+            .in_generation(generation, |state| {
+                if state.generation() == Some(generation) {
+                    return;
+                }
+                *state = match saved {
+                    Some(sign_in) => State::Connected {
+                        generation,
+                        sign_in,
+                        unrecorded: false,
+                    },
+                    None => State::signed_out(None),
+                };
+            })
+            .ok_or(GithubError::StoreUnavailable)?;
+        Ok(())
+    }
+    /// Vault closure removes cached token/code ownership without deleting persistence.
+    pub fn clear_locked(&self) -> Result<(), AuditUnavailable> {
+        self.inner.retire_stale()
     }
 
     /// Start a sign-in, or answer the one already waiting or held: asking
     /// again is safe.
     pub async fn connect(&self, caller: GithubCaller) -> Result<GithubStatus, GithubError> {
         let inner = &self.inner;
-        let _change = inner.changes.lock().await;
+        let generation = inner
+            .access
+            .generation()
+            .ok_or(GithubError::StoreUnavailable)?;
+        let _change = inner.change_in(generation).await?;
+        inner
+            .retire_stale()
+            .map_err(|_| GithubError::AuditUnavailable)?;
         if !matches!(&*inner.state.lock().unwrap(), State::SignedOut { .. }) {
             return Ok(inner.status());
         }
@@ -173,37 +263,65 @@ impl GithubConnections {
                 if unrecorded {
                     tracing::error!(?end, "the end of a GitHub sign-in could not be recorded");
                 }
-                *inner.state.lock().unwrap() = State::SignedOut {
-                    last: Some(end),
-                    unrecorded,
-                };
+                inner.publish(
+                    generation,
+                    State::SignedOut {
+                        last: Some(end),
+                        unrecorded,
+                    },
+                );
                 return Err(error);
             }
         };
-        let expires_at = inner.timer.now() + authorization.expires_in;
-        let poll = tokio::spawn(poll(
-            Arc::downgrade(inner),
-            operation_id.clone(),
-            authorization.device_code,
-            authorization.interval,
-            expires_at,
-        ))
-        .abort_handle();
-        *inner.state.lock().unwrap() = State::Connecting(Attempt {
-            operation_id,
-            caller,
-            user_code: authorization.user_code,
-            verification_uri: authorization.verification_uri,
-            expires_at,
-            poll,
-        });
+        let published = inner
+            .in_generation(generation, |state| {
+                let expires_at = inner.timer.now() + authorization.expires_in;
+                let poll = tokio::spawn(poll(
+                    Arc::downgrade(inner),
+                    operation_id.clone(),
+                    authorization.device_code,
+                    authorization.interval,
+                    expires_at,
+                ))
+                .abort_handle();
+                *state = State::Connecting(Attempt {
+                    generation,
+                    operation_id: operation_id.clone(),
+                    caller: caller.clone(),
+                    user_code: authorization.user_code,
+                    verification_uri: authorization.verification_uri,
+                    expires_at,
+                    poll,
+                });
+            })
+            .is_some();
+        if !published {
+            inner
+                .audit
+                .record(&record(GithubAuditEvent::ConnectEnded {
+                    end: ConnectEnd::StoreUnavailable,
+                    cause: EndCause::VaultLocked,
+                }))
+                .await
+                .map_err(|_| GithubError::AuditUnavailable)?;
+            return Err(GithubError::StoreUnavailable);
+        }
+
         Ok(inner.status())
     }
 
     /// Stop the sign-in waiting, if one is. A sign-in already held is left
     /// as it is: that is [`Self::disconnect`]'s.
     pub async fn cancel(&self, caller: GithubCaller) -> Result<GithubStatus, GithubError> {
-        let _change = self.inner.changes.lock().await;
+        let generation = self
+            .inner
+            .access
+            .generation()
+            .ok_or(GithubError::StoreUnavailable)?;
+        let _change = self.inner.change_in(generation).await?;
+        self.inner
+            .retire_stale()
+            .map_err(|_| GithubError::AuditUnavailable)?;
         self.inner.cancel_held(caller).await
     }
 
@@ -212,11 +330,18 @@ impl GithubConnections {
     /// longer holds or gives out its token.
     pub async fn disconnect(&self, caller: GithubCaller) -> Result<GithubStatus, GithubError> {
         let inner = &self.inner;
-        let _change = inner.changes.lock().await;
+        let generation = inner
+            .access
+            .generation()
+            .ok_or(GithubError::StoreUnavailable)?;
+        let _change = inner.change_in(generation).await?;
+        inner
+            .retire_stale()
+            .map_err(|_| GithubError::AuditUnavailable)?;
         // Read, then let go of the state before answering from it.
         let held = match &*inner.state.lock().unwrap() {
             State::Connected { sign_in, .. } => Held::SignedIn(sign_in.account.clone()),
-            State::Connecting(_) => Held::Waiting,
+            State::Connecting(_) | State::Saving { .. } => Held::Waiting,
             State::SignedOut { .. } => Held::Nothing,
         };
         let account = match held {
@@ -228,7 +353,7 @@ impl GithubConnections {
             Held::Nothing => {
                 inner
                     .store
-                    .delete()
+                    .delete(generation)
                     .await
                     .map_err(|_| GithubError::StoreUnavailable)?;
                 return Ok(inner.status());
@@ -245,7 +370,7 @@ impl GithubConnections {
             .record(&record(GithubAuditEvent::DisconnectRequested { account }))
             .await
             .map_err(|_| GithubError::AuditUnavailable)?;
-        if inner.store.delete().await.is_err() {
+        if inner.store.delete(generation).await.is_err() {
             // Still signed in, and refused for that; a failure the audit
             // will not keep either is said by the status too.
             if inner
@@ -255,13 +380,15 @@ impl GithubConnections {
                 .is_err()
             {
                 tracing::error!("a failed GitHub sign-out could not be recorded");
-                if let State::Connected { unrecorded, .. } = &mut *inner.state.lock().unwrap() {
-                    *unrecorded = true;
-                }
+                inner.in_generation(generation, |state| {
+                    if let State::Connected { unrecorded, .. } = state {
+                        *unrecorded = true;
+                    }
+                });
             }
             return Err(GithubError::StoreUnavailable);
         }
-        *inner.state.lock().unwrap() = State::signed_out(None);
+        inner.publish(generation, State::signed_out(None));
         if inner
             .audit
             .record(&record(GithubAuditEvent::Disconnected))
@@ -269,10 +396,13 @@ impl GithubConnections {
             .is_err()
         {
             // Signed out all the same: the token is gone.
-            *inner.state.lock().unwrap() = State::SignedOut {
-                last: None,
-                unrecorded: true,
-            };
+            inner.publish(
+                generation,
+                State::SignedOut {
+                    last: None,
+                    unrecorded: true,
+                },
+            );
             return Err(GithubError::AuditUnavailable);
         }
         Ok(inner.status())
@@ -287,24 +417,114 @@ enum Held {
 }
 
 impl Inner {
+    /// Same-session IO and publication have one ordering owner. Replacing the
+    /// gate for a new vault generation never makes its unlock wait on old IO.
+    async fn change_in(
+        &self,
+        generation: u64,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, GithubError> {
+        let gate = {
+            let mut changes = self.changes.lock().unwrap();
+            if self.access.generation() != Some(generation) {
+                return Err(GithubError::StoreUnavailable);
+            }
+            if changes.as_ref().is_none_or(|(held, _)| *held != generation) {
+                *changes = Some((generation, Arc::new(tokio::sync::Mutex::new(()))));
+            }
+            changes.as_ref().expect("assigned above").1.clone()
+        };
+        let guard = gate.lock_owned().await;
+        if self.access.generation() != Some(generation) {
+            return Err(GithubError::StoreUnavailable);
+        }
+        Ok(guard)
+    }
+    fn in_generation<T>(&self, generation: u64, apply: impl FnOnce(&mut State) -> T) -> Option<T> {
+        let mut state = self.state.lock().unwrap();
+        if self.access.generation() != Some(generation) {
+            return None;
+        }
+        Some(apply(&mut state))
+    }
+    fn publish(&self, generation: u64, next: State) {
+        if self
+            .in_generation(generation, |state| *state = next)
+            .is_none()
+        {
+            tracing::debug!("discarded a stale GitHub cache publication");
+        }
+    }
+
+    /// The held generation, not current availability, decides which cache is retired.
+    fn retire_stale(&self) -> Result<(), AuditUnavailable> {
+        let previous = {
+            let mut state = self.state.lock().unwrap();
+            if state.generation().is_none() || state.generation() == self.access.generation() {
+                return Ok(());
+            }
+            std::mem::replace(&mut *state, State::signed_out(None))
+        };
+        if let State::Connecting(attempt) = previous {
+            attempt.poll.abort();
+            self.audit.record_cleanup(&GithubAuditRecord {
+                operation_id: attempt.operation_id,
+                caller: attempt.caller,
+                event: GithubAuditEvent::ConnectEnded {
+                    end: ConnectEnd::StoreUnavailable,
+                    cause: EndCause::VaultLocked,
+                },
+            })?;
+        }
+        Ok(())
+    }
     fn status(&self) -> GithubStatus {
-        match &*self.state.lock().unwrap() {
+        if self.retire_stale().is_err() {
+            tracing::error!("GitHub vault cleanup audit failed");
+        }
+        let state = self.state.lock().unwrap();
+        if state.generation().is_some() && state.generation() != self.access.generation() {
+            return GithubStatus::SignedOut {
+                last: None,
+                unrecorded: false,
+            };
+        }
+        match &*state {
             State::SignedOut { last, unrecorded } => GithubStatus::SignedOut {
                 last: *last,
                 unrecorded: *unrecorded,
             },
-            State::Connecting(attempt) => GithubStatus::Connecting {
-                user_code: attempt.user_code.clone(),
-                verification_uri: attempt.verification_uri.clone(),
-                expires_in_seconds: attempt.expires_at.since(self.timer.now()).as_secs(),
-            },
+            State::Connecting(attempt) => self.connecting_status(
+                &attempt.user_code,
+                &attempt.verification_uri,
+                attempt.expires_at,
+            ),
+            State::Saving {
+                user_code,
+                verification_uri,
+                expires_at,
+                ..
+            } => self.connecting_status(user_code, verification_uri, *expires_at),
             State::Connected {
                 sign_in,
                 unrecorded,
+                ..
             } => GithubStatus::Connected {
                 account: sign_in.account.clone(),
                 unrecorded: *unrecorded,
             },
+        }
+    }
+
+    fn connecting_status(
+        &self,
+        user_code: &str,
+        verification_uri: &str,
+        expires_at: Moment,
+    ) -> GithubStatus {
+        GithubStatus::Connecting {
+            user_code: user_code.to_owned(),
+            verification_uri: verification_uri.to_owned(),
+            expires_in_seconds: expires_at.since(self.timer.now()).as_secs(),
         }
     }
 
@@ -321,6 +541,7 @@ impl Inner {
                 _ => unreachable!("matched above"),
             }
         };
+        let generation = attempt.generation;
         attempt.poll.abort();
         // The cancel stands whether or not its record can be kept: the
         // attempt is not left polling for a code nobody is shown. A missing
@@ -334,32 +555,69 @@ impl Inner {
             })
             .await;
         if recorded.is_err() {
-            *self.state.lock().unwrap() = State::SignedOut {
-                last: Some(ConnectEnd::Cancelled),
-                unrecorded: true,
-            };
+            self.publish(
+                generation,
+                State::SignedOut {
+                    last: Some(ConnectEnd::Cancelled),
+                    unrecorded: true,
+                },
+            );
             return Err(GithubError::AuditUnavailable);
         }
         Ok(self.status())
     }
 
     /// The attempt `operation_id`'s caller, while it is the one waiting.
-    fn waiting(&self, operation_id: &str) -> Option<GithubCaller> {
+    fn waiting(&self, operation_id: &str) -> Option<(GithubCaller, u64)> {
+        if self.retire_stale().is_err() {
+            tracing::error!("GitHub vault cleanup audit failed");
+        }
         match &*self.state.lock().unwrap() {
             State::Connecting(attempt) if attempt.operation_id == operation_id => {
-                Some(attempt.caller.clone())
+                Some((attempt.caller.clone(), attempt.generation))
             }
             _ => None,
+        }
+    }
+
+    fn take_waiting(
+        &self,
+        operation_id: &str,
+        projection: impl FnOnce(&Attempt) -> State,
+    ) -> Option<Attempt> {
+        if self.retire_stale().is_err() {
+            tracing::error!("GitHub vault cleanup audit failed");
+        }
+        let mut state = self.state.lock().unwrap();
+        if !matches!(&*state,State::Connecting(attempt) if attempt.operation_id==operation_id && self.access.generation()==Some(attempt.generation))
+        {
+            return None;
+        }
+        match std::mem::replace(&mut *state, State::signed_out(None)) {
+            State::Connecting(attempt) => {
+                // Taking terminal ownership and replacing the public projection
+                // are one transition; a status read cannot observe the temporary value.
+                *state = projection(&attempt);
+                Some(attempt)
+            }
+            _ => unreachable!("matched above"),
         }
     }
 
     /// End the attempt `operation_id` without a sign-in, if it is still the
     /// one waiting.
     async fn end(&self, operation_id: &str, end: ConnectEnd, cause: EndCause) {
-        let _change = self.changes.lock().await;
-        let Some(caller) = self.waiting(operation_id) else {
+        let Some((_, generation)) = self.waiting(operation_id) else {
             return;
         };
+        let Ok(_change) = self.change_in(generation).await else {
+            return;
+        };
+        let Some(attempt) = self.take_waiting(operation_id, |_| State::signed_out(None)) else {
+            return;
+        };
+        let generation = attempt.generation;
+        let caller = attempt.caller;
         // The attempt ends either way; a missing record is said, not hidden.
         let unrecorded = self
             .audit
@@ -373,18 +631,34 @@ impl Inner {
         if unrecorded {
             tracing::error!(?end, "the end of a GitHub sign-in could not be recorded");
         }
-        *self.state.lock().unwrap() = State::SignedOut {
-            last: Some(end),
-            unrecorded,
-        };
+        self.publish(
+            generation,
+            State::SignedOut {
+                last: Some(end),
+                unrecorded,
+            },
+        );
     }
 
     /// Keep `sign_in` for the attempt `operation_id`, if it is still the one
     /// waiting: recorded first, then stored, then given to agents.
     async fn complete(&self, operation_id: &str, sign_in: GithubSignIn) {
-        let _change = self.changes.lock().await;
-        let Some(caller) = self.waiting(operation_id) else {
+        let Some((_, generation)) = self.waiting(operation_id) else {
             return;
+        };
+        let Ok(_change) = self.change_in(generation).await else {
+            return;
+        };
+        let (generation, caller) = {
+            let Some(attempt) = self.take_waiting(operation_id, |attempt| State::Saving {
+                generation: attempt.generation,
+                user_code: attempt.user_code.clone(),
+                verification_uri: attempt.verification_uri.clone(),
+                expires_at: attempt.expires_at,
+            }) else {
+                return;
+            };
+            (attempt.generation, attempt.caller)
         };
         let record = |event| GithubAuditRecord {
             operation_id: operation_id.to_owned(),
@@ -401,15 +675,18 @@ impl Inner {
         {
             tracing::error!("a GitHub sign-in could not be recorded; its token is dropped");
             // The end itself says the record is what failed.
-            *self.state.lock().unwrap() = State::signed_out(Some(ConnectEnd::AuditUnavailable));
+            self.publish(
+                generation,
+                State::signed_out(Some(ConnectEnd::AuditUnavailable)),
+            );
             return;
         }
-        if self.store.save(&sign_in).await.is_err() {
+        if self.store.save(generation, &sign_in).await.is_err() {
             // A save can fail after the file was already written (its
             // directory not synced): delete it, so a dropped token is never
             // held again at the next start. A file that cannot be deleted
             // either is said in the log; disconnecting deletes it later.
-            if self.store.delete().await.is_err() {
+            if self.store.delete(generation).await.is_err() {
                 tracing::error!("a GitHub sign-in that could not be stored could not be deleted");
             }
             tracing::error!("a GitHub sign-in could not be stored; its token is dropped");
@@ -417,23 +694,34 @@ impl Inner {
                 .audit
                 .record(&record(GithubAuditEvent::ConnectEnded {
                     end: ConnectEnd::StoreUnavailable,
-                    cause: EndCause::StoreFailed,
+                    cause: if self.access.generation() == Some(generation) {
+                        EndCause::StoreFailed
+                    } else {
+                        EndCause::VaultLocked
+                    },
                 }))
                 .await
                 .is_err();
             if unrecorded {
                 tracing::error!("the end of a GitHub sign-in could not be recorded");
             }
-            *self.state.lock().unwrap() = State::SignedOut {
-                last: Some(ConnectEnd::StoreUnavailable),
-                unrecorded,
-            };
+            self.publish(
+                generation,
+                State::SignedOut {
+                    last: Some(ConnectEnd::StoreUnavailable),
+                    unrecorded,
+                },
+            );
             return;
         }
-        *self.state.lock().unwrap() = State::Connected {
-            sign_in,
-            unrecorded: false,
-        };
+        self.publish(
+            generation,
+            State::Connected {
+                generation,
+                sign_in,
+                unrecorded: false,
+            },
+        );
     }
 }
 
@@ -453,6 +741,9 @@ async fn poll(
         let Some(inner) = owner.upgrade() else {
             return;
         };
+        if inner.waiting(&operation_id).is_none() {
+            return;
+        }
         let timer = inner.timer.clone();
         let api = inner.api.clone();
         drop(inner);
@@ -468,6 +759,12 @@ async fn poll(
             return finish(&owner, &operation_id, end, EndCause::DeadlinePassed).await;
         }
         timer.sleep_until(next).await;
+        if owner
+            .upgrade()
+            .is_none_or(|inner| inner.waiting(&operation_id).is_none())
+        {
+            return;
+        }
         let token = match &granted {
             Some(token) => token.clone(),
             None => match within(timer.as_ref(), expires_at, api.poll(&device_code)).await {
@@ -519,6 +816,12 @@ async fn poll(
                 }
             },
         };
+        if owner
+            .upgrade()
+            .is_none_or(|inner| inner.waiting(&operation_id).is_none())
+        {
+            return;
+        }
         // Approved: whose it is. A lost answer is asked again until the code
         // would have expired; a refused token is not GitHub's to give.
         match within(timer.as_ref(), expires_at, api.account(&token)).await {

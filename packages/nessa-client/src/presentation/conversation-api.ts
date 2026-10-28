@@ -14,7 +14,10 @@ import {
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
-import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
+import {
+  conversationDeleteTimeoutMs,
+  conversationWorkspaceCreateTimeoutMs,
+} from "../application/agent-budgets.js"
 import { bounds, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
@@ -876,6 +879,11 @@ export function createConversationApi(
           ...channelId,
         },
         (value) => conversationId(value, id),
+        true,
+        false,
+        options.channelId !== undefined || options.environment === "boat:thread"
+          ? { atLeastMs: conversationWorkspaceCreateTimeoutMs }
+          : undefined,
       )
     },
     setModel: (id, model, options = {}) => {

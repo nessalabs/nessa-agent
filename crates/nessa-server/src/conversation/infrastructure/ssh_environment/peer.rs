@@ -132,6 +132,7 @@ impl PeerEnvironments {
     ) {
         let environment = self.peer(PeerEnvironment::new(*proof.key().bytes()));
         let connection = LeaseConnection {
+            mcp_relay: None,
             from_environment,
             to_environment,
             keep,

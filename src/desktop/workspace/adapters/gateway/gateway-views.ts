@@ -120,6 +120,11 @@ export function channelFrom(wire: WireChannel): Channel {
     private: false,
     topic: "",
     folder: wire.folder,
+    ...(wire.coordinatorConversationId
+      ? { coordinatorConversationId: wire.coordinatorConversationId }
+      : {}),
+    coordinatorPlacement: wire.coordinatorPlacement,
+    threadPlacement: wire.threadPlacement,
     ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),
   }
 }

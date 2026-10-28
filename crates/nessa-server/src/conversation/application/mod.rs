@@ -393,6 +393,15 @@ mod local_golden_tests;
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
 
+#[cfg(unix)]
+pub(crate) use placement::ThreadEnvironments;
+pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
+
+#[cfg(unix)]
+mod artifact_channels;
+#[cfg(unix)]
+pub(crate) use artifact_channels::{ArtifactChannel, ArtifactChannels};
+
 mod input_files;
 pub(crate) use input_files::{ConversationInputFiles, InputFileDelivery};
 pub use input_files::{InputFileAudit, InputFileStage};

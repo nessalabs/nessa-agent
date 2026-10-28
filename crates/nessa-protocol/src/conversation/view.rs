@@ -951,6 +951,8 @@ pub enum ConversationLeaseState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationLeaseEnvironment {
+    /// A thread workspace in the user's Boat account.
+    Boat,
     /// The gateway's own machine.
     Here,
     /// A machine reached over SSH, named by `host`.

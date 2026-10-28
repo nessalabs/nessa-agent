@@ -1,3 +1,6 @@
+import { BoatProvider } from "./settings/ui/boat-row"
+import { VaultProvider, nativeVault } from "../vault"
+import { hasNativeHost } from "../host"
 import { nativeAgentApiKeys } from "../onboarding/adapters/agent-api-key"
 import { AgentSetupProvider } from "../onboarding"
 import { assignedAgentReadiness } from "../onboarding/adapters/agents"
@@ -152,6 +155,7 @@ const channelPaths: PathPicker | undefined =
       }
     : undefined
 const dependencies = createDesktopDependencies({
+  vault: hasNativeHost() ? nativeVault : undefined,
   signInToProvider,
   paths: channelPaths,
   providerLoginAvailable,
@@ -192,44 +196,51 @@ if (!container) throw new Error("missing #root")
 createRoot(container).render(
   <React.StrictMode>
     <StartupMounted />
-    <AgentSetupProvider source={agentSetup}>
-      <Provider store={store}>
-        <WidgetRegistryProvider registry={dependencies.widgets}>
-          <ClockProvider now={dependencies.now}>
-            <SubagentsProvider source={dependencies.subagents}>
-              {/* Every icon in the window resolves through the family chosen in Settings. */}
-              <DesktopIconFamilyProvider>
-                <McpServersProvider gateway={dependencies.mcpServers}>
-                  <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                    <ClipboardProvider write={writeClipboardText}>
-                      <SiteIconProvider render={faviconSiteIcon}>
-                        <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
-                          <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                            <PermissionRulesProvider
-                              gateway={dependencies.permissionRules}
-                            >
-                              <GithubProvider
-                                gateway={dependencies.github}
-                                avatar={githubAvatar}
+    <VaultProvider source={dependencies.vault} autoUnlock={hasNativeHost()}>
+      <AgentSetupProvider source={agentSetup}>
+        <Provider store={store}>
+          <WidgetRegistryProvider registry={dependencies.widgets}>
+            <ClockProvider now={dependencies.now}>
+              <SubagentsProvider source={dependencies.subagents}>
+                {/* Every icon in the window resolves through the family chosen in Settings. */}
+                <DesktopIconFamilyProvider>
+                  <McpServersProvider gateway={dependencies.mcpServers}>
+                    <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                      <ClipboardProvider write={writeClipboardText}>
+                        <SiteIconProvider render={faviconSiteIcon}>
+                          <HeldFilesProvider
+                            read={dependencies.heldFiles}
+                            save={saveFile}
+                          >
+                            <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                              <PermissionRulesProvider
+                                gateway={dependencies.permissionRules}
                               >
-                                <DesktopWindow
-                                  hostKind={host.kind}
-                                  browserSurface={host.kind === "browser"}
-                                  inspectable={import.meta.env.DEV}
-                                />
-                              </GithubProvider>
-                            </PermissionRulesProvider>
-                          </NativeHooksProvider>
-                        </HeldFilesProvider>
-                      </SiteIconProvider>
-                    </ClipboardProvider>
-                  </LinkedDevicesProvider>
-                </McpServersProvider>
-              </DesktopIconFamilyProvider>
-            </SubagentsProvider>
-          </ClockProvider>
-        </WidgetRegistryProvider>
-      </Provider>
-    </AgentSetupProvider>
+                                <BoatProvider gateway={dependencies.boat}>
+                                  <GithubProvider
+                                    gateway={dependencies.github}
+                                    avatar={githubAvatar}
+                                  >
+                                    <DesktopWindow
+                                      hostKind={host.kind}
+                                      browserSurface={host.kind === "browser"}
+                                      inspectable={import.meta.env.DEV}
+                                    />
+                                  </GithubProvider>
+                                </BoatProvider>
+                              </PermissionRulesProvider>
+                            </NativeHooksProvider>
+                          </HeldFilesProvider>
+                        </SiteIconProvider>
+                      </ClipboardProvider>
+                    </LinkedDevicesProvider>
+                  </McpServersProvider>
+                </DesktopIconFamilyProvider>
+              </SubagentsProvider>
+            </ClockProvider>
+          </WidgetRegistryProvider>
+        </Provider>
+      </AgentSetupProvider>
+    </VaultProvider>
   </React.StrictMode>,
 )

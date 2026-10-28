@@ -42,6 +42,8 @@ fn caller(credential: &str) -> GithubCaller {
 struct ScriptedGithub {
     device: Mutex<Result<DeviceAuthorization, ApiFailure>>,
     device_requests: Mutex<usize>,
+    hold_device: Mutex<Option<Arc<Notify>>>,
+    device_started: Notify,
     polls: Mutex<VecDeque<Result<PollAnswer, ApiFailure>>>,
     polled: Mutex<usize>,
     /// Held polls wait here until the test lets them answer.
@@ -60,6 +62,8 @@ impl Default for ScriptedGithub {
                 interval: INTERVAL,
             })),
             device_requests: Mutex::new(0),
+            hold_device: Mutex::default(),
+            device_started: Notify::new(),
             polls: Mutex::default(),
             polled: Mutex::new(0),
             hold_polls: Mutex::default(),
@@ -78,6 +82,11 @@ impl ScriptedGithub {
 impl GithubApi for ScriptedGithub {
     async fn request_device_code(&self) -> Result<DeviceAuthorization, ApiFailure> {
         *self.device_requests.lock().unwrap() += 1;
+        self.device_started.notify_one();
+        let hold = self.hold_device.lock().unwrap().clone();
+        if let Some(hold) = hold {
+            hold.notified().await;
+        }
         self.device.lock().unwrap().clone()
     }
     async fn poll(&self, device_code: &DeviceCode) -> Result<PollAnswer, ApiFailure> {
@@ -105,6 +114,10 @@ impl GithubApi for ScriptedGithub {
 #[derive(Default)]
 struct MemoryStore {
     held: Mutex<Option<GithubSignIn>>,
+    hold_load: Mutex<Option<Arc<Notify>>>,
+    load_started: Notify,
+    hold_save: Mutex<Option<Arc<Notify>>>,
+    save_started: Notify,
     unreadable: Mutex<bool>,
     unwritable: Mutex<bool>,
     /// A save writes the file, then fails (its directory not synced).
@@ -113,13 +126,20 @@ struct MemoryStore {
 
 #[async_trait]
 impl GithubTokenStore for MemoryStore {
-    async fn load(&self) -> Result<Option<GithubSignIn>, StoreUnavailable> {
-        if *self.unreadable.lock().unwrap() {
-            return Err(StoreUnavailable);
+    async fn load(&self, _generation: u64) -> Result<Option<GithubSignIn>, StoreUnavailable> {
+        let receipt = if *self.unreadable.lock().unwrap() {
+            Err(StoreUnavailable)
+        } else {
+            Ok(self.held.lock().unwrap().clone())
+        };
+        let hold = self.hold_load.lock().unwrap().clone();
+        if let Some(hold) = hold {
+            self.load_started.notify_one();
+            hold.notified().await;
         }
-        Ok(self.held.lock().unwrap().clone())
+        receipt
     }
-    async fn save(&self, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable> {
+    async fn save(&self, _generation: u64, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable> {
         if *self.unwritable.lock().unwrap() {
             return Err(StoreUnavailable);
         }
@@ -127,9 +147,14 @@ impl GithubTokenStore for MemoryStore {
         if *self.fails_after_writing.lock().unwrap() {
             return Err(StoreUnavailable);
         }
+        let hold = self.hold_save.lock().unwrap().clone();
+        if let Some(hold) = hold {
+            self.save_started.notify_one();
+            hold.notified().await;
+        }
         Ok(())
     }
-    async fn delete(&self) -> Result<(), StoreUnavailable> {
+    async fn delete(&self, _generation: u64) -> Result<(), StoreUnavailable> {
         if *self.unwritable.lock().unwrap() {
             return Err(StoreUnavailable);
         }
@@ -144,6 +169,8 @@ type Refusal = fn(&GithubAuditEvent) -> bool;
 /// Records every event; refuses the ones `refuse` names.
 #[derive(Default)]
 struct RecordingAudit {
+    hold_connected: Mutex<Option<Arc<Notify>>>,
+    connected_started: Notify,
     records: Mutex<Vec<GithubAuditRecord>>,
     refuse: Mutex<Option<Refusal>>,
 }
@@ -162,6 +189,16 @@ impl RecordingAudit {
 #[async_trait]
 impl GithubAudit for RecordingAudit {
     async fn record(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable> {
+        let hold = self.hold_connected.lock().unwrap().clone();
+        if let Some(hold) =
+            hold.filter(|_| matches!(record.event, GithubAuditEvent::Connected { .. }))
+        {
+            self.connected_started.notify_one();
+            hold.notified().await;
+        }
+        self.record_cleanup(record)
+    }
+    fn record_cleanup(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable> {
         if self
             .refuse
             .lock()
@@ -198,6 +235,7 @@ impl Fixture {
     async fn connections(&self) -> GithubConnections {
         GithubConnections::load(
             self.github.clone(),
+            self.store.clone(),
             self.store.clone(),
             self.audit.clone(),
             self.timer.clone(),
@@ -844,4 +882,533 @@ async fn the_time_left_is_counted_down_on_the_timer() {
         fixture.timer.now(),
         Moment::from_origin(Duration::from_secs(4))
     );
+}
+
+impl crate::github::application::GithubAccess for MemoryStore {
+    fn generation(&self) -> Option<u64> {
+        Some(1)
+    }
+}
+
+struct ChangingVault(std::sync::atomic::AtomicU64);
+impl crate::github::application::GithubAccess for ChangingVault {
+    fn generation(&self) -> Option<u64> {
+        match self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            0 => None,
+            value => Some(value),
+        }
+    }
+}
+#[tokio::test]
+async fn a_device_code_from_before_lock_cannot_publish_in_a_new_unlock() {
+    for reopened in [false, true] {
+        let f = Fixture::new();
+        let hold = Arc::new(Notify::new());
+        *f.github.hold_device.lock().unwrap() = Some(hold.clone());
+        let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+        let connections = Arc::new(
+            GithubConnections::load(
+                f.github.clone(),
+                access.clone(),
+                f.store.clone(),
+                f.audit.clone(),
+                f.timer.clone(),
+            )
+            .await,
+        );
+        let started = {
+            let connections = connections.clone();
+            tokio::spawn(async move { connections.connect(caller("desktop")).await })
+        };
+        tokio::time::timeout(Duration::from_secs(5), f.github.device_started.notified())
+            .await
+            .unwrap();
+        access.0.store(0, std::sync::atomic::Ordering::SeqCst);
+        connections.clear_locked().unwrap();
+        if reopened {
+            access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+        }
+        hold.notify_one();
+        assert!(matches!(
+            started.await.unwrap(),
+            Err(GithubError::StoreUnavailable)
+        ));
+        assert!(matches!(
+            connections.status(),
+            GithubStatus::SignedOut { .. }
+        ));
+        assert_eq!(*f.github.polled.lock().unwrap(), 0);
+        assert!(f.audit.records.lock().unwrap().iter().any(|r| matches!(
+            r.event,
+            GithubAuditEvent::ConnectEnded {
+                cause: EndCause::VaultLocked,
+                ..
+            }
+        )));
+    }
+}
+
+#[tokio::test]
+async fn stale_connected_cache_is_not_reused_and_old_cleanup_preserves_new_restore() {
+    let f = Fixture::new();
+    *f.store.held.lock().unwrap() = Some(GithubSignIn {
+        account: octo(),
+        token: token("private-test-token"),
+    });
+    let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+    let connections = GithubConnections::load(
+        f.github.clone(),
+        access.clone(),
+        f.store.clone(),
+        f.audit.clone(),
+        f.timer.clone(),
+    )
+    .await;
+    assert!(connections.token().is_some());
+    access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+    assert!(connections.token().is_none());
+    assert!(matches!(
+        connections.status(),
+        GithubStatus::SignedOut { .. }
+    ));
+    connections.restore().await.unwrap();
+    assert!(connections.token().is_some());
+    connections.clear_locked().unwrap();
+    assert!(connections.token().is_some());
+}
+
+#[tokio::test]
+async fn stale_attempt_retirement_is_once_attributed_and_cleanup_failure_still_drops_codes() {
+    for fail in [false, true] {
+        let f = Fixture::new();
+        let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+        let connections = GithubConnections::load(
+            f.github.clone(),
+            access.clone(),
+            f.store.clone(),
+            f.audit.clone(),
+            f.timer.clone(),
+        )
+        .await;
+        connections
+            .connect(caller("original-desktop"))
+            .await
+            .unwrap();
+        if fail {
+            *f.audit.refuse.lock().unwrap() =
+                Some(|e| matches!(e, GithubAuditEvent::ConnectEnded { .. }));
+        }
+        access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+        let closed = connections.clear_locked();
+        assert_eq!(closed.is_err(), fail);
+        connections.clear_locked().unwrap();
+        assert!(matches!(
+            connections.status(),
+            GithubStatus::SignedOut { .. }
+        ));
+        assert!(connections.token().is_none());
+        let rows = f.audit.records.lock().unwrap();
+        let ends: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.event,
+                    GithubAuditEvent::ConnectEnded {
+                        cause: EndCause::VaultLocked,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(ends.len(), usize::from(!fail));
+        if let Some(end) = ends.first() {
+            assert_eq!(end.caller, caller("original-desktop"));
+            assert_eq!(end.operation_id, rows[0].operation_id);
+        }
+        assert_eq!(*f.github.polled.lock().unwrap(), 0);
+    }
+}
+
+#[tokio::test]
+async fn a_restore_receipt_from_an_old_generation_cannot_revive_its_token() {
+    let f = Fixture::new();
+    *f.store.held.lock().unwrap() = Some(GithubSignIn {
+        account: octo(),
+        token: token("old-receipt"),
+    });
+    let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+    let connections = Arc::new(
+        GithubConnections::load(
+            f.github.clone(),
+            access.clone(),
+            f.store.clone(),
+            f.audit.clone(),
+            f.timer.clone(),
+        )
+        .await,
+    );
+    access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+    let hold = Arc::new(Notify::new());
+    *f.store.hold_load.lock().unwrap() = Some(hold.clone());
+    let pending = {
+        let connections = connections.clone();
+        tokio::spawn(async move { connections.restore().await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), f.store.load_started.notified())
+        .await
+        .unwrap();
+    access.0.store(3, std::sync::atomic::Ordering::SeqCst);
+    connections.clear_locked().unwrap();
+    *f.store.held.lock().unwrap() = Some(GithubSignIn {
+        account: octo(),
+        token: token("current-receipt"),
+    });
+    hold.notify_one();
+    assert!(matches!(
+        pending.await.unwrap(),
+        Err(GithubError::StoreUnavailable)
+    ));
+    assert!(connections.token().is_none());
+    *f.store.hold_load.lock().unwrap() = None;
+    connections.restore().await.unwrap();
+    assert_eq!(connections.token().unwrap().expose(), "current-receipt");
+}
+
+#[tokio::test]
+async fn new_restore_does_not_wait_for_or_get_erased_by_an_old_provider_request() {
+    for rejected in [false, true] {
+        let f = Fixture::new();
+        let hold = Arc::new(Notify::new());
+        *f.github.hold_device.lock().unwrap() = Some(hold.clone());
+        if rejected {
+            *f.github.device.lock().unwrap() = Err(ApiFailure::Unreachable);
+        }
+        let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+        let connections = Arc::new(
+            GithubConnections::load(
+                f.github.clone(),
+                access.clone(),
+                f.store.clone(),
+                f.audit.clone(),
+                f.timer.clone(),
+            )
+            .await,
+        );
+        let pending = {
+            let connections = connections.clone();
+            tokio::spawn(async move { connections.connect(caller("departed-desktop")).await })
+        };
+        tokio::time::timeout(Duration::from_secs(5), f.github.device_started.notified())
+            .await
+            .unwrap();
+        access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+        *f.store.held.lock().unwrap() = Some(GithubSignIn {
+            account: octo(),
+            token: token("new-session-token"),
+        });
+        tokio::time::timeout(Duration::from_secs(5), connections.restore())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(connections.token().unwrap().expose(), "new-session-token");
+        hold.notify_one();
+        assert!(pending.await.unwrap().is_err());
+        assert_eq!(connections.token().unwrap().expose(), "new-session-token");
+    }
+}
+
+#[tokio::test]
+async fn same_generation_disconnect_follows_restore_and_cannot_be_undone_by_its_receipt() {
+    let f = Fixture::new();
+    let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+    let connections = Arc::new(
+        GithubConnections::load(
+            f.github.clone(),
+            access.clone(),
+            f.store.clone(),
+            f.audit.clone(),
+            f.timer.clone(),
+        )
+        .await,
+    );
+    access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+    *f.store.held.lock().unwrap() = Some(GithubSignIn {
+        account: octo(),
+        token: token("captured-before-disconnect"),
+    });
+    let hold = Arc::new(Notify::new());
+    *f.store.hold_load.lock().unwrap() = Some(hold.clone());
+    let restore = {
+        let connections = connections.clone();
+        tokio::spawn(async move { connections.restore().await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), f.store.load_started.notified())
+        .await
+        .unwrap();
+    // Poll the concurrent operation once so its admission is before the receipt.
+    let disconnect = connections.disconnect(caller("disconnecting-desktop"));
+    tokio::pin!(disconnect);
+    tokio::select! {
+        biased;
+        result = &mut disconnect => panic!("disconnect passed an in-flight restore: {result:?}"),
+        _ = std::future::ready(()) => {}
+    }
+    hold.notify_one();
+    restore.await.unwrap().unwrap();
+    disconnect.await.unwrap();
+    assert!(connections.token().is_none());
+    assert!(f.store.held.lock().unwrap().is_none());
+    assert!(matches!(
+        connections.status(),
+        GithubStatus::SignedOut { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_failed_restore_cannot_erase_a_same_generation_connect_owner() {
+    let f = Fixture::new();
+    let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+    let connections = Arc::new(
+        GithubConnections::load(
+            f.github.clone(),
+            access.clone(),
+            f.store.clone(),
+            f.audit.clone(),
+            f.timer.clone(),
+        )
+        .await,
+    );
+    access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+    *f.store.unreadable.lock().unwrap() = true;
+    let hold = Arc::new(Notify::new());
+    *f.store.hold_load.lock().unwrap() = Some(hold.clone());
+    let restore = {
+        let connections = connections.clone();
+        tokio::spawn(async move { connections.restore().await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), f.store.load_started.notified())
+        .await
+        .unwrap();
+    let connect = connections.connect(caller("current-desktop"));
+    tokio::pin!(connect);
+    tokio::select! {
+        biased;
+        result = &mut connect => panic!("connect passed an in-flight restore: {result:?}"),
+        _ = std::future::ready(()) => {}
+    }
+    hold.notify_one();
+    assert!(matches!(
+        restore.await.unwrap(),
+        Err(GithubError::StoreUnavailable)
+    ));
+    connect.await.unwrap();
+    assert!(matches!(
+        connections.status(),
+        GithubStatus::Connecting { .. }
+    ));
+    connections.cancel(caller("current-desktop")).await.unwrap();
+    let rows = f.audit.records.lock().unwrap();
+    let requested = rows
+        .iter()
+        .find(|row| matches!(row.event, GithubAuditEvent::ConnectRequested))
+        .unwrap();
+    let cancelled = rows
+        .iter()
+        .find(|row| matches!(row.event, GithubAuditEvent::ConnectCancelled { .. }))
+        .unwrap();
+    assert_eq!(requested.operation_id, cancelled.operation_id);
+    assert_eq!(cancelled.caller, caller("current-desktop"));
+}
+
+#[tokio::test]
+async fn approved_sign_in_stays_connecting_until_audit_and_store_receipts() {
+    for audit_wait in [true, false] {
+        let f = Fixture::new();
+        let hold = Arc::new(Notify::new());
+        if audit_wait {
+            *f.audit.hold_connected.lock().unwrap() = Some(hold.clone());
+        } else {
+            *f.store.hold_save.lock().unwrap() = Some(hold.clone());
+        }
+        let connections = f.connections().await;
+        connections.connect(caller("desktop")).await.unwrap();
+        f.github
+            .answer([Ok(PollAnswer::Granted(token("approved-token")))]);
+        f.next_poll().await;
+        let reached = if audit_wait {
+            &f.audit.connected_started
+        } else {
+            &f.store.save_started
+        };
+        tokio::time::timeout(Duration::from_secs(5), reached.notified())
+            .await
+            .unwrap();
+        let waiting = connections.status();
+        let exposed = connections.token();
+        hold.notify_one();
+        assert!(
+            matches!(waiting, GithubStatus::Connecting { .. }),
+            "premature terminal status during audit_wait={audit_wait}: {waiting:?}"
+        );
+        assert!(exposed.is_none(), "no credential before both receipts");
+        f.settled(&connections, |status| {
+            matches!(status, GithubStatus::Connected { .. })
+        })
+        .await;
+        assert_eq!(connections.token().unwrap().expose(), "approved-token");
+    }
+}
+
+#[tokio::test]
+async fn disconnect_during_approved_receipts_waits_and_removes_the_saved_sign_in() {
+    for audit_wait in [true, false] {
+        let f = Fixture::new();
+        let hold = Arc::new(Notify::new());
+        if audit_wait {
+            *f.audit.hold_connected.lock().unwrap() = Some(hold.clone());
+        } else {
+            *f.store.hold_save.lock().unwrap() = Some(hold.clone());
+        }
+        let connections = f.connections().await;
+        connections.connect(caller("desktop")).await.unwrap();
+        f.github
+            .answer([Ok(PollAnswer::Granted(token("approved-token")))]);
+        f.next_poll().await;
+        let reached = if audit_wait {
+            &f.audit.connected_started
+        } else {
+            &f.store.save_started
+        };
+        tokio::time::timeout(Duration::from_secs(5), reached.notified())
+            .await
+            .unwrap();
+        let disconnect = connections.disconnect(caller("disconnecting-desktop"));
+        tokio::pin!(disconnect);
+        tokio::select! {
+            biased;
+            result = &mut disconnect => panic!("disconnect overtook pending receipts: {result:?}"),
+            _ = std::future::ready(()) => {}
+        }
+        hold.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), disconnect)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(connections.status(), signed_out(None));
+        assert!(connections.token().is_none());
+        assert!(f.store.held.lock().unwrap().is_none());
+        assert!(matches!(
+            f.audit.events().last(),
+            Some(GithubAuditEvent::Disconnected)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn a_closed_vault_during_approved_receipts_preserves_a_new_restoration_and_terminal_owner() {
+    for audit_wait in [true, false] {
+        let f = Fixture::new();
+        let access = Arc::new(ChangingVault(std::sync::atomic::AtomicU64::new(1)));
+        let connections = GithubConnections::load(
+            f.github.clone(),
+            access.clone(),
+            f.store.clone(),
+            f.audit.clone(),
+            f.timer.clone(),
+        )
+        .await;
+        let hold = Arc::new(Notify::new());
+        if audit_wait {
+            *f.audit.hold_connected.lock().unwrap() = Some(hold.clone());
+        } else {
+            *f.store.hold_save.lock().unwrap() = Some(hold.clone());
+        }
+        connections
+            .connect(caller("original-desktop"))
+            .await
+            .unwrap();
+        f.github
+            .answer([Ok(PollAnswer::Granted(token("old-approved-token")))]);
+        f.next_poll().await;
+        let reached = if audit_wait {
+            &f.audit.connected_started
+        } else {
+            &f.store.save_started
+        };
+        tokio::time::timeout(Duration::from_secs(5), reached.notified())
+            .await
+            .unwrap();
+        // Queue a real old-generation command: its eventual rejection proves
+        // the old completion released its generation gate after publication.
+        let cancel = connections.cancel(caller("departed-desktop"));
+        tokio::pin!(cancel);
+        tokio::select! {
+            biased;
+            result = &mut cancel => panic!("cancel overtook pending receipts: {result:?}"),
+            _ = std::future::ready(()) => {}
+        }
+        access.0.store(0, std::sync::atomic::Ordering::SeqCst);
+        connections.clear_locked().unwrap();
+        connections.clear_locked().unwrap();
+        assert_eq!(connections.status(), signed_out(None));
+        assert!(connections.token().is_none());
+        let before = f.audit.events();
+        assert!(!before
+            .iter()
+            .any(|event| matches!(event, GithubAuditEvent::ConnectEnded { .. })));
+        access.0.store(2, std::sync::atomic::Ordering::SeqCst);
+        *f.store.held.lock().unwrap() = Some(GithubSignIn {
+            account: octo(),
+            token: token("new-session-token"),
+        });
+        // When the old save has not started, model the scoped store's refusal.
+        // Real read/save/delete generation fences are exercised by token_vault tests.
+        *f.store.unwritable.lock().unwrap() = audit_wait;
+        tokio::time::timeout(Duration::from_secs(5), connections.restore())
+            .await
+            .unwrap()
+            .unwrap();
+        hold.notify_one();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), cancel)
+                .await
+                .unwrap(),
+            Err(GithubError::StoreUnavailable)
+        ));
+        assert_eq!(connections.token().unwrap().expose(), "new-session-token");
+        assert_eq!(
+            f.store
+                .held
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .token
+                .expose(),
+            "new-session-token"
+        );
+        let rows = f.audit.records.lock().unwrap();
+        let ends: Vec<_> = rows
+            .iter()
+            .filter(|row| matches!(row.event, GithubAuditEvent::ConnectEnded { .. }))
+            .collect();
+        assert_eq!(ends.len(), usize::from(audit_wait));
+        if let Some(ended) = ends.first() {
+            assert_eq!(ended.operation_id, rows[0].operation_id);
+            assert_eq!(ended.caller, caller("original-desktop"));
+            assert!(matches!(
+                ended.event,
+                GithubAuditEvent::ConnectEnded {
+                    cause: EndCause::VaultLocked,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            rows.iter()
+                .filter(|row| matches!(row.event, GithubAuditEvent::Connected { .. }))
+                .count(),
+            1
+        );
+    }
 }

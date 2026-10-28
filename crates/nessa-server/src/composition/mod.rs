@@ -47,6 +47,7 @@ mod env_grant_command;
 mod env_serve_command;
 #[cfg(unix)]
 mod github;
+mod github_relay;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;
@@ -101,3 +102,7 @@ mod peer_reading_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
+
+mod vault;
+
+mod vault_session;

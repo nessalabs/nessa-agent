@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 91,
+          "maxItems": 99,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -3270,7 +3270,7 @@
         },
         "environment": {
           "type": "string",
-          "enum": ["here", "ssh", "peer"],
+          "enum": ["here", "ssh", "peer", "boat"],
           "description": "Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files."
         },
         "host": {
@@ -6348,14 +6348,41 @@
       },
       "required": ["userCode", "verificationUri", "expiresInSeconds"]
     },
+    "GithubLiveEvents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "repositories": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "gaps": { "type": "integer", "minimum": 0, "maximum": 16 }
+      },
+      "required": ["enabled", "repositories", "gaps"],
+      "description": "Live delivery is opted in for this gateway's signed-in GitHub account. Gaps report expired catch-up history; they are not acknowledged automatically."
+    },
+    "GithubLiveEventsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "acceptGaps": {
+          "type": "boolean",
+          "description": "Explicit acknowledgement of missing history, continue within retained events."
+        }
+      },
+      "required": ["enabled"]
+    },
     "GithubConnection": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
+      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its passphrase-protected local vault, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
       "properties": {
         "state": {
           "$ref": "#/$defs/GithubConnectState",
           "description": "Where the sign-in stands."
+        },
+        "liveEvents": {
+          "$ref": "#/$defs/GithubLiveEvents",
+          "description": "Present when this build stage has a live relay configured."
         },
         "account": {
           "$ref": "#/$defs/GithubAccount",
@@ -6390,9 +6417,12 @@
         "github_unreachable",
         "github_rejected",
         "github_storage_unavailable",
-        "github_audit_unavailable"
+        "github_audit_unavailable",
+        "github_live_unavailable",
+        "github_live_capacity",
+        "vault_locked"
       ],
-      "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
+      "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the encrypted local vault could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
     },
     "PeerEnrollParams": {
       "type": "object",
@@ -7855,6 +7885,20 @@
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "When the channel was made, in Unix milliseconds; 0 for the default channel."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+        },
+        "coordinatorConversationId": {
+          "type": ["string", "null"],
+          "description": "Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity."
         }
       },
       "required": [
@@ -7865,7 +7909,10 @@
         "agent",
         "model",
         "approvalMode",
-        "createdAtMs"
+        "createdAtMs",
+        "coordinatorPlacement",
+        "threadPlacement",
+        "coordinatorConversationId"
       ]
     },
     "ChannelCreateParams": {
@@ -7928,6 +7975,16 @@
             "x-utf8MaxBytes": 4096
           },
           "description": "Existing absolute files and folders to attach, none twice, at most x-channelRules.maxResourceBytes of paths in all; omitted is none."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
         }
       },
       "required": ["requestId", "name", "agent", "model"]
@@ -8022,6 +8079,104 @@
         }
       },
       "required": ["revision", "applied"]
+    },
+    "VaultState": {
+      "type": "string",
+      "enum": ["unconfigured", "locked", "unlocked"],
+      "description": "The local vault state. Unlock belongs to the connection that proved its passphrase; closing its owner locks the vault."
+    },
+    "VaultStatus": {
+      "description": "The current state of the local encrypted vault; never includes secret contents.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/VaultState",
+          "description": "Whether protected local credentials are unconfigured, locked, or available to this app session."
+        }
+      },
+      "required": ["state"]
+    },
+    "VaultPassphraseParams": {
+      "description": "Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "passphrase": {
+          "type": "string",
+          "description": "Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json."
+        }
+      },
+      "required": ["passphrase"]
+    },
+    "VaultErrorCode": {
+      "type": "string",
+      "enum": [
+        "vault_unavailable",
+        "vault_locked",
+        "vault_passphrase_policy",
+        "vault_wrong_passphrase",
+        "vault_busy",
+        "vault_cooldown",
+        "vault_session_closed",
+        "vault_session_owned",
+        "vault_already_configured",
+        "vault_capacity",
+        "vault_audit_unavailable",
+        "vault_migration_unavailable"
+      ],
+      "description": "Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault."
+    },
+    "BoatSaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Boat infrastructure token. Never returned or logged."
+        }
+      },
+      "required": ["token"],
+      "description": "Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription."
+    },
+    "BoatErrorCode": {
+      "description": "Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
+      "type": "string",
+      "enum": [
+        "vault_locked",
+        "boat_not_configured",
+        "invalid_request",
+        "boat_storage_unavailable",
+        "boat_resource_missing",
+        "boat_unreachable",
+        "boat_worker_unavailable",
+        "boat_environment_blocks_credentials",
+        "boat_provisioning_uncertain",
+        "boat_cleanup_uncertain"
+      ]
+    },
+    "BoatStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["locked", "disconnected", "connected"],
+          "description": "Locked when the vault cannot be read, disconnected when no connection is saved, or connected after validation and encrypted persistence."
+        },
+        "environment": {
+          "type": "string",
+          "description": "The dedicated Boat environment saved with this connection; present only while connected."
+        },
+        "image": {
+          "type": "string",
+          "description": "The release-owned shared worker image saved with this connection; present only while connected."
+        }
+      },
+      "required": ["state"],
+      "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
     }
   }
 }
