@@ -324,7 +324,7 @@ test("apt installs and every CI job are bounded", () => {
   )
   assert.match(
     script,
-    /candidate="\$\(LC_ALL=C apt-cache policy webkit2gtk-driver \| awk '\/\^  Candidate:\/ \{ print \$2; exit \}'\)"\r?\n {4}if \[ -z "\$candidate" \] \|\| \[ "\$candidate" = "\(none\)" \]; then\r?\n {6}resolved\+=\(webkitgtk-webdriver\)/,
+    /candidate="\$\(LC_ALL=C apt-cache policy webkit2gtk-driver \| awk '\/\^  Candidate:\/ \{ candidate=\$2 \} END \{ if \(candidate != ""\) print candidate \}'\)"\r?\n {4}if \[ -z "\$candidate" \] \|\| \[ "\$candidate" = "\(none\)" \]; then\r?\n {6}resolved\+=\(webkitgtk-webdriver\)/,
   )
   assert.match(
     script,
