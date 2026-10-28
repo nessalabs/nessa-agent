@@ -91,10 +91,14 @@ impl ProviderSessionBackend for GatedBackend {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            let input = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -150,11 +154,15 @@ impl ProviderSessionBackend for GatedBackend {
     fn steer<'a>(
         &'a self,
         target: ExecutionId,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
+            let input = input.await.map_err(|error| {
+                started();
+                ProviderOperationFailure::new(error, ProviderSessionState::Usable)
+            })?;
             let result: Result<SteeringOutcome, AgentError> = {
                 async move {
                     if self.provider.panic_before_started.load(Ordering::SeqCst) {

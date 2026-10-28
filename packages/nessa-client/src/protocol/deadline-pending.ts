@@ -42,6 +42,8 @@ export function deadlinePendingLine(
   if (!Number.isFinite(remainingMs) || remainingMs <= 0)
     return `If nobody answers, this is ${outcome}${stop}.`
   const seconds = Math.ceil(remainingMs / 1000)
-  const unit = seconds === 1 ? "second" : "seconds"
-  return `If nobody answers within ${seconds} ${unit}, this is ${outcome}${stop}.`
+  // Past a minute, whole minutes: "within 5 minutes", not "within 300 seconds".
+  const [count, unit] =
+    seconds > 60 ? [Math.ceil(seconds / 60), "minute"] : [seconds, "second"]
+  return `If nobody answers within ${count} ${unit}${count === 1 ? "" : "s"}, this is ${outcome}${stop}.`
 }

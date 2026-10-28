@@ -1,6 +1,25 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use super::agent::AgentsConfig;
 #[cfg(unix)]
+use crate::{
+    conversation::{
+        application::{ChannelStore, ThreadEnvironments},
+        infrastructure::{
+            ssh_environment::{DurableEnvironmentAudit, EnvironmentAudit, EnvironmentEvent},
+            LocalChannelStore, ThreadWorkspaces,
+        },
+    },
+    workspaces::{
+        application::{RecoveryAudit, RecoveryEvent, Workspaces},
+        domain::Failure as WorkspaceFailure,
+        infrastructure::{
+            worker_image, BoatProvider, ConfigRuntimeSettings, FileAssignments,
+            RuntimeSettingsAudit, VaultSettings,
+        },
+    },
+};
+
+#[cfg(unix)]
 use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 #[cfg(unix)]
 use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
@@ -10,6 +29,8 @@ use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 use crate::conversation::infrastructure::NessaRecordWatches;
 #[cfg(unix)]
 use crate::mcp_servers::application::BuiltInServer;
+#[cfg(unix)]
+use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
 #[cfg(unix)]
 use crate::{
     agent_warm_up::{
@@ -83,6 +104,8 @@ use nessa_protocol::{
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
+#[cfg(unix)]
+use nessa_sdk::infrastructure::clock::RuntimeClock;
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 #[cfg(unix)]
@@ -230,6 +253,63 @@ pub(super) async fn product_state(
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
+    let vault = super::vault::compose(namespace);
+    #[cfg(unix)]
+    let workspace_audit = DurableEnvironmentAudit::new(
+        namespace.join("boat-environment-audit"),
+        Arc::new(SystemClock),
+    )
+    .map_err(setup_error)?;
+    #[cfg(unix)]
+    let runtime_settings = {
+        Arc::new(ConfigRuntimeSettings {
+            config: Arc::new(ConfigJson::new(
+                Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
+                    namespace,
+                ))),
+                ConfigCheck {
+                    limit: super::runtime_config::MAX_CONFIG_BYTES,
+                    parses: Box::new(|bytes| {
+                        super::runtime_config::RuntimeConfig::parse(bytes).is_ok()
+                    }),
+                },
+                Arc::new(RuntimeClock::new()),
+            )),
+            audit: Arc::new(
+                RuntimeSettingsAudit::new(
+                    namespace.join("boat-runtime-audit"),
+                    Arc::new(SystemClock),
+                )
+                .map_err(|_| setup_error("Boat runtime audit unavailable"))?,
+            ),
+            next_id: Arc::new(Uuid::new_v4),
+        })
+    };
+    #[cfg(unix)]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(unix)]
+    let workspace_service = Arc::new(
+        Workspaces::new(
+            Arc::new(VaultSettings(vault.vault.clone())),
+            Arc::new(BoatProvider {
+                http: reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(45))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(setup_error)?,
+                api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
+                // SAFETY: geteuid has no preconditions.
+                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
+                    libc::geteuid()
+                }),
+                relay_program: std::env::current_exe().map_err(setup_error)?,
+            }),
+            Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
+            Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
+            runtime_settings,
+        )
+        .with_image(worker_image()),
+    );
     let inventory =
         Arc::new(CommittedInventory::open(namespace, Arc::new(SystemClock)).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
@@ -270,6 +350,24 @@ pub(super) async fn product_state(
         }
         _ => None,
     };
+    // The web tunnel rides the native listener. With none to run, a
+    // provider program an earlier run left running is ended.
+    #[cfg(unix)]
+    let tunnel = match (&settings.native, &native) {
+        (Some(config), Some(_)) => config
+            .tunnel
+            .as_ref()
+            .map(|tunnel| super::tunnel::prepare(namespace, tunnel)),
+        _ => None,
+    };
+    #[cfg(unix)]
+    if tunnel
+        .as_ref()
+        .and_then(super::tunnel::PreparedTunnel::setting)
+        .is_none()
+    {
+        super::tunnel::release_kept(namespace);
+    }
     let credential_namespace = CredentialNamespace::new(
         config.stage.as_str().to_owned(),
         config.instance().map(str::to_owned),
@@ -299,7 +397,7 @@ pub(super) async fn product_state(
     // The GitHub sign-in, composed where agents are: they are what it is for.
     #[cfg(unix)]
     let github = match &settings.agents {
-        Some(_) => super::github::compose(namespace).await,
+        Some(_) => super::github::compose(namespace, config, vault.vault.clone()).await,
         None => None,
     };
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
@@ -321,6 +419,10 @@ pub(super) async fn product_state(
                     packaged_agents,
                     record_origin.clone(),
                     ConversationSettings {
+                        #[cfg(unix)]
+                        workspace_service: workspace_service.clone(),
+                        #[cfg(unix)]
+                        workspace_audit: workspace_audit.clone(),
                         read_work_budget: limits.read_work_budget(),
                         live_conversations: limits.live_conversations(),
                         agent_idle: limits.agent_idle(),
@@ -413,6 +515,7 @@ pub(super) async fn product_state(
             agent_probe,
         },
     )
+    .with_vault(vault)
     .with_caller_kinds(caller_kinds)
     .with_admin(admin)
     .with_fence_capture(inventory)
@@ -438,6 +541,10 @@ pub(super) async fn product_state(
     }
     product.browser_http_allowed = config.browser_http_allowed();
     #[cfg(unix)]
+    {
+        product = product.with_workspaces(workspace_service);
+    }
+    #[cfg(unix)]
     if let Some(github) = github {
         product = product.with_github(github.routes);
     }
@@ -447,7 +554,6 @@ pub(super) async fn product_state(
     // comes to run.
     #[cfg(unix)]
     {
-        use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
         let config = ConfigJson::new(
             Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
                 namespace,
@@ -458,7 +564,7 @@ pub(super) async fn product_state(
                     super::runtime_config::RuntimeConfig::parse(bytes).is_ok()
                 }),
             },
-            Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
+            Arc::new(RuntimeClock::new()),
         );
         let audit = crate::device_pairing::infrastructure::DurableLinkingAudit::new(
             conversation_root(namespace)
@@ -466,21 +572,38 @@ pub(super) async fn product_state(
                 .join("native-linking"),
             Arc::new(SystemClock),
         );
-        product = product.with_native_linking(Arc::new(super::native_linking::ConfigLinking::new(
+        let linking = super::native_linking::ConfigLinking::new(
             Arc::new(config),
             Arc::new(audit),
             native.is_some(),
             restart.clone(),
-        )));
+        )
+        .with_tunnel(
+            crate::tunnel::infrastructure::files::TunnelFiles::new(namespace),
+            match &tunnel {
+                Some(tunnel) => tunnel.running(),
+                None => tokio::sync::watch::channel(None).1,
+            },
+        );
+        product = product.with_native_linking(Arc::new(linking));
+        if let Some(tunnel) = &tunnel {
+            product = product.with_tunnel(tunnel.view());
+        }
     }
     let (listener_environments, connected_environments) = environment_peers.unzip();
     let native = match native {
         Some((prepared, commands, peers)) => {
             product = product.with_pairing(Arc::new(commands)).with_peers(peers);
-            Some(match listener_environments {
+            let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,
-            })
+            };
+            #[cfg(unix)]
+            let prepared = match tunnel {
+                Some(tunnel) => prepared.with_tunnel(tunnel),
+                None => prepared,
+            };
+            Some(prepared)
         }
         None => None,
     };
@@ -660,6 +783,10 @@ type PairedParts = (
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    #[cfg(unix)]
+    workspace_service: Arc<Workspaces>,
+    #[cfg(unix)]
+    workspace_audit: Arc<dyn EnvironmentAudit>,
     /// How much work one passive read may do.
     read_work_budget: std::time::Duration,
     /// The most conversations open, each with its agent, at once.
@@ -1006,6 +1133,8 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
+        workspace_service,
+        workspace_audit,
         read_work_budget,
         live_conversations,
         agent_idle,
@@ -1095,6 +1224,17 @@ async fn conversations(
     );
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    let channels_path = root.join("channels.sqlite3");
+    let channel_store: Arc<dyn ChannelStore> =
+        Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
+            RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
+        })?);
+    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
+        service: workspace_service,
+        channels: channel_store.clone(),
+        audit: workspace_audit,
+        environments: Default::default(),
+    });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
@@ -1324,7 +1464,14 @@ async fn conversations(
         serving,
         organization,
     )?;
+    let environment = environment.with_workspaces(workspace_environments);
     let dependencies = ConversationDependencies {
+        input_files: Some(Arc::new(
+            crate::conversation::application::InputFileDelivery {
+                local: Arc::new(crate::conversation::infrastructure::LocalInputFiles),
+                timer: Arc::new(crate::timer::TokioTimer::new()),
+            },
+        )),
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
         storage: storage.clone(),
@@ -1401,13 +1548,8 @@ async fn conversations(
     ));
     // Channels and which conversation is in which; a channel with no chosen
     // folder works in `<data>/channels/<id>`.
-    let channels_path = root.join("channels.sqlite3");
     service.bind_channels(
-        Arc::new(
-            crate::conversation::infrastructure::LocalChannelStore::open(&channels_path).map_err(
-                |cause| RunError::opening(crate::core::Dataset::Channels, &channels_path, cause),
-            )?,
-        ),
+        channel_store,
         Arc::new(
             crate::conversation::infrastructure::LocalChannelFolders::new(
                 directory
@@ -1775,3 +1917,51 @@ impl crate::agents::application::CallerKindSource
 #[cfg(all(test, unix))]
 #[path = "../../tests/composition/local_auth.rs"]
 mod tests;
+
+#[cfg(unix)]
+struct WorkspaceRecoveryAudit(Arc<dyn EnvironmentAudit>);
+#[cfg(unix)]
+impl RecoveryAudit for WorkspaceRecoveryAudit {
+    fn record(&self, event: &RecoveryEvent) -> Result<(), WorkspaceFailure> {
+        let record = match event {
+            RecoveryEvent::AdmissionRefused {
+                thread,
+                vm,
+                admission,
+                rejection,
+                disposition,
+            } => EnvironmentEvent::WorkspaceAdmissionRefused {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                environment_id: admission.id().into(),
+                environment_version_id: admission.version_id().into(),
+                environment_version: admission.version(),
+                cause: rejection.cause().as_str().into(),
+                disposition: disposition.as_str().into(),
+                observed_environment: rejection.observed().and_then(|o| o.name.clone()),
+                observed_version: rejection.observed().and_then(|o| o.version),
+            },
+            RecoveryEvent::ReceiptSaveFailed {
+                thread,
+                vm,
+                disposition,
+            } => EnvironmentEvent::WorkspaceReceiptSaveFailed {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                disposition: disposition.as_str().into(),
+            },
+            RecoveryEvent::RollbackObserved {
+                thread,
+                vm,
+                confirmed,
+            } => EnvironmentEvent::WorkspaceRollbackObserved {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                confirmed: *confirmed,
+            },
+        };
+        self.0
+            .record(&record)
+            .map_err(|_| WorkspaceFailure::Storage)
+    }
+}

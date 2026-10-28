@@ -30,6 +30,7 @@ invocations: [
                         path: "/tmp/notes.txt",
                     },
                 ],
+                uploads: [],
                 sender: Person,
                 app_model_context: [],
                 notes: [],

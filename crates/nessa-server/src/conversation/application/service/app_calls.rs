@@ -627,6 +627,7 @@ impl ConversationService {
                 caller,
                 execution_id.clone(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: message.text,
                     images: Vec::new(),
                     files: Vec::new(),

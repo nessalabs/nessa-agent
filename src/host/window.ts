@@ -53,6 +53,9 @@ const HOST_EVENTS = {
   attachmentDragging: "nessa://attachment-dragging",
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
+  pathsDragging: "nessa://paths-dragging",
+  pathsDropBegan: "nessa://paths-drop-began",
+  pathsDropped: "nessa://paths-dropped",
   gatewayStartup: "nessa://gateway-startup",
   runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
@@ -565,6 +568,43 @@ export async function chooseChannelResources(
   if (!inTauri) return []
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<string[]>("choose_channel_resources", { folders: kind === "folders" })
+}
+
+/** A file or folder dragged onto the desktop window, as the host names it. */
+export interface DroppedPath {
+  path: string
+  kind: "file" | "folder"
+}
+
+/**
+ * Be told of files and folders dragged onto the desktop window: `dragging`
+ * while a drag carrying paths is over it, `began` the moment a drop lands
+ * (named), and `dropped` with the paths it let go of, under the same name,
+ * once the host has looked at them (which can be a couple of seconds later). The window receives no drop events of its own (the webview's drag and
+ * drop belongs to the host), and a DOM `File` names no path, so this is the
+ * only way the page learns where a dropped file is. Only paths, like the
+ * channel pickers': the gateway checks each again before using it.
+ */
+export async function onPathsDragged(handlers: {
+  dragging: (over: boolean) => void
+  began: (drop: string) => void
+  dropped: (drop: string, paths: DroppedPath[], unread: number) => void
+}): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  const stops = await Promise.all([
+    listen<{ dragging: boolean }>(HOST_EVENTS.pathsDragging, ({ payload }) =>
+      handlers.dragging(payload.dragging),
+    ),
+    listen<{ drop: string }>(HOST_EVENTS.pathsDropBegan, ({ payload }) =>
+      handlers.began(payload.drop),
+    ),
+    listen<{ drop: string; paths: DroppedPath[]; unread: number }>(
+      HOST_EVENTS.pathsDropped,
+      ({ payload }) => handlers.dropped(payload.drop, payload.paths, payload.unread),
+    ),
+  ])
+  return () => stops.forEach((stop) => stop())
 }
 
 /** The person's home folder, to write paths under it from `~`; `null` outside Tauri. */
@@ -1310,4 +1350,15 @@ export async function writeClipboardText(text: string): Promise<void> {
   }
   if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable.")
   await navigator.clipboard.writeText(text)
+}
+
+/** Transient local-vault input; the native host retains one app-owned connection.
+ * Browser composition uses the gateway adapter instead of invoking this seam. */
+export async function vaultCommand(request: {
+  operation: "status" | "setup" | "unlock" | "lock"
+  passphrase?: string
+}): Promise<unknown> {
+  if (!inTauri) return undefined
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("vault_command", { request })
 }

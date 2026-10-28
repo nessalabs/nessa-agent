@@ -562,6 +562,19 @@
             "type": "Ask"
           }
         }
+      },
+      "channel.settings": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person"
+          ],
+          "resourceTypes": [
+            "Channel"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
       }
     }
   }

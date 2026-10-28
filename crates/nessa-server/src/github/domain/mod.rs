@@ -10,13 +10,14 @@ pub struct GithubAccount {
 
 /// A user access token for the Nessa GitHub App. `Debug` does not print it.
 #[derive(Clone, PartialEq, Eq)]
-pub struct AccessToken(String);
+pub struct AccessToken(zeroize::Zeroizing<String>);
 
 impl AccessToken {
     /// `None` for an empty token or one holding a control character, which
     /// no header or environment variable could carry.
     pub fn new(token: String) -> Option<Self> {
-        (!token.is_empty() && !token.chars().any(char::is_control)).then_some(Self(token))
+        (!token.is_empty() && !token.chars().any(char::is_control))
+            .then_some(Self(zeroize::Zeroizing::new(token)))
     }
     /// The token itself, for the one header or variable it is sent in.
     pub fn expose(&self) -> &str {

@@ -1,15 +1,16 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
+    read_access::CatalogueReader,
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
-    ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate, QuestionChoiceInput,
-    ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError, RuleChange,
-    RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
-    UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
+    QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
+    RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
+    SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
@@ -106,6 +107,19 @@ async fn answer(
     ) {
         return Ok(dispatch_permission_rules(state, session, frame).await);
     }
+    // Catalogue refusal precedes service availability (row L12). Retain the
+    // admitted scope for the read rather than resolving the binding again.
+    let list_scope = if matches!(
+        frame.method.as_str(),
+        "conversation.list" | "conversation.observe"
+    ) {
+        match super::read_access::admit_list(state, session).await {
+            Ok(scope) => Some(scope),
+            Err(code) => return Ok(failure(&frame.id, code)),
+        }
+    } else {
+        None
+    };
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
@@ -352,33 +366,33 @@ async fn answer(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
-                let listed = read_list(
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
+                let (listed, _) = read_list(
                     state,
                     service,
                     session,
                     archived.unwrap_or(false),
                     &frame.id,
+                    scope,
                 )
                 .await?;
                 Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,
                 };
                 let observed = service
-                    .observe(
+                    .observe_for(
                         caller(frame.id.clone()),
                         params.archived.unwrap_or(false),
                         cursor,
+                        &scope.reader,
+                        &scope.owner,
+                        scope.policy.as_deref(),
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
@@ -497,6 +511,7 @@ async fn answer(
                             || params.text.is_some()
                             || params.attachments.is_some()
                             || params.files.is_some()
+                            || params.uploads.is_some()
                         {
                             return Err(ConversationError::InvalidInput);
                         }
@@ -1064,16 +1079,24 @@ pub(super) async fn read_list(
     session: &AuthenticatedSession,
     archived: bool,
     request_id: &str,
-) -> Result<ConversationListResult, ConversationError> {
+    scope: &CatalogueReader,
+) -> Result<(ConversationListResult, Option<CatalogueHead>), ConversationError> {
     let listed = service
-        .list(caller(session, request_id.to_owned()), archived)
+        .list_for(
+            caller(session, request_id.to_owned()),
+            archived,
+            &scope.reader,
+            &scope.owner,
+            scope.policy.as_deref(),
+        )
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    let listed = list_result(listed?);
+    let (listed, head) = listed?;
+    let listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
-    Ok(listed)
+    Ok((listed, head))
 }
 
 fn usage_limit_preference_facts(
@@ -1159,6 +1182,7 @@ fn requested_conversation_from_receipt(
         || params.text.is_some()
         || params.attachments.is_some()
         || params.files.is_some()
+        || params.uploads.is_some()
     {
         return Err(ConversationError::InvalidInput);
     }
@@ -1179,6 +1203,18 @@ fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
 }
 fn submitted_message(params: &ConversationSendParams) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone(),
         images: params
             .attachments
@@ -1213,6 +1249,18 @@ fn submitted_message_from_receipt(
         return Err(ConversationError::InvalidInput);
     }
     Ok(SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone().ok_or(ConversationError::InvalidInput)?,
         images: params
             .attachments

@@ -1,12 +1,14 @@
 //! File loading belongs to composition; consumers receive typed settings.
 use super::agent::AgentsConfig;
+use crate::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 use crate::{
-    conversation::domain::CommandPolicy,
+    conversation::{domain::CommandPolicy, infrastructure::BoatRuntimeConfig},
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
 use nessa_auth::{adapters::local::LocalStoreConfig, domain::pairing::OwnerPhoneRequest};
 pub(super) use nessa_protocol::relay::RelayAddress;
+use nessa_protocol::tunnel::TunnelAddress;
 use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
 use serde::Deserialize;
 use std::{
@@ -40,6 +42,8 @@ pub(super) struct RuntimeConfig {
     /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.
     pub limits: LimitsConfig,
     pub agents: Option<AgentsConfig>,
+    /// Ordinary VM lifetime defaults and channel overrides, never credentials.
+    pub boat: BoatRuntimeConfig,
     /// Native device pairing; absent, `null` or `"enabled": false` keeps it
     /// off (design rows S1, S2). Settings › Linked devices writes it
     /// (`native_linking`).
@@ -111,6 +115,104 @@ pub(super) struct NativeConfig {
     /// listener's. Absent, a wildcard listener is not disclosed.
     #[serde(default)]
     pub advertised_address: Option<IpAddr>,
+    /// The web tunnel (`docs/design/auth/tunnel.md`): absent, `null` or
+    /// `"enabled": false` keeps it off. Settings writes it
+    /// (`pairing.setTunnel`).
+    #[serde(default, deserialize_with = "tunnel_section")]
+    #[cfg_attr(not(unix), allow(dead_code))] // served by the Unix composition only
+    pub tunnel: Option<TunnelConfig>,
+}
+
+/// The web tunnel as `config.json` names it. A named tunnel's token is not
+/// here: it is a private file beside the gateway's state
+/// (`tunnel::infrastructure::files`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TunnelConfig {
+    /// The loopback address the provider forwards to.
+    pub ingress: SocketAddr,
+    pub mode: TunnelMode,
+    /// A named tunnel's public address; required for one.
+    pub hostname: Option<TunnelAddress>,
+}
+
+/// `native.tunnel` as written: [`TunnelConfig`]'s fields, the provider
+/// (only `cloudflare` so far) and `enabled`. False keeps the rest, so on
+/// again finds it; absent is on. Off reads as no section.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct TunnelSection {
+    #[serde(default = "on")]
+    pub enabled: bool,
+    /// Only `cloudflare` parses; anything else is refused at startup.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub provider: TunnelProviderName,
+    #[serde(default)]
+    pub mode: TunnelModeName,
+    #[serde(default)]
+    pub hostname: Option<TunnelAddress>,
+    #[serde(default)]
+    pub ingress: Option<SocketAddr>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum TunnelProviderName {
+    #[default]
+    Cloudflare,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum TunnelModeName {
+    #[default]
+    Quick,
+    Named,
+}
+
+impl From<TunnelModeName> for TunnelMode {
+    fn from(mode: TunnelModeName) -> Self {
+        match mode {
+            TunnelModeName::Quick => TunnelMode::Quick,
+            TunnelModeName::Named => TunnelMode::Named,
+        }
+    }
+}
+
+impl TunnelSection {
+    /// The setting it names, when on. The ingress must be loopback: it
+    /// forwards whatever reaches it into the native listener, so only this
+    /// machine's tunnel program may reach it. A named tunnel needs its
+    /// hostname.
+    pub(super) fn config(self) -> Result<Option<TunnelConfig>, &'static str> {
+        let ingress = self.ingress.unwrap_or(DEFAULT_TUNNEL_INGRESS);
+        if !ingress.ip().is_loopback() {
+            return Err("native.tunnel.ingress must be a loopback address");
+        }
+        let mode = TunnelMode::from(self.mode);
+        if mode == TunnelMode::Named && self.hostname.is_none() {
+            return Err("a named native.tunnel needs a hostname");
+        }
+        Ok(self.enabled.then_some(TunnelConfig {
+            ingress,
+            mode,
+            hostname: self.hostname,
+        }))
+    }
+}
+
+fn on() -> bool {
+    true
+}
+
+fn tunnel_section<'de, D>(deserializer: D) -> Result<Option<TunnelConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<TunnelSection>::deserialize(deserializer)? {
+        Some(section) => section.config().map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
 }
 
 /// `native` as written: [`NativeConfig`]'s fields and `enabled`. False keeps
@@ -130,9 +232,8 @@ where
         relay: Option<RelayAddress>,
         #[serde(default)]
         advertised_address: Option<IpAddr>,
-    }
-    fn on() -> bool {
-        true
+        #[serde(default, deserialize_with = "tunnel_section")]
+        tunnel: Option<TunnelConfig>,
     }
     Ok(Option::<Section>::deserialize(deserializer)?
         .filter(|section| section.enabled)
@@ -140,6 +241,7 @@ where
             listen_address: section.listen_address,
             relay: section.relay,
             advertised_address: section.advertised_address,
+            tunnel: section.tunnel,
         }))
 }
 
@@ -453,6 +555,44 @@ mod tests {
             OperationalLimits::default().controls()
         );
     }
+    #[test]
+    fn the_tunnel_section_is_off_unless_turned_on_and_its_ingress_stays_on_loopback() {
+        let native = |tunnel: &str| {
+            RuntimeConfig::parse(
+                format!(r#"{{"native":{{"listenAddress":"0.0.0.0:47650","tunnel":{tunnel}}}}}"#)
+                    .as_bytes(),
+            )
+            .map(|config| config.native.unwrap().tunnel)
+        };
+        assert_eq!(native("null").unwrap(), None);
+        assert_eq!(native(r#"{"enabled":false,"mode":"quick"}"#).unwrap(), None);
+        assert_eq!(
+            native("{}").unwrap(),
+            Some(TunnelConfig {
+                ingress: DEFAULT_TUNNEL_INGRESS,
+                mode: TunnelMode::Quick,
+                hostname: None
+            })
+        );
+        let named = native(
+            r#"{"provider":"cloudflare","mode":"named","hostname":"https://g.example.com","ingress":"127.0.0.1:9"}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(named.mode, TunnelMode::Named);
+        assert_eq!(named.ingress, "127.0.0.1:9".parse().unwrap());
+        for refused in [
+            r#"{"ingress":"0.0.0.0:47651"}"#,
+            r#"{"mode":"named"}"#,
+            r#"{"provider":"ngrok"}"#,
+            r#"{"hostname":"http://g.example.com"}"#,
+            r#"{"hostname":"https://g.example.com/path"}"#,
+            r#"{"token":"never here"}"#,
+        ] {
+            assert!(native(refused).is_err(), "{refused}");
+        }
+    }
+
     /// Design row S2: refused contents are a configuration failure that a
     /// restart cannot fix, whichever section they are in.
     #[test]

@@ -11,7 +11,7 @@ use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
-    ProviderSessionErasers, PublishedArtifact, ReviewNoticeAudit, ReviewNoticeAuditFailure,
+    ProviderSessionErasers, PublishedArtifact, Reader, ReviewNoticeAudit, ReviewNoticeAuditFailure,
     ReviewNoticeAuditRecord, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
@@ -22,8 +22,8 @@ use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
-    ExecutionUpdate, PermissionAuthoritySource,
+    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionUpdate,
+    PermissionAuthoritySource,
 };
 use nessa_sdk::application::agent_execution::permissions::{
     ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
@@ -33,10 +33,10 @@ use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
     ExecutionReport, ModelChange, ModelChangeEffect, ModelChangeTiming, ObservationFailure,
     OpenedProviderSession, ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-    ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
-    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
-    SteeringOutcome,
+    ProviderInputFuture, ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture,
+    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
+    ProviderOperationFuture, ProviderSession, ProviderSessionBackend, ProviderSessionState,
+    SessionCloseRequest, SteeringOutcome,
 };
 use nessa_sdk::application::agent_execution::providers::{
     HarnessHostIdentity, NativeExecutionHandoff,
@@ -957,6 +957,7 @@ impl ConversationListing for MemoryListing {
         owner: &PrincipalId,
         archived: bool,
         limit: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         let records: Vec<Conversation> = self
             .repository
@@ -973,6 +974,7 @@ impl ConversationListing for MemoryListing {
                 match self.summaries.load(conversation.id()).await {
                     Ok(Some(summary)) if summary.archived() == archived => {
                         listed.conversations.push(ListedConversation {
+                            held: None,
                             conversation,
                             summary,
                         });
@@ -1022,6 +1024,7 @@ impl ConversationListing for MemoryListing {
         owner: &PrincipalId,
         archived: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         let records: Vec<Conversation> = self
             .repository
@@ -1042,6 +1045,7 @@ impl ConversationListing for MemoryListing {
                 match self.summaries.load(conversation.id()).await {
                     Ok(Some(summary)) if summary.archived() == archived => {
                         observed.conversations.push(ListedConversation {
+                            held: None,
                             conversation,
                             summary,
                         });
@@ -1076,6 +1080,7 @@ impl ConversationListing for Unlisted {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
@@ -1085,6 +1090,7 @@ impl ConversationListing for Unlisted {
         _: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
@@ -1198,10 +1204,24 @@ impl ConversationDeletionAudit for RecordingDeletionAudit {
 /// submission's behaviour when its evidence cannot be committed is testable.
 #[derive(Default)]
 pub(crate) struct RecordingFileLinkAudit {
+    pub(crate) input_records: Mutex<Vec<crate::conversation::application::InputFileAudit>>,
     pub(crate) records: Mutex<Vec<ConversationFileLinkAuditRecord>>,
     pub(crate) refuses: AtomicBool,
 }
 impl ConversationFileLinkAudit for RecordingFileLinkAudit {
+    fn record_input(
+        &self,
+        record: crate::conversation::application::InputFileAudit,
+    ) -> ConversationFuture<'_, ()> {
+        Box::pin(async move {
+            if self.refuses.load(Ordering::SeqCst) {
+                return Err(ConversationError::Audit);
+            }
+            self.input_records.lock().unwrap().push(record);
+            Ok(())
+        })
+    }
+
     fn record(&self, record: ConversationFileLinkAuditRecord) -> ConversationFuture<'_, ()> {
         let refuses = self.refuses.load(Ordering::SeqCst);
         Box::pin(async move {
@@ -1346,6 +1366,13 @@ pub(crate) struct ProviderFactory {
 /// What a conversation holds, as a list a test writes. Remembers every release.
 #[derive(Default)]
 pub(crate) struct MemoryAttachments {
+    pub(crate) uploads: Mutex<
+        Vec<(
+            OrganizationId,
+            ConversationId,
+            nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+        )>,
+    >,
     pub(crate) held: Mutex<Vec<(OrganizationId, ConversationId, ImageReference)>>,
     pub(crate) asked: AtomicUsize,
     pub(crate) releases: Mutex<Vec<AttachmentRelease>>,
@@ -1420,6 +1447,22 @@ impl MemoryAttachments {
     }
 }
 impl ConversationAttachments for MemoryAttachments {
+    fn holds_file<'a>(
+        &'a self,
+        organization: &'a OrganizationId,
+        conversation: &'a ConversationId,
+        file: &'a nessa_sdk::domain::agent_execution::prompts::UploadedFileReference,
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async move {
+            Ok(self
+                .uploads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|held| &held.0 == organization && &held.1 == conversation && &held.2 == file))
+        })
+    }
+
     fn offers_images(&self) -> bool {
         true
     }
@@ -1589,6 +1632,7 @@ pub(crate) fn image_fixture_with_model(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -1628,6 +1672,7 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
+                workspace: None,
                 provider,
                 execution_audit: Arc::new(AcceptingAudit),
                 reserved_output_tokens: 4096,
@@ -1687,6 +1732,7 @@ impl ConversationAgentSource for ModeAgentSource {
 impl ModeAgentSource {
     fn for_mode(&self, mode: ApprovalMode) -> ConversationAgent {
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(Provider::new(self.provider.clone()).with_mode(mode)),
             execution_audit: self.audit.clone(),
             reserved_output_tokens: 4096,
@@ -1744,6 +1790,7 @@ pub(crate) fn mode_fixture_with_summaries(
     let mode_audit = Arc::new(RecordingModeAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: mode_agents(provider.clone(), execution_audit.clone()),
             storage,
@@ -1783,6 +1830,7 @@ pub(crate) fn fixture(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -2075,11 +2123,15 @@ impl ProviderSessionBackend for Backend {
     fn steer<'a>(
         &'a self,
         _: nessa_sdk::domain::agent_execution::executions::ExecutionId,
-        _: ExecutionRequest,
+        input: ProviderInputFuture,
         _: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
+            input.await.map_err(|error| {
+                started();
+                ProviderOperationFailure::new(error, ProviderSessionState::Usable)
+            })?;
             started();
             if self.factory.inject_steers.load(Ordering::SeqCst) {
                 return Ok(SteeringOutcome::Injected);
@@ -2092,10 +2144,14 @@ impl ProviderSessionBackend for Backend {
     }
     fn execute(
         &self,
-        request: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            let request = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -2716,3 +2772,6 @@ pub(crate) fn unrooted(text: &str) -> &str {
         text
     }
 }
+#[cfg(unix)]
+#[path = "channel_lookup_fixture.rs"]
+pub(crate) mod channel_lookup;

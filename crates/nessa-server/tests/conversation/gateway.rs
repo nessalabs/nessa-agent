@@ -561,6 +561,7 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         let (_, provider, repository, storage) = chat_fixture();
         let service = crate::conversation::application::ConversationService::new(
             crate::conversation::application::ConversationDependencies {
+ input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: conversation_support::only(Arc::new(conversation_support::Provider::new(
                     provider,

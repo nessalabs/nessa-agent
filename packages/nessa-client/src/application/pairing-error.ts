@@ -37,6 +37,8 @@ export type PairingMethod =
   | "pairing.deny"
   | "pairing.cancel"
   | "pairing.setLinking"
+  | "pairing.setTunnel"
+  | "pairing.tunnel"
 
 /**
  * A pairing method that did not answer with a result.

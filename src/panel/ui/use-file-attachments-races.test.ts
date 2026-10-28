@@ -532,7 +532,7 @@ it("captures pathless host image ownership before the fetch waits", async () => 
   const replacementId = active().id
   await act(async () => {
     response.resolve(
-      new Response(new Blob(["image"], { type: "image/png" }), {
+      new Response("image", {
         headers: { "content-type": "image/png" },
       }),
     )

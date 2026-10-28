@@ -130,3 +130,8 @@ Verify both `cargo test -p nessa-local-storage` and
 `cargo test -p nessa-local-storage --features physical-operation`. The existing
 combined six-package CI compile selects this feature through SDK/server and runs
 the central mechanic tests in its local-storage test binary.
+
+`PrivateDirectory::open_shared_root` retains an explicitly selected Unix workspace
+with current ownership and no group/other write bits. Like `open_root`, its
+locator ancestry is caller trust; read/search bits are permitted. Binding checks
+continue to refuse root replacement, symbolic links and permission drift.

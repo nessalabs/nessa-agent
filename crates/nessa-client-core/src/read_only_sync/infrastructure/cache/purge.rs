@@ -71,6 +71,23 @@ impl CachePurges for ReadOnlyCache {
 }
 
 impl ReadOnlyCache {
+    /// Whether this connection already stores a successful terminal purge.
+    pub(crate) fn terminal_receipt_present(
+        connection: &Connection,
+        receiver: &str,
+    ) -> Result<bool, CacheError> {
+        Ok(connection
+            .query_row(
+                "SELECT 1 FROM cache_purges WHERE receiver=?1
+                  AND cause='TerminalEnrollment' AND initiator='GatewayStatus'",
+                params![receiver],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(rows::database_error)?
+            .is_some())
+    }
+
     /// Read original durable purge evidence without requiring an enrollment
     /// record or contacting the gateway; this does not perform another purge.
     pub(crate) fn purge_receipt(

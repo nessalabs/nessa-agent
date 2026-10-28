@@ -85,12 +85,32 @@ impl ClientPendingStore for Store {
         panic!("unexpected seed publication")
     }
 }
-struct NoEntropy;
+struct NoEntropy(AtomicUsize);
 impl EnrollmentEntropyFactory for NoEntropy {
     fn create(&self) -> Box<dyn EnrollmentEntropy> {
-        panic!("local read acquired entropy")
+        if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
+            panic!("local read acquired entropy");
+        }
+        Box::new(LeaseIdentity)
     }
 }
+struct LeaseIdentity;
+impl RngCore for LeaseIdentity {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.try_fill_bytes(dest).unwrap();
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        dest.fill(0);
+        Ok(())
+    }
+}
+impl CryptoRng for LeaseIdentity {}
 struct NoNetwork(AtomicUsize);
 impl EnrollmentConnector for NoNetwork {
     fn connect(&self, _: SocketAddr) -> Result<TcpStream, NativeClientError> {
@@ -111,11 +131,14 @@ fn compose(
     NativeSession::compose(Dependencies {
         state,
         connector,
-        entropy: Arc::new(NoEntropy),
+        entropy: Arc::new(NoEntropy(AtomicUsize::new(0))),
+        files: Arc::new(OsCacheFiles),
+        artifacts: Arc::new(DiskArtifactFiles),
         path: root.join("private/cache.sqlite"),
         address: "127.0.0.1:9".parse().unwrap(),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
+        pause: Arc::new(ThreadPause),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies::default(),
     })
@@ -201,6 +224,7 @@ fn local_enrollment_real_private_record_survives_retry_reopen_and_issued_replace
         root.path(),
         Path::new("private"),
         "127.0.0.1:9".parse().unwrap(),
+        None,
     )
     .unwrap();
     let original = session.local_enrollment().unwrap().unwrap();
@@ -226,6 +250,7 @@ fn local_enrollment_real_private_record_survives_retry_reopen_and_issued_replace
         root.path(),
         Path::new("private"),
         "127.0.0.1:9".parse().unwrap(),
+        None,
     )
     .unwrap();
     let retry = session.local_enrollment().unwrap().unwrap();
@@ -243,6 +268,7 @@ fn local_enrollment_real_private_record_survives_retry_reopen_and_issued_replace
         root.path(),
         Path::new("private"),
         "127.0.0.1:9".parse().unwrap(),
+        None,
     )
     .unwrap();
     assert!(session.local_enrollment().unwrap().is_none());
@@ -385,6 +411,9 @@ impl OwnerPhoneOriginalStore for Store {
     > {
         Ok(None)
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        Ok(false)
+    }
 }
 
 impl OwnerPhoneOriginalStore for HeldStore {
@@ -404,6 +433,9 @@ impl OwnerPhoneOriginalStore for HeldStore {
         PrivateStateError,
     > {
         self.owned.load_original()
+    }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.owned.enrollment_signed()
     }
 }
 

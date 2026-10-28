@@ -42,6 +42,7 @@ fn message(text: Option<&str>, images: Vec<ImageReference>) -> UserMessage {
         text.map(|text| PromptText::new(text).unwrap()),
         images,
         Vec::new(),
+        Vec::new(),
     )
     .unwrap()
 }
@@ -232,6 +233,7 @@ fn linking(text: Option<&str>, paths: &[&str]) -> UserMessage {
             .iter()
             .map(|path| LinkedFile::new((*path).into()).unwrap())
             .collect(),
+        Vec::new(),
     )
     .unwrap()
 }
@@ -242,6 +244,7 @@ fn a_file_becomes_a_resource_link_after_the_text_and_the_images() {
         Some(PromptText::new("look at these").unwrap()),
         vec![reference(b"image", ImageMediaType::Png)],
         vec![LinkedFile::new("/Users/ada/report.pdf".into()).unwrap()],
+        Vec::new(),
     )
     .unwrap();
     let blocks = content_blocks(&sent, ImageBlocks::none().charged(None));
@@ -723,22 +726,27 @@ fn largest_message_syntax_is_what_the_frame_figure_adds_to_its_content() {
             .unwrap()
         })
         .collect();
-    let largest = UserMessage::new(Some(PromptText::new("hi").unwrap()), images, files)
-        .unwrap()
-        .with_app_model_context(contexts)
-        .unwrap()
-        .with_notes(vec![
-            NoteContext::new(NoteAuthor::Owner, "s", "x").unwrap();
-            UserMessage::MAX_NOTES
-        ])
-        .unwrap()
-        .with_history(
-            CarriedHistory::new(
-                vec![CarriedTurn::new(Some("x"), Some("y")).unwrap(); CarriedHistory::MAX_TURNS],
-                u32::MAX,
-            )
-            .unwrap(),
-        );
+    let largest = UserMessage::new(
+        Some(PromptText::new("hi").unwrap()),
+        images,
+        files,
+        Vec::new(),
+    )
+    .unwrap()
+    .with_app_model_context(contexts)
+    .unwrap()
+    .with_notes(vec![
+        NoteContext::new(NoteAuthor::Owner, "s", "x").unwrap();
+        UserMessage::MAX_NOTES
+    ])
+    .unwrap()
+    .with_history(
+        CarriedHistory::new(
+            vec![CarriedTurn::new(Some("x"), Some("y")).unwrap(); CarriedHistory::MAX_TURNS],
+            u32::MAX,
+        )
+        .unwrap(),
+    );
     let text = 2;
     let images = UserMessage::MAX_IMAGES * 4;
     // A path of three bytes, `/` copied into the URI, and a name of two.

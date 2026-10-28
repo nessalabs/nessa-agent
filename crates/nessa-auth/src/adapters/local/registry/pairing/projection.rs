@@ -321,7 +321,8 @@ impl StoredPairing {
             ),
             self.class.domain(),
         )?;
-        let constructor = if self.class.domain().uses_pake() {
+        // A stored original request is what makes an enrollment a signed one.
+        let constructor = if self.owner_phone_original.is_none() {
             PairingRecord::new
         } else {
             PairingRecord::new_owner_phone
@@ -370,7 +371,7 @@ impl StoredPairing {
                     return Err(PairingError::Conflict);
                 }
             }
-            (None, class) if class.uses_pake() => {}
+            (None, _) => {}
             _ => return Err(PairingError::Conflict),
         }
         Ok(record)

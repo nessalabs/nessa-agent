@@ -53,6 +53,15 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
     let agent = attached_agent(Arc::new(original), manager().await.unwrap())
         .await
         .unwrap();
+    assert_eq!(
+        agent
+            .invoke(
+                prompt("initial-context-work"),
+                Submitter::owner(close_action())
+            )
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
     let saved_context = agent
         .session_manager()
         .snapshot()
@@ -287,6 +296,15 @@ async fn mcp_server_change_keeps_the_identity_and_restores(
     let agent = attached_agent(Arc::new(original), manager().await.unwrap())
         .await
         .unwrap();
+    assert_eq!(
+        agent
+            .invoke(
+                prompt("initial-context-work"),
+                Submitter::owner(close_action())
+            )
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
     agent.close(close_action()).await.unwrap();
     drop(agent);
     let mut changed = config;

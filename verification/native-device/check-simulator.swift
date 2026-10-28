@@ -22,7 +22,7 @@ private struct NativeSessionCheckView: View {
                 let offMain = try await worker.perform { _, _ in !Thread.isMainThread }
                 precondition(offMain)
                 do {
-                    _ = try await worker.cataloguePage(after: nil, maximum: 1)
+                    _ = try await worker.bindSavedReceiver()
                     result = "FAIL: unpaired cache was accepted"
                     try await worker.close()
                     return

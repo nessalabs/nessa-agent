@@ -305,7 +305,20 @@ impl WorkerContext {
 
 /// Where this gateway's conversations can run: here, each SSH host its
 /// configuration names, and the paired environments that dial it.
+/// Per-thread environments supplied by a workspace provider. This factory owns no
+/// model policy; the channel and existing conversation admission choose placement.
+pub(crate) trait ThreadEnvironments: Send + Sync {
+    fn environment(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<Arc<dyn Environment>, ConversationError>;
+}
+pub(crate) const BOAT: &str = "boat:thread";
+/// Bound retained workspace environments independently of saved thread history.
+pub(crate) const MAX_RETAINED_ENVIRONMENTS: usize = 256;
+
 pub(crate) struct Environments {
+    workspaces: Option<Arc<dyn ThreadEnvironments>>,
     here: Arc<dyn Environment>,
     hosts: BTreeMap<String, Arc<dyn Environment>>,
     /// `None` when this gateway pairs no environments.
@@ -331,6 +344,7 @@ impl From<Arc<dyn Environment>> for Environments {
     /// here. For tests; composition always keeps placements.
     fn from(here: Arc<dyn Environment>) -> Self {
         Self {
+            workspaces: None,
             here,
             hosts: BTreeMap::new(),
             peers: None,
@@ -345,6 +359,12 @@ impl From<Arc<dyn Environment>> for Environments {
 }
 
 impl Environments {
+    #[cfg(unix)]
+    pub(crate) fn with_workspaces(mut self, workspaces: Arc<dyn ThreadEnvironments>) -> Self {
+        self.workspaces = Some(workspaces);
+        self
+    }
+
     /// Here, the configured hosts by the destination they are named by, and
     /// where placements are kept.
     #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
@@ -354,6 +374,7 @@ impl Environments {
         placements: Arc<dyn ConversationPlacements>,
     ) -> Self {
         Self {
+            workspaces: None,
             here,
             hosts,
             peers: None,
@@ -477,7 +498,8 @@ impl Environments {
         requested: Option<&str>,
     ) -> Result<(), ConversationError> {
         if let Some(name) = requested {
-            let known = name == POOL && self.bindings.is_some() && self.pool_serves()
+            let known = name == BOAT && self.workspaces.is_some()
+                || name == POOL && self.bindings.is_some() && self.pool_serves()
                 || match PeerEnvironment::parse(name) {
                     Ok(peer) => self
                         .peers
@@ -538,6 +560,11 @@ impl Environments {
     ) -> Result<Arc<dyn Environment>, ConversationError> {
         match self.placement(conversation).await? {
             None => Ok(self.here.clone()),
+            Some(name) if name == BOAT => self
+                .workspaces
+                .as_ref()
+                .map(|factory| factory.environment(conversation))
+                .ok_or(ConversationError::EnvironmentNotConfigured)?,
             Some(name) if name == POOL => {
                 let (peers, bindings) = self.pool()?;
                 let binding = bindings

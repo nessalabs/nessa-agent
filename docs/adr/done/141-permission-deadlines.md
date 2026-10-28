@@ -72,7 +72,7 @@ The standard policy, owned by `PermissionDeadlinePolicy::standard`:
 | Class | What lands here | Wait | Outcome | Reason the deadline records |
 | --- | --- | --- | --- | --- |
 | Read-only | `read` or `search` whose paths all resolve inside the workspace | 8 seconds | allow | No human answered in time. This read-only tool was allowed so the turn could continue. |
-| Everything else | any other kind, a read or search outside the workspace, a symlink escape, or no path | 30 seconds | deny | No human answered in time. Continue without this tool or try another approach. |
+| Everything else | any other kind, a read or search outside the workspace, a symlink escape, or no path | 30 seconds in the SDK; the gateway installs 5 minutes, or `agents.reviewWaitSeconds` | deny | No human answered in time. Continue without this tool or try another approach. |
 
 When the chosen refusal stops the turn, the recorded reason is instead "No
 human answered in time. The only refusal this agent offered stops the turn."
@@ -80,7 +80,12 @@ human answered in time. The only refusal this agent offered stops the turn."
 Eight seconds is long enough to refuse a sensitive read and short enough that
 an absent person does not hold a read-heavy turn. It is not zero: a secret
 stays interruptible. Thirty seconds is long enough to read a command at the
-desk and short enough that walking away does not freeze the turn. Deny is the
+desk and short enough that walking away does not freeze the turn. The gateway
+gives its person five minutes instead (2026-10-27): a review is also answered
+from the paired phone, and thirty seconds was gone before the phone was out of
+a pocket. `agents.reviewWaitSeconds` in `config.json` sets it, from 1 second to
+a day (`PermissionDeadlinePolicy::standard_waiting`, `REVIEW_WAIT` in
+`composition/agent.rs`). Deny is the
 fail-closed outcome for mutation, execution, network, mode changes, a kind
 the provider did not name, and a read or search that is not confined to the
 workspace. Search is read-only only in that confined case, because it
@@ -90,7 +95,7 @@ prefers `decline`. A profile that does not say keeps the first deny option
 that does not stop the turn.
 
 The policy sits on `AcpConfig` beside the offer policy and the refusal
-outcome. Composition installs `standard()`. A wait of zero, a wait longer
+outcome. Composition installs `standard_waiting` with the configured wait. A wait of zero, a wait longer
 than a day, a blank reason, or a reason with a control character is rejected
 at construction, as is a deadline installed in the other class's slot. The
 restoration fingerprint does not include it: it is host policy for this

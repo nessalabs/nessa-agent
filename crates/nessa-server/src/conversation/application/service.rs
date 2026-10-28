@@ -22,16 +22,17 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
-    AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
-    ConversationCreationAudit, ConversationDeletionAudit, ConversationDeletionAuditRecord,
-    ConversationDeletionCause, ConversationError, ConversationFileLinkAudit,
-    ConversationFileLinkAuditRecord, ConversationFileLinkCause, ConversationFileLinkState,
-    ConversationListing, ConversationModeApplication, ConversationModeAudit,
-    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
-    ConversationOwnershipState, ConversationRepository, ConversationSummaries, DeletionFailures,
-    FenceCapture, FetchRequests, ListedConversation, ObservationCursor, ObservedConversations,
-    OwnerAccess, PublishRequests, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
+    AccessAction, AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer,
+    AttachmentRelease, AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
+    ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
+    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
+    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
+    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
+    ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
+    ConversationSummaries, DeletionFailures, FenceCapture, FetchRequests, ListedConversation,
+    ObservationCursor, ObservedConversations, OwnerAccess, PairedAccess, PairedParty,
+    PublishRequests, Reader, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
     SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
@@ -101,7 +102,10 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::{ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UserMessage},
+    prompts::{
+        ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UploadedFileReference,
+        UserMessage,
+    },
     questions::{QuestionChoice, QuestionId},
     sessions::ExecutionSessionId,
 };
@@ -342,6 +346,9 @@ pub(super) fn blank_text(text: &str) -> bool {
 /// agent nobody has selected is still the agent yesterday's conversations need.
 #[derive(Clone)]
 pub struct ConversationAgent {
+    /// Canonical local workspace selected with this exact provider generation.
+    /// The execution environment's reported workspace takes precedence remotely.
+    pub workspace: Option<String>,
     /// What opens an execution session for it.
     pub provider: Arc<dyn AgentProvider>,
     /// The same durable audit sink injected into the provider and prepared Agent.
@@ -828,6 +835,8 @@ impl Slot {
     }
 }
 struct Inner {
+    input_file_slots: Arc<Semaphore>,
+    input_files: Option<Arc<super::InputFileDelivery>>,
     workspace: Option<String>,
     /// Every agent this server can start, and which of them a creation that
     /// names none is made on.
@@ -1149,6 +1158,7 @@ fn admission_evidence_error(failure: &AdmissionEvidenceFailure) -> ConversationE
 /// tests. Grouped rather than passed one by one, so that adding one does not
 /// add another positional argument at every call site.
 pub struct ConversationDependencies {
+    pub(crate) input_files: Option<Arc<super::InputFileDelivery>>,
     /// Every configured agent, and the one a caller that names none gets.
     pub agents: ConversationAgents,
     pub storage: Arc<dyn SessionStorage>,
@@ -1366,6 +1376,7 @@ impl ConversationService {
         mcp_apps: Option<McpAppPorts>,
     ) -> Result<Self, ConversationError> {
         let ConversationDependencies {
+            input_files,
             agents,
             storage,
             message_commit_clock,
@@ -1395,7 +1406,9 @@ impl ConversationService {
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                input_file_slots: Arc::new(Semaphore::new(16)),
                 workspace,
+                input_files,
                 agents,
                 storage,
                 message_commit_clock,
@@ -1647,10 +1660,23 @@ impl ConversationService {
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
+        let channel_environment = channel.as_ref().and_then(|channel| {
+            match if id == channel.coordinator_id() {
+                channel.execution().coordinator
+            } else {
+                channel.execution().threads
+            } {
+                crate::conversation::domain::WorkspacePlacement::Local => None,
+                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
+            }
+        });
         service
             .inner
             .environment
-            .place(&id, requested.environment.as_deref())
+            .place(
+                &id,
+                requested.environment.as_deref().or(channel_environment),
+            )
             .await?;
         service.place_in_channel(&id, channel.as_ref()).await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
@@ -2095,6 +2121,17 @@ impl ConversationService {
                                 manager.expect_handoff(handoff);
                             }
                             let tool_source = checked_source(agent);
+                            if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
+                                let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                                if let Some(workspace) = workspace {
+                                    let local = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| delivery.local.clone());
+                                    opening.fence.set_input_files(Arc::new(super::ConversationInputFiles::new(
+                                        attachments.clone(), service.inner.file_link_audit.clone(), service.inner.clock.clone(), record.organization().clone(), record.owner().clone(), id.clone(), opening.lease.clone(), hold.clone(), workspace, local, opening.fence.input_stop(),
+                                            service.inner.input_file_slots.clone(),
+                                            delivery.timer.clone(),
+                                    )));
+                                }
+                            }
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
                                 manager,
@@ -2289,6 +2326,7 @@ impl ConversationService {
                             let workspace = opening
                                 .workspace
                                 .as_ref()
+                                .or(configured.workspace.as_ref())
                                 .or(channel_folder.as_ref())
                                 .or(service.inner.workspace.as_ref());
                             if let Some(workspace) = workspace {
@@ -3492,8 +3530,29 @@ impl ConversationService {
             .into_iter()
             .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
             .collect::<Result<Vec<_>, _>>()?;
-        let message =
-            UserMessage::new(prompt, images, files).map_err(|_| ConversationError::InvalidInput)?;
+        let message = UserMessage::new(
+            prompt,
+            images,
+            files,
+            message
+                .uploads
+                .into_iter()
+                .map(|file| {
+                    UploadedFileReference::new(
+                        Sha256Digest::parse(&file.digest)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                        nessa_sdk::domain::common::value_objects::MediaType::parse(
+                            &file.media_type,
+                        )
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                        file.size,
+                        file.name,
+                    )
+                    .map_err(|_| ConversationError::InvalidInput)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+        .map_err(|_| ConversationError::InvalidInput)?;
         Ok((execution, message))
     }
 
@@ -3987,6 +4046,56 @@ impl ConversationService {
                     }
                 }
             }
+            if !message.uploads().is_empty() && !known {
+                let attachments = service
+                    .inner
+                    .attachments
+                    .as_ref()
+                    .ok_or(ConversationError::AttachmentNotFound)?;
+                let timer = service
+                    .inner
+                    .input_files
+                    .as_ref()
+                    .ok_or(ConversationError::AttachmentNotFound)?
+                    .timer
+                    .as_ref();
+                for file in message.uploads() {
+                    if !crate::timer::within(
+                        timer,
+                        timer.now() + std::time::Duration::from_secs(10),
+                        attachments.holds_file(&caller.organization_id, &id, file),
+                    )
+                    .await
+                    .map_err(|_| ConversationError::AttachmentNotFound)??
+                    {
+                        return Err(ConversationError::AttachmentNotFound.into());
+                    }
+                }
+                for (index, file) in message.uploads().iter().enumerate() {
+                    super::input_files::record_input(
+                        timer,
+                        service.inner.file_link_audit.as_ref(),
+                        super::InputFileAudit {
+                            conversation: id.clone(),
+                            organization: caller.organization_id.clone(),
+                            execution: execution_id.clone(),
+                            lease: None,
+                            attempt: format!("submission-{}-{index}", execution_id),
+                            file: file.clone(),
+                            stage: super::InputFileStage::Submitted,
+                            destination: None,
+                            delivered: false,
+                            failure: None,
+                            initiator: Some((
+                                caller.principal_id.clone(),
+                                caller.surface_id.clone(),
+                            )),
+                            observed_at_ms: service.inner.clock.unix_milliseconds(),
+                        },
+                    )
+                    .await?;
+                }
+            }
             // A message naming paths is recorded before it is admitted, and
             // what is recorded is the naming — not a read, and not even a
             // successful admission, both of which happen later and may not
@@ -4413,6 +4522,23 @@ impl ConversationService {
         caller: ConversationCaller,
         archived: bool,
     ) -> Result<ConversationList, ConversationError> {
+        let owner = caller.principal_id.clone();
+        self.list_for(caller, archived, &Reader::Owner, &owner, None)
+            .await
+            .map(|(list, _)| list)
+    }
+
+    /// Read the bounded list for this reader without opening an agent. A paired
+    /// result carries the catalogue head acquired with its rows; cancellation
+    /// releases the service admission and does not retain live agent handles.
+    pub(crate) async fn list_for(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<(ConversationList, Option<CatalogueHead>), ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         // One past the bound, so the list can say whether it left any out.
@@ -4421,28 +4547,37 @@ impl ConversationService {
             .listing
             .list(
                 &caller.organization_id,
-                &caller.principal_id,
+                owner,
                 archived,
                 MAX_LISTED_CONVERSATIONS + 1,
+                reader,
             )
             .await?;
         let complete =
             listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
+        let head = if matches!(reader, Reader::PairedDevice { .. }) {
+            Some(listed.head.ok_or(ConversationError::Metadata)?)
+        } else {
+            None
+        };
         // Found by the listing, decided by the access policy: a row it
         // returns that is not this caller's, or is deleted, is not shown
         // whatever listing is wired here
         // (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
         let owned: Vec<ListedConversation> = self
-            .admitted(listed.conversations, &caller)?
+            .admitted_for(listed.conversations, &caller, reader, owner, paired_policy)?
             .into_iter()
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
-        Ok(ConversationList {
-            conversations: list_entries(&owned, &running, &channels),
-            complete,
-        })
+        Ok((
+            ConversationList {
+                conversations: list_entries(&owned, &running, &channels),
+                complete,
+            },
+            head,
+        ))
     }
     /// One page of every summary this caller owns under `archived`, in
     /// creation order, from [`ConversationListing::observe`].
@@ -4459,6 +4594,22 @@ impl ConversationService {
         archived: bool,
         cursor: Option<ConversationObservationCursor>,
     ) -> Result<ConversationObservation, ConversationError> {
+        let owner = caller.principal_id.clone();
+        self.observe_for(caller, archived, cursor, &Reader::Owner, &owner, None)
+            .await
+    }
+
+    /// Continue the current observation cursor in this reader's grant scope.
+    /// Uses the existing incarnation/boundary/creation cursor and opens no agent.
+    pub(crate) async fn observe_for(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+        cursor: Option<ConversationObservationCursor>,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<ConversationObservation, ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         let cursor = match cursor {
@@ -4473,19 +4624,15 @@ impl ConversationService {
         let observed = self
             .inner
             .listing
-            .observe(
-                &caller.organization_id,
-                &caller.principal_id,
-                archived,
-                cursor,
-            )
+            .observe(&caller.organization_id, owner, archived, cursor, reader)
             .await?;
         let ObservedConversations {
             conversations,
             complete,
             cursor,
         } = observed;
-        let owned: Vec<ListedConversation> = self.admitted(conversations, &caller)?;
+        let owned: Vec<ListedConversation> =
+            self.admitted_for(conversations, &caller, reader, owner, paired_policy)?;
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok(ConversationObservation {
@@ -4522,6 +4669,38 @@ impl ConversationService {
             .filter_map(|(row, admitted)| admitted.then_some(row))
             .collect())
     }
+
+    fn admitted_for(
+        &self,
+        listed: Vec<ListedConversation>,
+        caller: &ConversationCaller,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<Vec<ListedConversation>, ConversationError> {
+        let Reader::PairedDevice { receiver_id } = reader else {
+            return self.admitted(listed, caller);
+        };
+        let access = PairedAccess::new(
+            paired_policy.ok_or(ConversationError::Metadata)?,
+            PairedParty {
+                organization: &caller.organization_id,
+                signed_in_as: &caller.principal_id,
+                binding_owner: owner,
+                receiver: receiver_id,
+            },
+        );
+        let admitted = access
+            .allows_each(
+                AccessAction::Read,
+                listed.iter().map(|row| (&row.conversation, row.held)),
+            )
+            .map_err(|_| ConversationError::Metadata)?;
+        if admitted.iter().any(|admitted| !admitted) {
+            return Err(ConversationError::Metadata);
+        }
+        Ok(listed)
+    }
     /// Which of `owned` are open here with a turn under way.
     ///
     /// Only a conversation that finished opening has anything to say about
@@ -4554,7 +4733,11 @@ impl ConversationService {
     /// Record in the conversation's summary that `message` was accepted.
     async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
         let at_ms = self.inner.clock.unix_milliseconds();
-        let first_file = message.files().first().map(LinkedFile::name);
+        let first_file = message
+            .files()
+            .first()
+            .map(LinkedFile::name)
+            .or_else(|| message.uploads().first().map(|file| file.name()));
         self.change_summary(id, |previous| {
             Some(ConversationSummary::after_message(
                 previous,
@@ -5021,7 +5204,7 @@ impl ConversationService {
                         // need the files. An agent that did not close keeps its
                         // saved invocations, and one of those may be a turn that
                         // names images and has not settled.
-                        let may_release = closed || !awaits_images(snapshot.as_ref());
+                        let may_release = closed || !awaits_uploaded_input(snapshot.as_ref());
                         (
                             result.map(|_| ()).map_err(ConversationError::Agent),
                             may_release,
@@ -5722,7 +5905,14 @@ impl ConversationService {
                 }
             }
             self.forget_thread_reports_of(&id).await;
-            self.forget_channel_of(&id).await;
+            // Retiring a channel main publishes its replacement. That transition
+            // requires confirmed history erasure and participates in deletion
+            // retries; a failed channel commit must not finish the tombstone.
+            if failures.history.is_none() && !failures.history_leased_elsewhere {
+                if let Err(error) = self.forget_channel_of(&id).await {
+                    failures.summary.get_or_insert(error);
+                }
+            }
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
@@ -7269,12 +7459,13 @@ fn offers_notes(known: bool, is_app: bool, mode: &SubmissionMode) -> bool {
     !known && !is_app && matches!(mode, SubmissionMode::Queue)
 }
 
-fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
+fn awaits_uploaded_input(snapshot: Option<&SessionSnapshot>) -> bool {
     let Some(snapshot) = snapshot else {
         return true;
     };
     snapshot.invocations.iter().any(|record| {
-        !record.request.user_message.images().is_empty()
+        (!record.request.user_message.images().is_empty()
+            || !record.request.user_message.uploads().is_empty())
             && record.result.is_none()
             && !record.scheduling.last().is_some_and(|event| {
                 matches!(

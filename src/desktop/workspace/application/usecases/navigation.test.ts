@@ -44,10 +44,26 @@ describe("choosing what the list shows", () => {
     expect(shown(state)).toEqual(["a"])
   })
 
-  it("opens the channel's most pressing session when the list is hidden", () => {
+  it("shows the list again when it is hidden, leaving the panes alone", () => {
     const hidden = toggleSessionList(loaded(), { open: false })
-    expect(shown(selectChannel(hidden, { channelId: "desktop" }))).toEqual(["b"])
-    expect(shown(selectChannel(hidden, { channelId: "empty" }))).toEqual(["a"])
+    const state = selectChannel(hidden, { channelId: "desktop" })
+    expect(state.view).toEqual({ channelId: "desktop" })
+    expect(state.chrome.sessionList).toEqual({ open: true, folded: false })
+    expect(shown(state)).toEqual(["a"])
+    // The person can still hide it afterwards.
+    expect(toggleSessionList(state, { open: false }).chrome.sessionList.open).toBe(false)
+  })
+
+  it("shows a list the window folded for room", () => {
+    const folded = loaded()
+    const state = selectChannel(
+      {
+        ...folded,
+        chrome: { ...folded.chrome, sessionList: { open: true, folded: true } },
+      },
+      { channelId: "gateway" },
+    )
+    expect(state.chrome.sessionList).toEqual({ open: true, folded: false })
   })
 
   it("ignores a channel it does not have", () => {
@@ -58,6 +74,37 @@ describe("choosing what the list shows", () => {
 })
 
 describe("opening a channel from the sidebar", () => {
+  it("opens the channel main chat ahead of a newer worker and preserves its worker draft", () => {
+    const base = loaded()
+    const state = {
+      ...base,
+      channels: base.channels.map((channel) =>
+        channel.id === "gateway"
+          ? { ...channel, coordinatorConversationId: "a" }
+          : channel,
+      ),
+      drafts: { ...base.drafts },
+    }
+    const opened = openChannel(state, { channelId: "gateway", draftId: "unused" })
+    expect(shown(opened)).toEqual(["a"])
+    expect(opened.drafts).toEqual(state.drafts)
+  })
+
+  it("uses the replacement main identity when the channel has no listed main chat", () => {
+    const base = loaded()
+    const state = {
+      ...base,
+      channels: base.channels.map((channel) =>
+        channel.id === "empty"
+          ? { ...channel, coordinatorConversationId: "replacement" }
+          : channel,
+      ),
+    }
+    const opened = openChannel(state, { channelId: "empty", draftId: "random-worker" })
+    expect(shown(opened)).toEqual(["replacement"])
+    expect(opened.drafts.replacement.channelId).toBe("empty")
+  })
+
   it("opens its newest session in place, and discloses it", () => {
     const state = openChannel(loaded(), { channelId: "gateway" })
     expect(shown(state)).toEqual(["d"])

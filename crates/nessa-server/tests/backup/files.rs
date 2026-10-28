@@ -883,6 +883,60 @@ async fn an_oversized_non_database_session_is_not_read() {
 }
 
 #[tokio::test]
+async fn boat_runtime_backup_keeps_only_validated_preferences_and_preserves_presence() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    for (section, expected) in [
+        (r#"{}"#, serde_json::json!({"channelAutoStopSeconds":{}})),
+        (
+            r#"{"autoStopSeconds":null}"#,
+            serde_json::json!({"autoStopSeconds":null,"channelAutoStopSeconds":{}}),
+        ),
+        (
+            r#"{"autoStopSeconds":14400}"#,
+            serde_json::json!({"autoStopSeconds":14400,"channelAutoStopSeconds":{}}),
+        ),
+    ] {
+        fs::write(
+            root.join("config.json"),
+            format!(r#"{{"boat":{section},"token":"CONFIG-TOKEN"}}"#),
+        )
+        .unwrap();
+        let published = publish_cut(root).await;
+        let records = published
+            .manifest
+            .manifest()
+            .store(StoreKind::RelayConfiguration);
+        assert_eq!(records.records().len(), 1);
+        assert_eq!(records.records()[0].identity(), "boat-runtime");
+        let bytes = records.records()[0].public_bytes().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(bytes).unwrap(),
+            expected
+        );
+        assert!(!holds(&published.bytes, b"CONFIG-TOKEN"));
+    }
+    for section in [
+        r#"{"autoStopSeconds":0}"#,
+        r#"{"autoStopSeconds":null,"autoStopSeconds":14400}"#,
+        r#"{"token":"BOAT-SECRET"}"#,
+    ] {
+        fs::write(root.join("config.json"), format!(r#"{{"boat":{section}}}"#)).unwrap();
+        let published = publish_cut(root).await;
+        assert!(published
+            .text
+            .contains("skipped relay-configuration boat-runtime unreadable"));
+        assert!(published
+            .manifest
+            .manifest()
+            .store(StoreKind::RelayConfiguration)
+            .records()
+            .is_empty());
+        assert!(!holds(&published.bytes, b"BOAT-SECRET"));
+    }
+}
+
+#[tokio::test]
 async fn a_malformed_peer_relay_is_named_skipped() {
     let namespace = tempfile::tempdir().unwrap();
     let root = namespace.path();

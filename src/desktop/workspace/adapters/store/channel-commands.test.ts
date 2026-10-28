@@ -7,6 +7,8 @@ import { makeDesktopStore } from "../../../store"
 import {
   ChannelCreationError,
   type ChannelSource,
+  type DroppedPath,
+  type PathDropWatch,
   type PathPicker,
 } from "../../application/ports"
 import { createQuestionFlights } from "../../application/question-flights"
@@ -27,6 +29,7 @@ import {
   openChannelCreation,
   removeChannelResource,
   showContent,
+  watchChannelDrops,
 } from "./commands"
 
 /** Pickers that answer what the test queued, a cancel when nothing is. */
@@ -34,7 +37,12 @@ function queuedPaths() {
   const folders: (string | null)[] = []
   const resources: string[][] = []
   const asked: string[] = []
+  const watches = new Set<PathDropWatch>()
   const paths: PathPicker = {
+    drops: (watch) => {
+      watches.add(watch)
+      return () => watches.delete(watch)
+    },
     home: async () => "/home/person",
     folder: async () => {
       asked.push("folder")
@@ -45,7 +53,7 @@ function queuedPaths() {
       return resources.shift() ?? []
     },
   }
-  return { paths, folders, resources, asked }
+  return { paths, folders, resources, asked, watches }
 }
 
 /** The source's index, which a channel made through `channels()` joins, as a real source's does. */
@@ -126,12 +134,14 @@ describe("asking", () => {
     expect(flowOf(store)?.asking).toBe("name")
     store.dispatch(draftChannel({ change: { name: " design-review " } }))
     store.dispatch(answerChannelStep())
+    expect(flowOf(store)?.asking).toBe("placement")
+    store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBe("model")
     store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBe("notes")
     store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBeNull()
-    expect(flowOf(store)?.answered).toEqual(["name", "model", "notes"])
+    expect(flowOf(store)?.answered).toEqual(["name", "placement", "model", "notes"])
   })
 
   it("asks all five with pickers, and a clicked line asks its step again", async () => {
@@ -139,10 +149,11 @@ describe("asking", () => {
     const { store } = await storeWith({ channels: channels(), paths })
     store.dispatch(openChannelCreation())
     store.dispatch(draftChannel({ change: { name: "a" } }))
-    for (let n = 0; n < 5; n++) store.dispatch(answerChannelStep())
+    for (let n = 0; n < 6; n++) store.dispatch(answerChannelStep())
     expect(flowOf(store)?.answered).toEqual([
       "name",
       "folder",
+      "placement",
       "model",
       "notes",
       "resources",
@@ -200,6 +211,115 @@ describe("asking", () => {
     expect(flowOf(store)?.draft.resources).toHaveLength(channelRules.maxResources)
     expect(flowOf(store)?.leftOut).toBe(2)
   })
+
+  it("takes files and folders dropped while it asks for them, each with its kind", async () => {
+    const { paths, watches } = queuedPaths()
+    const { store } = await storeWith({ channels: channels(), paths })
+    store.dispatch(openChannelCreation())
+    const over: boolean[] = []
+    const stop = store.dispatch(watchChannelDrops({ dragging: (is) => over.push(is) }))
+    let drops = 0
+    const land = () => {
+      const name = `d${++drops}`
+      watches.forEach((watch) => watch.began(name))
+      return name
+    }
+    const answer = (name: string, ...dropped: DroppedPath[]) =>
+      watches.forEach((watch) => watch.dropped(name, dropped, 0))
+    watches.forEach((watch) => watch.dragging(true))
+    expect(over).toEqual([true])
+    // Landed while it asked for the name: its paths add nothing, even once
+    // they come with the files question open.
+    const early = land()
+    store.dispatch(askChannelStep({ step: "resources" }))
+    answer(early, { path: "/work/early.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual([])
+    answer(
+      land(),
+      { path: "/work/brief.md", kind: "file" },
+      { path: "/work/docs", kind: "folder" },
+      { path: "/work/brief.md", kind: "file" },
+    )
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md", "/work/docs"])
+    expect(flowOf(store)?.kinds).toEqual({
+      "/work/brief.md": "file",
+      "/work/docs": "folder",
+    })
+    // Landed here, then the question moved on before the paths came: they
+    // add nothing, and the drop no longer holds Create.
+    const moved = land()
+    expect(flowOf(store)?.landing).toEqual([moved])
+    store.dispatch(askChannelStep({ step: "notes" }))
+    answer(moved, { path: "/work/moved.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md", "/work/docs"])
+    expect(flowOf(store)?.landing).toEqual([])
+    store.dispatch(askChannelStep({ step: "resources" }))
+    // Landed here, then the question moved on and came back before the paths
+    // came: it asks for files again when they come, so they are added.
+    const back = land()
+    store.dispatch(askChannelStep({ step: "notes" }))
+    store.dispatch(askChannelStep({ step: "resources" }))
+    answer(back, { path: "/work/back.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual([
+      "/work/brief.md",
+      "/work/docs",
+      "/work/back.md",
+    ])
+    expect(flowOf(store)?.landing).toEqual([])
+    // Landed here, then the flow closed and another opened before the paths
+    // came: they belong to neither.
+    const late = land()
+    store.dispatch(closeChannelCreation())
+    store.dispatch(openChannelCreation())
+    store.dispatch(askChannelStep({ step: "resources" }))
+    answer(late, { path: "/work/late.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual([])
+    stop()
+    expect(watches.size).toBe(0)
+  })
+
+  it("waits to create while a drop's paths are still coming, then sends them", async () => {
+    const { paths, watches } = queuedPaths()
+    const source = channels()
+    const { store } = await storeWith({ channels: source, paths })
+    store.dispatch(openChannelCreation())
+    store.dispatch(draftChannel({ change: { name: "drops" } }))
+    store.dispatch(askChannelStep({ step: "resources" }))
+    const stop = store.dispatch(watchChannelDrops({ dragging: () => {} }))
+    watches.forEach((watch) => watch.began("d1"))
+    expect(await store.dispatch(createChannel())).toBeUndefined()
+    expect(flowOf(store)?.creating).toBe(false)
+    watches.forEach((watch) =>
+      watch.dropped("d1", [{ path: "/work/brief.md", kind: "file" }], 0),
+    )
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md"])
+    const made = await store.dispatch(createChannel())
+    expect(made).toBeDefined()
+    expect(listed.find((channel) => channel.id === made)?.name).toBe("drops")
+    stop()
+  })
+
+  it("counts the paths the host did not look at as not fitting", async () => {
+    const { paths, watches } = queuedPaths()
+    const { store } = await storeWith({ channels: channels(), paths })
+    store.dispatch(openChannelCreation())
+    store.dispatch(askChannelStep({ step: "resources" }))
+    const stop = store.dispatch(watchChannelDrops({ dragging: () => {} }))
+    watches.forEach((watch) => watch.began("d1"))
+    watches.forEach((watch) =>
+      watch.dropped("d1", [{ path: "/work/brief.md", kind: "file" }], 7),
+    )
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md"])
+    expect(flowOf(store)?.leftOut).toBe(7)
+    stop()
+  })
+
+  it("watches nothing where the window is never told of a drop", async () => {
+    const { store } = await storeWith({ channels: channels() })
+    store.dispatch(openChannelCreation())
+    const stop = store.dispatch(watchChannelDrops({ dragging: () => {} }))
+    expect(() => stop()).not.toThrow()
+  })
 })
 
 describe("creating", () => {
@@ -246,7 +366,7 @@ describe("creating", () => {
     const { store } = await storeWith({ channels: source, paths })
     store.dispatch(openChannelCreation())
     store.dispatch(draftChannel({ change: { name: "a" } }))
-    for (let n = 0; n < 5; n++) store.dispatch(answerChannelStep())
+    for (let n = 0; n < 6; n++) store.dispatch(answerChannelStep())
     folders.push("/")
     await store.dispatch(chooseChannelFolder())
     source.refuse("folder-refused")

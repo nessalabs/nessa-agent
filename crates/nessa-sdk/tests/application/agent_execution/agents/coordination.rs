@@ -4,7 +4,7 @@ use crate::application::agent_execution::agents::{
     AgentFuture, AttachmentPhase, AttachmentRequest,
 };
 use crate::application::agent_execution::permissions::QuestionAnswer;
-use crate::application::agent_execution::providers::NativeExecutionHandoff;
+use crate::application::agent_execution::providers::{NativeExecutionHandoff, ProviderInputFuture};
 use crate::application::{
     agent_execution::{
         executions::{
@@ -261,10 +261,13 @@ impl ProviderSessionBackend for Backend {
     }
     fn execute(
         &self,
-        _: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = input.await {
+                return ProviderExecutionReply::Rejected(error);
+            }
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
@@ -287,7 +290,7 @@ impl ProviderSessionBackend for Backend {
     fn steer<'a>(
         &'a self,
         _target: ExecutionId,
-        _input: ExecutionRequest,
+        _input: ProviderInputFuture,
         _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {

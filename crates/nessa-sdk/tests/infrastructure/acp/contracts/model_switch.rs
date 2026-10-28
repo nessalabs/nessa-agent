@@ -366,7 +366,7 @@ fn model_choices_require_the_same_captured_host_owner() {
             codex_configuration("model-switch", 64)
         };
         let workspace = std::fs::canonicalize(root.path()).unwrap();
-        let config = config.on_host(workspace.clone());
+        let config = config.on_host(workspace.clone(), None);
         let mut selected = ModelMetadataDto::from(&model);
         selected.model_id = "selected-model".into();
         let selected = ModelMetadata::try_from(selected).unwrap();

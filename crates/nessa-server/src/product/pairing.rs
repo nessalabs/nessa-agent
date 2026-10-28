@@ -13,6 +13,7 @@ use crate::device_pairing::{
     application::OwnerError,
     infrastructure::{PairingRuntimeError, RegistrationError},
 };
+use crate::tunnel::application::{TunnelMode, TunnelToken};
 use nessa_auth::{
     application::{
         dto::{CredentialGrantDto, ResourceDto},
@@ -25,6 +26,7 @@ use nessa_auth::{
         PairingRecord, TerminalCause,
     },
 };
+use nessa_protocol::product::generated::PairingTunnelMode;
 use nessa_protocol::product::generated::{
     PairingActivationStop, PairingApproveParams, PairingApproveResult, PairingCreateParams,
     PairingCreateResult, PairingEnrollee, PairingErrorCode, PairingInitiator as WireInitiator,
@@ -32,6 +34,7 @@ use nessa_protocol::product::generated::{
     PairingPendingResult, PairingReceiver, PairingTerminal, PairingTerminalCause,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_protocol::tunnel::TunnelAddress;
 use serde_json::json;
 
 pub(super) async fn dispatch(
@@ -50,6 +53,7 @@ pub(super) async fn dispatch(
             };
             let class = match params.enrollee {
                 None | Some(PairingEnrollee::Device) => ConsentClass::DeviceRead,
+                Some(PairingEnrollee::OwnerPhone) => ConsentClass::OwnerPhoneReadWrite,
                 Some(PairingEnrollee::Gateway) => ConsentClass::PeerRead,
                 Some(PairingEnrollee::Environment) => ConsentClass::PeerEnvironment,
             };
@@ -214,7 +218,7 @@ pub(super) async fn set_linking(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    use crate::device_pairing::application::{LinkingApply, LinkingCaller, LinkingError};
+    use crate::device_pairing::application::LinkingApply;
     use nessa_protocol::product::generated::{
         PairingLinkingApply, PairingSetLinkingParams, PairingSetLinkingResult,
     };
@@ -224,13 +228,7 @@ pub(super) async fn set_linking(
     let Some(linking) = state.native_linking.as_ref() else {
         return failure(&frame.id, PairingErrorCode::PairingUnavailable.as_str());
     };
-    let context = session.context();
-    let caller = LinkingCaller {
-        organization_id: context.organization_id().as_str().to_owned(),
-        principal_id: context.principal_id().as_str().to_owned(),
-        credential_id: context.credential_id().as_str().to_owned(),
-    };
-    match linking.set(caller, params.enabled).await {
+    match linking.set(linking_caller(session), params.enabled).await {
         Ok(change) => success(
             &frame.id,
             &PairingSetLinkingResult {
@@ -241,16 +239,142 @@ pub(super) async fn set_linking(
                 },
             },
         ),
-        Err(error) => failure(
+        Err(error) => failure(&frame.id, linking_refusal(error).as_str()),
+    }
+}
+
+/// The wire's code for a linking or tunnel refusal.
+fn linking_refusal(error: crate::device_pairing::application::LinkingError) -> PairingErrorCode {
+    use crate::device_pairing::application::LinkingError;
+    match error {
+        LinkingError::Busy => PairingErrorCode::PairingBusy,
+        LinkingError::AddressInUse => PairingErrorCode::PairingAddressInUse,
+        LinkingError::Unavailable => PairingErrorCode::PairingUnavailable,
+        LinkingError::AuditUnavailable => PairingErrorCode::PairingAuditUnavailable,
+        LinkingError::LinkingOff => PairingErrorCode::PairingLinkingOff,
+        LinkingError::TunnelIncomplete => PairingErrorCode::PairingTunnelIncomplete,
+    }
+}
+
+fn wire_mode(mode: TunnelMode) -> PairingTunnelMode {
+    match mode {
+        TunnelMode::Quick => PairingTunnelMode::Quick,
+        TunnelMode::Named => PairingTunnelMode::Named,
+    }
+}
+
+/// `pairing.setTunnel`: like `pairing.setLinking`, answered whether or not
+/// a tunnel runs now. The socket has already asked Cedar for
+/// `credential.manage`. A hostname or token that is not one is refused
+/// here, before the port sees it.
+pub(super) async fn set_tunnel(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    use crate::device_pairing::application::{LinkingApply, TunnelRequest};
+    use nessa_protocol::product::generated::{
+        PairingLinkingApply, PairingSetTunnelParams, PairingSetTunnelResult,
+    };
+    let Ok(params) = serde_json::from_value::<PairingSetTunnelParams>(frame.params) else {
+        return failure(&frame.id, "invalid_request");
+    };
+    let hostname = match params.hostname.map(TunnelAddress::try_from).transpose() {
+        Ok(hostname) => hostname,
+        Err(_) => return failure(&frame.id, "invalid_request"),
+    };
+    let token = match params
+        .token
+        .map(|token| TunnelToken::new(token).ok_or(()))
+        .transpose()
+    {
+        Ok(token) => token,
+        Err(()) => return failure(&frame.id, "invalid_request"),
+    };
+    let Some(linking) = state.native_linking.as_ref() else {
+        return failure(&frame.id, PairingErrorCode::PairingUnavailable.as_str());
+    };
+    let request = TunnelRequest {
+        enabled: params.enabled,
+        mode: params.mode.map(|mode| match mode {
+            PairingTunnelMode::Quick => TunnelMode::Quick,
+            PairingTunnelMode::Named => TunnelMode::Named,
+        }),
+        hostname,
+        token,
+    };
+    match linking.set_tunnel(linking_caller(session), request).await {
+        Ok(change) => success(
             &frame.id,
-            match error {
-                LinkingError::Busy => PairingErrorCode::PairingBusy,
-                LinkingError::AddressInUse => PairingErrorCode::PairingAddressInUse,
-                LinkingError::Unavailable => PairingErrorCode::PairingUnavailable,
-                LinkingError::AuditUnavailable => PairingErrorCode::PairingAuditUnavailable,
-            }
-            .as_str(),
+            &PairingSetTunnelResult {
+                enabled: change.enabled,
+                mode: wire_mode(change.mode),
+                applies: match change.applies {
+                    LinkingApply::Unchanged => PairingLinkingApply::Unchanged,
+                    LinkingApply::Restarting => PairingLinkingApply::Restarting,
+                },
+            },
         ),
+        Err(error) => failure(&frame.id, linking_refusal(error).as_str()),
+    }
+}
+
+/// `pairing.tunnel`: the saved tunnel (never its token) and this run's.
+pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> OutgoingMessage {
+    use crate::tunnel::application::TunnelStatus;
+    use nessa_protocol::product::generated::{PairingTunnelResult, PairingTunnelStatus};
+    if frame.params != json!({}) {
+        return failure(&frame.id, "invalid_request");
+    }
+    let Some(linking) = state.native_linking.as_ref() else {
+        return failure(&frame.id, PairingErrorCode::PairingUnavailable.as_str());
+    };
+    let saved = match linking.tunnel().await {
+        Ok(saved) => saved,
+        Err(error) => return failure(&frame.id, linking_refusal(error).as_str()),
+    };
+    let live = state
+        .tunnel
+        .as_ref()
+        .map(|tunnel| tunnel.status.borrow().clone());
+    let (status, address, failure_reason) = match live {
+        None => (PairingTunnelStatus::Off, None, None),
+        Some(TunnelStatus::Starting) => (PairingTunnelStatus::Starting, None, None),
+        Some(TunnelStatus::Ready(address)) => (
+            PairingTunnelStatus::Ready,
+            Some(address.as_str().to_owned()),
+            None,
+        ),
+        Some(TunnelStatus::Failed(failure)) => (
+            PairingTunnelStatus::Failed,
+            None,
+            Some(failure.as_str().to_owned()),
+        ),
+    };
+    success(
+        &frame.id,
+        &PairingTunnelResult {
+            enabled: saved.enabled,
+            mode: wire_mode(saved.mode),
+            hostname: saved.hostname.map(String::from),
+            has_token: saved.has_token,
+            ingress: saved.ingress.to_string(),
+            status,
+            address,
+            failure: failure_reason,
+        },
+    )
+}
+
+/// The authenticated caller, as the linking audit names it.
+fn linking_caller(
+    session: &AuthenticatedSession,
+) -> crate::device_pairing::application::LinkingCaller {
+    let context = session.context();
+    crate::device_pairing::application::LinkingCaller {
+        organization_id: context.organization_id().as_str().to_owned(),
+        principal_id: context.principal_id().as_str().to_owned(),
+        credential_id: context.credential_id().as_str().to_owned(),
     }
 }
 

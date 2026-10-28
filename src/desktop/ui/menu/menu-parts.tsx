@@ -74,7 +74,7 @@ function chosen(onSelect: ((event: SelectEvent) => void) | undefined) {
   }
 }
 
-/** A dropdown's floating surface, in the window's glass. */
+/** A dropdown's floating surface, on the window's menu card. */
 export function DropdownMenuContent({ className, ...props }: DropdownMenuContentProps) {
   return (
     <MenuKindContext.Provider value="dropdown">
@@ -83,7 +83,7 @@ export function DropdownMenuContent({ className, ...props }: DropdownMenuContent
   )
 }
 
-/** A right-click menu's floating surface, in the window's glass. */
+/** A right-click menu's floating surface, on the window's menu card. */
 export function ContextMenuContent({
   className,
   ...props
@@ -102,7 +102,7 @@ export function MenuItem({ onSelect, ...props }: DropdownMenuItemProps) {
 }
 
 /**
- * An item that is on or off, marked by a check in the menu's leading column.
+ * An item that is on or off, marked by a check at the row's end.
  * Choosing it closes the menu, in either kind, unless `onSelect` prevents it.
  */
 export function MenuCheckboxItem({
@@ -187,7 +187,7 @@ export function MenuSubTrigger(props: DropdownMenuSubTriggerProps) {
 }
 
 /**
- * A submenu's surface, in the same glass as its menu. nessa_ui's draws it
+ * A submenu's surface, on the same card as its menu. nessa_ui's draws it
  * where it is written, inside the menu's own surface — which scrolls, and so
  * clips it: open, and drawn nowhere. It is portalled beside the menu instead,
  * as the menu itself is, onto the page's body.

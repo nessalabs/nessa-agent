@@ -1365,6 +1365,19 @@ html:not(.dark) .settings .settings-card {
   padding-block: 8px;
 }
 
+/* The web tunnel: its public address, and a named tunnel's two fields. */
+.tunnel-address {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.tunnel-input {
+  width: 18rem;
+  max-width: 100%;
+}
+
 .linked-pairing-code {
   flex: 1 1 200px;
   display: flex;
@@ -1443,5 +1456,43 @@ html:not(.dark) .settings .settings-card {
   }
   .settings-row[data-github-settled] .settings-github-status {
     opacity: 0;
+  }
+}
+
+/* Boat connection setup uses the same field and action controls as other accounts. */
+.settings-boat {
+  display: grid;
+  gap: 10px;
+  padding-block: 4px;
+  font-size: 12.5px;
+}
+.settings-boat p {
+  margin: 0;
+}
+.settings-boat form {
+  display: grid;
+  gap: 6px;
+}
+.settings-boat-fields {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.settings-boat-fields .settings-button {
+  flex: none;
+}
+.settings-boat-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-boat-note {
+  color: var(--desktop-faint);
+  line-height: 1.5;
+}
+@media (max-width: 480px) {
+  .settings-boat-fields {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

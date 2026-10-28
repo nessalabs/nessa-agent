@@ -88,6 +88,7 @@ fn fixture_with_agents(
     );
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
@@ -372,7 +373,9 @@ async fn competing_attachment_waiters_share_original_completion_and_fault() {
                     .await
             }
         });
-        tokio::time::timeout(Duration::from_secs(5), readiness.started.notified())
+        // The same bounded creation ceiling covers a loaded Windows runner;
+        // a short scheduling delay must not masquerade as attachment failure.
+        tokio::time::timeout(CREATION_HANG, readiness.started.notified())
             .await
             .unwrap();
         let live = original_live(&service, &target).await;
@@ -1667,7 +1670,10 @@ fn creation_crash_child() {
                 )
                 .await
         });
-        tokio::time::timeout(Duration::from_secs(5), started.notified())
+        // The separate libtest child may wait for a Windows CI core while the
+        // other server partition is active. The marker still requires a real
+        // provider open before the parent can proceed.
+        tokio::time::timeout(Duration::from_secs(15), started.notified())
             .await
             .unwrap();
         assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
@@ -1705,7 +1711,9 @@ async fn a_crash_after_provider_open_reopens_the_original_interrupted_receipt() 
             .spawn()
             .unwrap(),
     );
-    tokio::time::timeout(Duration::from_secs(10), async {
+    // Allow the child its full startup bound plus time for the parent to
+    // observe the atomically published marker on a loaded Windows runner.
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match std::fs::read(root.join("provider-opened")) {
                 Ok(bytes) => {

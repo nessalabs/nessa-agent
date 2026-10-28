@@ -2196,6 +2196,10 @@ function reasonFor(
     case ConversationErrorCode.AttachmentCapacity:
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
+    case ConversationErrorCode.UploadTicketInvalid:
+    case ConversationErrorCode.UploadFailed:
+    case ConversationErrorCode.UnsupportedImage:
+    case ConversationErrorCode.ImageTooLarge:
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.MessageQuotaExceeded:
       return "unavailable"

@@ -47,6 +47,7 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
         open_credentials: Default::default(),
         mcp_stand_ins: Default::default(),
         channel_instructions: None,
+        review_deadlines: crate::composition::agent::review_deadlines(),
         selected: None,
         runtimes: HashMap::new(),
     }

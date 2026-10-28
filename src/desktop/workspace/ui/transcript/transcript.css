@@ -22,6 +22,15 @@
   );
 }
 
+/*
+ * A tool the reader opens or closes. Anchoring would keep the text below the
+ * tool and slide the clicked header up; the hold turns it off for that motion
+ * (`tool-disclosure.ts`).
+ */
+[data-disclosure-hold] {
+  overflow-anchor: none;
+}
+
 .workspace-transcript-inner {
   display: flex;
   max-width: 700px;

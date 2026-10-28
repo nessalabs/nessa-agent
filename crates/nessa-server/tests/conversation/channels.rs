@@ -11,6 +11,8 @@ use crate::conversation::domain::{
     ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
 };
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
+#[cfg(unix)]
+use crate::conversation_test_support::channel_lookup::ChannelLookup;
 use crate::conversation_test_support::{absolute, unrooted};
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
@@ -43,6 +45,7 @@ impl RecordingSource {
             ConversationApprovalMode::Full => ApprovalMode::Full,
         };
         ConversationAgent {
+            workspace: None,
             provider: Arc::new(
                 Provider::new(self.factory.clone())
                     .with_model(model)
@@ -174,6 +177,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn request(folder: Option<&str>) -> ChannelRequest {
     ChannelRequest {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder: folder.map(path),
         defaults: ChannelDefaults {
@@ -192,6 +196,13 @@ impl Fixture {
     }
 
     fn with_erasers(provider_sessions: ProviderSessionErasers) -> Self {
+        Self::with_channel_store(provider_sessions, None)
+    }
+
+    fn with_channel_store(
+        provider_sessions: ProviderSessionErasers,
+        channel_store: Option<Arc<dyn ChannelStore>>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = &directory.path().join("gateway");
         nessa_local_storage::create_directory(root).unwrap();
@@ -213,6 +224,7 @@ impl Fixture {
         .unwrap();
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents,
                 storage: storage.clone(),
@@ -237,7 +249,9 @@ impl Fixture {
         service.bind_commands(storage);
         let folders = TableFolders::default();
         service.bind_channels(
-            Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap()),
+            channel_store.unwrap_or_else(|| {
+                Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap())
+            }),
             Arc::new(folders.clone()),
         );
         Self {
@@ -262,6 +276,34 @@ impl Fixture {
     fn asked(&self) -> Vec<Asked> {
         std::mem::take(&mut self.source.asked.lock().unwrap())
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn settings_authorization_refuses_another_channels_valid_owner_facts() {
+    let real = Fixture::new();
+    let found = real.channel("owned-channel", None).await;
+    let id = found.id().clone();
+    let other = ChannelId::from_random([99; 10]);
+    assert_ne!(id, other);
+    let fixture = Fixture::with_channel_store(
+        ProviderSessionErasers::default(),
+        Some(Arc::new(ChannelLookup {
+            channel: Box::new(found),
+        })),
+    );
+    assert!(fixture
+        .service
+        .authorize_channel_settings(&caller("person", "settings"), &id)
+        .await
+        .is_ok());
+    assert!(matches!(
+        fixture
+            .service
+            .authorize_channel_settings(&caller("person", "settings"), &other)
+            .await,
+        Err(ConversationError::Unavailable)
+    ));
 }
 
 #[test]
@@ -415,6 +457,7 @@ async fn a_conversation_in_a_channel_starts_with_its_defaults_in_its_folder() {
             caller("person", "say"),
             "say".to_owned(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -752,6 +795,7 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
             caller("person", "say"),
             "say".to_owned(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -759,7 +803,9 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
         )
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    // This bounds fixture completion, not the product's turn latency. The
+    // Windows CI runner runs two server partitions alongside each other.
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             let view = fixture
                 .service

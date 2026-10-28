@@ -253,48 +253,60 @@ impl RecordStorage {
     /// Replay is what refuses a record this build cannot read. The replacement
     /// stream is empty, so a later open does not read the refused bytes.
     /// The reset is published to committed-change watches after the lifecycle
-    /// receipt, before retired rows are cleaned up. The writer reservation
-    /// stays until this function returns, including when the reset is refused.
+    /// receipt, before retired rows are cleaned up. Once admitted, the operation
+    /// retains its writer reservation through physical completion even if the
+    /// caller drops its wait, as the cancellation regression verifies.
     async fn discard_unreadable_inner(&self, id: SessionId) -> Result<(), StorageError> {
-        let _reservation = Reservation::acquire(self.owner.clone(), id.as_str())?;
+        let reservation = Reservation::acquire(self.owner.clone(), id.as_str())?;
         let journal = SessionPaths::new(&self.root, &id).journal;
-        tokio::task::spawn_blocking(move || match std::fs::remove_file(&journal) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(StorageError::Io(error.to_string())),
-        })
-        .await
-        .map_err(|error| StorageError::Io(error.to_string()))??;
-        let runtime = self.runtime().await?.clone();
-        let stream_id =
-            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
-        let Some(stream) = runtime.find_stream(&stream_id).await.map_err(store_error)? else {
-            return Ok(());
-        };
-        let mut digest = Sha256::new();
-        digest.update(stream.id.as_str().as_bytes());
-        digest.update(stream.incarnation.0);
-        let operation = format!("nessa-discard-{:x}", digest.finalize());
-        runtime
-            .change_lifecycle(LifecycleRequest {
-                operation_id: LifecycleOperationId::new(operation)
-                    .map_err(|error| StorageError::Corrupt(error.to_string()))?,
-                expected: stream,
-                action: LifecycleAction::Reset,
+        let owner = self.owner.clone();
+        let cell = self.runtime.clone();
+        let options = self.options.clone();
+        let saves = self.saves.clone();
+        let changes = self.changes.clone();
+        tokio::spawn(async move {
+            let _reservation = reservation;
+            tokio::task::spawn_blocking(move || match std::fs::remove_file(&journal) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(StorageError::Io(error.to_string())),
             })
             .await
-            .map_err(store_error)?;
-        // Same order as an erasure: the receipt is durable before cleanup, and
-        // a watcher re-reads after this notice.
-        self.changes.publish(&id);
-        const MAX_CLEANUP_PASSES: usize = 1024;
-        for _ in 0..MAX_CLEANUP_PASSES {
-            let progress = runtime.cleanup_retired().await.map_err(store_error)?;
-            if !progress.remaining {
+            .map_err(|error| StorageError::Io(error.to_string()))??;
+            owner.initialize()?;
+            let runtime = initialize_runtime(&cell, &options, &saves).await?;
+            let stream_id = StreamId::new(id.as_str())
+                .map_err(|error| StorageError::Corrupt(error.to_string()))?;
+            let Some(stream) = runtime.find_stream(&stream_id).await.map_err(store_error)? else {
                 return Ok(());
+            };
+            let mut digest = Sha256::new();
+            digest.update(stream.id.as_str().as_bytes());
+            digest.update(stream.incarnation.0);
+            let operation = format!("nessa-discard-{:x}", digest.finalize());
+            runtime
+                .change_lifecycle(LifecycleRequest {
+                    operation_id: LifecycleOperationId::new(operation)
+                        .map_err(|error| StorageError::Corrupt(error.to_string()))?,
+                    expected: stream,
+                    action: LifecycleAction::Reset,
+                })
+                .await
+                .map_err(store_error)?;
+            // Same order as an erasure: the receipt is durable before cleanup, and
+            // a watcher re-reads after this notice.
+            changes.publish(&id);
+            const MAX_CLEANUP_PASSES: usize = 1024;
+            for _ in 0..MAX_CLEANUP_PASSES {
+                let progress = runtime.cleanup_retired().await.map_err(store_error)?;
+                if !progress.remaining {
+                    return Ok(());
+                }
             }
-        }
-        Err(StorageError::Unresolved)
+            Err(StorageError::Unresolved)
+        })
+        .await
+        .map_err(|error| StorageError::Io(error.to_string()))?
     }
 
     /// Append one already-encoded semantic batch and its completion.

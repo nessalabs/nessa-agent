@@ -99,8 +99,8 @@ when {
     !resource.deleted
 };
 
-// The owner lists their own conversations. A paired reader lists through
-// its catalogue, never the owner's list, so no permit names one.
+// The owner lists their own conversations. Devices ask grant.list for a
+// grant-scoped catalogue under their distinct paired subject.
 @id("owner.list")
 permit (
     principal is NessaConversation::Person,
@@ -172,6 +172,18 @@ when {
 permit (
     principal is NessaConversation::Person,
     action == NessaConversation::Action::"channel.use",
+    resource is NessaConversation::Channel
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
+
+// The owner manages ordinary runtime settings for this channel.
+@id("owner.channel_settings")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"channel.settings",
     resource is NessaConversation::Channel
 )
 when {

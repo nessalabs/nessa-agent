@@ -1,3 +1,6 @@
+import { BoatProvider } from "./settings/ui/boat-row"
+import { VaultProvider, nativeVault } from "../vault"
+import { hasNativeHost } from "../host"
 import { nativeAgentApiKeys } from "../onboarding/adapters/agent-api-key"
 import { AgentSetupProvider } from "../onboarding"
 import { assignedAgentReadiness } from "../onboarding/adapters/agents"
@@ -10,6 +13,7 @@ import {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  onPathsDragged,
   host,
   loadAssignedGatewayEndpoint,
   onReviewNoticeOpened,
@@ -51,7 +55,7 @@ import {
   openReviewEvent,
   showWaitingReviews,
 } from "./workspace/adapters/gateway/review-notices"
-import { followWorkspace, loadWorkspace } from "./workspace"
+import { followWorkspace, loadWorkspace, type PathPicker } from "./workspace"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
@@ -128,15 +132,30 @@ if (nativeNotices) {
 // The system's pickers for a new channel's paths, in the app on macOS and
 // Windows. Linux has no picker of its own yet, and a browser none at all, so
 // there a channel's folder is made for it and it takes no resources.
-const channelPaths =
+const channelPaths: PathPicker | undefined =
   backend === "host" && (host.kind === "macos" || host.kind === "other")
     ? {
         home: homeFolder,
         folder: chooseChannelFolder,
         resources: chooseChannelResources,
+        drops: (watch) => {
+          // Listening is asked for, and answers later: a watch stopped before
+          // then stops the listener as soon as it is there.
+          let stop: (() => void) | null = null
+          let stopped = false
+          void onPathsDragged(watch).then(
+            (unlisten) => (stopped ? unlisten() : (stop = unlisten)),
+            (error: unknown) => console.warn("Dropped files will not be heard", error),
+          )
+          return () => {
+            stopped = true
+            stop?.()
+          }
+        },
       }
     : undefined
 const dependencies = createDesktopDependencies({
+  vault: hasNativeHost() ? nativeVault : undefined,
   signInToProvider,
   paths: channelPaths,
   providerLoginAvailable,
@@ -177,44 +196,51 @@ if (!container) throw new Error("missing #root")
 createRoot(container).render(
   <React.StrictMode>
     <StartupMounted />
-    <AgentSetupProvider source={agentSetup}>
-      <Provider store={store}>
-        <WidgetRegistryProvider registry={dependencies.widgets}>
-          <ClockProvider now={dependencies.now}>
-            <SubagentsProvider source={dependencies.subagents}>
-              {/* Every icon in the window resolves through the family chosen in Settings. */}
-              <DesktopIconFamilyProvider>
-                <McpServersProvider gateway={dependencies.mcpServers}>
-                  <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                    <ClipboardProvider write={writeClipboardText}>
-                      <SiteIconProvider render={faviconSiteIcon}>
-                        <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
-                          <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                            <PermissionRulesProvider
-                              gateway={dependencies.permissionRules}
-                            >
-                              <GithubProvider
-                                gateway={dependencies.github}
-                                avatar={githubAvatar}
+    <VaultProvider source={dependencies.vault} autoUnlock={hasNativeHost()}>
+      <AgentSetupProvider source={agentSetup}>
+        <Provider store={store}>
+          <WidgetRegistryProvider registry={dependencies.widgets}>
+            <ClockProvider now={dependencies.now}>
+              <SubagentsProvider source={dependencies.subagents}>
+                {/* Every icon in the window resolves through the family chosen in Settings. */}
+                <DesktopIconFamilyProvider>
+                  <McpServersProvider gateway={dependencies.mcpServers}>
+                    <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                      <ClipboardProvider write={writeClipboardText}>
+                        <SiteIconProvider render={faviconSiteIcon}>
+                          <HeldFilesProvider
+                            read={dependencies.heldFiles}
+                            save={saveFile}
+                          >
+                            <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                              <PermissionRulesProvider
+                                gateway={dependencies.permissionRules}
                               >
-                                <DesktopWindow
-                                  hostKind={host.kind}
-                                  browserSurface={host.kind === "browser"}
-                                  inspectable={import.meta.env.DEV}
-                                />
-                              </GithubProvider>
-                            </PermissionRulesProvider>
-                          </NativeHooksProvider>
-                        </HeldFilesProvider>
-                      </SiteIconProvider>
-                    </ClipboardProvider>
-                  </LinkedDevicesProvider>
-                </McpServersProvider>
-              </DesktopIconFamilyProvider>
-            </SubagentsProvider>
-          </ClockProvider>
-        </WidgetRegistryProvider>
-      </Provider>
-    </AgentSetupProvider>
+                                <BoatProvider gateway={dependencies.boat}>
+                                  <GithubProvider
+                                    gateway={dependencies.github}
+                                    avatar={githubAvatar}
+                                  >
+                                    <DesktopWindow
+                                      hostKind={host.kind}
+                                      browserSurface={host.kind === "browser"}
+                                      inspectable={import.meta.env.DEV}
+                                    />
+                                  </GithubProvider>
+                                </BoatProvider>
+                              </PermissionRulesProvider>
+                            </NativeHooksProvider>
+                          </HeldFilesProvider>
+                        </SiteIconProvider>
+                      </ClipboardProvider>
+                    </LinkedDevicesProvider>
+                  </McpServersProvider>
+                </DesktopIconFamilyProvider>
+              </SubagentsProvider>
+            </ClockProvider>
+          </WidgetRegistryProvider>
+        </Provider>
+      </AgentSetupProvider>
+    </VaultProvider>
   </React.StrictMode>,
 )

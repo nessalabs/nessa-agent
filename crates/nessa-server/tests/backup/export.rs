@@ -206,6 +206,7 @@ async fn a_read_and_a_send_finish_while_the_export_is_still_reading() {
                     caller("send-during"),
                     "send-during".into(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: "hello".into(),
                         ..SubmittedMessage::default()
                     },

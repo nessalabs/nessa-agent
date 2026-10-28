@@ -159,6 +159,7 @@ export type {
 
 export type { SessionTermination } from "./generated/product.js"
 export { RecordReadErrorCode } from "./generated/product.js"
+export { PairingEnrollee } from "./generated/product.js"
 export {
   channelRules,
   mcpAppCallTiming,
@@ -475,3 +476,24 @@ export type {
   WorkspaceWidget,
   WorkspaceWindow,
 } from "./generated/product.js"
+
+export { type VaultApi } from "./presentation/vault-api.js"
+export { NessaVaultError } from "./application/vault-error.js"
+export { VaultErrorCode, VaultState, type VaultStatus } from "./generated/product.js"
+
+export type { BoatApi } from "./presentation/boat-api.js"
+export {
+  BoatErrorCode,
+  type BoatStatus,
+  type BoatRuntimeReadParams,
+  type BoatRuntimeSetParams,
+  type BoatRuntimeSettings,
+  type BoatVmLifetime,
+  type VmLifetimeSeconds,
+  VmLifetimeMode,
+  BoatRuntimeSelection,
+  vmLifetimeSeconds,
+  type BoatSaveParams,
+} from "./generated/product.js"
+
+export { NessaBoatError } from "./presentation/boat-api.js"

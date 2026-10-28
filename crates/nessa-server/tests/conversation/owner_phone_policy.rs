@@ -283,10 +283,18 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.subscribeList",
         "conversation.subscribeEvents",
         "conversation.peek",
+        // A card shows what a review or question asks before it is answered.
+        "conversation.answer",
+        "conversation.permissionReview",
+        "conversation.answerQuestion",
+        "conversation.questionReview",
+        "channel.list",
         "attachment.begin",
+        "attachment.write",
         "artifact.read",
         "agents.list",
         "server.health",
+        "server.reach",
         "auth.session",
     ] {
         let action = nessa_protocol::product::generated::action_for_method(method);
@@ -302,10 +310,13 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
     }
     for method in [
         "agents.install",
+        "channel.create",
         "mcp.servers.list",
         "credential.issue",
         "conversation.share",
         "pairing.approve",
+        "pairing.setTunnel",
+        "pairing.tunnel",
         "peer.relay",
         "unknown.future",
     ] {

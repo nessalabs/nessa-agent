@@ -12,6 +12,14 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  inputFiles: {
+    default: 1,
+    what: "PDF, ZIP and text inputs uploaded by another surface, retained and drawn in the conversation",
+  },
+  pairedCatalogues: {
+    default: 1,
+    what: "real native paired catalogue cycles through the protected product child",
+  },
   modelSwitches: {
     default: 1,
     what: "same-provider model choices through the actual composer picker, applied by the next send",
@@ -125,6 +133,10 @@ export const KNOBS = {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
   },
+  tunnels: {
+    default: 1,
+    what: "times the web tunnel is turned on in Settings, kept across a gateway restart, dialed through by a paired worker, and turned off",
+  },
   drifts: {
     default: 1,
     what: "gateway restarts with a changed agent PATH and TMPDIR, then a send to the existing conversation completes",
@@ -132,6 +144,10 @@ export const KNOBS = {
   upgrades: {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
+  },
+  menus: {
+    default: 1,
+    what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
   },
   menuPanels: {
     default: 1,
@@ -212,6 +228,7 @@ export function plan(knobs) {
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
+  add(knobs.inputFiles, () => ({ kind: "inputFiles" }))
   add(knobs.modelSwitches, () => ({ kind: "model" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
@@ -230,10 +247,12 @@ export function plan(knobs) {
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
+  add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   add(knobs.webhooks, () => ({ kind: "webhook" }))
@@ -246,6 +265,8 @@ export function plan(knobs) {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
   }
+  if (knobs.pairedCatalogues > 0)
+    steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes follow
   // that work, using Ask before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older

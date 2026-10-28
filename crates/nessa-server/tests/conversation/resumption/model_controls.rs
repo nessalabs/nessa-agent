@@ -63,6 +63,7 @@ async fn startup_model_evidence(reconcile_before_start: bool) {
             caller("work"),
             "owed-model".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Finish the admitted A work".into(),
                 ..SubmittedMessage::default()
             },

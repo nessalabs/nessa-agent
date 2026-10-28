@@ -1,3 +1,4 @@
+import { appVault } from "./vault.mjs"
 /**
  * A real gateway, the dev server in front of it, and a `NessaClient` on it as
  * a surface of its own: what the checks against a real gateway start from
@@ -132,7 +133,10 @@ export async function startGatewayStack(
   options,
   instance,
   {
+    vault = false,
+    initializeVault = true,
     as = "owner",
+    stage = "ci",
     scripted,
     scenario,
     evidence,
@@ -172,6 +176,7 @@ export async function startGatewayStack(
   const timings = {}
   let started = Date.now()
   const gateway = await startLocalGateway({
+    stage,
     agent,
     port: await freePort(),
     instance,
@@ -193,20 +198,27 @@ export async function startGatewayStack(
     webhooks,
     environment,
     runtimes,
+    evidence,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
-    if (evidence && error.gatewayLog)
-      writeFileSync(join(evidence, "gateway.log"), error.gatewayLog)
-    throw new CannotRun(`the gateway did not start: ${error.message.split("\n")[0]}`)
+    // The gateway owner already attempted evidence retention before cleanup.
+    // A second write here can erase both startup and retention failures.
+    const failure = new CannotRun(
+      `the gateway did not start: ${error.message.split("\n")[0]}`,
+    )
+    failure.cause = error
+    throw failure
   })
   timings.gatewayMs = Date.now() - started
   let dev = null
   let client = null
+  let protectedVault = null
   // The gateway stops, and its directory with the credentials goes, whatever
   // the client or the dev server did as they closed.
   const close = async () => {
     try {
+      await protectedVault?.close()
       client?.close()
       await dev?.close()
     } finally {
@@ -214,34 +226,44 @@ export async function startGatewayStack(
       try {
         stopped = await gateway.stop()
       } finally {
-        // After the stop: its last lines are in the log, and the directory
-        // they are not stored in is gone. The evidence copy is this process's.
-        if (evidence) writeFileSync(join(evidence, "gateway.log"), gateway.log())
-        if (!stopped) log(`the gateway (pid ${gateway.server.pid}) did not exit`)
+        if (
+          !stopped &&
+          gateway.server.exitCode === null &&
+          gateway.server.signalCode === null
+        )
+          log(`the gateway (pid ${gateway.server.pid}) did not exit`)
       }
     }
   }
   const token = () => readFileSync(gateway.token, "utf8").trim()
   try {
     started = Date.now()
-    const stage = {
-      NESSA_STAGE: "ci",
-      VITE_NESSA_STAGE: "ci",
+    const stageEnvironment = {
+      NESSA_STAGE: stage,
+      VITE_NESSA_STAGE: stage,
       NESSA_BROWSER_GATEWAY_URL: gateway.url,
     }
     // A production build inlines the stage. The gateway is a ci gateway, and
     // a prod stage refuses its HTTP loopback address.
     dev =
       options.mode === "prod"
-        ? await startPreview(options, stage)
-        : await startDevServer(options, stage)
+        ? await startPreview(options, stageEnvironment)
+        : await startDevServer(options, stageEnvironment)
     timings.devServerMs = Date.now() - started
     client = await connectClient(gateway, instance, as)
+    if (vault) {
+      protectedVault = appVault({
+        endpoint: () => gateway.url,
+        credential: () => token(),
+      })
+      if (initializeVault) await protectedVault.unlock()
+    }
     return {
       url: dev.url,
       mode: options.mode === "prod" ? "prod" : "dev",
       close,
       client,
+      vault: protectedVault,
       gateway,
       timings,
       token,

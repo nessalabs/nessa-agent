@@ -79,6 +79,8 @@ jobs:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
       # A scheduled run has no inputs; each falls back to the same default
       # the dispatch form shows.
+      # The iOS macOS workflow owns real Swift phone stress.
+      NESSA_STRESS_INPUTFILES: "0"
       NESSA_STRESS_ROUNDS: ${{ inputs.rounds || '80' }}
       NESSA_STRESS_PARALLEL: ${{ inputs.parallel || '12' }}
       NESSA_STRESS_TURNS: ${{ inputs.turns || '8' }}
@@ -101,6 +103,7 @@ jobs:
       NESSA_CHAOS_SHRINK: "20"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/secret-service
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

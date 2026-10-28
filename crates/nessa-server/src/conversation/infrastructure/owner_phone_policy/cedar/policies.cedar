@@ -32,14 +32,26 @@ when {
     ["conversation.create", "conversation.read", "conversation.list", "conversation.observe",
      "conversation.send", "conversation.steer", "conversation.remove", "conversation.stop",
      "conversation.receipt", "conversation.message", "conversation.messageStatus",
-     "conversation.answer", "conversation.answerQuestion", "conversation.cancel",
+     "conversation.answer", "conversation.permissionReview", "conversation.answerQuestion",
+     "conversation.questionReview", "conversation.cancel",
      "conversation.close", "conversation.archive", "conversation.unarchive", "conversation.delete",
      "conversation.rename", "conversation.reorder", "conversation.subscribe", "conversation.subscribeList",
      "conversation.subscribeEvents", "conversation.peek",
-     "conversation.unsubscribe", "attachment.begin"].contains(context.method)
+     "conversation.unsubscribe", "attachment.begin",
+     "attachment.write"].contains(context.method)
 };
 // A live conversation is conversation.subscribe. The chat list is
 // conversation.subscribeList. The payloadless watch methods are not this purpose.
+
+// The phone's sidebar lists the owner's channels. Listing reads only the
+// catalogue; making a channel names a folder on the owner's machine, which
+// stays the desktop's to do, so channel.create is not this purpose.
+@id("owner-phone.channel-list")
+permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
+when {
+    context has method && context has publishedAction &&
+    context.publishedAction == "conversation.write" && context.method == "channel.list"
+};
 
 @id("owner-phone.native-read-methods")
 permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
@@ -58,7 +70,7 @@ when { context has method && context.method == "auth.session" && !(context has p
 permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
 when {
     context has method && context has publishedAction && context.publishedAction == "server.read" &&
-    ["server.health", "agents.list", "agents.subscribe", "agents.unsubscribe"].contains(context.method)
+    ["server.health", "server.reach", "agents.list", "agents.subscribe", "agents.unsubscribe"].contains(context.method)
 };
 
 // The service owns the default fact; Cedar owns which creation selections this purpose permits.

@@ -136,11 +136,13 @@ pub enum AccessAction {
     ChannelList,
     /// Create a conversation in a channel.
     ChannelUse,
+    /// Read or edit a channel's runtime settings.
+    ChannelSettings,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::AgentTools,
         Self::Locate,
         Self::Act,
@@ -161,6 +163,7 @@ impl AccessAction {
         Self::ChannelCreate,
         Self::ChannelList,
         Self::ChannelUse,
+        Self::ChannelSettings,
     ];
 
     /// The action's name, as the policy spells it.
@@ -186,6 +189,7 @@ impl AccessAction {
             Self::ChannelCreate => "channel.create",
             Self::ChannelList => "channel.list",
             Self::ChannelUse => "channel.use",
+            Self::ChannelSettings => "channel.settings",
         }
     }
 }
@@ -600,6 +604,32 @@ impl<'a> PairedAccess<'a> {
             Answer::Refused => Ok(false),
             Answer::Unavailable => Err(PairedRefusal::Unavailable),
         }
+    }
+
+    /// Admit candidates in order through [`Self::allows`], sharing a decision
+    /// only when the resource facts and held capabilities are identical.
+    /// The action and paired party are fixed for this call.
+    ///
+    /// # Errors
+    /// `Unavailable` when any candidate's policy decision is unavailable.
+    pub fn allows_each<'c>(
+        &self,
+        action: AccessAction,
+        candidates: impl IntoIterator<Item = (&'c Conversation, Option<Capabilities>)>,
+    ) -> Result<Vec<bool>, PairedRefusal> {
+        let mut decided = HashMap::new();
+        candidates
+            .into_iter()
+            .map(|(conversation, held)| {
+                let key = (AccessResource::of(conversation), held);
+                if let Some(admitted) = decided.get(&key) {
+                    return Ok(*admitted);
+                }
+                let admitted = self.allows(action, conversation, held)?;
+                decided.insert(key, admitted);
+                Ok(admitted)
+            })
+            .collect()
     }
 
     /// Whether the party may take `action` on the owner's catalogue its

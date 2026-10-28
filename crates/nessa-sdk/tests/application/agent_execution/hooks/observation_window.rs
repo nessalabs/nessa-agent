@@ -167,7 +167,7 @@ impl ProviderSessionBackend for ScriptedBackend {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         let started = self.started.clone();
@@ -176,6 +176,10 @@ impl ProviderSessionBackend for ScriptedBackend {
         let release = self.release.clone();
         let handshake = self.handshake.clone();
         Box::pin(async move {
+            let input = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }

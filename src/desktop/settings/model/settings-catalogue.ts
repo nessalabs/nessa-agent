@@ -347,6 +347,13 @@ export const settingsEntries = [
     detail: "Lets agents clone, push, and open pull requests as you.",
     keywords: "git repository sign in connect app",
   },
+  {
+    id: "boat",
+    tab: "accounts",
+    label: "Boat",
+    detail: "Cloud workspaces using your connected agent subscriptions.",
+    keywords: "cloud vm compute workspace token chatgpt claude",
+  },
   // Connections › Integrations
   {
     id: "mcp-servers",

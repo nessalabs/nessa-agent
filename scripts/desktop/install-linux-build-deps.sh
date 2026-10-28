@@ -52,5 +52,22 @@ for attempt in 1 2 3; do
   fi
   sleep $((attempt * 15))
 done
+# Ubuntu 26.04 drops webkit2gtk-driver. webkitgtk-webdriver replaces that name,
+# so `apt-cache show` exits 0 and prints nothing while `apt-get install` reports
+# no candidate. The candidate line is what install can fetch. Ubuntu 24.04 and
+# 22.04 still publish the old name, and the smoke still calls WebKitWebDriver.
+resolved=()
+for package in "${packages[@]}"; do
+  if [ "$package" = webkit2gtk-driver ]; then
+    # Consume all policy output. Exiting awk at Candidate closes the pipe
+    # early; apt-cache can then receive SIGPIPE, and pipefail reports 141.
+    candidate="$(LC_ALL=C apt-cache policy webkit2gtk-driver | awk '/^  Candidate:/ { candidate=$2 } END { if (candidate != "") print candidate }')"
+    if [ -z "$candidate" ] || [ "$candidate" = "(none)" ]; then
+      resolved+=(webkitgtk-webdriver)
+      continue
+    fi
+  fi
+  resolved+=("$package")
+done
 sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "${apt_options[@]}" install -y \
-  "${packages[@]}"
+  "${resolved[@]}"

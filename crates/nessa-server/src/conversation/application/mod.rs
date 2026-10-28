@@ -254,9 +254,11 @@ pub use artifacts::{
 pub(crate) use artifacts::{
     ArtifactBudget, ArtifactCollector, FetchRequests, FetchTaken, PublishRequests,
 };
+// Input resolution holds a lease on every host, independently of composition.
+pub(crate) use environment::LeaseHold;
 #[cfg(any(unix, test))]
 pub(crate) use environment::{
-    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseHold, LeaseRelease,
+    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseRelease,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
@@ -311,8 +313,8 @@ pub use ports::{
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
-    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
-    UnfinishedMark, UnfinishedTurns,
+    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload,
+    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -391,3 +393,18 @@ mod local_golden_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
+
+#[cfg(unix)]
+pub(crate) use placement::ThreadEnvironments;
+pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
+
+#[cfg(unix)]
+mod artifact_channels;
+#[cfg(unix)]
+pub(crate) use artifact_channels::{ArtifactChannel, ArtifactChannels};
+
+mod input_files;
+pub(crate) use input_files::{ConversationInputFiles, InputFileDelivery};
+pub use input_files::{InputFileAudit, InputFileStage};
+#[cfg(any(unix, test))]
+pub(crate) use input_files::{LocalInputFile, LocalInputFilePlacement};

@@ -231,6 +231,7 @@ impl UserImageSource for NoImages {
 
 fn fixed_agent() -> ConversationAgent {
     ConversationAgent {
+        workspace: None,
         provider: Arc::new(Provider::new(Arc::new(ProviderFactory::default()))),
         execution_audit: Arc::new(AcceptingAudit),
         reserved_output_tokens: 4096,
@@ -1079,6 +1080,7 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
     .unwrap();
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: Arc::new(InMemoryStorage::new()),
@@ -1168,6 +1170,7 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
             caller("submit-first"),
             "first-execution".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -1228,6 +1231,7 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
             caller("submit-second"),
             "second-execution".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello again".into(),
                 ..SubmittedMessage::default()
             },
@@ -1440,6 +1444,7 @@ async fn missing_key_skips_startup_warm_up_and_a_later_key_recovers_on_the_cold_
             caller("submit-after-save"),
             "hello".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -1508,6 +1513,7 @@ async fn rotated_key_shares_runtime_preparation_but_the_conversation_uses_fresh_
             caller("submit-after-rotation"),
             "rotation".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -1607,6 +1613,7 @@ async fn standalone_explicit_profile_launches_with_captured_environment_and_no_m
             caller("submit-standalone"),
             "standalone-execution".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },

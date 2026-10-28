@@ -77,3 +77,5 @@ export type {
   ViewSubscriptionHandlers,
   EventSubscriptionHandlers,
 } from "./subscription-api.js"
+
+export type { VaultApi } from "./vault-api.js"

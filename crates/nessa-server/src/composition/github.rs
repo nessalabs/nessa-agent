@@ -1,6 +1,6 @@
 //! The GitHub sign-in, composed once per run: the Nessa GitHub App, GitHub
-//! over HTTPS, the private sign-in file, its audit, and what each agent open
-//! reads of it.
+//! over HTTPS, its encrypted app-session vault entry and audit, and what each
+//! agent open reads of it.
 //!
 //! `NESSA_GITHUB_APP` names a file describing another app in place of the
 //! released one, so the stress check can point a gateway at a fake GitHub on
@@ -13,7 +13,7 @@ use nessa_sdk::infrastructure::acp::sessions::OpenCredentials;
 use super::local_auth::{conversation_root, SystemClock};
 use crate::github::application::GithubConnections;
 use crate::github::infrastructure::{
-    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenFile,
+    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenVault,
 };
 use crate::product::GithubRoutes;
 use crate::timer::TokioTimer;
@@ -28,7 +28,11 @@ pub(super) struct GithubComposition {
 /// override cannot be read or no HTTP client can be built. Without it the
 /// github methods answer `github_not_configured` and agents are given no
 /// GitHub sign-in.
-pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
+pub(super) async fn compose(
+    namespace: &Path,
+    environment: &crate::env::Environment,
+    vault: Arc<nessa_vault::application::Vault>,
+) -> Option<GithubComposition> {
     let app = match std::env::var_os("NESSA_GITHUB_APP") {
         None => GithubApp::released(),
         Some(path) => match std::fs::read(&path).map(|bytes| GithubApp::parse(&bytes)) {
@@ -47,14 +51,24 @@ pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
         },
     };
     let install_url = app.install_url();
-    let Some(api) = GithubHttps::new(app) else {
+    let Some(api) = GithubHttps::new(app.clone()) else {
         tracing::error!("GitHub sign-in is off this run: no HTTPS client could be built");
         return None;
     };
+    let secret = crate::secrets::VaultSecret::new(
+        vault.clone(),
+        nessa_vault::domain::EntryName::new("github-sign-in").expect("static vault entry"),
+    );
     let connections = Arc::new(
         GithubConnections::load(
             Arc::new(api),
-            Arc::new(GithubTokenFile::new(namespace.join("github"))),
+            Arc::new(crate::github::infrastructure::GithubVaultAccess(
+                vault.clone(),
+            )),
+            Arc::new(GithubTokenVault::new(
+                namespace.join("github"),
+                Arc::new(secret),
+            )),
             Arc::new(DurableGithubAudit::new(
                 conversation_root(namespace).join("audit").join("github"),
                 Arc::new(SystemClock),
@@ -63,6 +77,30 @@ pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
         )
         .await,
     );
+    let live = if crate::github_relay::infrastructure::relay_configuration(environment.stage)
+        .is_ok_and(|relay| relay.client_id == app.client_id && relay.app_slug == app.slug)
+    {
+        match (
+            super::github_relay::http(),
+            super::github_relay::store(environment, vault),
+        ) {
+            (Ok(http), Ok(store)) => {
+                Some(Arc::new(crate::github_relay::application::LiveEvents::new(
+                    Arc::new(
+                        crate::github_relay::infrastructure::ConnectedGithubCredentials::new(
+                            http,
+                            connections.clone(),
+                            app,
+                        ),
+                    ),
+                    store,
+                )))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     Some(GithubComposition {
         credentials: OpenCredentials::read_from(Arc::new(GithubLaunchCredentials::new(
             connections.clone(),
@@ -70,6 +108,8 @@ pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
         routes: Arc::new(GithubRoutes {
             connections,
             install_url,
+            live,
+            changes: tokio::sync::Mutex::new(()),
         }),
     })
 }

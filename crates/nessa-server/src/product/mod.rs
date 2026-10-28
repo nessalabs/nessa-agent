@@ -51,6 +51,7 @@ pub(crate) use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 pub(crate) use state::ConnectedEnvironments;
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
+mod boat;
 mod channel;
 mod conversation;
 mod github;
@@ -70,3 +71,6 @@ pub(crate) use conversation::dispatch as dispatch_conversation;
 
 #[cfg(test)]
 pub(crate) use socket::HostProductFixture;
+
+mod vault;
+pub use vault::VaultRoutes;

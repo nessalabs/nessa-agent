@@ -1,3 +1,4 @@
+import { VaultProvider, nativeVault } from "./vault"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
@@ -119,11 +120,13 @@ function renderApplication() {
       <StartupMounted />
       {windowSurface() === "setup" ? (
         <Provider store={store}>
-          <SetupGate
-            agents={dependencies.agents}
-            apiKeys={nativeAgentApiKeys}
-            installations={dependencies.agentInstallations}
-          />
+          <VaultProvider source={hasNativeHost() ? nativeVault : undefined} setup>
+            <SetupGate
+              agents={dependencies.agents}
+              apiKeys={nativeAgentApiKeys}
+              installations={dependencies.agentInstallations}
+            />
+          </VaultProvider>
           <SessionLifecycle dependencies={dependencies} />
         </Provider>
       ) : !hasNativeHost() && environment.conversation.backend === "local" ? (

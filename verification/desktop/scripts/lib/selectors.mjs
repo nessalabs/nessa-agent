@@ -19,6 +19,9 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  boatRuntimeSettings: "[data-boat-runtime-settings]",
+  channelSettingsOpen: "[data-channel-settings-open]",
+  channelSettingsDialog: "[data-channel-settings]",
   localLifetimes: "[data-local-lifetimes]",
   // Committed conversation production-component fixture
   historyTabConsumer: "[data-history-tab-consumer]",
@@ -60,6 +63,8 @@ export const css = {
   cornerPane: "[data-pane-key][data-split-corner]", // the top-left pane, whose header clears the window's controls when no side column is beside it
   panesAlone: "[data-workspace][data-panes-alone]", // both side columns closed: the corner pane's header steps past the controls
   focusedPane: "[data-pane-key][data-pane-focused]",
+  focusBlocked:
+    "[inert], [data-drag-reflow], [data-split-flying], [data-split-measuring], [data-message-arrival-waiting]",
   workspaceFlight: "[data-split-flipping], [data-split-flying]",
   paneGrid: "[data-split-grid]", // the grid the panes are laid out in — the box the drag measures
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
@@ -80,6 +85,7 @@ export const css = {
   newChannelAsked: ".new-channel-asked", // class: the question being asked; data-step
   newChannelAnswered: ".new-channel-answered", // class: an answered question's ✓ line; data-step
   newChannelResource: ".new-channel-resources li", // a file or folder attached to the channel being made
+  newChannelDrop: ".new-channel-drop", // the drop target, while files are dragged over the flow
   homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
@@ -193,6 +199,7 @@ export const css = {
   approvalCopy: ".workspace-approval-copy",
   approvalCommandBlock: ".workspace-approval-command-block",
   approvalDeny: ".workspace-approval-deny",
+  approvalAlways: 'button[data-answer="always"]',
   approvalCard: ".workspace-approval", // class
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
@@ -301,11 +308,17 @@ export const css = {
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  githubLive: "[data-github-live]",
+  githubLiveHelp: "[data-github-live] button[popovertarget]",
   github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
   githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
   githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus
   githubActions: ".settings-github-actions", // Choose repositories and Disconnect; opacity 0 at rest
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
+  linkingSwitch: "[data-linking-switch] [role='switch']", // the Native linking switch
+  tunnel: "[data-tunnel]", // the Web tunnel group: data-tunnel-enabled, data-tunnel-status
+  tunnelSwitch: "[data-tunnel] [role='switch']",
+  tunnelAddress: "[data-tunnel-address]", // the ready tunnel's public address
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',
@@ -467,6 +480,17 @@ export const storage = {
   pictureInConversations: "nessa.desktop.picture-in-conversations",
   greeting: "nessa.desktop.greeting",
   sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
+  overviewFilter: "nessa.desktop.workspace.overview-filter", // the Agents overview's filter, as JSON (`remembered-filter.ts`)
+}
+
+/** The number each overview filter choice shows and answers to (`choiceKey`). */
+export const overviewFilterKeys = {
+  ongoing: "1",
+  all: "2",
+  any: "3",
+  today: "4",
+  week: "5",
+  month: "6",
 }
 
 /** The same-window event a stored preference announces a change on. */
@@ -582,6 +606,7 @@ export const names = {
   experimental: "Experimental",
   /** Settings › Advanced's tab holding first-run setup, and its row's button. */
   setupTab: "Setup",
+  setupBrowserHint: "Setup can be replayed in the Nessa app.",
   replayOnboarding: "Replay",
   /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
   setup: {

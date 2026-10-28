@@ -80,6 +80,7 @@ async fn model_choice_during_a_turn_keeps_native_session_and_exact_attributed_hi
             caller(),
             "ongoing".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "keep running".into(),
                 ..SubmittedMessage::default()
             },
@@ -163,6 +164,7 @@ async fn model_choice_during_a_turn_keeps_native_session_and_exact_attributed_hi
             caller(),
             "after-model".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "uses the acknowledged model".into(),
                 ..SubmittedMessage::default()
             },
@@ -215,6 +217,7 @@ async fn a_pending_model_control_keeps_the_original_review_answerable_after_call
             caller(),
             "review-turn".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "needs approval".into(),
                 ..SubmittedMessage::default()
             },
@@ -329,6 +332,7 @@ async fn a_failed_metadata_commit_recovers_from_exact_sdk_evidence_without_repla
             caller(),
             "held-across-storage-failure".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "ongoing".into(),
                 ..SubmittedMessage::default()
             },
@@ -444,6 +448,7 @@ async fn an_active_permission_preset_keeps_the_original_review_and_native_turn()
             caller(),
             "permission-preset-turn".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "wait for review".into(),
                 ..SubmittedMessage::default()
             },
@@ -649,6 +654,7 @@ async fn a_foreign_pending_initiator_cannot_authorize_retirement_or_publication(
             caller(),
             "owned-turn".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "keep running".into(),
                 ..SubmittedMessage::default()
             },

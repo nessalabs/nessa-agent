@@ -217,6 +217,9 @@ pub struct PeerCommands {
 struct PeerTurns {
     closed: bool,
     peers: HashMap<DeviceKey, PeerTurn>,
+    /// Test evidence survives a free turn's removal, without retaining its semaphore.
+    #[cfg(test)]
+    first_cycles: HashMap<DeviceKey, Arc<ReadStop>>,
 }
 
 /// One peer's turn and the cycle holding it, if a cycle is.
@@ -364,6 +367,8 @@ impl PeerCommands {
             peers: Mutex::new(PeerTurns {
                 closed: false,
                 peers: HashMap::new(),
+                #[cfg(test)]
+                first_cycles: HashMap::new(),
             }),
             syncs: Mutex::new(HashMap::new()),
             running: watch::channel(Admission::default()).0,
@@ -384,6 +389,16 @@ impl PeerCommands {
             .as_ref()
             .map(|cycle| Arc::clone(cycle.read()))
     }
+    /// The first successfully registered cycle, even after its turn was removed.
+    #[cfg(test)]
+    pub(crate) fn first_read_stop(&self, key: &DeviceKey) -> Option<Arc<ReadStop>> {
+        self.peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .first_cycles
+            .get(key)
+            .cloned()
+    }
     /// `key`'s turn for `cycle`, if no one holds it. The poller asks again
     /// later rather than queue, so an owner command never waits behind a
     /// cycle. `None` once the commands are closed.
@@ -396,6 +411,11 @@ impl PeerCommands {
         let slot = open_slot(&mut turns, key)?;
         let permit = slot.turn.clone().try_acquire_owned().ok()?;
         slot.cycle = Some(cycle.clone());
+        #[cfg(test)]
+        turns
+            .first_cycles
+            .entry(key)
+            .or_insert_with(|| cycle.read().clone());
         Some(CycleTurn {
             commands: self.clone(),
             key,

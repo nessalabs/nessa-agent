@@ -227,6 +227,27 @@ const channelRules = {}
   }
 }
 
+// The domain admits finite lifetimes. Schema/client bounds are its publication,
+// checked before any generated artifact is written.
+{
+  const source = readFileSync(
+    resolve(
+      root,
+      "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+    ),
+    "utf8",
+  )
+  for (const [field, constant] of [
+    ["minimum", "MIN_SECONDS"],
+    ["maximum", "MAX_SECONDS"],
+  ]) {
+    const literal = source.match(new RegExp(`const ${constant}: u64 = ([0-9_]+);`))?.[1]
+    const owned = Number(literal?.replaceAll("_", ""))
+    if (!Number.isSafeInteger(owned) || schema.$defs.VmLifetimeSeconds?.[field] !== owned)
+      throw new Error(`VmLifetimeSeconds.${field} drifted from the domain's ${constant}`)
+  }
+}
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -347,6 +368,13 @@ for (const [name, def] of Object.entries(schema.$defs)) {
     else rs += enumRs
     continue
   }
+  // A reusable integer definition keeps request and response bounds under
+  // one schema owner, like named string definitions below.
+  if (def.type === "integer" && !def.properties) {
+    ts += `export type ${name} = ${type(def, false)}\n`
+    rs += `pub type ${name} = ${type(def, true)};\n`
+    continue
+  }
   if (def.type === "string" && !def.properties) {
     ts += `export type ${name} = string\n`
     rs += `pub type ${name} = String;\n`
@@ -369,6 +397,10 @@ for (const [name, def] of Object.entries(schema.$defs)) {
   ts += "}\n"
   if (!externalRust) rs += "}\n"
 }
+// Lifetime request/response validation consumes the same published integer
+// definition; clients do not retype the provider's representation bounds.
+ts += `export const vmLifetimeSeconds = ${JSON.stringify({ minimum: schema.$defs.VmLifetimeSeconds.minimum, maximum: schema.$defs.VmLifetimeSeconds.maximum })} as const\n`
+
 /**
  * The one value every array of `field` referring to `kind` agrees on, so a
  * bound that drifted between two commands is a generation failure rather than a
@@ -601,6 +633,9 @@ const bounds = {
   maxMessageImages: arrayBound("attachments", "ImageAttachment", "maxItems"),
   maxMessageImageBytes: arrayBound("attachments", "ImageAttachment", "x-maxTotalBytes"),
   maxUploadBytes: schema.$defs.AttachmentBeginParams.properties.size.maximum,
+  maxUploadedFileNameBytes:
+    schema.$defs.UploadedFileAttachment.properties.name["x-utf8MaxBytes"],
+  uploadedFileNamePattern: schema.$defs.UploadedFileAttachment.properties.name.pattern,
   maxMessageFiles: arrayBound("files", "LinkedFile", "maxItems"),
   maxFilePathBytes: linked.path["x-utf8MaxBytes"],
   filePathPattern: linked.path.pattern,
@@ -838,18 +873,26 @@ if (
 )
   throw new Error("Invalid event subscription filter bounds")
 const eventOptions = schema.$defs.ConversationSubscribeEventsParams
-const nonNullEventOptions = Object.entries(eventOptions.properties).flatMap(
-  ([name, node]) => {
-    if (eventOptions.required.includes(name)) return []
+function nonNullOptionalFields(definition) {
+  return Object.entries(definition.properties).flatMap(([name, node]) => {
+    if (definition.required.includes(name)) return []
     const owner = node.$ref ? schema.$defs[node.$ref.split("/").at(-1)] : node
     return owner.type === "null" ||
       (Array.isArray(owner.type) && owner.type.includes("null"))
       ? []
       : [name]
-  },
-)
+  })
+}
+const nonNullEventOptions = nonNullOptionalFields(eventOptions)
+const nonNullBoatRuntimeOptions = [
+  ...new Set([
+    ...nonNullOptionalFields(schema.$defs.BoatRuntimeReadParams),
+    ...nonNullOptionalFields(schema.$defs.BoatRuntimeSetParams),
+  ]),
+]
 rs += `/// Event filter bounds published by the product schema.\npub const MIN_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.minItems};\npub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.maxItems};\npub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = ${eventKinds.uniqueItems};\n`
 rs += `/// Optional event subscription fields whose published schema forbids explicit null.\npub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &${JSON.stringify(nonNullEventOptions)};\n`
+rs += `/// Runtime settings options whose published schema forbids explicit null.\npub const NON_NULL_BOAT_RUNTIME_OPTIONS: &[&str] = &${JSON.stringify(nonNullBoatRuntimeOptions)};\n`
 ts += `/** Kind/metadata relationships derived from ConversationEvent's JSON Schema conditionals. */\nexport const conversationEventMetadataRules = ${JSON.stringify(eventMetadataRules(schema))} as const\n`
 for (const [kind, entries] of [
   ["Method", productMethods],

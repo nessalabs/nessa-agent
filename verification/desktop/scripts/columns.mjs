@@ -20,6 +20,8 @@
  *                    right); each pane's picture runs up to the window's top
  *                    edge; and the left pane's composer starts past the
  *                    corner mark when the rail is closed.
+ *   pane-clipping    focusing an overflowing fixture cannot scroll the pane
+ *                    root or move its header; the transcript owns scrolling.
  *   rail-corner      the toggle holds one bottom-left place in the rail's
  *                    column, rail open or closed; with the rail closed it is
  *                    the footer's mark, right before "nessa Studio".
@@ -67,6 +69,7 @@ import { css, keys, names, selectorFor, storage } from "./lib/selectors.mjs"
 import {
   flatSurfaceFailures,
   frames,
+  hideColumns,
   openPanes,
   paneCountIs,
   settled,
@@ -101,6 +104,7 @@ const cutOff = (page) =>
   )
 
 const checks = [
+  "pane-clipping",
   "channels-alone",
   "list-request",
   "list-request-claude",
@@ -142,6 +146,8 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
 Checks, per engine, layout and size:
+  pane-clipping   focusing an overflowing fixture leaves each pane root at
+                  offset zero and its header in place (#1184)
   list-request    three columns: a waiting row in Needs you is a card with the
                   exact command, and Allow from it settles the review — the
                   row leaves Needs you, its card with it
@@ -297,6 +303,51 @@ async function arrange(page, size, { rail, sidebar }) {
 }
 
 const body = {
+  "pane-clipping": async ({ page }) => {
+    await openPanes(page, 2)
+    await settled(page)
+    const states = []
+    const failures = []
+    for (const pane of await page.locator(css.pane).all()) {
+      const state = await pane.evaluate(async (element, headerSelector) => {
+        const header = element.querySelector(headerSelector)
+        const before = header.getBoundingClientRect().top
+        // Isolate #1184's scroll-container mechanism without replaying the
+        // whole stress history. Only this owned fixture overflows; the pane's
+        // actual stylesheet and the browser's focus scrolling stay untouched.
+        const fixture = document.createElement("button")
+        fixture.textContent = "Pane overflow focus fixture"
+        fixture.style.position = "absolute"
+        fixture.style.top = `${element.clientHeight * 3}px`
+        element.append(fixture)
+        try {
+          const outside =
+            fixture.getBoundingClientRect().top > element.getBoundingClientRect().bottom
+          fixture.focus()
+          await new Promise(requestAnimationFrame)
+          return {
+            outside,
+            focused: document.activeElement === fixture,
+            top: element.scrollTop,
+            left: element.scrollLeft,
+            headerShift: header.getBoundingClientRect().top - before,
+          }
+        } finally {
+          fixture.remove()
+        }
+      }, css.paneHeader)
+      states.push(state)
+      if (!state.outside || !state.focused)
+        failures.push(
+          `the overflowing focus fixture did not run: ${JSON.stringify(state)}`,
+        )
+      if (state.top !== 0 || state.left !== 0 || Math.abs(state.headerShift) > 0.5)
+        failures.push(
+          `focus scrolled the pane root or its header: ${JSON.stringify(state)}`,
+        )
+    }
+    return { states, failures }
+  },
   "chat-layout": async ({ page, size }) => {
     const failures = []
     const states = []
@@ -1854,7 +1905,8 @@ const body = {
    * A non-last draft is dropped in the close, and the box stays three
    * frames. The next frame still shows that home and the unsent text.
    */
-  "draft-held": async ({ page }) => {
+  "draft-held": async ({ page, layout }) => {
+    await hideColumns(page, layout)
     const text = "unsent line"
     const before = await page.locator(css.pane).count()
     await page.keyboard.press(keys.newSessionBeside)

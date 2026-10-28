@@ -17,6 +17,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
@@ -135,7 +136,7 @@ export function agentCommand(agent) {
 
 /**
  * What a signed-out gateway is started with, over `NESSA_*`: this process's
- * `PATH` (`path` first, when given), `TMPDIR` and `RUST_LOG`, and a `HOME` of
+ * `PATH` (`path` first, when given), `TMPDIR`, `RUST_LOG` and local OS-service addresses, and a `HOME` of
  * its own under `directory`, so neither a credential variable nor a sign-in
  * kept under the real home reaches it or the agent it starts. Built from
  * what it needs rather than by removing the credentials it might find.
@@ -145,7 +146,7 @@ export function agentCommand(agent) {
  */
 export function signedOutEnvironment(directory, path) {
   const kept = Object.fromEntries(
-    ["TMPDIR", "RUST_LOG"]
+    ["TMPDIR", "RUST_LOG", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]
       .filter((name) => process.env[name] !== undefined)
       .map((name) => [name, process.env[name]]),
   )
@@ -190,8 +191,14 @@ export async function exited(child, ms) {
  *   agent (`signedOutEnvironment`), for an agent that needs none
  * @param {object} [o.limits] the config's `limits`, as `docs/limits.md` names
  *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
+ * @param {number} [o.reviewWaitSeconds] `agents.reviewWaitSeconds`: how long a
+ *   review other than a read inside the workspace waits before it is denied;
+ *   the gateway's default (five minutes) when absent
  * @param {object} [o.native] the config's `native` section
  *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
+ * @param {string} [o.evidence] task-owned output directory. Before private data
+ *   cleanup, preserve gateway.log and gateway-status.json here, never credentials
+ *   or audit record contents. A failed evidence write still removes private data.
  * @param {Record<string, string>} [o.environment] more of the gateway's
  *   environment, such as `NESSA_GITHUB_APP`
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
@@ -208,12 +215,17 @@ export async function exited(child, ms) {
  *   error carries the gateway's output as `gatewayLog`.
  */
 export async function startLocalGateway(o) {
+  const stage = o.stage ?? "ci"
+  if (!["ci", "dev"].includes(stage))
+    throw new Error("verification gateways use ci or dev")
   const nessa = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
   if (!existsSync(nessa))
     throw new Error(
       "build the gateway first (cargo build -p nessa-server), or set MCP_LIVE_NESSA",
     )
-  const directory = mkdtempSync(join(tmpdir(), `nessa-mcp-live-${o.agent}-`))
+  const directory = realpathSync(
+    mkdtempSync(join(tmpdir(), `nessa-mcp-live-${o.agent}-`)),
+  )
   const output = []
   let server = null
   // Its output streams closed: everything it wrote has been read.
@@ -233,7 +245,26 @@ export async function startLocalGateway(o) {
       // that kept the streams open does not hold the stop up for long.
       if (stopped) await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
     }
-    rmSync(directory, { recursive: true, force: true })
+    try {
+      if (o.evidence) {
+        mkdirSync(o.evidence, { recursive: true })
+        writeFileSync(join(o.evidence, "gateway.log"), output.join(""))
+        writeFileSync(
+          join(o.evidence, "gateway-status.json"),
+          `${JSON.stringify(
+            {
+              stopped,
+              exitCode: server?.exitCode ?? null,
+              signal: server?.signalCode ?? null,
+            },
+            null,
+            2,
+          )}\n`,
+        )
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
     return stopped
   }
   try {
@@ -248,7 +279,7 @@ export async function startLocalGateway(o) {
             ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
           }),
       ...o.environment,
-      NESSA_STAGE: "ci",
+      NESSA_STAGE: stage,
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,
       NESSA_INSTANCE: o.instance,
@@ -260,7 +291,7 @@ export async function startLocalGateway(o) {
       { env, encoding: "utf8" },
     )
     if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
-    const configPath = join(directory, "ci", "instances", o.instance, "config.json")
+    const configPath = join(directory, stage, "instances", o.instance, "config.json")
     writeFileSync(
       configPath,
       JSON.stringify({
@@ -280,6 +311,7 @@ export async function startLocalGateway(o) {
             // Other agents the gateway may carry a conversation on under.
             ...o.runtimes,
           },
+          ...(o.reviewWaitSeconds ? { reviewWaitSeconds: o.reviewWaitSeconds } : {}),
         },
         ...(o.limits ? { limits: o.limits } : {}),
         ...(o.native ? { native: o.native } : {}),
@@ -351,8 +383,16 @@ export async function startLocalGateway(o) {
       restart,
     }
   } catch (error) {
-    await stop()
-    error.gatewayLog = output.join("")
-    throw error
+    let failure = error
+    try {
+      await stop()
+    } catch (cleanup) {
+      failure = new AggregateError(
+        [error, cleanup],
+        "The gateway failed and its cleanup or diagnostic retention also failed",
+      )
+    }
+    failure.gatewayLog = output.join("")
+    throw failure
   }
 }

@@ -35,6 +35,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 /// An open byte stream to a host's environment.
 pub(crate) struct LeaseConnection {
+    /// Explicit scoped MCP relay, independent of the environment byte stream.
+    pub(crate) mcp_relay:
+        Option<Arc<dyn nessa_sdk::application::agent_execution::providers::HarnessMcpRelay>>,
     /// What the environment writes: its frames.
     pub(crate) from_environment: Box<dyn AsyncRead + Send + Unpin>,
     /// What the environment reads.
@@ -57,27 +60,7 @@ pub(crate) enum ArtifactTransport {
     Frames,
 }
 
-/// One artifact channel: an sftp session's two directions, and whatever
-/// keeps it open.
-pub(crate) struct ArtifactChannel {
-    /// What the host's sftp server writes.
-    pub(crate) from_host: Box<dyn AsyncRead + Send + Unpin>,
-    /// What it reads.
-    pub(crate) to_host: Box<dyn AsyncWrite + Send + Unpin>,
-    /// Dropping it ends the channel, never the connection it rides on.
-    pub(crate) keep: Box<dyn Send>,
-}
-
-/// Opens artifact channels beside one connection's lease frames: sftp on
-/// the same SSH connection, so nothing more is authenticated or reached.
-pub(crate) trait ArtifactChannels: Send + Sync {
-    /// Open one. Answers at once; whether it is served is learned from what
-    /// arrives on it.
-    ///
-    /// # Errors
-    /// Nothing could be started at all.
-    fn open(&self) -> io::Result<ArtifactChannel>;
-}
+use crate::conversation::application::ArtifactChannels;
 
 /// Opens connections to hosts' environments.
 pub(crate) trait LeaseConnector: Send + Sync {
@@ -160,4 +143,16 @@ pub(crate) fn channel_arguments<'a>(host: &'a SshDestination, control: &'a str) 
         host.as_str(),
         "sftp",
     ]
+}
+
+/// An application-owned workspace carrying the existing environment protocol.
+/// Provisioning is allowed only for a new lease, never while accounting old work.
+pub(crate) trait WorkspaceConnector: Send + Sync {
+    fn connect(
+        &self,
+        provision: bool,
+    ) -> crate::conversation::application::EnvironmentFuture<
+        '_,
+        Result<LeaseConnection, nessa_sdk::domain::agent_execution::leases::LeaseRefusal>,
+    >;
 }
