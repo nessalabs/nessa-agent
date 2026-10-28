@@ -5,7 +5,7 @@ kind: "statechart"
 status: "mixed"
 summary: "A new desktop session begins as a local draft."
 parent: "desktop-workspace"
-sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
+sourceRevision: "79b641248948cde7837a813ef9ac6885ada23045"
 sources:
   - "src/desktop/workspace/application/usecases/sessions.ts"
   - "src/desktop/workspace/application/usecases/session-tabs.ts"
@@ -31,6 +31,21 @@ channel to remain in the current index. If the source refused its first send,
 discarding that message restores the draft in a current channel when one is
 available. With no current channel, it removes the local session and any pane
 showing it.
+
+The current-channel decision is checked again immediately before a local
+message reaches the source. An index can replace the channel list after the
+composer stages a message and before the asynchronous delivery continuation.
+
+| Channel when send or retry starts | Channel before source dispatch | Result |
+| --- | --- | --- |
+| Present | Present | Send the staged message under its stable ID. |
+| Missing | Missing | Do not stage or send a message. |
+| Present | Missing | Mark the staged message failed with a channel-unavailable explanation; do not call the source. A retry may use the same ID if the channel returns. |
+| Present | Removed after source dispatch | Settle from the source's answer or later update; the window cannot retract the request. |
+
+These rows apply to drafts and sessions the source has not confirmed. An
+established session is sent under its source-owned identity without a local
+`start` channel.
 
 The selected [connection mode](README.md#connection-modes) decides where the message goes. Gateway mode sends through the workspace client; sample mode produces scripted replies. A sample reply does not prove a provider ran.
 
