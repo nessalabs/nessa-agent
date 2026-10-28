@@ -429,7 +429,7 @@
   }
 }
 
-/* Up to the window's top edge the picture is as bright as below: it fades
+/* Up to the pane's top edge the picture is as bright as below: it fades
    only out toward the sides and into the pane. */
 .workspace-pane-home > .desktop-home:not([data-page]) .desktop-header-image {
   mask-image:

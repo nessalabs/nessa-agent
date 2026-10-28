@@ -219,11 +219,11 @@
   }
 }
 
-/* A bottom-left slot aligned with the compact rail, clear of the window bar. */
+/* A bottom-left slot inset equally from the window's left and bottom edges. */
 .side-rail-toggle {
   position: absolute;
   z-index: 42;
-  bottom: calc(var(--desktop-gutter) + 13px);
+  bottom: var(--rail-column);
   left: var(--rail-column);
 }
 
