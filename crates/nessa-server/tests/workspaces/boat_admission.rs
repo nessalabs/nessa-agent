@@ -34,6 +34,7 @@ struct State {
     drift_on_resume: bool,
     creation_ack: Value,
     read_override: Option<Value>,
+    expected_ttl: Option<u32>,
 }
 struct Server {
     provider: BoatProvider,
@@ -56,6 +57,7 @@ async fn server() -> Server {
         drift_on_resume: false,
         creation_ack: json!({"ok":true,"type":"sandbox.created","status":"provisioning"}),
         read_override: None,
+        expected_ttl: Some(3600),
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
@@ -71,10 +73,11 @@ async fn server() -> Server {
             assert_eq!(headers.get("authorization").unwrap(),"Bearer fixture-token");
             assert_eq!(headers.get("x-boat-org").unwrap(),"personal");
             assert_eq!(headers.get("idempotency-key").unwrap(),"nessa-thread-fixture-thread");
-            assert_eq!(request,json!({"type":"small","ttlSeconds":3600,"environment":"nessa","env":{"NESSA_THREAD_ID":"fixture-thread"},"from":"bsh_fixture","snapshots":true}));
-            let mut state=create.lock().unwrap(); state.created+=1; if state.drift_on_create { state.environment["passGithub"]=json!(true); } let mut body=state.receipt.clone(); for field in ["ok","type","status"] {body.as_object_mut().unwrap().remove(field);} for (field,value) in state.creation_ack.as_object().unwrap() {body[field.as_str()]=value.clone();} body["ttlSeconds"]=json!(3600); async { Json(body) } }))
+            let mut state=create.lock().unwrap();
+            assert_eq!(request,json!({"type":"small","ttlSeconds":state.expected_ttl,"environment":"nessa","env":{"NESSA_THREAD_ID":"fixture-thread"},"from":"bsh_fixture","snapshots":true}));
+            state.created+=1; if state.drift_on_create { state.environment["passGithub"]=json!(true); } let mut body=state.receipt.clone(); for field in ["ok","type","status"] {body.as_object_mut().unwrap().remove(field);} for (field,value) in state.creation_ack.as_object().unwrap() {body[field.as_str()]=value.clone();} body["ttlSeconds"]=json!(state.expected_ttl); async { Json(body) } }))
         .route("/api/v1/sandboxes/{id}", get(move || { let state=read.lock().unwrap(); let body=state.read_override.as_ref().unwrap_or(&state.receipt).clone(); async { Json(body) } }))
-        .route("/api/v1/sandboxes/{id}/resume", post(move || { let mut state=resume.lock().unwrap(); state.resumed+=1; if state.drift_on_resume { state.environment["passSecrets"]=json!(true); } state.receipt["sandbox"]["state"]=json!("ready"); async move { Json(json!({"ok":true,"type":"sandbox.resumed","id":VM,"status":"ready"})) } }))
+        .route("/api/v1/sandboxes/{id}/resume", post(move |Json(request):Json<Value>| { let mut state=resume.lock().unwrap(); assert_eq!(request["ttlSeconds"],json!(state.expected_ttl)); state.resumed+=1; if state.drift_on_resume { state.environment["passSecrets"]=json!(true); } state.receipt["sandbox"]["state"]=json!("ready"); async move { Json(json!({"ok":true,"type":"sandbox.resumed","id":VM,"status":"ready"})) } }))
         .fallback(move || { commands.lock().unwrap().commands+=1; async { axum::http::StatusCode::FORBIDDEN } });
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -103,7 +106,81 @@ async fn server() -> Server {
     }
 }
 fn connection() -> BoatConnection {
-    BoatConnection::new("fixture-token".into(), "nessa".into(), "bsh_fixture".into()).unwrap()
+    let mut connection =
+        BoatConnection::new("fixture-token".into(), "nessa".into(), "bsh_fixture".into()).unwrap();
+    connection.auto_stop =
+        crate::conversation::domain::VmLifetime::from_seconds(Some(3600)).unwrap();
+    connection
+}
+
+#[tokio::test]
+async fn admitted_creation_sends_explicit_null_for_no_automatic_stop() {
+    let server = server().await;
+    {
+        let mut state = server.state.lock().unwrap();
+        state.expected_ttl = None;
+        state.receipt["sandbox"]["ttlSeconds"] = Value::Null;
+    }
+    let mut unlimited = connection();
+    unlimited.auto_stop = crate::conversation::domain::VmLifetime::Unlimited;
+    let receipt = server
+        .provider
+        .create(&unlimited, "fixture-thread")
+        .await
+        .unwrap();
+    assert_eq!(receipt.vm, VM);
+    assert!(receipt.refusal.is_none());
+    assert_eq!(server.state.lock().unwrap().created, 1);
+}
+
+#[tokio::test]
+async fn finite_creation_refuses_unenforced_provider_lifetime_before_sdk_authority() {
+    for observed in [Some(Value::Null), Some(json!(0)), Some(json!(14_400)), None] {
+        let server = server().await;
+        {
+            let mut state = server.state.lock().unwrap();
+            state.expected_ttl = Some(7_200);
+            if let Some(value) = observed {
+                state.receipt["sandbox"]["ttlSeconds"] = value;
+            } else {
+                state.receipt["sandbox"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("ttlSeconds");
+            }
+        }
+        let mut finite = connection();
+        finite.auto_stop =
+            crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+        let receipt = server
+            .provider
+            .create(&finite, "fixture-thread")
+            .await
+            .unwrap();
+        assert_eq!(receipt.vm, VM);
+        assert_eq!(
+            receipt.refusal.as_ref().map(|rejection| rejection.cause()),
+            Some(AdmissionRefusal::LifetimeNotEnforced)
+        );
+        let state = server.state.lock().unwrap();
+        assert_eq!(state.created, 1);
+        assert_eq!(state.commands, 0);
+    }
+}
+
+#[tokio::test]
+async fn a_shorter_provider_lifetime_satisfies_the_selected_maximum() {
+    let server = server().await;
+    server.state.lock().unwrap().expected_ttl = Some(7_200);
+    let mut finite = connection();
+    finite.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+    let receipt = server
+        .provider
+        .create(&finite, "fixture-thread")
+        .await
+        .unwrap();
+    assert!(receipt.refusal.is_none());
+    assert_eq!(server.state.lock().unwrap().commands, 0);
 }
 
 #[tokio::test]
@@ -343,6 +420,82 @@ async fn resume_rechecks_environment_before_any_sdk_command_or_grant() {
     let state = server.state.lock().unwrap();
     assert_eq!(state.resumed, 1);
     assert_eq!(state.commands, 0);
+}
+
+#[tokio::test]
+async fn archived_resume_sends_explicit_null_after_lifetime_changes() {
+    let server = server().await;
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    {
+        let mut state = server.state.lock().unwrap();
+        state.receipt["sandbox"]["state"] = json!("archived");
+        state.expected_ttl = None;
+        state.drift_on_resume = true;
+    }
+    let mut unlimited = connection();
+    unlimited.auto_stop = crate::conversation::domain::VmLifetime::Unlimited;
+    assert!(matches!(
+        server
+            .provider
+            .connect(&unlimited, "fixture-thread", VM, &receipt.admission)
+            .await,
+        Err(Failure::AdmissionRejected(_))
+    ));
+    assert_eq!(server.state.lock().unwrap().resumed, 1);
+}
+
+#[tokio::test]
+async fn archived_resume_refuses_an_unenforced_finite_lifetime_before_sdk_authority() {
+    let server = server().await;
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    {
+        let mut state = server.state.lock().unwrap();
+        state.receipt["sandbox"]["state"] = json!("archived");
+        state.receipt["sandbox"]["ttlSeconds"] = Value::Null;
+        state.expected_ttl = Some(7_200);
+    }
+    let mut finite = connection();
+    finite.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+    let result = server
+        .provider
+        .connect(&finite, "fixture-thread", VM, &receipt.admission)
+        .await;
+    assert!(matches!(
+        result,
+        Err(Failure::AdmissionRejected(rejection))
+            if rejection.cause() == AdmissionRefusal::LifetimeNotEnforced
+    ));
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.resumed, 1);
+    assert_eq!(state.commands, 0);
+}
+
+#[tokio::test]
+async fn an_active_vm_keeps_its_original_lifetime_after_settings_change() {
+    let server = server().await;
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    let mut changed = connection();
+    changed.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+    let result = server
+        .provider
+        .connect(&changed, "fixture-thread", VM, &receipt.admission)
+        .await;
+    assert!(matches!(result, Err(Failure::Provider)));
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.resumed, 0);
+    assert!(state.commands > 0);
 }
 
 #[tokio::test]

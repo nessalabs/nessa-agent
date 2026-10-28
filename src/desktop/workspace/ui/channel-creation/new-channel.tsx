@@ -670,8 +670,9 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
       ))}
       <p>
         Boat runs Claude or Codex in a cloud workspace using your connected subscriptions.
-        Keep your Nessa gateway online; local folders need an approved connection. Alpha
-        VMs stop after one hour, including active work.
+        Keep your Nessa gateway online; local folders need an approved connection. New
+        channels use your default Boat VM lifetime; change it in channel settings to
+        override.
       </p>
     </div>
   )

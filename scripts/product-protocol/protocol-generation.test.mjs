@@ -78,6 +78,7 @@ function fixture(run) {
       "crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs",
       "crates/nessa-sdk/src/infrastructure/mcp/servers.rs",
       "crates/nessa-server/src/conversation/domain/value_objects/channel.rs",
+      "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
       "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
       "crates/nessa-protocol/src/protocol/encode.rs",
@@ -333,6 +334,44 @@ for (const [rule, file, constant] of [
       assert.match(result.stderr, new RegExp(`x-mcpServerRules.${rule} drifted`))
     }))
 }
+for (const [field, constant, old, replacement] of [
+  ["minimum", "MIN_SECONDS", "1", "2"],
+  ["maximum", "MAX_SECONDS", "4_294_967_295", "4_294_967_294"],
+]) {
+  test(`VM lifetime ${field} changed in its domain owner refuses stale publication`, () =>
+    fixture((path) => {
+      const source = join(
+        path,
+        "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+      )
+      const before = readFileSync(source, "utf8")
+      const after = before.replace(
+        `const ${constant}: u64 = ${old};`,
+        `const ${constant}: u64 = ${replacement};`,
+      )
+      assert.notEqual(after, before)
+      writeFileSync(source, after)
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`VmLifetimeSeconds.${field} drifted`))
+    }))
+  test(`VM lifetime ${field} retyped in the schema refuses before writes`, () =>
+    fixture((path) => {
+      edit(path, "protocol/product/v1.json", (schema) => {
+        schema.$defs.VmLifetimeSeconds[field] -= 1
+      })
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`VmLifetimeSeconds.${field} drifted`))
+    }))
+}
+
 test("channel rules publish the gateway's bounds to the client", () =>
   fixture((path) => {
     const result = generate(path, "generate-product-protocol")

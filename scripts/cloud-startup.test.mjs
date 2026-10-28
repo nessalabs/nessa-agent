@@ -51,6 +51,10 @@ if (tool === 'timeout') {
 }
 else if (tool === 'uname') console.log(args[0] === '-s' ? 'Linux' : 'x86_64')
 else if (tool === 'dpkg-query') { if (!exists('packages') || (exists('missing-package') && fs.readFileSync(marker('missing-package'),'utf8')===args.at(-1))) process.exit(1); console.log('installed') }
+else if (tool === 'apt-cache') {
+  process.stdout.write('  Candidate: '+(exists('old-driver-candidate')?'4.1.0':'(none)')+'\n')
+  process.stdout.write('  Version table:\n'+'.'.repeat(262144)+'\n')
+}
 else if (tool === 'sudo') { if (args.includes('install')) touch('packages') }
 else if (tool === 'curl') {
   const output = args[args.indexOf('-o') + 1]
@@ -145,6 +149,7 @@ else process.exit(2)
     "timeout",
     "uname",
     "dpkg-query",
+    "apt-cache",
     "sudo",
     "curl",
     "npm",
@@ -259,6 +264,25 @@ test("missing Linux dependencies use the canonical installation and extra packag
   assert.ok(commands[0].args.includes("update"))
   assert.ok(commands[1].args.includes("libwebkit2gtk-4.1-dev"))
   assert.deepEqual(commands[1].args.slice(-2), ["xvfb", "gh"])
+})
+
+test("driver policy is fully consumed before choosing the available package", (t) => {
+  for (const [oldCandidate, expected] of [
+    [true, "webkit2gtk-driver"],
+    [false, "webkitgtk-webdriver"],
+  ]) {
+    const f = fixture(t, { installed: false })
+    if (oldCandidate) writeFileSync(join(f.root, "old-driver-candidate"), "")
+    const result = f.run(
+      join(f.repository, "scripts/desktop/install-linux-build-deps.sh"),
+      ["webkit2gtk-driver"],
+    )
+    assert.equal(result.status, 0, result.stderr)
+    const install = f
+      .calls()
+      .find(({ tool, args }) => tool === "sudo" && args.includes("install"))
+    assert.ok(install?.args.includes(expected))
+  }
 })
 
 test("a missing extra package cannot hide behind installed core dependencies", (t) => {

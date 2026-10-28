@@ -169,7 +169,13 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     assert.equal(localCommand[1], "2")
     assert.equal(serverCommand[1], "2")
     assert.equal(localCommand[2], "${{ matrix.partition }}")
-    assert.equal(serverCommand[2], "server-lib")
+    assert.equal(serverCommand[2], "${{ matrix.partition }}")
+    assert.match(server, /partition: \[server-conversation, server-other\]/)
+    assert.match(server, /fail-fast: false/)
+    assert.match(
+      server,
+      /name: Windows server library tests \(\$\{\{ matrix\.partition \}\}\)/,
+    )
     assert.equal(localCommand[3], serverCommand[3])
     assert.equal(
       localCommand[3],
@@ -230,7 +236,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
   }
 })
 
-test("either Windows partition failure or unexpected skip fails the aggregate", () => {
+test("any Windows job failure or unexpected skip fails the aggregate", () => {
   for (const job of ["windows-server-tests", "local-auth"]) {
     for (const result of ["failure", "cancelled", "skipped"]) {
       const evaluated = evaluateChecks(needs("true", { ...compileJobs, [job]: result }))

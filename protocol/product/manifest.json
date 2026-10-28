@@ -401,6 +401,14 @@
     "boat.disconnect": {
       "params": null,
       "grant": "credential.manage"
+    },
+    "boat.runtimeSettings": {
+      "params": "BoatRuntimeReadParams",
+      "grant": "credential.manage"
+    },
+    "boat.setRuntimeSettings": {
+      "params": "BoatRuntimeSetParams",
+      "grant": "credential.manage"
     }
   },
   "events": {

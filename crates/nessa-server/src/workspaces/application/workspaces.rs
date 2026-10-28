@@ -1,5 +1,7 @@
 //! Allocation ordering. External effects and storage are injected; retries use
 //! the saved VM, and observer cancellation does not cancel accepted provisioning.
+use super::RuntimeSettings;
+use crate::conversation::domain::{ChannelId, VmLifetimeScope};
 use crate::workspaces::domain::{
     AdmissionRejection, Assignment, BoatConnection, CleanupOutcome, EnvironmentIdentity, Failure,
     RefusalDisposition,
@@ -96,6 +98,7 @@ pub(crate) trait RecoveryAudit: Send + Sync {
 #[derive(Clone)]
 pub(crate) struct Workspaces {
     pub(crate) settings: Arc<dyn Settings>,
+    pub(crate) runtime_settings: Arc<dyn RuntimeSettings>,
     provider: Arc<dyn Provider>,
     assignments: Arc<dyn Assignments>,
     recovery: Arc<dyn RecoveryAudit>,
@@ -108,9 +111,11 @@ impl Workspaces {
         provider: Arc<dyn Provider>,
         assignments: Arc<dyn Assignments>,
         recovery: Arc<dyn RecoveryAudit>,
+        runtime_settings: Arc<dyn RuntimeSettings>,
     ) -> Self {
         Self {
             settings,
+            runtime_settings,
             image: None,
             provider,
             assignments,
@@ -140,11 +145,12 @@ impl Workspaces {
         &self,
         thread: ConversationId,
         provision: bool,
+        channel: Option<ChannelId>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let this = self.clone();
         // The admitted task owns allocation through receipt persistence, even if
         // its initiating conversation/open waiter disappears.
-        tokio::spawn(async move { this.allocate(thread, provision).await })
+        tokio::spawn(async move { this.allocate(thread, provision, channel).await })
             .await
             .map_err(|_| Failure::ProvisioningUncertain)?
     }
@@ -152,6 +158,7 @@ impl Workspaces {
         &self,
         thread: ConversationId,
         provision: bool,
+        channel: Option<ChannelId>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = thread.to_string();
         let lock = {
@@ -165,7 +172,13 @@ impl Workspaces {
             lock
         };
         let _guard = lock.lock().await;
-        let connection = self.settings.read().await?;
+        let mut connection = self.settings.read().await?;
+        let scope = channel.map_or(VmLifetimeScope::Global, VmLifetimeScope::Channel);
+        let lifetimes = self.runtime_settings.read(&scope).await?;
+        if lifetimes.scope() != &scope {
+            return Err(Failure::Storage);
+        }
+        connection.auto_stop = lifetimes.effective();
         let vm = match self.assignments.read(&id).await? {
             Some(Assignment::Assigned {
                 thread,

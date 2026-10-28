@@ -9,6 +9,7 @@ mod channel;
 mod conversation_deletion;
 mod share_access;
 mod tool_call;
+mod vm_lifetime;
 mod workspace_window;
 pub use channel::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
@@ -29,3 +30,5 @@ pub use workspace_window::{
     PaneContent, PanePlace, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,
     WindowShowing, WorkspaceWindow,
 };
+
+pub use vm_lifetime::{VmLifetime, VmLifetimeScope, VmLifetimeSettings};

@@ -163,6 +163,16 @@ async function bounded(promise, ms, expire) {
     clearTimeout(timer)
   }
 }
+/** A protected read after restart may request the app's sealed vault again.
+ * Call after the UI intent that requests unlock, not after an arbitrary restart. */
+export async function unlockRequestedVault(client, page) {
+  if ((await client.vault.status()).state !== "locked") return
+  await page.locator('[data-vault-dialog="unlock"]').waitFor()
+  await unlockVault(page)
+  if ((await client.vault.status()).state !== "unlocked")
+    throw new Error("The requesting window did not unlock its vault")
+}
+
 /** Protected-use flows enter the public disposable passphrase only when prompted. */
 export async function unlockVault(page, { screenshot, expectedContainer } = {}) {
   const dialog = page.locator('[data-vault-dialog="unlock"]')

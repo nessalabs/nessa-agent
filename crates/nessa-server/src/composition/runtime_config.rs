@@ -2,7 +2,7 @@
 use super::agent::AgentsConfig;
 use crate::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 use crate::{
-    conversation::domain::CommandPolicy,
+    conversation::{domain::CommandPolicy, infrastructure::BoatRuntimeConfig},
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
@@ -40,6 +40,8 @@ pub(super) struct RuntimeConfig {
     /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.
     pub limits: LimitsConfig,
     pub agents: Option<AgentsConfig>,
+    /// Ordinary VM lifetime defaults and channel overrides, never credentials.
+    pub boat: BoatRuntimeConfig,
     /// Native device pairing; absent, `null` or `"enabled": false` keeps it
     /// off (design rows S1, S2). Settings › Linked devices writes it
     /// (`native_linking`).

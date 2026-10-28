@@ -216,8 +216,15 @@
  * its tooltip. (`data-trailing` is written by `sidebar-row.tsx` only; the tree's
  * + is a control of its own.)
  */
-.workspace-sidebar [data-trailing] + [data-slot="sidebar-menu-item-trailing"] {
+.workspace-sidebar
+  :is([data-trailing], [data-row-actions])
+  + [data-slot="sidebar-menu-item-trailing"] {
   pointer-events: none;
+}
+
+.workspace-sidebar .workspace-row-actions {
+  display: inline-flex;
+  pointer-events: auto;
 }
 
 .workspace-sidebar [data-slot="sidebar-menu-item-badge"] {
@@ -229,22 +236,34 @@
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="glyph"] {
-  padding-right: calc(16px + 10px);
+  --workspace-row-decoration-width: 10px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="count"] {
-  padding-right: calc(16px + 18px);
+  --workspace-row-decoration-width: 18px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-digits="2"] {
-  padding-right: calc(16px + 24px);
+  --workspace-row-decoration-width: 24px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-digits="3"] {
-  padding-right: calc(16px + 31px);
+  --workspace-row-decoration-width: 31px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
+}
+
+/* The action slot is independent of the count or glyph already at the end. */
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-row-actions] {
+  padding-right: calc(
+    16px + var(--workspace-row-decoration-width, 0px) + var(--desktop-control-size)
+  );
 }
 
 .workspace-row-icon {

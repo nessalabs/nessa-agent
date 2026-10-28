@@ -4,7 +4,7 @@ import { messageText, settledMessage } from "./evidence.mjs"
  * The token is read from a private file, never argv, environment or evidence.
  * See README.md before running; Boat must already have a connected subscription. */
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import {
   mkdirSync,
   mkdtempSync,
@@ -65,6 +65,21 @@ async function boat(path, method = "GET") {
   assert(response.ok, `Boat ${method} failed (${response.status})`)
   return response.json()
 }
+async function lifetime(vm, expected, name) {
+  const receipt = (await boat(`/sandboxes/${vm}`))?.sandbox
+  assert(
+    receipt && Object.hasOwn(receipt, "ttlSeconds"),
+    "Provider omitted lifetime receipt",
+  )
+  assert.equal(
+    receipt.ttlSeconds,
+    expected,
+    "Provider lifetime differs from selected settings",
+  )
+  if (expected === null)
+    assert.equal(receipt.archiveAfter, null, "Unlimited VM has an automatic deadline")
+  record(name, { vm, ttlSeconds: receipt.ttlSeconds, archiveAfter: receipt.archiveAfter })
+}
 async function until(check, label, ms = 180_000) {
   const end = Date.now() + ms
   while (Date.now() < end) {
@@ -98,10 +113,15 @@ function assignments() {
     ),
   )
 }
-async function turn(id, text, permission = "none") {
+async function turn(id, text, permission = "none", uploads = []) {
   const approved = new Set()
   const executionId = randomUUID()
-  const submission = await client.sendMessage(id, text, { requestId: executionId })
+  const prepared = client.conversation.prepare(id, text, [], [], {
+    requestId: executionId,
+    executionId,
+    uploads,
+  })
+  const submission = await client.conversation.submit(prepared)
   assert.equal(
     submission.target.executionId,
     executionId,
@@ -190,6 +210,7 @@ try {
   await client.boat.save({ token })
   assert.equal((await client.boat.status()).state, "connected")
   record("token validated and encrypted")
+  await client.boat.setRuntimeSettings({ mode: "after", seconds: 14_400 })
   const localChannel = await client.channels.create({
     requestId: randomUUID(),
     name: "Local fixture",
@@ -208,11 +229,18 @@ try {
     threadPlacement: "boat",
   })
   assert(channel.coordinatorConversationId)
+  await client.boat.setRuntimeSettings({
+    channelId: channel.channelId,
+    mode: "after",
+    seconds: 7200,
+  })
   const main = await open(channel, channel.coordinatorConversationId)
   const worker = await open(channel, undefined, "full")
   assert.equal(owned.size, 2, "Distinct threads did not receive distinct VMs")
   const workerVm = [...owned].find(([, thread]) => thread === worker)?.[0]
   assert(workerVm, "Worker allocation receipt missing")
+  for (const [vm] of owned)
+    await lifetime(vm, 7200, "channel override reaches VM creation")
   record("two threads use distinct saved VMs", { main, worker, workerVm })
   const fileMarker = `NESSA_WORKSPACE_TEST_${randomUUID()}`
   const wrote = await turn(
@@ -221,6 +249,41 @@ try {
   )
   assert(wrote.reply.includes(fileMarker))
   record("subscription inference writes workspace file")
+  const uploadedMarker = `NESSA_UPLOADED_TEST_${randomUUID()}`
+  const bytes = Buffer.from(`${uploadedMarker}\n`)
+  const description = {
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    mimeType: "text/plain",
+    size: bytes.length,
+  }
+  const beginning = await client.attachments.begin(worker, description)
+  const stored =
+    beginning.state === "stored"
+      ? beginning.stored
+      : await client.attachments.upload(beginning.ticket, {
+          mimeType: description.mimeType,
+          bytes: new Blob([bytes], { type: description.mimeType }),
+        })
+  assert.deepEqual(stored, description, "Stored text reference changed its original")
+  const uploaded = await turn(
+    worker,
+    "Read the uploaded text file and reply with its contents. Also copy those contents verbatim into uploaded-test.txt in your workspace. Use only native file tools, no MCP tools or subagents.",
+    "none",
+    [{ ...stored, name: "phone-note.txt" }],
+  )
+  assert(
+    uploaded.reply.includes(uploadedMarker),
+    "Uploaded bytes did not reach the worker",
+  )
+  assert(uploaded.tools.length > 0, "Uploaded-input turn did not use native file tools")
+  record("uploaded input reaches selected Boat workspace", {
+    thread: worker,
+    vm: workerVm,
+    digest: stored.digest,
+    mimeType: stored.mimeType,
+    size: stored.size,
+  })
+  await lifetime(workerVm, 7200, "uploaded input preserves the active VM lifetime")
   const before = owned.size
   await client.conversation.close(worker)
   await boat(`/sandboxes/${workerVm}/stop`, "POST")
@@ -228,6 +291,7 @@ try {
     async () => (await boat(`/sandboxes/${workerVm}`))?.sandbox.state === "archived",
     "VM archived",
   )
+  await client.boat.setRuntimeSettings({ channelId: channel.channelId, mode: "never" })
   // Restart the gateway to exercise durable receipts and a fresh connection,
   // rather than expecting a disconnected socket to detect loss synchronously.
   client.close()
@@ -236,18 +300,27 @@ try {
   // Vaults deliberately seal on session loss. Reuse only this test's passphrase.
   await client.vault.unlock(passphrase)
   await open(channel, worker, "full")
+  await lifetime(workerVm, null, "explicit unlimited reaches archived VM resume")
   assert.equal(owned.size, before, "Reopen allocated a replacement VM")
   const resumed = await turn(
     worker,
-    "Read alpha-test.txt in your workspace and return its contents. Do not change it or use MCP tools.",
+    "Read alpha-test.txt and uploaded-test.txt in your workspace and return both contents. Do not change them or use MCP tools.",
   )
   assert(resumed.reply.includes(fileMarker))
+  assert(
+    resumed.reply.includes(uploadedMarker),
+    "Uploaded workspace copy did not survive archived resume",
+  )
   assert(
     resumed.tools.some((tool) => tool.kind === "read" && tool.status === "completed"),
     "Resumed turn did not actually read its workspace file",
   )
   record("restart and VM resume retain identity and workspace files")
+  record("uploaded workspace copy survives archived resume")
   await open(channel, main)
+  const mainVm = [...owned].find(([, thread]) => thread === main)?.[0]
+  assert(mainVm)
+  await lifetime(mainVm, 7200, "settings edit leaves an active VM deadline unchanged")
   const warmed = await turn(
     main,
     "Reply NESSA_MAIN_READY. Do not use tools or create threads.",
@@ -266,7 +339,11 @@ try {
       enabled: true,
     },
   })
+  await client.boat.setRuntimeSettings({ channelId: channel.channelId, mode: "default" })
   const reader = await open(channel)
+  const readerVm = [...owned].find(([, thread]) => thread === reader)?.[0]
+  assert(readerVm)
+  await lifetime(readerVm, 14_400, "reset channel inherits global lifetime on creation")
   const read = await turn(
     reader,
     'Call read_local_log from the boat-local-files MCP server exactly once with {"name":"error.log"}. Return its actual text and host. Read no other files and use no other MCP tools.',

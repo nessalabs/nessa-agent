@@ -10,6 +10,7 @@ import {
 import { NessaBoatError, type BoatStatus } from "@nessa/client"
 import type { BoatGateway } from "../adapters/boat-gateway"
 import { useVaultUnlock } from "../../../vault"
+import { BoatRuntimeControl } from "./boat-runtime-control"
 import { setting } from "../model/settings-catalogue"
 import { FoundSetting, ItemRow, RowAction } from "./settings-controls"
 const BoatContext = createContext<BoatGateway | undefined>(undefined)
@@ -21,6 +22,9 @@ export function BoatProvider({
   children: ReactNode
 }) {
   return <BoatContext.Provider value={gateway}>{children}</BoatContext.Provider>
+}
+export function useBoatGateway() {
+  return useContext(BoatContext)
 }
 /** The token stays in this transient field, then in the encrypted gateway vault.
  * A saved infrastructure connection is distinct from model authentication. */
@@ -162,6 +166,7 @@ export function BoatRow() {
           The token is stored in Nessa’s encrypted vault. Disconnecting forgets it here;
           existing Boat VMs keep running until stopped in Boat.
         </p>
+        <BoatRuntimeControl gateway={gateway} />
         {error && <p role="alert">{error}</p>}
       </div>
     </ItemRow>
