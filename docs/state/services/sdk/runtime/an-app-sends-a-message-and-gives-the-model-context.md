@@ -5,6 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "An app can send a message into its conversation as the person, after the person allows it, and can hold context for the model's next idle message."
 parent: "sdk-runtime"
+sourceRevision: "5ae45faa95fd88ae96c5f213e0e3fcd811284a91"
 sources:
   - "crates/nessa-server/src/product/mcp_apps.rs"
   - "crates/nessa-server/src/conversation/application/service/app_calls.rs"
@@ -32,11 +33,16 @@ diagramLinks: {}
 
 An app can send a message into its conversation with `mcp.sendMessage`. The message is the person's turn, written by the app, and the saved invocation names the app. Every message waits for the person to allow it in its own app review. The one exception is a retry of a turn the agent already has. While a turn runs or input waits, the message is refused with `turn_running`. Its text is held to the same bound as the person's own message.
 
-An app can also give the model context with `mcp.updateModelContext`. The gateway holds one context per mount, and at most four mounts. Each context's text and structured content are each at most 8 KiB, past which the update is `invalid_request`, and together at most `AppModelContext::MAX_BYTES` (8 KiB), past which it is `mcp_request_too_large`. One update per conversation runs at a time, and each is recorded before it is held. The next message admitted while nothing runs or waits takes every held context and carries them as one leading text block. A queued or steered message takes none.
+An app can also give the model context with `mcp.updateModelContext`. The gateway holds one context per mount, and at most four mounts. Each context's text and structured content are each at most 8 KiB, past which the update is `invalid_request`, and together at most `AppModelContext::MAX_BYTES` (8 KiB), past which it is `mcp_request_too_large`. One update per conversation runs at a time, and each is recorded before it is held. The next person or app message admitted while nothing runs or waits takes every held context and carries them as one leading text block. A queued or steered message takes none.
 
 The gateway answers both methods as described here. The product client sends them as `client.mcpApps.sendMessage` and `client.mcpApps.updateModelContext`, refusing a request outside the schema's bounds before anything is sent.
 
 The desktop window sends them for an app's `ui/message` and `ui/update-model-context`. It joins the app's text blocks into one text, and an update with no text and no structured content clears the mount's context. One mount's updates go one at a time, in the order the app gave them; one the app was already answered for, a timeout among those, or whose mount was released, is never sent. When the client cannot say the gateway did not take a request, the app is told it failed, not refused, so it does not send again a message the agent may have. While a message waits on its review, the window reads the conversation each round, so the person sees the card. The card says the app wants to send a message as you, because the review's `ask` is `message`. Once allowed, the message shows labelled with the app that wrote it. When the app's view ends, its mount is released, which withdraws a message still in review and drops its context.
+
+Internal background-task completion is separate from an app message. It supplies
+the task outcome to the model and leaves held app context for the next person or
+app message. This checkpoint reviews that consumption boundary; the app review,
+mount lifetime and desktop bridge retain their existing behavior.
 
 ## Held context
 
@@ -47,7 +53,7 @@ stateDiagram-v2
     [*] --> Held: Update recorded / hold, replacing the mount's last
     Held --> Held: Another update / replace
     Held --> Cleared: Update with no context / let go unsent
-    Held --> Taken: Message admitted while idle / take under the submission lock
+    Held --> Taken: Person or app message admitted while idle / take under the submission lock
     Held --> Dropped: Mount released, opening ended or conversation deleted / record drop
     Taken --> Carried: Agent asked to take the message
     Taken --> Dropped: Message refused or failed before the agent / record not_sent

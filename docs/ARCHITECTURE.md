@@ -1200,3 +1200,14 @@ VM parking, live migration and local-folder mounts are outside this alpha. See
 [ADR 1160](adr/todo/1160-boat-workspaces.md) for ordering, failure and lifecycle
 contracts, and [workspace verification](../scripts/workspaces/README.md) for the
 opt-in provider test.
+
+
+## Background commands
+
+The optional `nessa-background` MCP tools reuse the authenticated session relay
+and conversation tool admission. Shepherd owns a command's process scope; the
+conversation application owns the original call binding, durable lifecycle and
+internal completion delivery. Status projection updates the existing waterfall
+row after the provider turn has ended. Local workspace placement is required;
+remote commands are refused. See [background tasks](state/services/gateway/background-tasks.md)
+for recovery and cleanup limits.

@@ -2615,6 +2615,18 @@ windows `product/workspace.rs` holds for each connection in
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
 
+## Background tasks
+
+`composition/background_tools.rs` exposes source-bound start, status and cancel
+through the existing MCP relay. `conversation/application/service/background_tasks.rs`
+coordinates admission, native-call binding, detached execution and internal
+continuation. Its runner, store and argument-decoder ports live in
+`conversation/application/background_tasks`; immutable lifecycle transitions live
+in `conversation/domain/background_task`. `infrastructure/background_tasks`
+implements transactional current-state/audit persistence and the Shepherd adapter.
+The service decorates existing tool rows; frontend transcript code retains their
+background identity while the turn ends. See [the lifecycle](state/services/gateway/background-tasks.md).
+
 ## GitHub webhook ingress and relay
 
 `packages/github-webhooks` owns the hosted receiver and authenticated delivery
