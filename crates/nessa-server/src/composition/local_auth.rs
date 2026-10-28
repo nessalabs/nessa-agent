@@ -13,7 +13,7 @@ use crate::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
         domain::Failure as WorkspaceFailure,
         infrastructure::{
-            worker_image, BoatProvider, ConfigRuntimeSettings, FileAssignments,
+            worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
             RuntimeSettingsAudit, VaultSettings,
         },
     },
@@ -260,7 +260,7 @@ pub(super) async fn product_state(
     .map_err(setup_error)?;
     #[cfg(unix)]
     let runtime_settings = {
-        Arc::new(ConfigRuntimeSettings {
+        Arc::new(ConfigBoatRuntimeSettings {
             config: Arc::new(ConfigJson::new(
                 Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
                     namespace,

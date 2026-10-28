@@ -26,6 +26,7 @@ pub mod product;
 pub(crate) mod relay;
 pub mod secrets;
 pub mod server;
+pub(crate) mod settings;
 pub(crate) mod timer;
 pub mod tunnel;
 

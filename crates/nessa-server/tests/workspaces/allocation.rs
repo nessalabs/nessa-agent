@@ -2,7 +2,7 @@
 //! admission. No real account or secret is used in these ordering fixtures.
 use crate::conversation::domain::{ChannelId, VmLifetime, VmLifetimeScope, VmLifetimeSettings};
 use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
-use crate::workspaces::infrastructure::{ConfigRuntimeSettings, RuntimeSettingsAudit};
+use crate::workspaces::infrastructure::{ConfigBoatRuntimeSettings, RuntimeSettingsAudit};
 use crate::workspaces::{application::*, domain::*};
 use async_trait::async_trait;
 use nessa_auth::{
@@ -298,7 +298,7 @@ impl Clock for Time {
 async fn config_default_and_channel_override_reach_admitted_creation_and_existing_connections() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let settings = Arc::new(ConfigRuntimeSettings {
+    let settings = Arc::new(ConfigBoatRuntimeSettings {
         config: Arc::new(ConfigJson::new(
             Arc::new(OsConfigFiles::new(directory.path().join("config.json"))),
             ConfigCheck {

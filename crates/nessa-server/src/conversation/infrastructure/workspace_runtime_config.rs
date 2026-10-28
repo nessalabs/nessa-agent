@@ -59,7 +59,7 @@ impl BoatRuntimeConfig {
     }
     #[cfg(any(unix, test))]
     pub(crate) fn default_lifetime(&self) -> VmLifetime {
-        self.default.unwrap_or_default()
+        crate::settings::resolve_inherited(VmLifetime::default(), [self.default])
     }
     #[cfg(unix)]
     pub(crate) fn default_override(&self) -> Option<VmLifetime> {
