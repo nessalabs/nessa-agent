@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "ed64020f5162d1601511724e439fd4ec9b1bf36d"
+sourceRevision: "05bb0383823d28e37f563ba28cea72fa9c6de9a3"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -27,6 +27,9 @@ sources:
   - crates/nessa-server/src/secrets/linux.rs
   - crates/nessa-server/src/github/infrastructure/token_vault.rs
   - crates/nessa-server/src/github_relay/infrastructure/vault.rs
+  - crates/nessa-server/src/github_relay/application/ports.rs
+  - crates/nessa-server/src/github_relay/application/catch_up.rs
+  - crates/nessa-server/src/github_relay/application/follow.rs
   - crates/nessa-server/src/github_relay/application/live_events.rs
   - crates/nessa-server/src/github_relay/infrastructure/selection.rs
   - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
@@ -260,3 +263,12 @@ counts trigger work as well as the outer cleanup query (836 row reads for
 [Hardening evidence](../../../../packages/github-webhooks/hardening-verification.json)
 records the reviewed source, adversarial findings and development deployment.
 Only this state page was reconciled for this hardening checkpoint.
+
+
+Native page requests preserve the GitHub owner's redacted, zeroizing token type.
+A fresh request-scoped credential is acquired for each page and released before
+storage or idle watch waiting; reconnect/notifications observe token rotation.
+HTTP success, 409 and 410 bodies share the bounded streamed decoder. The native
+watch sets explicit frame/message limits before assembly while admitting valid
+fragmented changed notifications and full RFC ping/pong control frames. These
+bounds do not claim to erase third-party HTTP-library buffers or provide E2EE.

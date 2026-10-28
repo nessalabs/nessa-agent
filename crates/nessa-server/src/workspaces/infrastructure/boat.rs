@@ -1,35 +1,42 @@
 //! Boat VM allocation plus an attached workspace-sdk backend. Nessa owns VM
 //! creation/deletion; the SDK owns supervisor runs and files inside that VM.
 use crate::workspaces::{
-    application::{Provider, WorkspaceRuntime},
-    domain::{BoatConnection, Failure},
+    application::{Provider, WorkspaceReceipt, WorkspaceRuntime},
+    domain::{BoatConnection, EnvironmentIdentity, Failure},
 };
 use async_trait::async_trait;
 use std::{sync::Arc, time::Duration};
 use workspace_sdk::{
-    boat_client::{self, Api, ClientConfig, CreateOptions, CreateSandboxRequest, SandboxState},
+    boat_client::{self, Api, ClientConfig, SandboxState},
     infrastructure::MemoryStateRepository,
     providers::{SandboxOpenOptions, SandboxProvider, SupervisorDeployment},
     OpenRequest, ProviderId, WorkspaceId, WorkspaceSdk,
 };
 
 pub(crate) struct BoatProvider {
+    pub(crate) http: reqwest::Client,
+    pub(crate) api_base: String,
     pub(crate) relay_socket: std::path::PathBuf,
     pub(crate) relay_program: std::path::PathBuf,
 }
-pub(crate) fn api(connection: &BoatConnection) -> Result<Api, Failure> {
+fn api(connection: &BoatConnection, base: &str) -> Result<Api, Failure> {
     let token =
         std::str::from_utf8(connection.token.as_slice()).map_err(|_| Failure::InvalidInput)?;
-    let config = ClientConfig::new(token)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut config = ClientConfig::new(token)
+        .map_err(|_| Failure::InvalidInput)?
+        .with_base_path(base)
         .map_err(|_| Failure::InvalidInput)?
         .with_connect_timeout(Duration::from_secs(10))
         .with_request_timeout(Duration::from_secs(45));
+    config.org = Some("personal".into());
+    config.max_response_bytes = 4 * 1024 * 1024;
     Api::new(config).map_err(|_| Failure::Provider)
 }
 #[async_trait]
 impl Provider for BoatProvider {
     async fn validate(&self, connection: &BoatConnection) -> Result<(), Failure> {
-        let api = api(connection)?;
+        let api = api(connection, &self.api_base)?;
         api.me().await.map_err(|_| Failure::Provider)?;
         if !connection.image.starts_with("bsh_") {
             api.get_named_snapshot(&connection.image)
@@ -61,65 +68,47 @@ impl Provider for BoatProvider {
                     pass_github: Some(false),
                     pass_secrets: Some(false),
                     pass_sandbox_credentials: Some(false),
+                    env_contents: Some(String::new()),
+                    secret_files: Some(vec![]),
+                    repositories: Some(vec![]),
+                    credential_profile_id: Some(None),
+                    proxy_ai_credentials: Some(false),
                     ..Default::default()
                 },
             )
             .await
             .map_err(|_| Failure::Provider)?;
-            environments = api.environments().await.map_err(|_| Failure::Provider)?;
         }
-        let environment = environments
-            .environments
-            .iter()
-            .find(|env| env.name == connection.environment)
-            .ok_or(Failure::Missing)?;
-        if environment.safe_for_third_parties || !environment.pass_agents_credentials {
-            return Err(Failure::EnvironmentUnavailable);
-        }
-
+        super::boat_admission::environment(&api, connection).await?;
         Ok(())
     }
-    async fn create(&self, connection: &BoatConnection, thread: &str) -> Result<String, Failure> {
-        let result = api(connection)?
-            .create(
-                Some(CreateSandboxRequest {
-                    type_: Some("small".into()),
-                    ttl_seconds: Some(connection.auto_stop.seconds()),
-                    environment: Some(connection.environment.clone()),
-                    env: Some(std::collections::HashMap::from([(
-                        "NESSA_THREAD_ID".into(),
-                        thread.into(),
-                    )])),
-                    from: Some(connection.image.clone()),
-                    snapshots: Some(true),
-                    ..Default::default()
-                }),
-                &CreateOptions {
-                    idempotency_key: Some(format!("nessa-thread-{thread}")),
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(|_| Failure::ProvisioningUncertain)?;
-        let id = result.sandbox.id;
-        if id.is_empty()
-            || id.len() > 128
-            || !id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-        {
-            return Err(Failure::ProvisioningUncertain);
-        }
-        Ok(id)
+    async fn create(
+        &self,
+        connection: &BoatConnection,
+        thread: &str,
+    ) -> Result<WorkspaceReceipt, Failure> {
+        let api = api(connection, &self.api_base)?;
+        let admission = super::boat_admission::environment(&api, connection).await?;
+        super::boat_admission::create(
+            &self.http,
+            &api,
+            connection,
+            thread,
+            admission,
+            connection.auto_stop.seconds(),
+        )
+        .await
     }
     async fn connect(
         &self,
         connection: &BoatConnection,
         thread: &str,
         vm: &str,
+        admission: &EnvironmentIdentity,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
-        let api = api(connection)?;
-        let found = api.get(vm).await.map_err(|_| Failure::Missing)?;
+        let api = api(connection, &self.api_base)?;
+        let found =
+            super::boat_admission::check(&self.http, &api, connection, vm, admission).await?;
         if found.sandbox.state == SandboxState::Archived {
             api.resume(
                 vm,
@@ -138,6 +127,7 @@ impl Provider for BoatProvider {
         )
         .await
         .map_err(|_| Failure::Provider)?;
+        super::boat_admission::check(&self.http, &api, connection, vm, admission).await?;
         let provider =
             SandboxProvider::new(api.clone()).with_supervisor(SupervisorDeployment::Preinstalled {
                 executable: "/opt/nessa/bin/workspace-supervisor".into(),
@@ -194,7 +184,7 @@ impl Provider for BoatProvider {
         Ok(Arc::new(super::runtime::BoatRuntime { access }))
     }
     async fn remove(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure> {
-        api(connection)?
+        api(connection, &self.api_base)?
             .delete_sandbox(vm)
             .await
             .map_err(|_| Failure::Provider)?;

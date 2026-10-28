@@ -8,7 +8,26 @@ use crate::{
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::time::Duration;
-use tokio_tungstenite::{tungstenite::client::IntoClientRequest, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    tungstenite::{
+        client::IntoClientRequest, handshake::client::Request, protocol::WebSocketConfig,
+    },
+    MaybeTlsStream, WebSocketStream,
+};
+
+const CHANGED: &str = "{\"type\":\"changed\"}";
+const MAX_RESPONSE_BYTES: usize = 2 * crate::github_relay::domain::contract::PAYLOAD_BYTES + 16_384;
+
+async fn bounded_body(mut response: reqwest::Response) -> Result<Vec<u8>, Failure> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| Failure::Offline)? {
+        if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+            return Err(Failure::InvalidResponse);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RelayConfiguration {
@@ -113,9 +132,18 @@ impl HttpRelaySource {
                 .parse()
                 .map_err(|_| Failure::InvalidResponse)?,
         );
+        RelayWatch::connect(request).await
+    }
+}
+pub struct RelayWatch(WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>);
+impl RelayWatch {
+    async fn connect(request: Request) -> Result<Self, Failure> {
+        let limits = WebSocketConfig::default()
+            .max_message_size(Some(CHANGED.len()))
+            .max_frame_size(Some(125)); // RFC 6455 control frames may carry 125 bytes.
         let (socket, _) = tokio::time::timeout(
             Duration::from_secs(15),
-            tokio_tungstenite::connect_async(request),
+            tokio_tungstenite::connect_async_with_config(request, Some(limits), false),
         )
         .await
         .map_err(|_| Failure::Offline)?
@@ -128,17 +156,16 @@ impl HttpRelaySource {
             _ => Failure::Offline,
         })?;
         tracing::debug!("GitHub relay watch connected");
-        Ok(RelayWatch(socket))
+        Ok(Self(socket))
     }
 }
-pub struct RelayWatch(WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>);
 #[async_trait::async_trait]
 impl RelayNotifications for RelayWatch {
     async fn changed(&mut self) -> Result<(), Failure> {
         loop {
             match self.0.next().await {
                 Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))
-                    if text == "{\"type\":\"changed\"}" =>
+                    if text == CHANGED =>
                 {
                     return Ok(())
                 }
@@ -162,7 +189,7 @@ impl RelaySource for HttpRelaySource {
         url.query_pairs_mut()
             .append_pair("repository", binding.repository_id())
             .append_pair("after", &after.to_string());
-        let mut response = self
+        let response = self
             .http
             .get(url)
             .header("x-nessa-stage", self.stage.as_str())
@@ -177,9 +204,7 @@ impl RelaySource for HttpRelaySource {
             403 => return Err(Failure::Forbidden),
             429 => return Err(Failure::RateLimited),
             409 => {
-                let refusal: WireRefusal = response
-                    .json()
-                    .await
+                let refusal: WireRefusal = serde_json::from_slice(&bounded_body(response).await?)
                     .map_err(|_| Failure::InvalidResponse)?;
                 return Err(match refusal.kind.as_str() {
                     "identity_changed" => Failure::IdentityChanged,
@@ -188,9 +213,7 @@ impl RelaySource for HttpRelaySource {
                 });
             }
             410 => {
-                let gap: WireGap = response
-                    .json()
-                    .await
+                let gap: WireGap = serde_json::from_slice(&bounded_body(response).await?)
                     .map_err(|_| Failure::InvalidResponse)?;
                 if gap.stage != self.stage.as_str() {
                     return Err(Failure::StageMismatch);
@@ -202,15 +225,7 @@ impl RelaySource for HttpRelaySource {
             }
             _ => return Err(Failure::Offline),
         }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| Failure::Offline)? {
-            if bytes.len() + chunk.len()
-                > 2 * crate::github_relay::domain::contract::PAYLOAD_BYTES + 16_384
-            {
-                return Err(Failure::InvalidResponse);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+        let bytes = bounded_body(response).await?;
         let page: WirePage =
             serde_json::from_slice(&bytes).map_err(|_| Failure::InvalidResponse)?;
         if page.stage != self.stage.as_str() {

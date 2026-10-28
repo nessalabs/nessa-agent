@@ -1,5 +1,11 @@
 # Final phone/main integration of #1158
 
+The later [Daybreak hardening checkpoint](daybreak-remediation.md) records
+provider admission, retained recovery targets, relay resource/credential bounds,
+and new regression fixtures at code `05bb03838`. Its independent closing review
+has no actionable findings. The checks below retain their earlier source scope;
+new-head hosted CI is required before landing.
+
 Runtime integration: `a79f324f39c9cd58c2082206b531b438d794d438` merges main
 `41339b0ba52dbddb2441389c9ebce1e4f7426c9e` (#1159) into the repaired relay/vault/Boat
 stack. Release mapping: `a162d7ef7cc7abbe5f714f74737b34421ec15e6b`.

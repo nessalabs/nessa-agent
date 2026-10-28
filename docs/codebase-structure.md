@@ -2627,7 +2627,9 @@ with real local D1 and Durable Objects.
 The native `crates/nessa-server/src/github_relay` context mirrors its own feature
 vocabulary: domain identities/order, application catch-up and ports, and
 infrastructure adapters for the existing `GithubConnections` token owner,
-HTTPS/WebSocket and encrypted SQLite. `infrastructure/vault.rs` obtains the inbox key through the injected `secrets::VaultSecret`; `github/infrastructure/token_vault.rs` uses a separate vault entry for sign-in. `secrets/keychain.rs` remains the legacy import adapter. `nessa-local-database::encryption` owns SQLCipher and the atomic plaintext upgrade. `application/live_events.rs` coordinates opt-in
+HTTPS/WebSocket and encrypted SQLite. `application/catch_up.rs` obtains the
+existing zeroizing credential for each page request; `transport.rs` owns bounded
+success/refusal bodies and protocol-sized WebSocket frames/messages. `infrastructure/vault.rs` obtains the inbox key through the injected `secrets::VaultSecret`; `github/infrastructure/token_vault.rs` uses a separate vault entry for sign-in. `secrets/keychain.rs` remains the legacy import adapter. `nessa-local-database::encryption` owns SQLCipher and the atomic plaintext upgrade. `application/live_events.rs` coordinates opt-in
 and `infrastructure/selection.rs` commits selection changes and cleanup evidence.
 `product/github.rs` serializes enable/disable with sign-out;
 `settings/ui/github-row.tsx` presents that state. Composition
@@ -2661,9 +2663,15 @@ and shared bounds are `protocol/defaults/github-relays.json` and
 
 `crates/nessa-server/src/workspaces/` owns Boat connection settings and VM
 allocation receipts: `domain` contains values and failures; `application` orders
-allocation through Settings, Assignments, Provider and RecoveryAudit ports; `infrastructure`
+allocation through Settings, Assignments, Provider and RecoveryAudit ports in
+`application/workspaces.rs`; `infrastructure`
 implements encrypted vault settings, private receipt files, Boat/workspace-sdk
-preparation and scoped SSH access. Tests live in `tests/workspaces`; real-provider
+preparation and scoped SSH access. `domain/workspace.rs` owns legal receipt histories. `domain/environment.rs` owns the supported
+credential posture, immutable environment identity and bounded refusal evidence;
+`infrastructure/boat_admission.rs` checks complete current provider state and raw
+VM receipts before SDK authority. `assignments.rs` retains proof and terminal
+refusals in private histories, while old receipts are read only as Unverified.
+Tests live in `tests/workspaces`; real-provider
 verification lives in `scripts/workspaces`, with the single-file local MCP fixture
 under `scripts/mcp-test-server`. Composition maps recovery evidence into the
 existing durable EnvironmentAudit store; failed receipt publication retains its

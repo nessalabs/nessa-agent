@@ -1,5 +1,9 @@
 # Local vault verification
 
+See the [Daybreak remediation and regression verification](daybreak-remediation.md)
+for the latest provider-admission and relay hardening, updated fixtures, revert
+probes, and independent closing review.
+
 See the [final phone/main integration](phone-main-completion.md) for the current
 worker, native/browser/provider checks and source-specific review limits.
 

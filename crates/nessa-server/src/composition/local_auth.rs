@@ -284,10 +284,18 @@ pub(super) async fn product_state(
         })
     };
     #[cfg(unix)]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(unix)]
     let workspace_service = Arc::new(
         Workspaces::new(
             Arc::new(VaultSettings(vault.vault.clone())),
             Arc::new(BoatProvider {
+                http: reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(45))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(setup_error)?,
+                api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
                 // SAFETY: geteuid has no preconditions.
                 relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
                     libc::geteuid()
@@ -1887,12 +1895,32 @@ struct WorkspaceRecoveryAudit(Arc<dyn EnvironmentAudit>);
 impl RecoveryAudit for WorkspaceRecoveryAudit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), WorkspaceFailure> {
         let record = match event {
-            RecoveryEvent::ReceiptSaveFailed { thread, vm } => {
-                EnvironmentEvent::WorkspaceReceiptSaveFailed {
-                    thread: thread.clone(),
-                    vm: vm.clone(),
-                }
-            }
+            RecoveryEvent::AdmissionRefused {
+                thread,
+                vm,
+                admission,
+                rejection,
+                disposition,
+            } => EnvironmentEvent::WorkspaceAdmissionRefused {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                environment_id: admission.id().into(),
+                environment_version_id: admission.version_id().into(),
+                environment_version: admission.version(),
+                cause: rejection.cause().as_str().into(),
+                disposition: disposition.as_str().into(),
+                observed_environment: rejection.observed().and_then(|o| o.name.clone()),
+                observed_version: rejection.observed().and_then(|o| o.version),
+            },
+            RecoveryEvent::ReceiptSaveFailed {
+                thread,
+                vm,
+                disposition,
+            } => EnvironmentEvent::WorkspaceReceiptSaveFailed {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                disposition: disposition.as_str().into(),
+            },
             RecoveryEvent::RollbackObserved {
                 thread,
                 vm,

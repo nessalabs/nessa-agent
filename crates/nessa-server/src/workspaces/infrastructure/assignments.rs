@@ -2,7 +2,10 @@
 //! before returning; unsafe files and mismatched identities are refused.
 use crate::workspaces::{
     application::Assignments,
-    domain::{Assignment, Failure},
+    domain::{
+        AdmissionRefusal, AdmissionRejection, Assignment, EnvironmentIdentity, Failure,
+        RefusalDisposition,
+    },
 };
 use async_trait::async_trait;
 use nessa_local_storage::{create_directory, OpenMode, PrivateDirectory};
@@ -31,17 +34,168 @@ enum StoredAssignment {
         thread: String,
         vm: String,
         image: String,
+        #[serde(with = "identity")]
+        admission: EnvironmentIdentity,
+    },
+    Refused {
+        thread: String,
+        vm: String,
+        image: String,
+        #[serde(with = "identity")]
+        admission: EnvironmentIdentity,
+        #[serde(with = "rejection")]
+        rejection: AdmissionRejection,
+        #[serde(with = "StoredDisposition")]
+        disposition: RefusalDisposition,
+    },
+    #[serde(skip)]
+    Unverified {
+        thread: String,
+        vm: String,
+        image: String,
         environment: String,
     },
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(transparent)]
 struct PersistedAssignment(#[serde(with = "StoredAssignment")] Assignment);
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "AdmissionRefusal", rename_all = "snake_case")]
+enum StoredRefusal {
+    MissingEnvironment,
+    WrongEnvironment,
+    MissingVersion,
+    WrongVersion,
+    EnvironmentChanged,
+    EnvironmentUnavailable,
+    InvalidReceipt,
+    ReceiptUnavailable,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "RefusalDisposition", rename_all = "snake_case")]
+enum StoredDisposition {
+    RollbackNewVm,
+    RetainTarget,
+}
+mod rejection {
+    use super::{AdmissionRefusal, AdmissionRejection, StoredRefusal};
+    use crate::workspaces::domain::ObservedEnvironment;
+    use serde::{Deserialize, Serialize};
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Wire {
+        #[serde(with = "StoredRefusal")]
+        cause: AdmissionRefusal,
+        observed: Option<Observed>,
+    }
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Observed {
+        name: Option<String>,
+        version: Option<u32>,
+    }
+    pub(super) fn serialize<S: serde::Serializer>(
+        value: &AdmissionRejection,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Wire {
+            cause: value.cause(),
+            observed: value.observed().map(|o| Observed {
+                name: o.name.clone(),
+                version: o.version,
+            }),
+        }
+        .serialize(serializer)
+    }
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<AdmissionRejection, D::Error> {
+        let wire = Wire::deserialize(deserializer)?;
+        let observed = wire.observed.map(|o| ObservedEnvironment {
+            name: o.name,
+            version: o.version,
+        });
+        let rejection = AdmissionRejection::new(wire.cause, observed.clone());
+        if rejection.cause() != wire.cause || rejection.observed() != observed.as_ref() {
+            return Err(serde::de::Error::custom("invalid refusal evidence"));
+        }
+        Ok(rejection)
+    }
+}
+mod identity {
+    use super::EnvironmentIdentity;
+    use serde::{Deserialize, Serialize};
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Wire {
+        id: String,
+        name: String,
+        version_id: String,
+        version: u32,
+    }
+    pub(super) fn serialize<S: serde::Serializer>(
+        value: &EnvironmentIdentity,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Wire {
+            id: value.id().into(),
+            name: value.name().into(),
+            version_id: value.version_id().into(),
+            version: value.version(),
+        }
+        .serialize(serializer)
+    }
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<EnvironmentIdentity, D::Error> {
+        let wire = Wire::deserialize(deserializer)?;
+        EnvironmentIdentity::new(wire.id, wire.name, wire.version_id, wire.version)
+            .map_err(|_| serde::de::Error::custom("invalid environment identity"))
+    }
+}
+impl<'de> Deserialize<'de> for PersistedAssignment {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Current(#[serde(with = "StoredAssignment")] Assignment);
+        #[derive(Deserialize)]
+        #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+        enum Legacy {
+            Assigned {
+                thread: String,
+                vm: String,
+                image: String,
+                environment: String,
+            },
+        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if let Ok(Current(current)) = serde_json::from_value(value.clone()) {
+            return Ok(Self(current));
+        }
+        let Legacy::Assigned {
+            thread,
+            vm,
+            image,
+            environment,
+        } = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(Self(Assignment::Unverified {
+            thread,
+            vm,
+            image,
+            environment,
+        }))
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct History {
     cause: Cause,
     transitions: Vec<PersistedAssignment>,
+}
+impl History {
+    fn validate(&self, thread: &str) -> Result<(), Failure> {
+        let transitions = self.transitions.iter().map(|a| &a.0).collect::<Vec<_>>();
+        Assignment::validate_history(thread, &transitions)
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,15 +204,7 @@ enum Cause {
 }
 fn decode(bytes: &[u8], thread: &str) -> Result<History, Failure> {
     let history: History = serde_json::from_slice(bytes).map_err(|_| Failure::Storage)?;
-    if history.transitions.is_empty()
-        || history.transitions.len() > 2
-        || history.transitions.iter().any(|a| a.0.thread() != thread)
-        || !matches!(history.transitions[0].0, Assignment::Provisioning { .. })
-        || (history.transitions.len() == 2
-            && !matches!(history.transitions[1].0, Assignment::Assigned { .. }))
-    {
-        return Err(Failure::Storage);
-    }
+    history.validate(thread)?;
     Ok(history)
 }
 fn valid(thread: &str) -> bool {
@@ -99,7 +245,7 @@ impl Assignments for FileAssignments {
         .map_err(|_| Failure::Storage)?
     }
     async fn save(&self, assignment: Assignment) -> Result<(), Failure> {
-        if !valid(assignment.thread()) {
+        if !valid(assignment.thread()) || matches!(assignment, Assignment::Unverified { .. }) {
             return Err(Failure::InvalidInput);
         }
         let root = self.0.clone();
@@ -128,17 +274,10 @@ impl Assignments for FileAssignments {
             if history.transitions.last().map(|value| &value.0) == Some(&assignment) {
                 return Ok(());
             }
-            match (history.transitions.as_slice(), &assignment) {
-                ([], Assignment::Provisioning { .. })
-                | (
-                    [PersistedAssignment(Assignment::Provisioning { .. })],
-                    Assignment::Assigned { .. },
-                ) => {}
-                _ => return Err(Failure::Storage),
-            }
             history
                 .transitions
                 .push(PersistedAssignment(assignment.clone()));
+            history.validate(assignment.thread())?;
             let bytes = serde_json::to_vec(&history).map_err(|_| Failure::Storage)?;
             if bytes.len() > MAX_HISTORY_BYTES {
                 return Err(Failure::Storage);
