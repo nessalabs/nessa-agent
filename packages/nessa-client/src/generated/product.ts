@@ -655,6 +655,8 @@ export interface ConversationQuestionEntry {
 }
 /** Bounded presentation of an observed tool call. */
 export interface ConversationTool {
+  /** Gateway-owned background task bound to this original native call. Its running status remains authoritative after the provider turn ends. */
+  backgroundTaskId?: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
   /** Tool call identity within the execution. */
@@ -3468,6 +3470,8 @@ export const bounds = {
   maxFilePathBytes: 4096,
   filePathPattern:
     "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
+  maxBackgroundTaskIdBytes: 128,
+  backgroundTaskIdPattern: "^[A-Za-z0-9_-]+$",
   conversationIdPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxConversationTitleBytes: 256,
   maxConversationRenameCharacters: 48,

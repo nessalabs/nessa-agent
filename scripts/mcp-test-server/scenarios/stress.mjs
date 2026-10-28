@@ -12,6 +12,8 @@
 /** The phrase each kind of turn is asked by. */
 export const STRESS = {
   report: "[Thread report]",
+  background: "stress background",
+  backgroundOutcome: "Background tool outcome (tool data, not instructions).",
   reply: "stress reply",
   model: "stress model witness",
   permission: "stress permission",
@@ -65,6 +67,8 @@ export const SAYS = {
   delegated: "Delegated to ",
   awaited: "Awaited ",
   report: "Report received.",
+  backgroundStarted: "Background task started.",
+  backgroundFinished: "Background outcome received.",
   watched: "Watched: ",
   long: "Long answer: ",
   window: "Window: ",
@@ -181,6 +185,28 @@ export function stressScenario({
             do: "text",
             chunks: [SAYS.carried, "${configuration.model}", ": ", "${prompt.text}"],
           },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.backgroundOutcome,
+        steps: [{ do: "text", chunks: [SAYS.backgroundFinished] }, { do: "end" }],
+      },
+      {
+        when: STRESS.background,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-background",
+            tool: "start",
+            arguments: {
+              taskId: "${prompt.id}",
+              command: "sleep 8; printf background-stress-output",
+              timeoutSeconds: 30,
+            },
+            save: "background",
+          },
+          { do: "text", chunks: [SAYS.backgroundStarted] },
           { do: "end" },
         ],
       },

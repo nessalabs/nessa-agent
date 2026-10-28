@@ -11,7 +11,12 @@
 //! is [`CommandPolicy`]. What a share of it lets a paired party do is its
 //! [`ShareAccess`], whose Drive policy names the hosts its turns may run
 //! commands on.
+mod background_task;
 mod command_policy;
+pub use background_task::{
+    BackgroundCommand, BackgroundTaskId, TaskCause, TaskDelivery, TaskInitiator, TaskInputError,
+    TaskLifecycle, TaskOutcome, TaskStop, TaskTransitionError,
+};
 mod entities;
 mod receiver;
 mod scheduled_message;

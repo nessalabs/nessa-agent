@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  backgroundTasks: {
+    default: 1,
+    what: "background commands outliving their calling turn and settling the original tool row",
+  },
   inputFiles: {
     default: 1,
     what: "PDF, ZIP and text inputs uploaded by another surface, retained and drawn in the conversation",
@@ -220,6 +224,7 @@ export function plan(knobs) {
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
+  add(knobs.backgroundTasks, () => ({ kind: "background" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))

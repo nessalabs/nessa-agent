@@ -1132,7 +1132,9 @@ async fn conversations(
         .as_ref()
         .map(super::environment_tools::EnvironmentTools::new);
     let conversation_tools = super::conversation_tools::ConversationTools::new();
-    let mut built_in: Vec<Arc<dyn BuiltInServer>> = vec![conversation_tools.clone()];
+    let background_tools = super::background_tools::BackgroundTools::new();
+    let mut built_in: Vec<Arc<dyn BuiltInServer>> =
+        vec![conversation_tools.clone(), background_tools.clone()];
     if let Some(tools) = &environment_tools {
         built_in.push(tools.clone());
     }
@@ -1554,6 +1556,27 @@ async fn conversations(
         )?,
     ));
     conversation_tools.attach(service.clone());
+    background_tools.attach(service.clone());
+    let background_path = root.join("background-tasks.sqlite3");
+    let background_store =
+        crate::conversation::infrastructure::LocalBackgroundTasks::open(&background_path)
+            .map_err(|error| RunError::Agent(format!("background task store: {error}")))?;
+    let background_environment =
+        super::mcp_servers::server_environment(|key| std::env::var_os(key))
+            .into_iter()
+            .collect();
+    service.bind_background_tasks(
+        Arc::new(background_store),
+        Arc::new(
+            crate::conversation::infrastructure::ShepherdBackgroundTasks::new(
+                shepherd::SupervisorBuilder::new().build(),
+                background_environment,
+                Arc::new(shepherd::SystemClock),
+            ),
+        ),
+        Arc::new(super::background_tools::Arguments),
+        Arc::new(crate::timer::TokioTimer::new()),
+    );
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
     service.bind_note_authors(metadata.clone());

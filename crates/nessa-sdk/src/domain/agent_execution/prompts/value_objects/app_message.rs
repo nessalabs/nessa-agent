@@ -88,13 +88,17 @@ impl McpAppSource {
     }
 }
 
-/// Who wrote a user message: the person, or an MCP App on their behalf
-/// (MCP Apps' `ui/message`). Either way it is the person's turn, under their
-/// credential; this says whose words they are.
+/// Who supplied model input. This is provenance, not a provider message role
+/// or permission: the host separately supplies the turn's admitted authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageSender {
     /// The person wrote it.
     Person,
+    /// The embedding application supplied an internal continuation. Its input
+    /// is retained and delivered to the model, but is not a person's chat
+    /// message. It carries no additional instruction authority. Hosts must
+    /// admit it before submission, just as they admit other inputs.
+    Internal,
     /// An app sent it on the person's behalf. Whether the person allowed it
     /// is the host's to decide before it says so.
     App(McpAppSource),

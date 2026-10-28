@@ -118,12 +118,14 @@ mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is
 // built, tests included, where both ends exist.
+mod background_tasks;
 mod channels;
 mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
 mod thread_reports;
+pub use background_tasks::{LocalBackgroundTasks, ShepherdBackgroundTasks};
 pub use channels::{LocalChannelFolders, LocalChannelStore};
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,

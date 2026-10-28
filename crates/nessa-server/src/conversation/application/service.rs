@@ -1,4 +1,5 @@
 mod agent_tools;
+mod background_tasks;
 mod channels;
 mod creation;
 mod model_changes;
@@ -232,7 +233,7 @@ const MAX_AGENTS_ASKED_AT_ONCE: usize = 2;
 const APP_CALLS_SETTLE: Duration = Duration::from_secs(10);
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationCaller {
     pub organization_id: OrganizationId,
     pub principal_id: PrincipalId,
@@ -655,6 +656,8 @@ pub(super) enum Writer {
     /// the share grant that admitted it. The flag is whether this membership
     /// may use a remember choice. A grant turn is not offered one.
     Person(Initiation, bool),
+    /// Durable tool outcome, delivered as ordinary model input and hidden from user-message presentation.
+    Internal,
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -673,7 +676,7 @@ impl Writer {
     fn initiation(&self) -> Initiation {
         match self {
             Self::Person(initiation, _) => initiation.clone(),
-            Self::App { .. } => Initiation::owner(),
+            Self::App { .. } | Self::Internal => Initiation::owner(),
         }
     }
     /// Whether this message may be offered a remember choice. An app writes
@@ -682,12 +685,14 @@ impl Writer {
     fn offers_remember(&self) -> bool {
         match self {
             Self::Person(_, offered) => *offered,
+            Self::Internal => false,
             Self::App { .. } => true,
         }
     }
     fn sender(&self) -> MessageSender {
         match self {
             Self::Person(_, _) => MessageSender::Person,
+            Self::Internal => MessageSender::Internal,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -708,7 +713,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person(_, _) => false,
+            Self::Person(_, _) | Self::Internal => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -726,6 +731,7 @@ enum SubmissionDelivery {
 /// would wait on that lease.
 type Carried = Arc<std::sync::Mutex<Option<(std::sync::Weak<LiveConversation>, Taken)>>>;
 struct LiveConversation {
+    local_workspace: Option<String>,
     agent: Agent,
     /// The lease its agent runs under. Every close of the agent goes through
     /// it, so the lease's end is recorded with the close.
@@ -886,6 +892,7 @@ struct Inner {
     workspace_windows: Arc<super::WorkspaceWindows>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
+    background_tasks: OnceLock<Arc<background_tasks::BackgroundTasks>>,
     /// Where channels, and which conversation is in which, are kept.
     channels: channels::ChannelBinding,
     /// One-shot continuations after a provider usage limit.
@@ -1434,6 +1441,7 @@ impl ConversationService {
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
                 thread_reports: Default::default(),
+                background_tasks: OnceLock::new(),
                 channels: Default::default(),
                 scheduled_messages: OnceLock::new(),
                 preference_policy: OnceLock::new(),
@@ -2121,8 +2129,9 @@ impl ConversationService {
                                 manager.expect_handoff(handoff);
                             }
                             let tool_source = checked_source(agent);
+                            let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
+                            let local_workspace = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| workspace.clone()).flatten();
                             if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
-                                let workspace = opening.workspace.clone().or_else(|| configured.workspace.clone()).or_else(|| place.as_ref().and_then(|place| place.folder.to_str().map(str::to_owned))).or_else(|| service.inner.workspace.clone());
                                 if let Some(workspace) = workspace {
                                     let local = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| delivery.local.clone());
                                     opening.fence.set_input_files(Arc::new(super::ConversationInputFiles::new(
@@ -2379,6 +2388,7 @@ impl ConversationService {
                                     .publish(&attachment_id);
                             });
                             let live = Arc::new(LiveConversation {
+                                local_workspace,
                                 model_budget: Mutex::new(ModelBudget {
                                     identity: agent.provider_identity(),
                                     reserved_output_tokens: configured.reserved_output_tokens,
@@ -3221,6 +3231,8 @@ impl ConversationService {
         if !same_owner {
             return Err(ConversationError::Agent(AgentError::Closed));
         }
+        let view = self.with_background_tasks(&id, view).await?;
+        self.check_view_access(&id, &caller).await?;
         Ok((view, cursor))
     }
     /// The agent of `id` if one is live or opening (waited for), after the
@@ -3369,7 +3381,9 @@ impl ConversationService {
         view.questions.clear();
         view.title = self.title(id).await;
         self.check_view_access(id, caller).await?;
-        Ok((bound_view(view), cursor))
+        let view = self.with_background_tasks(id, bound_view(view)).await?;
+        self.check_view_access(id, caller).await?;
+        Ok((view, cursor))
     }
     /// Both journals exclude each other; this is the one pending-view lookup
     /// used before waiting for a control and after explicit recovery.
@@ -4198,7 +4212,7 @@ impl ConversationService {
                 .map(|(_, took)| took);
             let contexts = match known {
                 true => request.user_message.app_model_context().to_vec(),
-                false if idle => {
+                false if idle && !matches!(writer, Writer::Internal) => {
                     let took = offered_before.unwrap_or_else(|| live.app_reviews.take_held());
                     let contexts = took.contexts();
                     taken = Some(took);
@@ -4241,7 +4255,11 @@ impl ConversationService {
             // the agent decides under its own lock whether the turn takes any
             // (only when admitted while idle) and which of those still
             // allowed (row J23). Never a steer, an app's message, or a retry.
-            let notes = if offers_notes(known, writer.is_app(), &mode) {
+            let notes = if offers_notes(
+                known,
+                writer.is_app() || matches!(writer, Writer::Internal),
+                &mode,
+            ) {
                 Some(service.note_candidates(&id, &live).await)
             } else {
                 None
@@ -4376,7 +4394,7 @@ impl ConversationService {
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
-            if !known {
+            if !known && !matches!(writer, Writer::Internal) {
                 service.summarize_message(&id, &message).await;
             }
             match delivery {
@@ -5742,6 +5760,14 @@ impl ConversationService {
             return Ok(());
         }
         let actor = deletion_actor(&deletion)?;
+        if let Err(error) = self.stop_background_tasks(Some(&id), &actor).await {
+            return Err(ConversationError::DeletionIncomplete(Box::new(
+                DeletionFailures {
+                    background_tasks: Some(error),
+                    ..DeletionFailures::default()
+                },
+            )));
+        }
         let slot = self.inner.conversations.lock().await.get(&id).cloned();
         if let Some(slot) = slot {
             // Retirement stops this agent itself, and must not wait here for
@@ -6353,6 +6379,11 @@ impl ConversationService {
         // behind. Each binding bounds its own wait
         // (`retirement_waits_for_abandoned_agent_deletions_to_settle`).
         self.inner.provider_sessions.settled().await;
+        let background = self.stop_background_tasks(None, actor).await;
+        if let Err(error) = background {
+            tracing::error!(?error, "background task cleanup remains unconfirmed");
+            return retired.and(Err(ConversationError::Unavailable));
+        }
         retired
     }
 
@@ -6390,6 +6421,7 @@ impl ConversationService {
         // A deletion abandoned during retirement stops its own process on a
         // task of its own, past `settled`'s bound if it must.
         self.inner.provider_sessions.cleanup_outstanding()
+            || self.background_resources_unreleased().await
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", test))]

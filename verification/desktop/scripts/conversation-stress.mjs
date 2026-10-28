@@ -1686,6 +1686,85 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
 }
 
 const steps = {
+  async background(run, step, failures) {
+    const text = prompt(run, STRESS.background, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    await expectShown(run.page, SAYS.backgroundStarted, failures)
+    const running = await run.client.conversation.read(run.main.id)
+    const task = running.tools.find(
+      (tool) => tool.executionId === turn.executionId && tool.backgroundTaskId,
+    )
+    if (!task || task.status !== "running") {
+      failures.push(
+        "the background tool did not remain running after its calling turn ended",
+      )
+      return
+    }
+    const row = run.page
+      .locator('[data-slot="tool-trace-step"]')
+      .filter({ hasText: "Background task" })
+      .last()
+    if (
+      !(await waitFor(
+        async () =>
+          (await row.getAttribute("data-status").catch(() => null)) === "running",
+        5000,
+      ))
+    )
+      failures.push("the background task is not running in the existing waterfall")
+    const trace = run.page
+      .locator('[data-slot="tool-trace"]')
+      .filter({ hasText: "Background task" })
+      .last()
+    if (run.evidence)
+      await trace.screenshot({
+        path: join(run.evidence, `background-${run.engine}-running.png`),
+      })
+    const completed = await waitFor(async () => {
+      const view = await run.client.conversation.read(run.main.id)
+      const original = view.tools.find(
+        (tool) => tool.toolId === task.toolId && tool.executionId === task.executionId,
+      )
+      const continuation = view.messages.find(
+        (message) =>
+          message.executionId === `background-${task.backgroundTaskId}` && ended(message),
+      )
+      return original?.status === "completed" && continuation
+        ? { view, original, continuation }
+        : null
+    }, 30000)
+    if (!completed) {
+      failures.push(
+        "background completion did not settle the original tool and resume the conversation",
+      )
+      return
+    }
+    if (!completed.original.details.includes("background-stress-output"))
+      failures.push("background task lost its actual output")
+    if (completed.continuation.userText !== "")
+      failures.push("background continuation leaked into a user message")
+    if (
+      completed.view.messages.filter(
+        (message) => message.executionId === completed.continuation.executionId,
+      ).length !== 1
+    )
+      failures.push("background completion created duplicate continuation turns")
+    await expectShown(run.page, SAYS.backgroundFinished, failures)
+    if (
+      !(await waitFor(
+        async () =>
+          (await trace.getAttribute("data-status").catch(() => null)) === "complete",
+        5000,
+      ))
+    )
+      failures.push("the background waterfall did not settle on completion")
+    if (run.evidence)
+      await trace.screenshot({
+        path: join(run.evidence, `background-${run.engine}-finished.png`),
+      })
+  },
   async inputFiles(run, step, failures) {
     await uploadedInputFiles(run, step, {
       prefix: STRESS.reply,

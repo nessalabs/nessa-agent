@@ -1587,6 +1587,13 @@
       "additionalProperties": false,
       "description": "Bounded presentation of an observed tool call.",
       "properties": {
+        "backgroundTaskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "Gateway-owned background task bound to this original native call. Its running status remains authoritative after the provider turn ends."
+        },
         "executionId": {
           "type": "string",
           "minLength": 1,

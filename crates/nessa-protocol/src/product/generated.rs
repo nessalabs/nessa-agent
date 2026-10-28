@@ -732,6 +732,8 @@ pub struct ConversationQuestionEntry {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationTool {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_task_id: Option<String>,
     pub execution_id: String,
     pub tool_id: String,
     pub title: String,
@@ -3740,6 +3742,9 @@ pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
 pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = 10000;
+pub const BACKGROUND_TASK_ID_PATTERN: &str = "^[A-Za-z0-9_-]+$";
+pub const MIN_BACKGROUND_TASK_ID_CHARACTERS: usize = 1;
+pub const MAX_BACKGROUND_TASK_ID_CHARACTERS: usize = 128;
 pub const CONVERSATION_SUBSCRIPTION_ID_PATTERN: &str = "^[1-9][0-9]{0,19}$";
 pub const MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 1;
 pub const MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 20;
