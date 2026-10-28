@@ -290,3 +290,252 @@ async fn a_failed_lock_audit_still_retires_github_with_attributed_evidence() {
     drop(peer);
     task.await.unwrap();
 }
+
+#[tokio::test]
+async fn a_queued_disconnect_cannot_delete_a_sign_in_restored_by_a_new_unlock() {
+    use crate::github::application::GithubTokenStore;
+    use crate::github::domain::{AccessToken, GithubAccount, GithubSignIn, GithubStatus};
+    use nessa_vault::application::Caller;
+    use nessa_vault::domain::{EntryName, Passphrase};
+
+    let root = tempfile::tempdir().unwrap();
+    let vault_routes = composed(root.path());
+    let owner = vault_routes.vault.session(
+        "github-generation-race".into(),
+        Caller {
+            principal: "owner".into(),
+            credential: "credential".into(),
+        },
+    );
+    let lease = owner.lease();
+    let passphrase = "disposable long vault passphrase";
+    assert_eq!(
+        vault_routes
+            .vault
+            .create(&lease, Passphrase::new(passphrase.into()).unwrap(), &[]),
+        Ok(Status::Unlocked)
+    );
+    let old_generation = vault_routes.vault.unlocked_generation().unwrap();
+    let store = Arc::new(crate::github::infrastructure::GithubTokenVault::new(
+        root.path().join("github"),
+        Arc::new(crate::secrets::VaultSecret::new(
+            vault_routes.vault.clone(),
+            EntryName::new("github-sign-in").unwrap(),
+        )),
+    ));
+    let sign_in = GithubSignIn {
+        account: GithubAccount {
+            id: 7,
+            login: "octo".into(),
+        },
+        token: AccessToken::new("fixture-token".into()).unwrap(),
+    };
+    store.save(old_generation, &sign_in).await.unwrap();
+    let connections = Arc::new(
+        crate::github::application::GithubConnections::load(
+            Arc::new(PendingGithub),
+            Arc::new(crate::github::infrastructure::GithubVaultAccess(
+                vault_routes.vault.clone(),
+            )),
+            store.clone(),
+            Arc::new(GithubEvidence::default()),
+            Arc::new(crate::timer::manual::ManualTimer::default()),
+        )
+        .await,
+    );
+    let github = Arc::new(crate::product::GithubRoutes {
+        connections: connections.clone(),
+        install_url: "https://github.com/apps/test/installations/new".into(),
+        live: None,
+        changes: tokio::sync::Mutex::new(()),
+    });
+    let (state, _) = fixture(MembershipRole::Admin);
+    let state = state
+        .with_vault(vault_routes.clone())
+        .with_github(github.clone());
+    let session = authenticate(&state).await;
+
+    let held = github.changes.lock().await;
+    let frame = RequestFrame::new("old-disconnect", "github.disconnect", &json!({})).unwrap();
+    let mut queued = Box::pin(crate::product::github::dispatch(&state, &session, frame));
+    assert!(futures_util::poll!(queued.as_mut()).is_pending());
+
+    assert_eq!(vault_routes.vault.lock(&lease), Ok(Status::Locked));
+    assert_eq!(
+        vault_routes
+            .vault
+            .unlock(&lease, Passphrase::new(passphrase.into()).unwrap()),
+        Ok(Status::Unlocked)
+    );
+    let new_generation = vault_routes.vault.unlocked_generation().unwrap();
+    assert_ne!(old_generation, new_generation);
+    connections.restore().await.unwrap();
+    assert!(matches!(
+        connections.status(),
+        GithubStatus::Connected { .. }
+    ));
+    drop(held);
+
+    let reply = queued.await;
+    let nessa_protocol::protocol::OutgoingMessage::Response(response) = reply else {
+        panic!("response")
+    };
+    assert_eq!(
+        response.error.as_ref().map(|error| error.code.as_str()),
+        Some("vault_locked")
+    );
+    assert!(matches!(
+        connections.status(),
+        GithubStatus::Connected { .. }
+    ));
+    assert_eq!(store.load(new_generation).await.unwrap(), Some(sign_in));
+}
+
+#[tokio::test]
+async fn an_in_flight_old_unlock_cannot_disable_live_events_or_disconnect_new_selection() {
+    use crate::github_relay::{
+        application::{ConnectedGithub, GitHubCredentials, InboxKeySource, LiveSelectionAdmission, RelayStore},
+        domain::{Binding, Failure as RelayFailure},
+        infrastructure::{SqliteRelayStore, VaultSelectionAdmission},
+    };
+    use nessa_vault::{
+        application::Caller,
+        domain::Passphrase,
+    };
+    use std::sync::{atomic::{AtomicBool, Ordering}, Condvar, Mutex};
+
+    struct Key;
+    impl InboxKeySource for Key {
+        fn load(&self) -> Result<Arc<nessa_local_database::DatabaseKey>, RelayFailure> {
+            Ok(Arc::new(nessa_local_database::DatabaseKey::new([11; 32])))
+        }
+    }
+    struct Connected;
+    #[async_trait::async_trait]
+    impl GitHubCredentials for Connected {
+        async fn token(&self) -> Result<crate::github::domain::AccessToken, RelayFailure> {
+            Err(RelayFailure::CredentialsUnavailable)
+        }
+        async fn identify(&self, _: &str) -> Result<Binding, RelayFailure> {
+            Err(RelayFailure::CredentialsUnavailable)
+        }
+    }
+    #[async_trait::async_trait]
+    impl ConnectedGithub for Connected {
+        fn user_id(&self) -> Option<String> { Some("11".into()) }
+        async fn repositories(&self) -> Result<Vec<Binding>, RelayFailure> {
+            Err(RelayFailure::CredentialsUnavailable)
+        }
+    }
+    struct PausedAdmission {
+        inner: VaultSelectionAdmission,
+        pause: AtomicBool,
+        entered: tokio::sync::Notify,
+        released: (Mutex<bool>, Condvar),
+    }
+    impl PausedAdmission {
+        fn arm(&self) {
+            *self.released.0.lock().unwrap() = false;
+            self.pause.store(true, Ordering::SeqCst);
+        }
+        fn release(&self) {
+            *self.released.0.lock().unwrap() = true;
+            self.released.1.notify_one();
+        }
+    }
+    impl LiveSelectionAdmission for PausedAdmission {
+        fn commit_in_generation(
+            &self,
+            generation: u64,
+            commit: &mut dyn FnMut() -> Result<(), RelayFailure>,
+        ) -> Result<(), RelayFailure> {
+            if self.pause.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                let mut ready = self.released.0.lock().unwrap();
+                while !*ready {
+                    ready = self.released.1.wait(ready).unwrap();
+                }
+            }
+            self.inner.commit_in_generation(generation, commit)
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let vault_routes = composed(root.path());
+    let owner = vault_routes.vault.session(
+        "live-selection-race".into(),
+        Caller { principal: "owner".into(), credential: "credential".into() },
+    );
+    let lease = owner.lease();
+    let passphrase = "disposable long vault passphrase";
+    assert_eq!(
+        vault_routes.vault.create(&lease, Passphrase::new(passphrase.into()).unwrap(), &[]),
+        Ok(Status::Unlocked)
+    );
+    let admission = Arc::new(PausedAdmission {
+        inner: VaultSelectionAdmission(vault_routes.vault.clone()),
+        pause: AtomicBool::new(false),
+        entered: tokio::sync::Notify::new(),
+        released: (Mutex::new(false), Condvar::new()),
+    });
+    let store = Arc::new(SqliteRelayStore::new(
+        root.path().join("private/inbox.sqlite"),
+        Arc::new(|| 1_000_000),
+        Arc::new(Key),
+        admission.clone(),
+    ));
+    let selected = Binding::new(
+        "11".into(), "42".into(), "nessalabs/nessa-agent".into(), uuid::Uuid::new_v4(),
+    ).unwrap();
+    store.bind(&selected, false).await.unwrap();
+    let live = Arc::new(crate::github_relay::application::LiveEvents::new(
+        Arc::new(Connected), store.clone(),
+    ));
+    let connections = Arc::new(
+        crate::github::application::GithubConnections::load(
+            Arc::new(PendingGithub),
+            Arc::new(crate::github::infrastructure::GithubVaultAccess(vault_routes.vault.clone())),
+            Arc::new(crate::github::infrastructure::GithubTokenVault::new(
+                root.path().join("github"),
+                Arc::new(crate::secrets::VaultSecret::new(
+                    vault_routes.vault.clone(),
+                    nessa_vault::domain::EntryName::new("github-sign-in").unwrap(),
+                )),
+            )),
+            Arc::new(GithubEvidence::default()),
+            Arc::new(crate::timer::manual::ManualTimer::default()),
+        ).await,
+    );
+    let github = Arc::new(crate::product::GithubRoutes {
+        connections: connections.clone(),
+        install_url: "https://github.com/apps/test/installations/new".into(),
+        live: Some(live),
+        changes: tokio::sync::Mutex::new(()),
+    });
+    let (state, _) = fixture(MembershipRole::Admin);
+    let state = state.with_vault(vault_routes.clone()).with_github(github);
+    let session = authenticate(&state).await;
+    for (method, params) in [
+        ("github.liveEvents", json!({"enabled":false})),
+        ("github.disconnect", json!({})),
+    ] {
+        admission.arm();
+        let entered = admission.entered.notified();
+        let frame = RequestFrame::new(method, method, &params).unwrap();
+        let mut pending = Box::pin(crate::product::github::dispatch(&state, &session, frame));
+        assert!(futures_util::poll!(pending.as_mut()).is_pending());
+        tokio::time::timeout(Duration::from_secs(5), entered).await.unwrap();
+        assert_eq!(vault_routes.vault.lock(&lease), Ok(Status::Locked));
+        assert_eq!(
+            vault_routes.vault.unlock(&lease, Passphrase::new(passphrase.into()).unwrap()),
+            Ok(Status::Unlocked)
+        );
+        connections.restore().await.unwrap();
+        admission.release();
+        let nessa_protocol::protocol::OutgoingMessage::Response(response) = pending.await else {
+            panic!("response")
+        };
+        assert_eq!(response.error.as_ref().map(|error| error.code.as_str()), Some("vault_locked"));
+        assert_eq!(store.bindings().await.unwrap(), vec![selected.clone()]);
+    }
+}

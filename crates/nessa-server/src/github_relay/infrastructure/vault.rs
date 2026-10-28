@@ -1,5 +1,8 @@
 use crate::{
-    github_relay::{application::InboxKeySource, domain::Failure},
+    github_relay::{
+        application::{InboxKeySource, LiveSelectionAdmission},
+        domain::Failure,
+    },
     secrets::SecretStore,
 };
 use nessa_local_database::DatabaseKey;
@@ -70,6 +73,24 @@ fn secret_failure(problem: crate::secrets::SecretUnavailable) -> Failure {
     match problem {
         crate::secrets::SecretUnavailable::Locked => Failure::VaultLocked,
         crate::secrets::SecretUnavailable::Unavailable => Failure::Storage,
+    }
+}
+
+/// Holds the vault generation through the inbox's short SQLite commit.
+pub struct VaultSelectionAdmission(pub Arc<nessa_vault::application::Vault>);
+impl LiveSelectionAdmission for VaultSelectionAdmission {
+    fn commit_in_generation(
+        &self,
+        generation: u64,
+        commit: &mut dyn FnMut() -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        self.0
+            .within_generation(generation, commit)
+            .map_err(|problem| match problem {
+                nessa_vault::domain::Failure::Locked
+                | nessa_vault::domain::Failure::SessionClosed => Failure::VaultLocked,
+                _ => Failure::Storage,
+            })?
     }
 }
 

@@ -9,4 +9,4 @@ pub use ports::{
     RelaySource, RelayStore, RelayWait,
 };
 mod live_events;
-pub use live_events::{ConnectedGithub, LiveEventStore, LiveEvents};
+pub use live_events::{ConnectedGithub, LiveEventStore, LiveEvents, LiveSelectionAdmission};

@@ -1,6 +1,6 @@
 use crate::github_relay::domain::contract;
 use crate::github_relay::{
-    application::{InboxKeySource, RelayStore},
+    application::{InboxKeySource, LiveSelectionAdmission, RelayStore},
     domain::{Binding, Event, Failure, Page},
 };
 use nessa_local_database::{
@@ -13,6 +13,7 @@ use std::{path::PathBuf, sync::Arc};
 pub struct SqliteRelayStore {
     path: PathBuf,
     key: Arc<dyn InboxKeySource>,
+    pub(super) selection: Arc<dyn LiveSelectionAdmission>,
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 impl SqliteRelayStore {
@@ -20,8 +21,14 @@ impl SqliteRelayStore {
         path: PathBuf,
         now: Arc<dyn Fn() -> i64 + Send + Sync>,
         key: Arc<dyn InboxKeySource>,
+        selection: Arc<dyn LiveSelectionAdmission>,
     ) -> Self {
-        Self { path, now, key }
+        Self {
+            path,
+            now,
+            key,
+            selection,
+        }
     }
     pub(super) async fn run<T: Send + 'static>(
         &self,

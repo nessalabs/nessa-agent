@@ -45,11 +45,12 @@ pub(super) fn store(
         Arc::new(crate::github_relay::infrastructure::VaultInboxKey::new(
             root.join("github-relay/inbox.sqlite"),
             Arc::new(crate::secrets::VaultSecret::new(
-                vault,
+                vault.clone(),
                 nessa_vault::domain::EntryName::new("github-inbox-key")
                     .expect("static vault entry"),
             )),
         )),
+        Arc::new(crate::github_relay::infrastructure::VaultSelectionAdmission(vault)),
     )))
 }
 fn source(environment: &Environment) -> Result<Arc<HttpRelaySource>, Failure> {

@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "05bb0383823d28e37f563ba28cea72fa9c6de9a3"
+sourceRevision: "eab6d335e064276a95c094d874174fbcbc51344b"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -32,8 +32,10 @@ sources:
   - crates/nessa-server/src/github_relay/application/follow.rs
   - crates/nessa-server/src/github_relay/application/live_events.rs
   - crates/nessa-server/src/github_relay/infrastructure/selection.rs
+  - crates/nessa-vault/src/application/vault.rs
   - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
   - crates/nessa-server/src/product/github.rs
+  - crates/nessa-server/tests/product/socket/vault.rs
   - crates/nessa-server/src/github/application/connections.rs
   - src/desktop/settings/ui/github-row.tsx
   - src/desktop/settings/ui/github-live-help.tsx
@@ -125,6 +127,9 @@ before commit leaves that page eligible for replay. A saved cursor resumes after
 restart. Each connection generation fences responses and cleanup from a removed
 binding; disconnect/reconnect cannot revive the previous generation's pending work.
 Local storage deduplicates a redelivered identity while its original copy remains.
+The vault unlock generation is checked again while the selection transaction
+commits. A disable or disconnect started before lock and unlock rolls back its
+binding, event and audit changes, leaving the newer selection intact.
 
 The local owner can read the downloaded inbox without network access. SQLCipher encrypts the whole database and rollback journal, including repository identities and audit records. Its separate random key lives in the passphrase-encrypted local vault. The native app unlocks it once per app session; closing that app or restarting the gateway seals it. The follower stops while locked and catches up after unlock. See [local vault](../gateway/local-vault.md). OS ownership also protects its files; no new unauthenticated local HTTP read route is
 mounted. Existing [conversation admission](../gateway/external-events.md) remains
@@ -174,6 +179,11 @@ Escape dismisses help and returns focus without closing Settings.
 
 The connection is owned by the gateway, so its windows see the same setting.
 Disabling removes the local selection and inbox in one audited transaction.
+A GitHub command waiting behind another command keeps the vault unlock generation
+it entered with. If the vault locks and unlocks during that wait, the queued
+command refuses before it can change the newer sign-in or live-event selection.
+The dispatcher regression holds a queued disconnect, restores an encrypted
+credential under the next unlock, and checks that credential remains.
 Disconnect waits for that cleanup before deleting the token. An already-returning
 page is rejected by the removed binding's generation. A cleanup failure leaves
 the selection intact and refuses sign-out. Cloud retention remains shared with

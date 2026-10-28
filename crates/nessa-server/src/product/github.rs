@@ -25,17 +25,29 @@ pub(super) async fn dispatch(
     let Some(github) = state.github.as_ref() else {
         return failure(&frame.id, GithubErrorCode::GithubNotConfigured.as_str());
     };
-    if state
+    // The command may wait behind another GitHub request while this connection
+    // locks and unlocks. Carry the admitted unlock across that wait.
+    let admitted_generation = state
         .vault
         .as_ref()
-        .is_some_and(|vault| !vault.vault.is_unlocked())
-    {
+        .map(|vault| vault.vault.unlocked_generation());
+    if admitted_generation == Some(None) {
         return failure(&frame.id, "vault_locked");
     }
     if frame.method != "github.liveEvents" && frame.params != json!({}) {
         return failure(&frame.id, "invalid_request");
     }
     let _change = github.changes.lock().await;
+    let still_admitted = || {
+        state
+            .vault
+            .as_ref()
+            .map(|vault| vault.vault.unlocked_generation())
+            == admitted_generation
+    };
+    if !still_admitted() {
+        return failure(&frame.id, "vault_locked");
+    }
     let caller = caller(session);
     let initiator=serde_json::to_string(&json!({"organizationId":caller.organization_id,"principalId":caller.principal_id,"credentialId":caller.credential_id})).expect("caller is serializable");
     if frame.method == "github.liveEvents" {
@@ -46,8 +58,12 @@ pub(super) async fn dispatch(
         let Some(live) = &github.live else {
             return failure(&frame.id, "github_live_unavailable");
         };
+        let Some(generation) = admitted_generation.flatten() else {
+            return failure(&frame.id, "vault_locked");
+        };
         if let Err(error) = live
             .set(
+                generation,
                 params.enabled,
                 &initiator,
                 params.accept_gaps.unwrap_or(false),
@@ -56,11 +72,20 @@ pub(super) async fn dispatch(
         {
             return failure(&frame.id, relay_code(&error));
         }
+        if !still_admitted() {
+            return failure(&frame.id, "vault_locked");
+        }
     }
     if frame.method == "github.disconnect" {
         if let Some(live) = &github.live {
-            if let Err(error) = live.set(false, &initiator, false).await {
+            let Some(generation) = admitted_generation.flatten() else {
+                return failure(&frame.id, "vault_locked");
+            };
+            if let Err(error) = live.set(generation, false, &initiator, false).await {
                 return failure(&frame.id, relay_code(&error));
+            }
+            if !still_admitted() {
+                return failure(&frame.id, "vault_locked");
             }
         }
     }

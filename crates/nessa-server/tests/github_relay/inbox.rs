@@ -7,7 +7,7 @@ use crate::{
     },
 };
 use std::sync::{
-    atomic::{AtomicBool, AtomicI64, Ordering},
+    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     Arc,
 };
 fn binding(user: &str) -> Binding {
@@ -35,6 +35,24 @@ fn page(user: &str, sequence: i64) -> Page {
         }],
     }
 }
+struct TestSelection(AtomicU64);
+impl TestSelection {
+    fn new() -> Self {
+        Self(AtomicU64::new(1))
+    }
+}
+impl crate::github_relay::application::LiveSelectionAdmission for TestSelection {
+    fn commit_in_generation(
+        &self,
+        generation: u64,
+        commit: &mut dyn FnMut() -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        if self.0.load(Ordering::SeqCst) != generation {
+            return Err(Failure::VaultLocked);
+        }
+        commit()
+    }
+}
 struct TestKey;
 impl crate::github_relay::application::InboxKeySource for TestKey {
     fn load(&self) -> Result<Arc<nessa_local_database::DatabaseKey>, Failure> {
@@ -46,6 +64,7 @@ fn store(directory: &tempfile::TempDir) -> SqliteRelayStore {
         directory.path().join("private/inbox.sqlite"),
         Arc::new(|| 1000000),
         Arc::new(TestKey),
+        Arc::new(TestSelection::new()),
     )
 }
 
@@ -69,6 +88,7 @@ async fn failed_page_rolls_back_events_and_cursor_and_reopen_replays() {
         directory.path().join("private/inbox.sqlite"),
         Arc::new(|| 1000000),
         Arc::new(TestKey),
+        Arc::new(TestSelection::new()),
     );
     assert_eq!(reopened.cursor(&binding).await.unwrap(), 1);
     assert_eq!(reopened.events(&binding).await.unwrap(), good.events);
@@ -150,6 +170,7 @@ async fn retention_records_delivery_identity_and_system_cause_with_cursor_unchan
         directory.path().join("private/inbox.sqlite"),
         Arc::new(move || clock.load(Ordering::SeqCst)),
         Arc::new(TestKey),
+        Arc::new(TestSelection::new()),
     );
     let binding = binding("11");
     store.bind(&binding, false).await.unwrap();
@@ -573,13 +594,13 @@ async fn opt_in_survives_restart_without_resetting_the_cursor_and_disable_fences
     });
     let live = LiveEvents::new(account.clone(), store.clone());
     assert_eq!(live.status().await.unwrap(), (false, 0, 0));
-    live.set(true, "principal:owner/credential:one", false)
+    live.set(1, true, "principal:owner/credential:one", false)
         .await
         .unwrap();
     let first = store.bindings().await.unwrap().remove(0);
     let first_page = page("11", 1);
     store.commit(&first, 0, &first_page).await.unwrap();
-    live.set(true, "principal:owner/credential:one", false)
+    live.set(1, true, "principal:owner/credential:one", false)
         .await
         .unwrap();
     assert_eq!(store.cursor(&first).await.unwrap(), 1);
@@ -587,14 +608,14 @@ async fn opt_in_survives_restart_without_resetting_the_cursor_and_disable_fences
     assert_eq!(restored.status().await.unwrap(), (true, 1, 0));
     store.gap(&first, 99).await.unwrap();
     assert_eq!(live.status().await.unwrap(), (true, 1, 1));
-    live.set(true, "principal:owner/credential:one", true)
+    live.set(1, true, "principal:owner/credential:one", true)
         .await
         .unwrap();
     let resumed = store.bindings().await.unwrap().remove(0);
     assert_ne!(resumed.generation(), first.generation());
     assert_eq!(store.cursor(&resumed).await.unwrap(), 99);
     assert_eq!(live.status().await.unwrap(), (true, 1, 0));
-    live.set(false, "principal:owner/credential:one", false)
+    live.set(1, false, "principal:owner/credential:one", false)
         .await
         .unwrap();
     assert_eq!(
@@ -603,7 +624,7 @@ async fn opt_in_survives_restart_without_resetting_the_cursor_and_disable_fences
     );
     assert!(store.events(&first).await.unwrap().is_empty());
     assert_eq!(restored.status().await.unwrap(), (false, 0, 0));
-    live.set(true, "principal:owner/credential:one", false)
+    live.set(1, true, "principal:owner/credential:one", false)
         .await
         .unwrap();
     let second = store.bindings().await.unwrap().remove(0);
@@ -645,14 +666,17 @@ async fn signed_out_offline_and_excess_repositories_cannot_enable_or_replace_the
     });
     let live = LiveEvents::new(account.clone(), store.clone());
     assert_eq!(
-        live.set(true, "owner", false).await,
+        live.set(1, true, "owner", false).await,
         Err(Failure::CredentialsUnavailable)
     );
     account.user.store(11, Ordering::SeqCst);
-    live.set(true, "owner", false).await.unwrap();
+    live.set(1, true, "owner", false).await.unwrap();
     let first = store.bindings().await.unwrap();
     account.unavailable.store(true, Ordering::SeqCst);
-    assert_eq!(live.set(true, "owner", false).await, Err(Failure::Offline));
+    assert_eq!(
+        live.set(1, true, "owner", false).await,
+        Err(Failure::Offline)
+    );
     assert_eq!(store.bindings().await.unwrap(), first);
     let excessive = LiveEvents::new(
         Arc::new(ConnectedAccount {
@@ -663,7 +687,7 @@ async fn signed_out_offline_and_excess_repositories_cannot_enable_or_replace_the
         store.clone(),
     );
     assert_eq!(
-        excessive.set(true, "owner", false).await,
+        excessive.set(1, true, "owner", false).await,
         Err(Failure::Capacity)
     );
     assert_eq!(store.bindings().await.unwrap(), first);
@@ -690,7 +714,7 @@ async fn cleanup_audit_failure_refuses_disable_and_preserves_selection() {
         }),
         store.clone(),
     );
-    live.set(true, "owner", false).await.unwrap();
+    live.set(1, true, "owner", false).await.unwrap();
     let binding = store.bindings().await.unwrap().remove(0);
     store.commit(&binding, 0, &page("11", 1)).await.unwrap();
     let db = nessa_local_database::open_encrypted(
@@ -703,7 +727,10 @@ async fn cleanup_audit_failure_refuses_disable_and_preserves_selection() {
     )
     .unwrap();
     db.execute_batch("CREATE TRIGGER refuse_cleanup BEFORE INSERT ON binding_audit WHEN NEW.cause='live_events_disabled' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;").unwrap();
-    assert_eq!(live.set(false, "owner", false).await, Err(Failure::Storage));
+    assert_eq!(
+        live.set(1, false, "owner", false).await,
+        Err(Failure::Storage)
+    );
     assert_eq!(live.status().await.unwrap(), (true, 1, 0));
     assert_eq!(store.events(&binding).await.unwrap().len(), 1);
 }
@@ -896,4 +923,89 @@ async fn follower_refreshes_credentials_per_request_and_acquires_none_while_idle
         ]
     );
     assert_eq!(credentials.0.load(Ordering::SeqCst), 4);
+}
+
+struct PausedSelectionKey {
+    pause: AtomicBool,
+    entered: tokio::sync::Notify,
+    release: (std::sync::Mutex<bool>, std::sync::Condvar),
+}
+impl crate::github_relay::application::InboxKeySource for PausedSelectionKey {
+    fn load(&self) -> Result<Arc<nessa_local_database::DatabaseKey>, Failure> {
+        if self.pause.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            let (released, wake) = &self.release;
+            let mut ready = released.lock().unwrap();
+            while !*ready {
+                ready = wake.wait(ready).unwrap();
+            }
+        }
+        Ok(Arc::new(nessa_local_database::DatabaseKey::new([11; 32])))
+    }
+}
+
+#[tokio::test]
+async fn an_in_flight_old_unlock_cannot_remove_a_new_live_selection() {
+    use crate::github_relay::application::LiveEvents;
+    let directory = tempfile::tempdir().unwrap();
+    let key = Arc::new(PausedSelectionKey {
+        pause: AtomicBool::new(false),
+        entered: tokio::sync::Notify::new(),
+        release: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+    });
+    let selection = Arc::new(TestSelection::new());
+    let store = Arc::new(SqliteRelayStore::new(
+        directory.path().join("private/inbox.sqlite"),
+        Arc::new(|| 1000000),
+        key.clone(),
+        selection.clone(),
+    ));
+    let account = Arc::new(ConnectedAccount {
+        user: AtomicI64::new(11),
+        unavailable: AtomicBool::new(false),
+        count: 1,
+    });
+    let live = Arc::new(LiveEvents::new(account, store.clone()));
+    live.set(1, true, "owner", false).await.unwrap();
+    let old = store.bindings().await.unwrap().remove(0);
+    let entered = key.entered.notified();
+    key.pause.store(true, Ordering::SeqCst);
+    let old_disable = {
+        let live = live.clone();
+        tokio::spawn(async move { live.set(1, false, "owner", false).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(15), entered)
+        .await
+        .unwrap();
+    let new = Binding::new(
+        old.user_id().into(),
+        old.repository_id().into(),
+        old.repository_name().into(),
+        uuid::Uuid::new_v4(),
+    )
+    .unwrap();
+    selection.0.store(2, Ordering::SeqCst);
+    store.bind(&new, false).await.unwrap();
+    let (released, wake) = &key.release;
+    *released.lock().unwrap() = true;
+    wake.notify_one();
+    assert_eq!(old_disable.await.unwrap(), Err(Failure::VaultLocked));
+    assert_eq!(store.bindings().await.unwrap(), vec![new]);
+    let db = nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &nessa_local_database::Schema::new(include_str!(
+            "../../src/github_relay/infrastructure/schema.sql"
+        ))
+        .unwrap(),
+        &nessa_local_database::DatabaseKey::new([11; 32]),
+    )
+    .unwrap();
+    let stale_deletions: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM binding_audit WHERE cause='live_events_disabled'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stale_deletions, 0);
 }
