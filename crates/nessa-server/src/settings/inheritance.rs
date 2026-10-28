@@ -4,10 +4,8 @@
 /// `Option<T>` remains a valid explicit value when `T` itself is optional.
 pub(crate) fn resolve_inherited<T>(default: T, choices: impl IntoIterator<Item = Option<T>>) -> T {
     let mut effective = default;
-    for choice in choices {
-        if let Some(value) = choice {
-            effective = value;
-        }
+    for value in choices.into_iter().flatten() {
+        effective = value;
     }
     effective
 }
