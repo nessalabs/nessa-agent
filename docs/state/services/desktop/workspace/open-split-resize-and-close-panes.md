@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Opening beside a pane first looks for space on the right, then below."
 parent: "desktop-workspace"
-sourceRevision: "669342bc233bc17e6b1e9d80c338cc7d2c2b23a6"
+sourceRevision: "89beec02d949d54eff7ae536f724877cf72c8b8f"
 sources:
   - "src/desktop/workspace/ui/panes/panes.css"
   - "src/desktop/workspace/ui/panes/conversation.css"
