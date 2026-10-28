@@ -2,8 +2,8 @@
 use super::WebhookRuntime;
 use crate::conversation::{
     application::{
-        ConversationAccessPolicyEvaluator, PrincipalRecordReadSource, RecordReadError,
-        RecordReadOperation, RecordReadValue,
+        ConversationAccessPolicyEvaluator, ConversationError, PrincipalRecordReadSource,
+        RecordReadError, RecordReadOperation, RecordReadValue,
     },
     infrastructure::LocalConversationStore,
 };
@@ -198,7 +198,7 @@ impl WebhookRuntime {
                 StopObservationResult::StopAcknowledged => continue,
                 StopObservationResult::NoStopObserved => {}
             }
-            let conversations = dependencies
+            let conversations = match dependencies
                 .metadata
                 .principal_conversations(
                     registration.target.principal.clone(),
@@ -206,7 +206,22 @@ impl WebhookRuntime {
                     MAX_CURSORS,
                 )
                 .await
-                .map_err(|_| CredentialAdminError::Unavailable)?;
+            {
+                Ok(conversations) => conversations,
+                Err(ConversationError::Capacity) => {
+                    // A valid grant set can exceed this registration's bounded
+                    // discovery pass. Preserve command admission and siblings;
+                    // the next paced cycle freshly discovers it again.
+                    *self
+                        .owner
+                        .last_refusal
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) =
+                        Some(WebhookRefusal::SourceUnavailable);
+                    continue;
+                }
+                Err(_) => return Err(CycleFailure::Fatal),
+            };
             for (conversation, epoch) in conversations {
                 if !self.accepting_delivery() {
                     return Ok(());

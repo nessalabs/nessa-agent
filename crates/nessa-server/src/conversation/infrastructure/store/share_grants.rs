@@ -1284,7 +1284,7 @@ impl LocalConversationStore {
                 let revision=sequence(row.get::<_,i64>(1).map_err(failed)?).ok_or(ConversationError::Metadata)?;
                 result.push((id,revision));
             }
-            if result.len()>limit {return Err(ConversationError::Metadata);}
+            if result.len()>limit {return Err(ConversationError::Capacity);}
             Ok(result)
         }).await
     }

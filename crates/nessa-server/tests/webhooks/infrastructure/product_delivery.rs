@@ -697,7 +697,7 @@ async fn canonical_scheduling_candidates_keep_principal_credential_budget_and_bo
         f.grants
             .principal_conversations(principal.clone(), credential.clone(), 1)
             .await,
-        Err(ConversationError::Metadata)
+        Err(ConversationError::Capacity)
     ));
     assert_eq!(
         f.grants
@@ -721,6 +721,14 @@ async fn canonical_scheduling_candidates_keep_principal_credential_budget_and_bo
         )
         .unwrap();
     drop(connection);
+    // Even at a smaller discovery bound, malformed returned metadata is not
+    // reclassified as ordinary capacity exhaustion.
+    assert!(matches!(
+        f.grants
+            .principal_conversations(principal.clone(), credential.clone(), 1)
+            .await,
+        Err(ConversationError::Metadata)
+    ));
     assert!(matches!(
         f.grants
             .principal_conversations(principal, credential, 2)
@@ -1845,3 +1853,6 @@ mod owner_reset;
 
 #[path = "product_delivery/owner_query.rs"]
 mod owner_query;
+
+#[path = "product_delivery/discovery.rs"]
+mod discovery;
