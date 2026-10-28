@@ -5,9 +5,10 @@ kind: "operation"
 status: "implemented"
 summary: "Opening beside a pane first looks for space on the right, then below."
 parent: "desktop-workspace"
-sourceRevision: "b214f29f9c4d64ebca97926935e45aab106a3d48"
+sourceRevision: "669342bc233bc17e6b1e9d80c338cc7d2c2b23a6"
 sources:
   - "src/desktop/workspace/ui/panes/panes.css"
+  - "src/desktop/workspace/ui/panes/conversation.css"
   - "src/desktop/styles.test.ts"
   - "src/desktop/workspace/application/usecases/panes.ts"
   - "src/desktop/workspace/application/usecases/session-tabs.ts"
@@ -48,10 +49,10 @@ its right-panel contents. A visible tab's pane shows another open document or
 a new draft home when one is available. Source removal may leave no valid
 home; the last pane then clears instead of pointing at a removed session.
 
-A corner pane's header text and controls keep clear of the window controls
+A corner pane's header text and controls keep clear of the window toolbar
 while a side column reopens and the pane flies to its new position. The
 header returns to its normal inset after landing. Its background picture
-can still extend behind the window controls.
+starts at the pane's top edge, below the toolbar.
 
 The pane root clips overflowing content; its transcript owns scrolling. Focusing
 a descendant does not scroll the root or move its header out of the titlebar.
