@@ -1210,6 +1210,44 @@ async function boundKeys(page) {
   }
 }
 
+/** A document shortcut takes the caret from the old tab into its new pane. */
+async function tabShortcutFocus(page, layout) {
+  await need(page, css.composer, "a composer")
+  await hideColumns(page, layout)
+  const tabs = page.getByRole("tablist", { name: "Open views" })
+  const selected = () => tabs.locator('[role="tab"][aria-selected="true"]')
+  const trail = []
+  const failures = []
+  for (const [name, key] of [
+    ["New Session", keys.newSession],
+    ["Split Right", keys.newSessionBeside],
+  ]) {
+    const old = selected()
+    await old.focus()
+    const oldTab = await old.locator("..").getAttribute("data-session-tab")
+    const expected = expectedPaneFocus(
+      { keys: await order(page), ...(await state(page)) },
+      name === "Split Right" ? "new" : "same",
+    )
+    await page.keyboard.press(key)
+    const settlement = await paneFocusSettled(page, expected, 5_000)
+    const now = await state(page)
+    const problem = inComposer(now)
+    const oldSelected =
+      (await tabs
+        .locator(`[data-session-tab="${oldTab}"] [role="tab"]`)
+        .getAttribute("aria-selected")) === "true"
+    trail.push({ step: name, oldTab, oldSelected, settlement, ...now })
+    if (problem || oldSelected || !settlement.converged) {
+      const active = await page.evaluate(() =>
+        document.activeElement?.outerHTML.slice(0, 400),
+      )
+      failures.push(`${name}: ${problem ?? "focus did not settle"}; ${active}`)
+    }
+  }
+  return { trail, failures }
+}
+
 await main(meta, async ({ options, rep, url }) => {
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts) {
@@ -1319,6 +1357,14 @@ await main(meta, async ({ options, rep, url }) => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
           return await boundKeys(fresh.page)
+        } finally {
+          await fresh.close()
+        }
+      })
+      await attempt(rep, { name: "focus-tab-shortcuts", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          return await tabShortcutFocus(fresh.page, layout)
         } finally {
           await fresh.close()
         }
