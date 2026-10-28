@@ -12,7 +12,7 @@ use crate::conversation::domain::{
 };
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
 #[cfg(unix)]
-use crate::conversation_test_support::channel_lookup::{ChannelLookup, ChannelRead, Membership};
+use crate::conversation_test_support::channel_lookup::ChannelLookup;
 use crate::conversation_test_support::{absolute, unrooted};
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
@@ -289,8 +289,7 @@ async fn settings_authorization_refuses_another_channels_valid_owner_facts() {
     let fixture = Fixture::with_channel_store(
         ProviderSessionErasers::default(),
         Some(Arc::new(ChannelLookup {
-            membership: Membership::Default,
-            channel: ChannelRead::Found(Box::new(found)),
+            channel: Box::new(found),
         })),
     );
     assert!(fixture

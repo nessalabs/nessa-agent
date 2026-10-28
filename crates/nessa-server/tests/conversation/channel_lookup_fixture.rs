@@ -1,44 +1,21 @@
 //! Faulty channel lookup ports for cross-boundary identity and refusal tests.
 use crate::conversation::{
-    application::{ChannelStore, ConversationError, ConversationFuture},
+    application::{ChannelStore, ConversationFuture},
     domain::{Channel, ChannelId},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use std::collections::HashMap;
 
-pub(crate) enum Membership {
-    Default,
-    Channel(ChannelId),
-    Failed,
-}
-pub(crate) enum ChannelRead {
-    Found(Box<Channel>),
-    Missing,
-    Failed,
-}
 pub(crate) struct ChannelLookup {
-    pub(crate) membership: Membership,
-    pub(crate) channel: ChannelRead,
+    pub(crate) channel: Box<Channel>,
 }
 impl ChannelStore for ChannelLookup {
     fn channel_of(&self, _: &ConversationId) -> ConversationFuture<'_, Option<ChannelId>> {
-        Box::pin(async move {
-            match &self.membership {
-                Membership::Default => Ok(None),
-                Membership::Channel(id) => Ok(Some(id.clone())),
-                Membership::Failed => Err(ConversationError::Unavailable),
-            }
-        })
+        Box::pin(async { Ok(None) })
     }
     fn get(&self, _: &ChannelId) -> ConversationFuture<'_, Option<Channel>> {
-        Box::pin(async move {
-            match &self.channel {
-                ChannelRead::Found(channel) => Ok(Some(channel.as_ref().clone())),
-                ChannelRead::Missing => Ok(None),
-                ChannelRead::Failed => Err(ConversationError::Unavailable),
-            }
-        })
+        Box::pin(async { Ok(Some(self.channel.as_ref().clone())) })
     }
     fn create(&self, _: Channel) -> ConversationFuture<'_, Channel> {
         panic!("lookup fixture cannot write")
