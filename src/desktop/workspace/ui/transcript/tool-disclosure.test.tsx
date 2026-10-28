@@ -86,7 +86,12 @@ describe("watchToolDisclosure", () => {
     let now = 0
     vi.spyOn(performance, "now").mockImplementation(() => now)
     const animation = { playState: "finished" }
-    scroller.getAnimations = () => [animation]
+    // The hold only reads `playState`. Defining the method avoids assigning a
+    // stand-in where the DOM type requires a full Animation.
+    Object.defineProperty(scroller, "getAnimations", {
+      configurable: true,
+      value: () => [animation],
+    })
     const { released } = watch(scroller)
     label.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     flushFrames()
