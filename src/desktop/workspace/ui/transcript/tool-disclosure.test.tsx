@@ -5,7 +5,6 @@ import { followTranscriptEnd, watchToolDisclosure } from "./tool-disclosure"
 
 const frames = new Map<number, FrameRequestCallback>()
 let nextFrame = 0
-let timeout: TimerHandler | null = null
 
 function flushFrames() {
   const due = [...frames.values()]
@@ -16,7 +15,6 @@ function flushFrames() {
 afterEach(() => {
   frames.clear()
   nextFrame = 0
-  timeout = null
   vi.restoreAllMocks()
   document.body.replaceChildren()
 })
@@ -44,13 +42,6 @@ function watch(scroller: HTMLElement) {
   })
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
     frames.delete(id)
-  })
-  vi.spyOn(window, "setTimeout").mockImplementation((callback) => {
-    timeout = callback
-    return 1
-  })
-  vi.spyOn(window, "clearTimeout").mockImplementation(() => {
-    timeout = null
   })
   const released = vi.fn()
   const stop = watchToolDisclosure(scroller, released)

@@ -44,15 +44,11 @@ export function watchToolDisclosure(
   onRelease: () => void,
 ): () => void {
   let frame = 0
-  let timer = 0
   let holding = false
   let disposed = false
   const view = () => scroller.ownerDocument.defaultView ?? window
   const cancelPending = () => {
-    const current = view()
-    current.clearTimeout(timer)
-    current.cancelAnimationFrame(frame)
-    timer = 0
+    view().cancelAnimationFrame(frame)
     frame = 0
   }
   const release = () => {
