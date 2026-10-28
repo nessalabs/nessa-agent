@@ -79,6 +79,8 @@ mod attachments;
 mod desktop;
 
 #[cfg(unix)]
+mod background_tools;
+#[cfg(unix)]
 pub(crate) mod conversation_tools;
 #[cfg(unix)]
 mod environment_tools;

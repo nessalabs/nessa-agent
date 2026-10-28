@@ -347,7 +347,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
                 .fold(0usize, usize::saturating_add),
         )
         .saturating_add(match message.sender() {
-            MessageSender::Person => 0,
+            MessageSender::Person | MessageSender::Internal => 0,
             MessageSender::App(app) => app.payload_bytes(),
         })
         .saturating_add(std::mem::size_of_val(message.app_model_context()))

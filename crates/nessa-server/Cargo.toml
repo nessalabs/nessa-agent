@@ -116,7 +116,7 @@ workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "33b
 libc = "0.2"
 # `nessa env serve` runs command leases' commands in process scopes of their
 # own, as the Nessa MCP shell tool does; the same pinned revision.
-shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "601653929349959a4b73b59391ca8814c786abb2" }
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "85ee0d55acabf5f91b8cac2e925872d044514864" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Nessa-owned agent API keys live in the login keychain. This crate is already

@@ -423,6 +423,9 @@ impl CompositionRoot {
         // when their turn finished, reported interrupted when it did not.
         if let Some(service) = conversations.clone() {
             tokio::spawn(async move {
+                if let Err(error) = service.resume_background_tasks().await {
+                    tracing::error!(?error, "saved background tasks could not be recovered");
+                }
                 if let Err(error) = service.resume_thread_reports().await {
                     tracing::error!(%error, "saved thread reports could not be read to resume them");
                 }

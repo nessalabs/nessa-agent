@@ -459,6 +459,10 @@ rs += `pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = ${subscripti
 rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits.listTargets};\n`
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
+const backgroundId = schema.$defs.ConversationTool.properties.backgroundTaskId
+contractRs += `pub const BACKGROUND_TASK_ID_PATTERN: &str = ${JSON.stringify(backgroundId.pattern)};\n`
+contractRs += `pub const MIN_BACKGROUND_TASK_ID_CHARACTERS: usize = ${backgroundId.minLength};\n`
+contractRs += `pub const MAX_BACKGROUND_TASK_ID_CHARACTERS: usize = ${backgroundId.maxLength};\n`
 const subscriptionId = schema.$defs.ConversationSubscriptionId
 if (
   typeof subscriptionId.pattern !== "string" ||
@@ -639,6 +643,10 @@ const bounds = {
   maxMessageFiles: arrayBound("files", "LinkedFile", "maxItems"),
   maxFilePathBytes: linked.path["x-utf8MaxBytes"],
   filePathPattern: linked.path.pattern,
+  maxBackgroundTaskIdBytes:
+    schema.$defs.ConversationTool.properties.backgroundTaskId.maxLength,
+  backgroundTaskIdPattern:
+    schema.$defs.ConversationTool.properties.backgroundTaskId.pattern,
   conversationIdPattern: agreeing(
     "conversationId pattern",
     Object.values(schema.$defs).flatMap((def) =>

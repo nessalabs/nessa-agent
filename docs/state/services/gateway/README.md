@@ -51,6 +51,7 @@ flowchart TB
 
 ## Browse this area
 
+- [Background tasks](background-tasks.md)
 - [External event admission](external-events.md)
 - [Attachments and content](attachments/README.md)
 - [Conversation identity and deletion](conversation.md)

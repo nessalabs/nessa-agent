@@ -55,6 +55,8 @@ export type Part =
        * `stopped`. Absent where nothing said; read as finished once the turn is.
        */
       readonly status?: StepStatus
+      /** Gateway-owned work whose lifecycle is independent of this turn. */
+      readonly backgroundTaskId?: string
       /** When it started and settled, in Unix milliseconds on this device's clock. */
       readonly startedAtMs?: number
       readonly endedAtMs?: number
@@ -590,10 +592,15 @@ export function runSettled(
   last: boolean,
   working: boolean,
 ): boolean {
+  const backgroundRunning = steps.some(
+    (step) =>
+      step.backgroundTaskId && (step.status === "pending" || step.status === "running"),
+  )
   return (
-    !working ||
-    (!last &&
-      steps.every((step) => step.status !== "pending" && step.status !== "running"))
+    !backgroundRunning &&
+    (!working ||
+      (!last &&
+        steps.every((step) => step.status !== "pending" && step.status !== "running")))
   )
 }
 

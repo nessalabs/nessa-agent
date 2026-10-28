@@ -2430,3 +2430,13 @@ vault dialog blocking the main conversation click.
   the text explains that finite durations include active work and changes apply
   at create/resume rather than changing an active deadline. _Check:_ manual
   screenshot/focus review and the settings control's rendered tests.
+
+
+## Background tasks
+
+- The conversation stress `background` step starts a real local command through
+  the MCP relay. Its original waterfall row stays running after the calling turn
+  finishes, then settles with the command's actual output. Exactly one internal
+  continuation reaches the conversation and no synthetic user bubble appears.
+- Check the running and completed row in Chromium and WebKit. Ordinary foreground
+  tools still settle when their calling turn ends. No separate task list is added.

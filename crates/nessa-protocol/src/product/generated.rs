@@ -732,6 +732,8 @@ pub struct ConversationQuestionEntry {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationTool {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_task_id: Option<String>,
     pub execution_id: String,
     pub tool_id: String,
     pub title: String,
