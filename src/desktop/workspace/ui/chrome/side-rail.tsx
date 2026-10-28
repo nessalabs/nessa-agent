@@ -139,6 +139,7 @@ export function SideRail({
       aria-hidden={!open || undefined}
       style={{ "--rail-index": index } as CSSProperties}
     >
+      <span className="side-rail-pill" aria-hidden="true" />
       <div className="side-rail-items">
         <span className="side-rail-lens" aria-hidden="true" />
         {railItems.map((item, i) => (

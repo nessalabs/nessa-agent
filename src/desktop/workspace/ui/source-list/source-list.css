@@ -30,7 +30,6 @@
     color-mix(in oklab, var(--desktop-light-high) 26%, transparent),
     transparent 75%
   );
-  --sidebar-material: color-mix(in oklab, var(--foreground) 3.5%, var(--background));
   padding: var(--desktop-titlebar-height) 0 var(--desktop-gutter) var(--desktop-gutter);
   margin: 0;
   background:
@@ -41,7 +40,7 @@
       )
       right top / 1px 100% no-repeat,
     var(--sidebar-wash),
-    var(--sidebar-material);
+    var(--desktop-sidebar-material);
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
