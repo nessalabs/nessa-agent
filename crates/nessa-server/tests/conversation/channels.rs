@@ -804,7 +804,9 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
         )
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    // This bounds fixture completion, not the product's turn latency. The
+    // Windows CI runner runs two server partitions alongside each other.
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             let view = fixture
                 .service
