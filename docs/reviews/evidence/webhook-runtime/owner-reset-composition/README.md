@@ -6,6 +6,11 @@ The later [discovery overflow correction](discovery-overflow.md) preserves main
 whole-feature review history. New-source platform and browser acceptance remain
 separate from the historical receipts below.
 
+The subsequent [setup-window readiness correction](setup-vault-readiness.md)
+preserves failed-run40669790086 and its skipped cohorts. Its independently
+reviewed change handles the real late unlock prompt before checking Welcome;
+it does not alter production vault behavior or relax the Welcome timeout.
+
 Original assembled source checkpoint: `c790639702213d79bad32aaa148e2744ca7a9d1d`.
 Owner cursor/reset time-precision correction: `69351af72cbd73179f7f8765424251ecf4a20b99`.
 The original qualification preserved main `919079a7b13f3e4e8600cc7584b097641f8992c7`,
