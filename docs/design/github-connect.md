@@ -96,6 +96,15 @@ as above, until that restarts.
 
 ## Orderings
 
+At the product socket, each GitHub request records the live vault generation before
+waiting on the GitHub command gate. After that wait, it refuses a different or
+locked generation before changing live-event bindings or calling the sign-in owner.
+A disconnect rechecks after an awaited live-event change, before it reaches the
+sign-in owner. The owner independently captures its generation before its own
+provider and storage work. A stale queued command therefore cannot borrow the
+new unlock. `a_queued_disconnect_cannot_delete_a_sign_in_restored_by_a_new_unlock`
+exercises G22 through the product dispatcher and encrypted token store.
+
 Every change takes `changes` first (a tokio mutex), so each sees the state
 the last one left. A read (`status`, `token`) takes only the state and never
 waits on GitHub. The poll is a task of its own holding the owner weakly; what
@@ -127,6 +136,7 @@ waiting.
 | G19 | signed out | cancel, or disconnect | answers signed out; disconnect first deletes any credential entry left by G14 (refused `github_storage_unavailable` if it cannot) | — |
 | G20 | (start) | the gateway starts | no secret is loaded while the vault is locked; after unlock, restore the saved sign-in or signed out; unreadable saved data reports `last: store_unavailable` | — |
 | G21 | connecting | the gateway stops | the code attempt is gone; an approved credential durably saved before the stop can be restored after unlocking the vault | — |
+| G22 | a product GitHub command queued for an old vault unlock | the vault locks and unlocks before the command gate opens | refuse `vault_locked` before changing live bindings or the newer sign-in; the new generation owns any later command | — |
 
 Disconnect forgets the token on this gateway. Revoking it at GitHub needs the
 app's client secret, which a desktop app cannot keep, so the row says to use
