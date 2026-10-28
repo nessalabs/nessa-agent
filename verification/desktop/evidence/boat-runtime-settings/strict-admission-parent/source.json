@@ -1,0 +1,9 @@
+{
+  "sourceRevision": "9db3e29adfa769989e82b1b096758183a22afa42",
+  "parentRevision": "398d5b084310711453f3ad6bf2a899b5b9e2ea17",
+  "workerProtocol": "b6e4f48aa694ce08",
+  "result": "real Boat workflow passed",
+  "ownedVmCount": 4,
+  "providerAbsenceConfirmedCount": 4,
+  "conversationCloseAfterMissingVm": "unconfirmed"
+}

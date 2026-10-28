@@ -3,7 +3,7 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: "05bb0383823d28e37f563ba28cea72fa9c6de9a3"
+sourceRevision: "ee77f0d9c1ccdfb89e9d1465a87336ef8aeea964"
 summary: A channel independently places its main agent and new threads on Local or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
@@ -24,6 +24,8 @@ sources:
   - crates/nessa-server/src/workspaces/domain/environment.rs
   - crates/nessa-server/src/workspaces/infrastructure/assignments.rs
   - crates/nessa-server/src/workspaces/infrastructure/boat_admission.rs
+  - crates/nessa-server/tests/workspaces/allocation.rs
+  - crates/nessa-server/tests/workspaces/assignments.rs
   - crates/nessa-server/tests/workspaces/boat_admission.rs
   - crates/nessa-server/tests/workspaces/environment.rs
   - crates/nessa-server/src/workspaces/infrastructure/boat.rs
@@ -97,6 +99,10 @@ after a selected duration, or request no automatic stop. Finite durations includ
 active work. The selected value is sent explicitly to Boat on creation and
 archived resume; a running VM keeps its existing deadline. Provider account
 restrictions may stop a VM sooner, and an unlimited VM can remain billable.
+Before workspace authority is granted, a finite create or archived resume
+must return a positive provider TTL no longer than the selected limit. A missing,
+null, zero or longer TTL refuses while retaining the actual VM target. Reopening an already
+active VM does not compare its original deadline with a newly edited setting.
 
 Ordinary preferences live in the gateway's existing `config.json`, separate
 from the encrypted Boat token. Missing channel overrides inherit; explicit
