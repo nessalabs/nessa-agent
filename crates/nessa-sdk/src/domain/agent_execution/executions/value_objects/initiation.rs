@@ -36,7 +36,11 @@ impl AgentSource {
         conversation: impl Into<String>,
         execution: ExecutionId,
     ) -> Result<Self, ExecutionError> {
-        let conversation = conversation.into();
+        Self::checked(conversation.into(), execution)
+    }
+    // Not generic, so every caller's instantiation of `new` shares one
+    // validation body and its failure paths.
+    fn checked(conversation: String, execution: ExecutionId) -> Result<Self, ExecutionError> {
         if conversation.trim().is_empty() {
             return Err(ExecutionError::EmptyValue("source conversation"));
         }
