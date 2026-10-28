@@ -108,8 +108,9 @@ impl Provider for BoatProvider {
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let api = api(connection, &self.api_base)?;
         let found =
-            super::boat_admission::check(&self.http, &api, connection, vm, admission).await?;
-        if found.sandbox.state == SandboxState::Archived {
+            super::boat_admission::check(&self.http, &api, connection, vm, admission, None).await?;
+        let resumed = found.sandbox.state == SandboxState::Archived;
+        if resumed {
             api.resume(
                 vm,
                 Some(boat_client::ResumeRequest {
@@ -127,7 +128,13 @@ impl Provider for BoatProvider {
         )
         .await
         .map_err(|_| Failure::Provider)?;
-        super::boat_admission::check(&self.http, &api, connection, vm, admission).await?;
+        let maximum_ttl = if resumed {
+            connection.auto_stop.seconds()
+        } else {
+            None
+        };
+        super::boat_admission::check(&self.http, &api, connection, vm, admission, maximum_ttl)
+            .await?;
         let provider =
             SandboxProvider::new(api.clone()).with_supervisor(SupervisorDeployment::Preinstalled {
                 executable: "/opt/nessa/bin/workspace-supervisor".into(),

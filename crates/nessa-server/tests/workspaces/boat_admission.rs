@@ -134,6 +134,56 @@ async fn admitted_creation_sends_explicit_null_for_no_automatic_stop() {
 }
 
 #[tokio::test]
+async fn finite_creation_refuses_unenforced_provider_lifetime_before_sdk_authority() {
+    for observed in [Some(Value::Null), Some(json!(0)), Some(json!(14_400)), None] {
+        let server = server().await;
+        {
+            let mut state = server.state.lock().unwrap();
+            state.expected_ttl = Some(7_200);
+            if let Some(value) = observed {
+                state.receipt["sandbox"]["ttlSeconds"] = value;
+            } else {
+                state.receipt["sandbox"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("ttlSeconds");
+            }
+        }
+        let mut finite = connection();
+        finite.auto_stop =
+            crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+        let receipt = server
+            .provider
+            .create(&finite, "fixture-thread")
+            .await
+            .unwrap();
+        assert_eq!(receipt.vm, VM);
+        assert_eq!(
+            receipt.refusal.as_ref().map(|rejection| rejection.cause()),
+            Some(AdmissionRefusal::LifetimeNotEnforced)
+        );
+        let state = server.state.lock().unwrap();
+        assert_eq!(state.created, 1);
+        assert_eq!(state.commands, 0);
+    }
+}
+
+#[tokio::test]
+async fn a_shorter_provider_lifetime_satisfies_the_selected_maximum() {
+    let server = server().await;
+    server.state.lock().unwrap().expected_ttl = Some(7_200);
+    let mut finite = connection();
+    finite.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+    let receipt = server
+        .provider
+        .create(&finite, "fixture-thread")
+        .await
+        .unwrap();
+    assert!(receipt.refusal.is_none());
+    assert_eq!(server.state.lock().unwrap().commands, 0);
+}
+
+#[tokio::test]
 async fn full_agent_only_posture_rejects_each_extra_credential_and_setup_path_before_create() {
     let server = server().await;
     server.provider.validate(&connection()).await.unwrap();
@@ -396,6 +446,56 @@ async fn archived_resume_sends_explicit_null_after_lifetime_changes() {
         Err(Failure::AdmissionRejected(_))
     ));
     assert_eq!(server.state.lock().unwrap().resumed, 1);
+}
+
+#[tokio::test]
+async fn archived_resume_refuses_an_unenforced_finite_lifetime_before_sdk_authority() {
+    let server = server().await;
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    {
+        let mut state = server.state.lock().unwrap();
+        state.receipt["sandbox"]["state"] = json!("archived");
+        state.receipt["sandbox"]["ttlSeconds"] = Value::Null;
+        state.expected_ttl = Some(7_200);
+    }
+    let mut finite = connection();
+    finite.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+    let result = server
+        .provider
+        .connect(&finite, "fixture-thread", VM, &receipt.admission)
+        .await;
+    assert!(matches!(
+        result,
+        Err(Failure::AdmissionRejected(rejection))
+            if rejection.cause() == AdmissionRefusal::LifetimeNotEnforced
+    ));
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.resumed, 1);
+    assert_eq!(state.commands, 0);
+}
+
+#[tokio::test]
+async fn an_active_vm_keeps_its_original_lifetime_after_settings_change() {
+    let server = server().await;
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    let mut changed = connection();
+    changed.auto_stop = crate::conversation::domain::VmLifetime::from_seconds(Some(7_200)).unwrap();
+    let result = server
+        .provider
+        .connect(&changed, "fixture-thread", VM, &receipt.admission)
+        .await;
+    assert!(matches!(result, Err(Failure::Provider)));
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.resumed, 0);
+    assert!(state.commands > 0);
 }
 
 #[tokio::test]
