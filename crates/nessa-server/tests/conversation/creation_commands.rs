@@ -373,7 +373,9 @@ async fn competing_attachment_waiters_share_original_completion_and_fault() {
                     .await
             }
         });
-        tokio::time::timeout(Duration::from_secs(5), readiness.started.notified())
+        // The same bounded creation ceiling covers a loaded Windows runner;
+        // a short scheduling delay must not masquerade as attachment failure.
+        tokio::time::timeout(CREATION_HANG, readiness.started.notified())
             .await
             .unwrap();
         let live = original_live(&service, &target).await;

@@ -419,13 +419,17 @@ jobs:
           path: ${{ env.STRESS_EVIDENCE }}
           if-no-files-found: ignore
           retention-days: 7
-  # The long Windows server libtest starts immediately on its own runner.
-  # Both jobs compile the complete package group to preserve Cargo feature
+  # The long Windows server selections start immediately on separate runners.
+  # Every job compiles the complete package group to preserve Cargo feature
   # unification. Only execution is partitioned; remaining owns all doctests.
   windows-server-tests:
-    name: Windows server library tests
+    name: Windows server library tests (${{ matrix.partition }})
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [server-conversation, server-other]
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -447,7 +451,7 @@ jobs:
         with:
           node-version: 24
       - shell: bash
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault
         timeout-minutes: 45
 
   local-auth:

@@ -436,15 +436,15 @@ function splitArtifacts() {
 test("Cargo identity partitions exhaustively and disjointly, including Windows paths and colliding names", () => {
   const all = testExecutables(splitArtifacts())
   const split = partitionExecutables(all, metadata)
-  assert.equal(split["server-lib"].length, 1)
+  assert.equal(split.server.length, 1)
   assert.equal(split.remaining.length, 1)
-  assert.equal(split["server-lib"][0].executable, "C:\\repo\\target\\unpredictable.exe")
-  assert.deepEqual(new Set([...split["server-lib"], ...split.remaining]), new Set(all))
-  assert.ok(split.remaining.every((item) => !split["server-lib"].includes(item)))
+  assert.equal(split.server[0].executable, "C:\\repo\\target\\unpredictable.exe")
+  assert.deepEqual(new Set([...split.server, ...split.remaining]), new Set(all))
+  assert.ok(split.remaining.every((item) => !split.server.includes(item)))
   for (const candidates of [
     [],
     split.remaining,
-    [...all, { ...split["server-lib"][0], executable: "other.exe" }],
+    [...all, { ...split.server[0], executable: "other.exe" }],
   ])
     assert.throws(
       () => partitionExecutables(candidates, metadata),
@@ -473,12 +473,12 @@ test("partition arguments reject misspellings before building", () => {
       "--concurrency",
       "2",
       "--partition",
-      "server-lib",
+      "server-conversation",
       "--",
       "-p",
       "nessa-server",
     ]).partition,
-    "server-lib",
+    "server-conversation",
   )
   assert.throws(
     () =>
@@ -495,8 +495,8 @@ test("partition arguments reject misspellings before building", () => {
   )
 })
 
-test("both split modes build the full selection, and remaining alone owns doctests", async () => {
-  for (const partition of ["server-lib", "remaining"]) {
+test("all three split modes build the full selection, and remaining alone owns doctests", async () => {
+  for (const partition of ["server-conversation", "server-other", "remaining"]) {
     const calls = []
     const io = streams()
     await runParallelCargoTests({
@@ -528,18 +528,15 @@ test("both split modes build the full selection, and remaining alone owns doctes
     const executed = calls.filter(
       (call) => call.command !== "cargo" && !call.args.includes("--list"),
     )
-    assert.equal(executed.length, 2)
+    assert.equal(executed.length, partition === "remaining" ? 2 : 1)
     assert.deepEqual(
       executed[0].args,
-      partition === "remaining" ? [cataloguePrefix] : [conversationFilter],
+      partition === "remaining"
+        ? [cataloguePrefix]
+        : partition === "server-conversation"
+          ? [conversationFilter]
+          : ["--skip", conversationFilter, "--skip", cataloguePrefix],
     )
-    if (partition === "server-lib")
-      assert.deepEqual(executed[1].args, [
-        "--skip",
-        conversationFilter,
-        "--skip",
-        cataloguePrefix,
-      ])
   }
 })
 
@@ -579,7 +576,7 @@ test("each part of Cargo identity excludes an otherwise matching executable", ()
     { ...server, executable: "binary-target.exe", targetKinds: ["bin"] },
   ]
   const split = partitionExecutables([server, ...nearMatches], metadata)
-  assert.deepEqual(split["server-lib"], [server])
+  assert.deepEqual(split.server, [server])
   assert.deepEqual(split.remaining, nearMatches)
 })
 
@@ -587,18 +584,28 @@ test("server case assignment is exhaustive/disjoint and registry failures cannot
   const registry = testRegistry(registryOutput(allServerCases))
   const plan = serverCasePlan(registry)
   assert.deepEqual(
-    [...plan["server-lib"].names, ...plan.remaining.names].sort(),
+    [
+      ...plan["server-conversation"].names,
+      ...plan["server-other"].names,
+      ...plan.remaining.names,
+    ].sort(),
     registry,
   )
   assert.equal(
-    new Set([...plan["server-lib"].names, ...plan.remaining.names]).size,
+    new Set([
+      ...plan["server-conversation"].names,
+      ...plan["server-other"].names,
+      ...plan.remaining.names,
+    ]).size,
     registry.length,
   )
   assert.deepEqual(
-    plan["server-lib"].tasks.flatMap((task) => task.names).sort(),
-    plan["server-lib"].names,
+    [...plan["server-conversation"].tasks, ...plan["server-other"].tasks]
+      .flatMap((task) => task.names)
+      .sort(),
+    [...plan["server-conversation"].names, ...plan["server-other"].names].sort(),
   )
-  assert.deepEqual(plan["server-lib"].tasks[0].names, [
+  assert.deepEqual(plan["server-conversation"].tasks[0].names, [
     "conversation::application::case",
     "product::conversation::case",
   ])
@@ -626,8 +633,8 @@ test("server case assignment is exhaustive/disjoint and registry failures cannot
     )
 })
 
-test("registry and actual filter failures prevent all execution and doctests in either split", async () => {
-  for (const partition of ["remaining", "server-lib"])
+test("registry and actual filter failures prevent all execution and doctests in each split", async () => {
+  for (const partition of ["remaining", "server-conversation", "server-other"])
     for (const mode of [
       "exit",
       "missing-seed",

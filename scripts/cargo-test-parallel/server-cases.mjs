@@ -35,10 +35,13 @@ export function serverCasePlan(registry) {
   if (conversation.length === 0 || other.length === 0)
     throw new Error("server library must have both conversation and other cases")
   return {
-    "server-lib": {
-      names: ordinary,
+    "server-conversation": {
+      names: conversation,
+      tasks: [{ label: "conversation", args: [conversationFilter], names: conversation }],
+    },
+    "server-other": {
+      names: other,
       tasks: [
-        { label: "conversation", args: [conversationFilter], names: conversation },
         {
           label: "other",
           args: ["--skip", conversationFilter, "--skip", cataloguePrefix],

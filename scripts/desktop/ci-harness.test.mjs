@@ -101,7 +101,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // partition owns dependency crates' tests, including the vault's regressions.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
