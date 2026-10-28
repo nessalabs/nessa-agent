@@ -1,0 +1,90 @@
+[
+  {
+    "name": "token validated and encrypted"
+  },
+  {
+    "name": "Local creates no cloud VM"
+  },
+  {
+    "name": "channel override reaches VM creation",
+    "vm": "bx_nhc99snk",
+    "ttlSeconds": 7200,
+    "archiveAfter": "2026-10-28T07:27:46.854Z"
+  },
+  {
+    "name": "channel override reaches VM creation",
+    "vm": "bx_gkgyk4w2",
+    "ttlSeconds": 7200,
+    "archiveAfter": "2026-10-28T07:28:00.110Z"
+  },
+  {
+    "name": "two threads use distinct saved VMs",
+    "main": "6ab74655-30d7-5ebc-80eb-5a1a023ec2a9",
+    "worker": "226dcb1f-8651-4141-a1dd-8ae06c082be2",
+    "workerVm": "bx_gkgyk4w2"
+  },
+  {
+    "name": "subscription inference writes workspace file"
+  },
+  {
+    "name": "uploaded input reaches selected Boat workspace",
+    "thread": "226dcb1f-8651-4141-a1dd-8ae06c082be2",
+    "vm": "bx_gkgyk4w2",
+    "digest": "sha256:db40d9fd648e56fa0df30dd92c3b2f7e9e46befea8bfa4abb411957902825c39",
+    "mimeType": "text/plain",
+    "size": 57
+  },
+  {
+    "name": "uploaded input preserves the active VM lifetime",
+    "vm": "bx_gkgyk4w2",
+    "ttlSeconds": 7200,
+    "archiveAfter": "2026-10-28T07:28:00.110Z"
+  },
+  {
+    "name": "explicit unlimited reaches archived VM resume",
+    "vm": "bx_gkgyk4w2",
+    "ttlSeconds": null,
+    "archiveAfter": null
+  },
+  {
+    "name": "restart and VM resume retain identity and workspace files"
+  },
+  {
+    "name": "uploaded workspace copy survives archived resume"
+  },
+  {
+    "name": "settings edit leaves an active VM deadline unchanged",
+    "vm": "bx_nhc99snk",
+    "ttlSeconds": 7200,
+    "archiveAfter": "2026-10-28T07:27:46.854Z"
+  },
+  {
+    "name": "cold main subscription starts after gateway restart"
+  },
+  {
+    "name": "reset channel inherits global lifetime on creation",
+    "vm": "bx_5c4rap7f",
+    "ttlSeconds": 14400,
+    "archiveAfter": "2026-10-28T09:29:05.103Z"
+  },
+  {
+    "name": "cloud subscription reads approved local log through existing MCP",
+    "reader": "58e6018c-324e-4529-a62b-9f33bbf05bc3"
+  },
+  {
+    "name": "removal plus session close revokes the old local connection"
+  },
+  {
+    "name": "coordinator dispatches real child on another VM",
+    "thread": "dcaba8d0-b89d-0e6d-1a63-e82e9ae0254f",
+    "vm": "bx_kawft8qm"
+  },
+  {
+    "name": "missing VM fails without replacement or Local fallback",
+    "vm": "bx_gkgyk4w2",
+    "operation": "bdop_291a131961c048e9ae4d6140e5e3e9fb"
+  },
+  {
+    "name": "PASS"
+  }
+]

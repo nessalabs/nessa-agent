@@ -1,0 +1,336 @@
+{
+  "check": "columns",
+  "ok": false,
+  "started": "2026-10-27T21:57:41.670Z",
+  "finished": "2026-10-27T21:58:17.318Z",
+  "target": {
+    "url": "http://127.0.0.1:52619/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 712,
+          "left": 0,
+          "headerShift": -712
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 712,
+          "left": 0,
+          "headerShift": -712
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":712,\"left\":0,\"headerShift\":-712}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":712,\"left\":0,\"headerShift\":-712}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 712,
+          "left": 0,
+          "headerShift": -712
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 712,
+          "left": 0,
+          "headerShift": -712
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":712,\"left\":0,\"headerShift\":-712}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":712,\"left\":0,\"headerShift\":-712}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1820,
+          "left": 0,
+          "headerShift": -1820
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1820,\"left\":0,\"headerShift\":-1820}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 1420,
+          "left": 0,
+          "headerShift": -1420
+        }
+      ],
+      "failures": [
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}",
+        "focus scrolled the pane root or its header: {\"outside\":true,\"focused\":true,\"top\":1420,\"left\":0,\"headerShift\":-1420}"
+      ],
+      "ok": false
+    }
+  ]
+}

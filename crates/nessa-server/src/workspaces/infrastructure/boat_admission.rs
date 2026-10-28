@@ -138,7 +138,7 @@ pub(super) async fn create(
     connection: &BoatConnection,
     thread: &str,
     admission: EnvironmentIdentity,
-    ttl_seconds: u32,
+    ttl_seconds: Option<u32>,
 ) -> Result<WorkspaceReceipt, Failure> {
     let response = http
         .post(format!(
@@ -150,7 +150,7 @@ pub(super) async fn create(
         .header("Idempotency-Key", format!("nessa-thread-{thread}"))
         .json(&CreateSandboxRequest {
             type_: Some("small".into()),
-            ttl_seconds: Some(Some(ttl_seconds)),
+            ttl_seconds: Some(ttl_seconds),
             environment: Some(connection.environment.clone()),
             env: Some(std::collections::HashMap::from([(
                 "NESSA_THREAD_ID".into(),
@@ -224,7 +224,7 @@ pub(super) async fn create(
         ));
     }
     if refusal.is_none() {
-        refusal = match check(http, api, connection, &vm, &admission).await {
+        refusal = match check(http, api, connection, &vm, &admission, ttl_seconds).await {
             Ok(_) => None,
             Err(Failure::AdmissionRejected(rejection)) => Some(rejection),
             Err(_) => Some(AdmissionRejection::new(
@@ -247,6 +247,7 @@ pub(super) async fn receipt(
     http: &reqwest::Client,
     api: &Api,
     vm: &str,
+    maximum_ttl: Option<u32>,
 ) -> Result<SandboxInfoResponse, Failure> {
     let response = http
         .get(format!(
@@ -352,6 +353,20 @@ pub(super) async fn receipt(
             None,
         )));
     }
+    // A finite choice is an upper bound. Boat may impose a shorter account
+    // limit, but null, missing or longer provider TTL cannot satisfy it.
+    if let Some(maximum) = maximum_ttl {
+        let observed = sandbox
+            .get("ttlSeconds")
+            .and_then(Value::as_u64)
+            .and_then(|seconds| u32::try_from(seconds).ok());
+        if !observed.is_some_and(|seconds| seconds > 0 && seconds <= maximum) {
+            return Err(Failure::AdmissionRejected(AdmissionRejection::new(
+                AdmissionRefusal::LifetimeNotEnforced,
+                None,
+            )));
+        }
+    }
     let decoded: SandboxInfoResponse = serde_json::from_value(value).map_err(|_| {
         Failure::AdmissionRejected(AdmissionRejection::new(
             AdmissionRefusal::InvalidReceipt,
@@ -378,6 +393,7 @@ pub(super) async fn check(
     connection: &BoatConnection,
     vm: &str,
     admitted: &EnvironmentIdentity,
+    maximum_ttl: Option<u32>,
 ) -> Result<SandboxInfoResponse, Failure> {
     let current = environment(api, connection)
         .await
@@ -394,7 +410,7 @@ pub(super) async fn check(
             None,
         )));
     }
-    let found = receipt(http, api, vm).await?;
+    let found = receipt(http, api, vm, maximum_ttl).await?;
     admitted.check(&observed(&found.sandbox)).map_err(|cause| {
         Failure::AdmissionRejected(AdmissionRejection::new(
             cause,

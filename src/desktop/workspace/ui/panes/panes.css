@@ -34,7 +34,11 @@
   background: transparent;
   border-left: calc(min(1, var(--ci)) * 1px) solid var(--desktop-rim);
   border-top: calc(min(1, var(--ri)) * 1px) solid var(--desktop-rim);
-  overflow: hidden;
+  /* A clipping surface, not another scroll container. Hidden overflow let
+     the pane retain an offset after a long conversation and split, moving
+     its header out of the titlebar (#1184, conversation-stress.mjs window).
+     The transcript owns its scrolling. */
+  overflow: clip;
 }
 
 /*

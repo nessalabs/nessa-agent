@@ -396,8 +396,9 @@ async function answerOnceOnCard(page) {
       if (!onAllow) throw new CannotRun("the keyboard would not stay on Allow Once")
       for (let i = 0; i < 5; i++) await page.keyboard.down(keys.enter)
       await page.keyboard.up(keys.enter)
-    } else
+    } else {
       await card.locator(`button[data-answer="${choice}"]:visible`).first().dblclick()
+    }
     // Counted in the overview once the answer has had its effect, and for a
     // while after, in case a second one was taken.
     await page.keyboard.press(keys.overview)
@@ -410,7 +411,7 @@ async function answerOnceOnCard(page) {
     await page.keyboard.press(keys.escape)
     await contentIs(page, content.panes)
     const typed = await composer.inputValue().catch(() => "")
-    trail.push({ step: name, before, after, typed })
+    trail.push({ step: name, choice, before, after, typed })
     if (!once)
       failures.push(`${name} on a pane's card answered ${before - after} requests, not 1`)
     if (answer === "held" && typed !== "keep these words")

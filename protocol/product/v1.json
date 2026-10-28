@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 99,
+          "maxItems": 101,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -8177,6 +8177,99 @@
       },
       "required": ["state"],
       "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
+    },
+    "VmLifetimeMode": {
+      "type": "string",
+      "enum": ["never", "after"],
+      "description": "Disable automatic stop or stop after a positive duration, including active work."
+    },
+    "VmLifetimeSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295,
+      "description": "Positive whole seconds representable by the Boat provider."
+    },
+    "BoatVmLifetime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/VmLifetimeMode",
+          "description": "Disable automatic stop or use the finite seconds value."
+        },
+        "seconds": {
+          "$ref": "#/$defs/VmLifetimeSeconds",
+          "description": "Present only in after mode. Includes time spent on active work."
+        }
+      },
+      "required": ["mode"],
+      "description": "The never mode omits seconds; after requires seconds. Validated together before any configuration write."
+    },
+    "BoatRuntimeSelection": {
+      "type": "string",
+      "enum": ["default", "never", "after"],
+      "description": "Use the default (or reset the global initial choice), disable auto-stop, or choose a finite lifetime."
+    },
+    "BoatRuntimeReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings."
+        }
+      },
+      "description": "Read default and optional channel override from one ordinary configuration snapshot. Does not read a Boat token.",
+      "required": []
+    },
+    "BoatRuntimeSetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings."
+        },
+        "mode": {
+          "$ref": "#/$defs/BoatRuntimeSelection",
+          "description": "Default removes the channel override or resets the global initial choice. Never disables automatic stop; after requires seconds."
+        },
+        "seconds": {
+          "$ref": "#/$defs/VmLifetimeSeconds",
+          "description": "Positive provider-compatible duration, required only in after mode."
+        }
+      },
+      "required": ["mode"],
+      "description": "Change ordinary lifetime settings without a token. Default/never forbid seconds; after requires it. New allocations and archived-VM resumes use the saved choice; active VM deadlines are unchanged. Read settings after an uncertain response; calls are not replayed."
+    },
+    "BoatRuntimeSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultLifetime": {
+          "$ref": "#/$defs/BoatVmLifetime",
+          "description": "The Nessa default used by inheriting channels; initially no automatic stop."
+        },
+        "channelOverride": {
+          "$ref": "#/$defs/BoatVmLifetime",
+          "description": "The requested channel's explicit choice. Omission inherits the default; never remains unlimited when the default changes."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The stored channel whose settings were read or saved. Omitted only for the global default; an override requires this identity."
+        }
+      },
+      "required": ["defaultLifetime"],
+      "description": "Non-secret settings. An omitted override inherits the default; explicit never remains unlimited when the default changes. Initial default is no automatic stop; provider/account limits still apply."
     }
   }
 }

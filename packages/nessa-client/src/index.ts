@@ -481,6 +481,14 @@ export type { BoatApi } from "./presentation/boat-api.js"
 export {
   BoatErrorCode,
   type BoatStatus,
+  type BoatRuntimeReadParams,
+  type BoatRuntimeSetParams,
+  type BoatRuntimeSettings,
+  type BoatVmLifetime,
+  type VmLifetimeSeconds,
+  VmLifetimeMode,
+  BoatRuntimeSelection,
+  vmLifetimeSeconds,
   type BoatSaveParams,
 } from "./generated/product.js"
 

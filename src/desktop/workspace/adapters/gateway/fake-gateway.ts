@@ -17,6 +17,8 @@ import {
   createSubscriptionGate,
   subscriptionLimits,
   viewEntryBounds,
+  type BoatVmLifetime,
+  type BoatRuntimeSettings,
   type Channel as WireChannel,
   type ChannelCreateParams,
   type ConnectionState,
@@ -457,6 +459,17 @@ export function fakeGateway(
     readonly now?: () => number
   } = {},
 ): FakeGateway {
+  let defaultLifetime: BoatVmLifetime = { mode: "never" }
+  const lifetimeOverrides = new Map<string, BoatVmLifetime>()
+  const runtimeSettings = (channelId?: string): BoatRuntimeSettings => {
+    const override =
+      channelId === undefined ? undefined : lifetimeOverrides.get(channelId)
+    return {
+      ...{ defaultLifetime },
+      ...(channelId === undefined ? {} : { channelId }),
+      ...(override === undefined ? {} : { channelOverride: override }),
+    }
+  }
   const calls: FakeGateway["calls"] = []
   const windows: FakeGateway["windows"] = []
   const rows = new Map<string, ConversationSummary>()
@@ -596,6 +609,17 @@ export function fakeGateway(
   }
   const client: FakeGatewayClient = {
     boat: {
+      runtimeSettings: async (params) => runtimeSettings(params?.channelId),
+      setRuntimeSettings: async (params) => {
+        const lifetime: BoatVmLifetime =
+          params.mode === "after"
+            ? { mode: "after", seconds: params.seconds }
+            : { mode: "never" }
+        if (params.channelId === undefined) defaultLifetime = lifetime
+        else if (params.mode === "default") lifetimeOverrides.delete(params.channelId)
+        else lifetimeOverrides.set(params.channelId, lifetime)
+        return runtimeSettings(params.channelId)
+      },
       status: async () => ({ state: "disconnected" as const }),
       save: async () => {
         throw new Error("Boat provisioning is unavailable in this fixture")

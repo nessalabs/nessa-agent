@@ -65,6 +65,7 @@ pub(crate) enum AdmissionRefusal {
     EnvironmentUnavailable,
     InvalidReceipt,
     ReceiptUnavailable,
+    LifetimeNotEnforced,
 }
 impl AdmissionRefusal {
     pub(crate) fn as_str(self) -> &'static str {
@@ -77,6 +78,7 @@ impl AdmissionRefusal {
             Self::EnvironmentUnavailable => "environment_unavailable",
             Self::InvalidReceipt => "invalid_receipt",
             Self::ReceiptUnavailable => "receipt_unavailable",
+            Self::LifetimeNotEnforced => "lifetime_not_enforced",
         }
     }
 }

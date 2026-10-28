@@ -22,6 +22,33 @@ fn receipt() -> Assignment {
 }
 
 #[tokio::test]
+async fn lifetime_refusal_keeps_the_actual_vm_target_after_reopen() {
+    use crate::workspaces::domain::{AdmissionRefusal, AdmissionRejection, RefusalDisposition};
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("receipts");
+    let store = FileAssignments(root.clone());
+    store.save(intent()).await.unwrap();
+    let refused = Assignment::Refused {
+        thread: THREAD.into(),
+        vm: "bx_fixture".into(),
+        image: "fixture-image".into(),
+        admission: super::allocation_tests::admission(),
+        rejection: AdmissionRejection::new(AdmissionRefusal::LifetimeNotEnforced, None),
+        disposition: RefusalDisposition::RollbackNewVm,
+    };
+    store.save(refused.clone()).await.unwrap();
+    let reopened = FileAssignments(root.clone());
+    assert_eq!(reopened.read(THREAD).await.unwrap(), Some(refused));
+    let history: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join(format!("{THREAD}.json"))).unwrap())
+            .unwrap();
+    assert_eq!(
+        history["transitions"][1]["rejection"]["cause"],
+        "lifetime_not_enforced"
+    );
+}
+
+#[tokio::test]
 async fn reopening_keeps_both_intent_and_received_vm_in_private_storage() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("receipts");

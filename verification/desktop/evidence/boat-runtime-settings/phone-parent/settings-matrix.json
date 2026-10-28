@@ -1,0 +1,40 @@
+{
+  "check": "boat-runtime-settings",
+  "ok": true,
+  "started": "2026-10-27T23:44:34.169Z",
+  "finished": "2026-10-27T23:45:04.946Z",
+  "target": {
+    "url": "http://127.0.0.1:54610/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "default-override-reset",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "default-override-reset",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "default-override-reset",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "default-override-reset",
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

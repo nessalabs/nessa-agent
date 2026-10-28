@@ -3,16 +3,19 @@ use super::agent::AgentsConfig;
 #[cfg(unix)]
 use crate::{
     conversation::{
-        application::ThreadEnvironments,
+        application::{ChannelStore, ThreadEnvironments},
         infrastructure::{
             ssh_environment::{DurableEnvironmentAudit, EnvironmentAudit, EnvironmentEvent},
-            ThreadWorkspaces,
+            LocalChannelStore, ThreadWorkspaces,
         },
     },
     workspaces::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
         domain::Failure as WorkspaceFailure,
-        infrastructure::{worker_image, BoatProvider, FileAssignments, VaultSettings},
+        infrastructure::{
+            worker_image, BoatProvider, ConfigRuntimeSettings, FileAssignments,
+            RuntimeSettingsAudit, VaultSettings,
+        },
     },
 };
 
@@ -26,6 +29,8 @@ use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 use crate::conversation::infrastructure::NessaRecordWatches;
 #[cfg(unix)]
 use crate::mcp_servers::application::BuiltInServer;
+#[cfg(unix)]
+use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
 #[cfg(unix)]
 use crate::{
     agent_warm_up::{
@@ -99,6 +104,8 @@ use nessa_protocol::{
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
+#[cfg(unix)]
+use nessa_sdk::infrastructure::clock::RuntimeClock;
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 #[cfg(unix)]
@@ -252,6 +259,31 @@ pub(super) async fn product_state(
     )
     .map_err(setup_error)?;
     #[cfg(unix)]
+    let runtime_settings = {
+        Arc::new(ConfigRuntimeSettings {
+            config: Arc::new(ConfigJson::new(
+                Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
+                    namespace,
+                ))),
+                ConfigCheck {
+                    limit: super::runtime_config::MAX_CONFIG_BYTES,
+                    parses: Box::new(|bytes| {
+                        super::runtime_config::RuntimeConfig::parse(bytes).is_ok()
+                    }),
+                },
+                Arc::new(RuntimeClock::new()),
+            )),
+            audit: Arc::new(
+                RuntimeSettingsAudit::new(
+                    namespace.join("boat-runtime-audit"),
+                    Arc::new(SystemClock),
+                )
+                .map_err(|_| setup_error("Boat runtime audit unavailable"))?,
+            ),
+            next_id: Arc::new(Uuid::new_v4),
+        })
+    };
+    #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(unix)]
     let workspace_service = Arc::new(
@@ -272,15 +304,10 @@ pub(super) async fn product_state(
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
+            runtime_settings,
         )
         .with_image(worker_image()),
     );
-    #[cfg(unix)]
-    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
-        service: workspace_service.clone(),
-        audit: workspace_audit,
-        environments: Default::default(),
-    });
     let inventory =
         Arc::new(CommittedInventory::open(namespace, Arc::new(SystemClock)).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
@@ -391,7 +418,9 @@ pub(super) async fn product_state(
                     record_origin.clone(),
                     ConversationSettings {
                         #[cfg(unix)]
-                        workspace_environments: workspace_environments.clone(),
+                        workspace_service: workspace_service.clone(),
+                        #[cfg(unix)]
+                        workspace_audit: workspace_audit.clone(),
                         read_work_budget: limits.read_work_budget(),
                         live_conversations: limits.live_conversations(),
                         agent_idle: limits.agent_idle(),
@@ -512,7 +541,6 @@ pub(super) async fn product_state(
     // comes to run.
     #[cfg(unix)]
     {
-        use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
         let config = ConfigJson::new(
             Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
                 namespace,
@@ -523,7 +551,7 @@ pub(super) async fn product_state(
                     super::runtime_config::RuntimeConfig::parse(bytes).is_ok()
                 }),
             },
-            Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
+            Arc::new(RuntimeClock::new()),
         );
         let audit = crate::device_pairing::infrastructure::DurableLinkingAudit::new(
             conversation_root(namespace)
@@ -731,7 +759,9 @@ type PairedParts = (
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
     #[cfg(unix)]
-    workspace_environments: Arc<dyn ThreadEnvironments>,
+    workspace_service: Arc<Workspaces>,
+    #[cfg(unix)]
+    workspace_audit: Arc<dyn EnvironmentAudit>,
     /// How much work one passive read may do.
     read_work_budget: std::time::Duration,
     /// The most conversations open, each with its agent, at once.
@@ -1078,7 +1108,8 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
-        workspace_environments,
+        workspace_service,
+        workspace_audit,
         read_work_budget,
         live_conversations,
         agent_idle,
@@ -1168,6 +1199,17 @@ async fn conversations(
     );
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    let channels_path = root.join("channels.sqlite3");
+    let channel_store: Arc<dyn ChannelStore> =
+        Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
+            RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
+        })?);
+    let workspace_environments: Arc<dyn ThreadEnvironments> = Arc::new(ThreadWorkspaces {
+        service: workspace_service,
+        channels: channel_store.clone(),
+        audit: workspace_audit,
+        environments: Default::default(),
+    });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
@@ -1481,13 +1523,8 @@ async fn conversations(
     ));
     // Channels and which conversation is in which; a channel with no chosen
     // folder works in `<data>/channels/<id>`.
-    let channels_path = root.join("channels.sqlite3");
     service.bind_channels(
-        Arc::new(
-            crate::conversation::infrastructure::LocalChannelStore::open(&channels_path).map_err(
-                |cause| RunError::opening(crate::core::Dataset::Channels, &channels_path, cause),
-            )?,
-        ),
+        channel_store,
         Arc::new(
             crate::conversation::infrastructure::LocalChannelFolders::new(
                 directory

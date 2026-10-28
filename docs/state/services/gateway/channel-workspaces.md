@@ -3,8 +3,8 @@ id: gateway-channel-workspaces
 title: Channel workspaces
 kind: statechart
 status: implemented
-sourceRevision: "05bb0383823d28e37f563ba28cea72fa9c6de9a3"
-summary: A channel independently places its main agent and new threads on Local or Boat.
+sourceRevision: "ee77f0d9c1ccdfb89e9d1465a87336ef8aeea964"
+summary: A channel independently places its main agent and new threads on Local or Boat and can override the default Boat VM lifetime.
 parent: gateway
 sources:
   - crates/nessa-server/src/conversation/application/placement.rs
@@ -19,18 +19,27 @@ sources:
   - crates/nessa-server/src/workspaces/infrastructure/settings.rs
   - crates/nessa-server/src/workspaces/infrastructure/release.rs
   - crates/nessa-server/src/workspaces/application/workspaces.rs
+  - crates/nessa-server/src/workspaces/application/runtime_settings.rs
   - crates/nessa-server/src/workspaces/domain/workspace.rs
   - crates/nessa-server/src/workspaces/domain/environment.rs
   - crates/nessa-server/src/workspaces/infrastructure/assignments.rs
   - crates/nessa-server/src/workspaces/infrastructure/boat_admission.rs
+  - crates/nessa-server/tests/workspaces/allocation.rs
+  - crates/nessa-server/tests/workspaces/assignments.rs
   - crates/nessa-server/tests/workspaces/boat_admission.rs
   - crates/nessa-server/tests/workspaces/environment.rs
   - crates/nessa-server/src/workspaces/infrastructure/boat.rs
+  - crates/nessa-server/src/workspaces/infrastructure/runtime_settings.rs
+  - crates/nessa-server/src/workspaces/infrastructure/runtime_settings_audit.rs
   - crates/nessa-server/src/workspaces/infrastructure/ssh.rs
   - crates/nessa-server/src/conversation/infrastructure/workspaces.rs
+  - crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs
+  - crates/nessa-server/src/conversation/infrastructure/workspace_runtime_config.rs
   - crates/nessa-server/src/conversation/infrastructure/channels.rs
   - src/desktop/workspace/ui/channel-creation/new-channel.tsx
   - src/desktop/settings/ui/boat-row.tsx
+  - src/desktop/settings/ui/boat-runtime-control.tsx
+  - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
 diagramLinks: {}
 ---
 
@@ -80,8 +89,44 @@ new target.
 A create intent is written first; uncertainty is retained rather than creating a
 second resource. An observer disappearing does not cancel the allocation task's
 receipt publication. Closing or deleting chat history preserves workspace files
-and VM identity. Users manage VM stop/delete in Boat. Runtime TTL is one hour;
-alpha has no idle parking or active TTL renewal.
+and VM identity. Users manage VM stop/delete in Boat. No automatic stop is the
+initial Nessa default; alpha has no idle parking or active TTL renewal.
+
+## VM lifetime settings
+
+Settings holds a Nessa default. A saved channel can inherit that default, stop
+after a selected duration, or request no automatic stop. Finite durations include
+active work. The selected value is sent explicitly to Boat on creation and
+archived resume; a running VM keeps its existing deadline. Provider account
+restrictions may stop a VM sooner, and an unlimited VM can remain billable.
+Before workspace authority is granted, a finite create or archived resume
+must return a positive provider TTL no longer than the selected limit. A missing,
+null, zero or longer TTL refuses while retaining the actual VM target. Reopening an already
+active VM does not compare its original deadline with a newly edited setting.
+
+Ordinary preferences live in the gateway's existing `config.json`, separate
+from the encrypted Boat token. Missing channel overrides inherit; explicit
+null requests no automatic stop. The default and override are read together for
+the requested scope before allocation. A settings snapshot for another scope
+refuses before provider effects. Channel membership is resolved by the shared
+channel store; a failed or mismatched lookup refuses rather than falling back
+to the global default. Channel edits require Cedar authorization.
+
+The configuration adapter owns each accepted save through caller loss using
+the shared configuration lock and atomic publication. Requested and outcome
+audit records retain the target, caller, before/requested choice and observed
+publication result. Failed audit or uncertain publication receives no success
+acknowledgement; the editor reloads before another attempt.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ReadSettings: load global or authorized channel target
+    ReadSettings --> Saving: submit validated choice
+    Saving --> Saved: durable publication and outcome audit
+    Saving --> Unconfirmed: storage or audit refusal
+    Saved --> ReadSettings: read saved default and override
+    Unconfirmed --> ReadSettings: explicit reload before retry
+```
 
 The placement contract owns one retention bound shared by the operational
 catalogue on every platform and the Unix connection cache. At capacity, only

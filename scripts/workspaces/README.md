@@ -20,6 +20,15 @@ cloud harnesses execute the real prebuilt Claude adapter with Boat's subscriptio
 credentials. It checks independent VM assignments, inference, a workspace file
 across stop/resume and gateway restart, an approved read of one temporary local
 log, removal and session-close revocation of that connection, and Nessa coordinator-to-worker delegation.
+It uploads an original text file through the authenticated attachment API, asks
+the cloud agent to read a marker absent from the prompt and save a workspace copy,
+then requires that copy after the same VM resumes. This combines stored-input
+delivery with the selected lifetime and workspace identity; no host path is sent.
+It also reads real provider lifetime receipts: a finite channel override on
+creation, explicit unlimited on archived resume, default inheritance after reset,
+and an unchanged deadline on an
+already-running VM after a settings edit. Settings use the isolated gateway's
+ordinary configuration file; the token's encrypted storage stays independent.
 Only `scripts/mcp-test-server/boat-local-files.mjs` can read that test log. No real
 user folders are shared. Its disposable VM writer uses full access inside its own
 VM; local-log and delegation permissions use one-time approvals of only those

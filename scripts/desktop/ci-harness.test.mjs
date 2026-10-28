@@ -27,6 +27,33 @@ test("local-auth integration harness is locked to its declared tools", () => {
   }
 })
 
+test("gateway staging covers canonical source paths consumed by protocol generation fixtures", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const start = workflow.indexOf("      - name: Prepare gateway contract harness")
+  const end = workflow.indexOf("      - run: npm install --ignore-scripts", start)
+  assert.ok(start >= 0 && end > start, "gateway staging boundary is present")
+  const stage = workflow.slice(start, end)
+  const trees = [...stage.matchAll(/shutil\.copytree\('([^']+)'/g)].map(
+    (match) => match[1],
+  )
+  const files = new Set([...stage.matchAll(/'([^'\r\n]+)'/g)].map((match) => match[1]))
+  const inputs = new Set()
+  for (const name of [
+    "scripts/generate-product-protocol.mjs",
+    "scripts/product-protocol/protocol-generation.test.mjs",
+  ])
+    for (const match of readFileSync(name, "utf8").matchAll(
+      /["'](crates\/[^"'\r\n]+\.(?:rs|json))["']/g,
+    ))
+      inputs.add(match[1])
+  assert.ok(inputs.size > 0, "generation declares canonical source inputs")
+  for (const input of inputs)
+    assert.ok(
+      files.has(input) || trees.some((tree) => input.startsWith(`${tree}/`)),
+      `gateway cut is missing ${input}`,
+    )
+})
+
 test("local and CI aggregate the same named frontend and native checks", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
@@ -74,7 +101,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // partition owns dependency crates' tests, including the vault's regressions.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
@@ -297,7 +324,7 @@ test("apt installs and every CI job are bounded", () => {
   )
   assert.match(
     script,
-    /candidate="\$\(LC_ALL=C apt-cache policy webkit2gtk-driver \| awk '\/\^  Candidate:\/ \{ print \$2; exit \}'\)"\r?\n {4}if \[ -z "\$candidate" \] \|\| \[ "\$candidate" = "\(none\)" \]; then\r?\n {6}resolved\+=\(webkitgtk-webdriver\)/,
+    /candidate="\$\(LC_ALL=C apt-cache policy webkit2gtk-driver \| awk '\/\^  Candidate:\/ \{ candidate=\$2 \} END \{ if \(candidate != ""\) print candidate \}'\)"\r?\n {4}if \[ -z "\$candidate" \] \|\| \[ "\$candidate" = "\(none\)" \]; then\r?\n {6}resolved\+=\(webkitgtk-webdriver\)/,
   )
   assert.match(
     script,

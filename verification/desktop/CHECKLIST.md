@@ -157,6 +157,12 @@ controls — text, icons, images, code, or decorative art — in any frame.
   _Check:_ `columns.mjs --only titlebar-row` for the page;
   `cargo test -p nessa-app --no-default-features --test traffic_lights` for the
   buttons in a real AppKit window (macOS) and the row height the two share.
+- [ ] **The pane root stays unscrolled after a long conversation, reviews and
+  a split.** Its transcript owns scrolling; the pane clips instead of retaining
+  a scroll offset that can move its header above the titlebar (#1184).
+  _Check:_ `columns.mjs --only pane-clipping` focuses an overflowing fixture
+  with the pane's real styles; `conversation-stress.mjs` (`window`, full seeded
+  sequence) records its offset and header geometry beside the list and panes alone.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
@@ -1301,7 +1307,10 @@ it is redesigned on its own branch.
   with `--desktop-hover`, a chosen row with `--desktop-selected`, and an
   unread title weighs `--desktop-unread-weight`; a kit row's name says the
   count or glyph the kit lays beside it, which stays silent, and pointed at
-  that glyph the row keeps its fill; a switcher result, whose choice
+  that glyph the row keeps its fill and receives its click. A channel's settings
+  action receives its own click, with the label clear of the trailing band;
+  its presence does not make the decorative count or glyph intercept the row.
+  A switcher result, whose choice
   follows the pointer, draws no hover of its own. _Check:_ `shared-controls.mjs`
   (`rows`, per engine and layout: on load, in the overview, with the switcher
   open). Rules: `ui/list-row.css`, `source-list.css` › Rows. At the base
@@ -2400,3 +2409,17 @@ continuing ordinary clicks. Review-notice identity, delivery and at-rest automat
 denial checks still apply. The minimized sequence is seed 2 with one pool step
 and one notice step; pool precedes notice, whose page reload used to leave the
 vault dialog blocking the main conversation click.
+
+## Boat VM lifetime settings
+
+- [ ] The global default saves from Settings → Connections → Accounts without a
+  Boat token. A saved channel's gear opens its settings in both layouts. A new
+  channel inherits the global lifetime; an explicit No automatic stop overrides
+  it, and Use Nessa default removes only that override. Invalid, null-scope and
+  contradictory commands leave the default unchanged. _Check:_
+  `boat-runtime-settings.mjs` in Chromium/WebKit, columns/sidebar, against a real
+  gateway; the same shared check runs in the conversation stress `channel` step.
+- [ ] The dialog's controls remain usable by keyboard, Escape closes it, and
+  the text explains that finite durations include active work and changes apply
+  at create/resume rather than changing an active deadline. _Check:_ manual
+  screenshot/focus review and the settings control's rendered tests.
