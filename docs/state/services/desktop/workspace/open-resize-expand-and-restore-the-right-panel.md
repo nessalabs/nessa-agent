@@ -5,11 +5,12 @@ kind: "statechart"
 status: "implemented"
 summary: "The right panel belongs to the chat in front and docks when another view opens."
 parent: "desktop-workspace"
-sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
+sourceRevision: "b974e027ea87fa9227cd294dd514db9c993a4423"
 sources:
   - "src/desktop/workspace/ui/chrome/right-panel.tsx"
   - "src/desktop/workspace/ui/chrome/right-panel.css"
   - "src/desktop/workspace/ui/chrome/window-tabs.tsx"
+  - "src/desktop/workspace/ui/chrome/window-tabs.css"
   - "src/desktop/workspace/ui/layouts/use-workspace-window.ts"
   - "src/desktop/workspace/ui/layouts/workspace-layout.tsx"
   - "src/desktop/workspace/ui/chrome/panel-content.tsx"
@@ -21,6 +22,7 @@ sources:
   - "src/desktop/model/right-panel.test.ts"
   - "src/desktop/workspace/ui/layouts/layouts.test.tsx"
   - "verification/desktop/scripts/conversation-stress.mjs"
+  - "verification/desktop/scripts/mcp-apps-gateway.mjs"
 diagramLinks: {}
 ---
 
@@ -36,6 +38,9 @@ Each chat has its own panel contents: widgets open as tabs inside the panel,
 or a note says that nothing is open. Conversation documents have separate tabs
 in the window toolbar; a widget never replaces a chat pane. Changing a panel
 tab keeps the same chat in front.
+The window toolbar's empty drag strip stops taking pointer hits before the
+open panel. Its widget tabs and close controls remain clickable beneath that
+row, while the document tabs and toolbar buttons keep their own hits.
 
 Expanding the panel covers the workspace for that chat. The workspace stays
 laid out and inert beneath, while the panel keeps its own tabs or empty note.
