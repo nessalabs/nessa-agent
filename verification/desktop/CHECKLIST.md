@@ -969,7 +969,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   source taking an established session out of two panes drops its composer
   text at once and keeps the box. On the next frame that box still shows
   the reply. After the box goes, the pane count is what it was before the
-  split. The check hides side columns before typing into the two-pane fixture
+  split. The check reclaims side-column room before typing into the two-pane fixture
   and reveals the session rows before removing it, including at 760px.
   _Check:_ `columns.mjs --only reply-held`.
 - [ ] **A message still on its way stays until that box goes.** The source

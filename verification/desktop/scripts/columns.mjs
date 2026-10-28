@@ -35,7 +35,7 @@
  *                    list, or the panes) and the pane's composer — its left
  *                    edge and its centre — move over several frames, one way,
  *                    to where they rest; with reduced motion they land at once.
- *   split-motion     with side columns hidden to leave readable room,
+ *   split-motion     after reclaiming side-column room,
  *                    ⌘D splits the chat in front and ⌘W closes the new pane:
  *                    each pane's edges and the first composer's centre move
  *                    over several frames, one way, to where they rest; the
