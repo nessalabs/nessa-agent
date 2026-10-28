@@ -234,9 +234,15 @@ export function useFocusFollowsPane(
       const active = document.activeElement
       const lost = !active || active === document.body
       if (inModal(active)) return
-      // Document tabs own keyboard navigation while selecting another pane.
-      // Moving that selection must not take the next arrow key into a composer.
-      if (active?.closest('[role="tablist"]')) return
+      // Document tabs own their arrow-key navigation while the selected tab
+      // still holds focus. A shortcut that creates a new document deselects
+      // the old tab; its caret must then follow the new focused pane.
+      if (active?.closest('[role="tablist"]')) {
+        if (active.closest('[role="tab"]')?.getAttribute("aria-selected") === "true")
+          return
+        follow()
+        return
+      }
       const key = selectFocusedPaneKey(store.getState())
       const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
       const markAgrees =

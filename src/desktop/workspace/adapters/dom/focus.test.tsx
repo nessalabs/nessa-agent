@@ -574,6 +574,7 @@ it("keeps keyboard focus in document tabs when selecting a different visible pan
   tabs.setAttribute("role", "tablist")
   const tab = document.createElement("button")
   tab.setAttribute("role", "tab")
+  tab.setAttribute("aria-selected", "true")
   tabs.append(tab)
   host.firstElementChild?.append(tabs)
   tab.focus()
@@ -581,3 +582,38 @@ it("keeps keyboard focus in document tabs when selecting a different visible pan
   await frames()
   expect(document.activeElement).toBe(tab)
 })
+
+it.each([undefined, "right"] as const)(
+  "moves focus from an old document tab to a new %s session's composer",
+  async (beside) => {
+    const store = await page()
+    if (!beside) {
+      await act(async () => void store.dispatch(newSession({ beside: "right" })))
+      await frames()
+      await act(async () => void store.dispatch(focusPane({ pane: 1 })))
+      await frames()
+    }
+    const tabs = document.createElement("div")
+    tabs.setAttribute("role", "tablist")
+    const tab = document.createElement("button")
+    tab.setAttribute("role", "tab")
+    tab.setAttribute("aria-selected", "true")
+    tabs.append(tab)
+    host.firstElementChild?.append(tabs)
+    tab.focus()
+
+    const before = store.getState().workspace.panes
+    const beforeItem =
+      before && panesOf(before).find((pane) => pane.key === before.focused)?.item
+    await act(async () => void store.dispatch(newSession({ beside })))
+    const after = store.getState().workspace.panes
+    const afterItem =
+      after && panesOf(after).find((pane) => pane.key === after.focused)?.item
+    expect(afterItem).not.toBe(beforeItem)
+    tab.setAttribute("aria-selected", "false")
+    await frames()
+
+    const focused = store.getState().workspace.panes?.focused
+    expect(caretIn()).toBe(`Message ${focused}`)
+  },
+)
