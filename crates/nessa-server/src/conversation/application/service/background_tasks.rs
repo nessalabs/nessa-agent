@@ -58,6 +58,7 @@ impl BackgroundTasks {
 }
 
 impl ConversationService {
+    #[cfg(any(unix, test))]
     pub(crate) fn bind_background_tasks(
         &self,
         store: Arc<dyn BackgroundStore>,
@@ -660,6 +661,7 @@ impl ConversationService {
         Ok(bound_view(view))
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(super) async fn background_resources_unreleased(&self) -> bool {
         let Some(tasks) = self.inner.background_tasks.get() else {
             return false;
