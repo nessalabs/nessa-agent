@@ -125,7 +125,9 @@ mod scheduled_messages;
 pub(crate) mod ssh_environment;
 mod store;
 mod thread_reports;
-pub use background_tasks::{LocalBackgroundTasks, ShepherdBackgroundTasks};
+pub use background_tasks::LocalBackgroundTasks;
+#[cfg(unix)]
+pub use background_tasks::ShepherdBackgroundTasks;
 pub use channels::{LocalChannelFolders, LocalChannelStore};
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,

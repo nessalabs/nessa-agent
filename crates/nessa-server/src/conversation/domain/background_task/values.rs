@@ -1,4 +1,4 @@
-use nessa_protocol::product::generated::{
+use nessa_protocol::product_contract::generated::{
     BACKGROUND_TASK_ID_PATTERN, MAX_BACKGROUND_TASK_ID_CHARACTERS,
     MIN_BACKGROUND_TASK_ID_CHARACTERS,
 };

@@ -2,7 +2,9 @@
 //! `BackgroundStore -> tasks (current output) + transitions (minimal evidence)`.
 mod encoding;
 mod rows;
+#[cfg(unix)]
 mod runner;
+#[cfg(unix)]
 pub use runner::ShepherdBackgroundTasks;
 
 use crate::conversation::application::background_tasks::{
