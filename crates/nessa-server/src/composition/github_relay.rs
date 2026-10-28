@@ -102,8 +102,7 @@ pub(super) async fn connect(
         let credentials=credentials(&environment,vault.vault.clone()).await?;
         let binding=credentials.identify(&repository).await?;
         store.bind(&binding,accept_gap).await?;
-        let token=credentials.token().await?;
-        catch_up(source.as_ref(),store.as_ref(),&binding,&token).await?;
+        catch_up(source.as_ref(),store.as_ref(),&binding,credentials.as_ref()).await?;
         Ok::<_,Failure>(serde_json::json!({"result":"connected","repository":binding.repository_name(),"repositoryId":binding.repository_id(),"userId":binding.user_id(),"stage":environment.stage.as_str()}))
     }.await.map_err(|error|RunError::Runtime(error.to_string()))?;
     output(result)

@@ -96,17 +96,18 @@ pub async fn follow(
     let mut retry = 1u64;
     loop {
         let result=async {
-            let token=credentials.token().await?;
             // Obtain a ticket, subscribe, then re-read: the second read closes
             // the catch-up/watch race even if the first notification was lost.
-            let page=catch_up(source,store,binding,&token).await?;
-            let mut watch=source.watch(&page.ticket).await?;
-            catch_up(source,store,binding,&token).await?;
+            let mut watch={
+                let ticket=zeroize::Zeroizing::new(catch_up(source,store,binding,credentials).await?.ticket);
+                source.watch(&ticket).await?
+            };
+            catch_up(source,store,binding,credentials).await?;
             let renew=wait.wait(Duration::from_secs(crate::github_relay::domain::contract::RENEW_AFTER_SECONDS));tokio::pin!(renew);
             loop {
                 tokio::select! {
                     _=&mut renew=>return Ok::<(),Failure>(()),
-                    changed=watch.changed()=>{ changed?;catch_up(source,store,binding,&token).await?; }
+                    changed=watch.changed()=>{ changed?;catch_up(source,store,binding,credentials).await?; }
                 }
             }
         }.await;

@@ -190,11 +190,13 @@ async fn offline_transport_preserves_cursor_then_recovers_using_injected_source(
     store.bind(&binding, false).await.unwrap();
     let source = OfflineThenPage(AtomicBool::new(false));
     assert!(matches!(
-        catch_up(&source, &store, &binding, "token").await,
+        catch_up(&source, &store, &binding, &Credentials).await,
         Err(Failure::Offline)
     ));
     assert_eq!(store.cursor(&binding).await.unwrap(), 0);
-    catch_up(&source, &store, &binding, "token").await.unwrap();
+    catch_up(&source, &store, &binding, &Credentials)
+        .await
+        .unwrap();
     assert_eq!(store.cursor(&binding).await.unwrap(), 1);
 }
 #[test]
@@ -358,8 +360,8 @@ impl crate::github_relay::application::RelayWait for ManualWait {
 struct Credentials;
 #[async_trait::async_trait]
 impl crate::github_relay::application::GitHubCredentials for Credentials {
-    async fn token(&self) -> Result<String, Failure> {
-        Ok("test-token".into())
+    async fn token(&self) -> Result<crate::github::domain::AccessToken, Failure> {
+        Ok(crate::github::domain::AccessToken::new("test-token".into()).unwrap())
     }
     async fn identify(&self, _: &str) -> Result<Binding, Failure> {
         Err(Failure::InvalidResponse)
@@ -526,11 +528,11 @@ struct ConnectedAccount {
 }
 #[async_trait::async_trait]
 impl crate::github_relay::application::GitHubCredentials for ConnectedAccount {
-    async fn token(&self) -> Result<String, Failure> {
+    async fn token(&self) -> Result<crate::github::domain::AccessToken, Failure> {
         if self.user.load(Ordering::SeqCst) == 0 {
             Err(Failure::CredentialsUnavailable)
         } else {
-            Ok("held-by-sign-in-owner".into())
+            Ok(crate::github::domain::AccessToken::new("held-by-sign-in-owner".into()).unwrap())
         }
     }
     async fn identify(&self, _: &str) -> Result<Binding, Failure> {
@@ -788,4 +790,110 @@ async fn a_quiet_day_uses_360_http_requests_per_repository() {
     let _ = task.await;
     assert_eq!(source.pages.load(Ordering::SeqCst), 240);
     assert_eq!(source.watches.load(Ordering::SeqCst), 120);
+}
+
+#[tokio::test]
+async fn follower_refreshes_credentials_per_request_and_acquires_none_while_idle() {
+    use crate::github_relay::application::{
+        follow, GitHubCredentials, RelayLiveSource, RelayNotifications,
+    };
+    use std::sync::{atomic::AtomicUsize, Mutex};
+    struct Rotating(AtomicUsize);
+    #[async_trait::async_trait]
+    impl GitHubCredentials for Rotating {
+        async fn token(&self) -> Result<crate::github::domain::AccessToken, Failure> {
+            Ok(crate::github::domain::AccessToken::new(format!(
+                "fixture-token-{}",
+                self.0.fetch_add(1, Ordering::SeqCst)
+            ))
+            .unwrap())
+        }
+        async fn identify(&self, _: &str) -> Result<Binding, Failure> {
+            Err(Failure::InvalidResponse)
+        }
+    }
+    struct Wake(Arc<tokio::sync::Notify>);
+    #[async_trait::async_trait]
+    impl RelayNotifications for Wake {
+        async fn changed(&mut self) -> Result<(), Failure> {
+            self.0.notified().await;
+            Ok(())
+        }
+    }
+    struct Source {
+        tokens: Mutex<Vec<String>>,
+        wake: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl RelaySource for Source {
+        async fn page(&self, token: &str, b: &Binding, after: i64) -> Result<Page, Failure> {
+            let mut tokens = self.tokens.lock().unwrap();
+            tokens.push(token.into());
+            let mut page = page(b.user_id(), after + 1);
+            page.has_more = tokens.len() == 1;
+            Ok(page)
+        }
+    }
+    #[async_trait::async_trait]
+    impl RelayLiveSource for Source {
+        async fn watch(&self, _: &str) -> Result<Box<dyn RelayNotifications>, Failure> {
+            Ok(Box::new(Wake(self.wake.clone())))
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(store(&directory));
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let credentials = Arc::new(Rotating(AtomicUsize::new(0)));
+    let source = Arc::new(Source {
+        tokens: Mutex::new(vec![]),
+        wake: Arc::new(tokio::sync::Notify::new()),
+    });
+    let wait = Arc::new(ManualWait {
+        waiting: AtomicBool::new(false),
+        renew: tokio::sync::Notify::new(),
+    });
+    let task = {
+        let (source, store, credentials, binding, wait) = (
+            source.clone(),
+            store.clone(),
+            credentials.clone(),
+            binding.clone(),
+            wait.clone(),
+        );
+        tokio::spawn(async move {
+            follow(
+                source.as_ref(),
+                store.as_ref(),
+                credentials.as_ref(),
+                &binding,
+                wait.as_ref(),
+                &Reporter,
+            )
+            .await
+        })
+    };
+    reaches_cursor(store.as_ref(), &binding, 3).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !wait.waiting.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(credentials.0.load(Ordering::SeqCst), 3);
+    source.wake.notify_one();
+    reaches_cursor(store.as_ref(), &binding, 4).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        *source.tokens.lock().unwrap(),
+        [
+            "fixture-token-0",
+            "fixture-token-1",
+            "fixture-token-2",
+            "fixture-token-3"
+        ]
+    );
+    assert_eq!(credentials.0.load(Ordering::SeqCst), 4);
 }

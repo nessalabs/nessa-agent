@@ -154,7 +154,7 @@ async fn worker_retention_gap_pauses_encrypted_catch_up_until_explicit_acceptanc
     let inbox = store(&directory);
     inbox.bind(&binding, false).await.unwrap();
     assert_eq!(
-        catch_up(&gap.source, &inbox, &binding, "fixture_token_1234")
+        catch_up(&gap.source, &inbox, &binding, &Credentials)
             .await
             .err(),
         Some(Failure::Gap(1))
@@ -168,7 +168,7 @@ async fn worker_retention_gap_pauses_encrypted_catch_up_until_explicit_acceptanc
     reopened.bind(&binding, false).await.unwrap();
     assert_eq!(reopened.cursor(&binding).await, Err(Failure::Gap(1)));
     assert_eq!(
-        catch_up(&gap.source, &reopened, &binding, "fixture_token_1234")
+        catch_up(&gap.source, &reopened, &binding, &Credentials)
             .await
             .err(),
         Some(Failure::Gap(1)),
@@ -208,7 +208,7 @@ async fn worker_retention_gap_pauses_encrypted_catch_up_until_explicit_acceptanc
     )
     .await;
     assert_eq!(
-        catch_up(&page.source, &reopened, &binding, "fixture_token_1234")
+        catch_up(&page.source, &reopened, &binding, &Credentials)
             .await
             .unwrap()
             .next,
@@ -252,7 +252,7 @@ async fn invalid_gap_receipts_leave_the_encrypted_cursor_unmodified() {
         let binding = binding();
         inbox.bind(&binding, false).await.unwrap();
         assert_eq!(
-            catch_up(&receipt.source, &inbox, &binding, "fixture_token_1234")
+            catch_up(&receipt.source, &inbox, &binding, &Credentials)
                 .await
                 .err(),
             Some(expected)
@@ -280,7 +280,7 @@ async fn a_cloud_gap_audit_failure_rolls_back_and_the_same_http_receipt_can_retr
     let db = database(&directory);
     db.execute_batch("CREATE TRIGGER refuse_cloud_gap BEFORE INSERT ON audit WHEN NEW.cause='cloud_retention_gap' BEGIN SELECT RAISE(ABORT,'injected cloud gap audit failure'); END;").unwrap();
     assert_eq!(
-        catch_up(&receipt.source, &inbox, &binding, "fixture_token_1234")
+        catch_up(&receipt.source, &inbox, &binding, &Credentials)
             .await
             .err(),
         Some(Failure::Storage)
@@ -290,7 +290,7 @@ async fn a_cloud_gap_audit_failure_rolls_back_and_the_same_http_receipt_can_retr
     assert!(gap_audits(&directory).is_empty());
     db.execute_batch("DROP TRIGGER refuse_cloud_gap;").unwrap();
     assert_eq!(
-        catch_up(&receipt.source, &inbox, &binding, "fixture_token_1234")
+        catch_up(&receipt.source, &inbox, &binding, &Credentials)
             .await
             .err(),
         Some(Failure::Gap(1))
@@ -298,4 +298,157 @@ async fn a_cloud_gap_audit_failure_rolls_back_and_the_same_http_receipt_can_retr
     assert_eq!(inbox.cursor(&binding).await, Err(Failure::Gap(1)));
     assert_eq!(receipt.calls.load(Ordering::SeqCst), 2);
     assert_eq!(gap_audits(&directory), vec![cloud_gap_evidence()]);
+}
+
+#[tokio::test]
+async fn oversized_refusal_bodies_are_rejected_before_decoding() {
+    for (status, mut body) in [
+        (StatusCode::CONFLICT, json!({"kind":"identity_changed"})),
+        (
+            StatusCode::GONE,
+            json!({"kind":"gap","stage":"dev","expiredThrough":1}),
+        ),
+    ] {
+        body["padding"] =
+            json!("x".repeat(2 * crate::github_relay::domain::contract::PAYLOAD_BYTES + 16_384));
+        let receipt = server(status, body).await;
+        assert_eq!(
+            receipt
+                .source
+                .page("fixture_token_1234", &binding(), 0)
+                .await
+                .err(),
+            Some(Failure::InvalidResponse)
+        );
+    }
+}
+
+struct Credentials;
+#[async_trait::async_trait]
+impl crate::github_relay::application::GitHubCredentials for Credentials {
+    async fn token(&self) -> Result<crate::github::domain::AccessToken, Failure> {
+        Ok(crate::github::domain::AccessToken::new("fixture_token_1234".into()).unwrap())
+    }
+    async fn identify(&self, _: &str) -> Result<Binding, Failure> {
+        Err(Failure::InvalidResponse)
+    }
+}
+
+#[tokio::test]
+async fn chunked_refusals_without_content_length_obey_the_same_body_limit() {
+    use axum::body::Body;
+    use axum::response::Response;
+    for status in [StatusCode::CONFLICT, StatusCode::GONE] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let router = Router::new().route(
+            "/relay/v1/events",
+            get(move || async move {
+                let chunks = futures_util::stream::iter(
+                    (0..33).map(|_| Ok::<_, std::io::Error>(vec![b' '; 65_536])),
+                );
+                Response::builder()
+                    .status(status)
+                    .body(Body::from_stream(chunks))
+                    .unwrap()
+            }),
+        );
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut receipt = server(StatusCode::OK, json!({})).await;
+        receipt.task.abort();
+        receipt.task = task;
+        receipt.source.configuration.origin = origin;
+        assert_eq!(
+            receipt
+                .source
+                .page("fixture_token_1234", &binding(), 0)
+                .await
+                .err(),
+            Some(Failure::InvalidResponse)
+        );
+    }
+}
+
+async fn watch_peer(frames: Vec<u8>) -> (super::RelayWatch, JoinHandle<()>) {
+    use tokio::io::AsyncWriteExt;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let request = format!("ws://{}/", listener.local_addr().unwrap())
+        .into_client_request()
+        .unwrap();
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let mut stream = socket.into_inner();
+        stream.write_all(&frames).await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    (super::RelayWatch::connect(request).await.unwrap(), task)
+}
+
+#[tokio::test]
+async fn watch_rejects_oversized_frames_from_the_header() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Error;
+    // Advertise 256 bytes with no payload: refusal must precede waiting for it.
+    for opcode in [0x81, 0x82] {
+        let (mut watch, task) = watch_peer(vec![opcode, 126, 1, 0]).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), watch.0.next()).await;
+        task.abort();
+        let _ = task.await;
+        assert!(matches!(result, Ok(Some(Err(Error::Capacity(_))))));
+    }
+}
+
+#[tokio::test]
+async fn watch_bounds_fragment_assembly() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Error;
+    // Both frames fit the frame bound; the assembled 20-byte message must fail.
+    let mut fragments = vec![0x01, 10];
+    fragments.extend_from_slice(&[b'x'; 10]);
+    fragments.extend_from_slice(&[0x80, 10]);
+    fragments.extend_from_slice(&[b'x'; 10]);
+    let (mut watch, task) = watch_peer(fragments).await;
+    let result = tokio::time::timeout(Duration::from_secs(2), watch.0.next()).await;
+    task.abort();
+    let _ = task.await;
+    assert!(matches!(result, Ok(Some(Err(Error::Capacity(_))))));
+}
+
+#[tokio::test]
+async fn watch_accepts_fragmented_changed_notifications_and_full_control_frames() {
+    use crate::github_relay::application::RelayNotifications;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::io::AsyncWriteExt;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let request = format!("ws://{}/", listener.local_addr().unwrap())
+        .into_client_request()
+        .unwrap();
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket
+            .send(Message::Ping(vec![7; 125].into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Pong(vec![7; 125].into())
+        );
+        let mut stream = socket.into_inner();
+        let mut frames = vec![0x01, 8];
+        frames.extend_from_slice(&super::CHANGED.as_bytes()[..8]);
+        frames.extend_from_slice(&[0x80, (super::CHANGED.len() - 8) as u8]);
+        frames.extend_from_slice(&super::CHANGED.as_bytes()[8..]);
+        stream.write_all(&frames).await.unwrap();
+    });
+    let mut watch = super::RelayWatch::connect(request).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(5), watch.changed()).await;
+    if result.is_err() {
+        task.abort();
+    }
+    task.await.unwrap();
+    assert_eq!(result.unwrap(), Ok(()));
 }

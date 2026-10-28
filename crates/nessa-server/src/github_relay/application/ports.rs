@@ -1,7 +1,8 @@
+use crate::github::domain::AccessToken;
 use crate::github_relay::domain::{Binding, Event, Failure, Page};
 #[async_trait::async_trait]
 pub trait GitHubCredentials: Send + Sync {
-    async fn token(&self) -> Result<String, Failure>;
+    async fn token(&self) -> Result<AccessToken, Failure>;
     async fn identify(&self, repository: &str) -> Result<Binding, Failure>;
 }
 #[async_trait::async_trait]

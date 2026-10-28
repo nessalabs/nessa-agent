@@ -1,7 +1,9 @@
 //! Reads the existing GitHub sign-in owner. No separate CLI credential,
 //! client secret, or token copy on disk belongs to the relay.
 use crate::github::{
-    application::GithubConnections, domain::GithubStatus, infrastructure::GithubApp,
+    application::GithubConnections,
+    domain::{AccessToken, GithubStatus},
+    infrastructure::GithubApp,
 };
 use crate::github_relay::{
     application::{ConnectedGithub, GitHubCredentials},
@@ -80,10 +82,9 @@ struct Repositories {
 }
 #[async_trait::async_trait]
 impl GitHubCredentials for ConnectedGithubCredentials {
-    async fn token(&self) -> Result<String, Failure> {
+    async fn token(&self) -> Result<AccessToken, Failure> {
         self.connections
             .token()
-            .map(|t| t.expose().to_owned())
             .ok_or(Failure::CredentialsUnavailable)
     }
     async fn identify(&self, repository: &str) -> Result<Binding, Failure> {
@@ -92,7 +93,9 @@ impl GitHubCredentials for ConnectedGithubCredentials {
         }
         let user = self.user_id().ok_or(Failure::CredentialsUnavailable)?;
         let token = self.token().await?;
-        let repo = self.get(&format!("repos/{repository}"), &token).await?;
+        let repo = self
+            .get(&format!("repos/{repository}"), token.expose())
+            .await?;
         if self.user_id().as_deref() != Some(&user) {
             return Err(Failure::IdentityChanged);
         }
@@ -110,8 +113,9 @@ impl ConnectedGithub for ConnectedGithubCredentials {
     async fn repositories(&self) -> Result<Vec<Binding>, Failure> {
         let user = self.user_id().ok_or(Failure::CredentialsUnavailable)?;
         let token = self.token().await?;
-        let installations: Installations =
-            self.get("user/installations?per_page=100", &token).await?;
+        let installations: Installations = self
+            .get("user/installations?per_page=100", token.expose())
+            .await?;
         if installations.total_count != installations.installations.len() {
             return Err(Failure::Capacity);
         }
@@ -126,7 +130,7 @@ impl ConnectedGithub for ConnectedGithubCredentials {
                         "user/installations/{}/repositories?per_page=100",
                         install.id
                     ),
-                    &token,
+                    token.expose(),
                 )
                 .await?;
             if repos.total_count != repos.repositories.len() {
