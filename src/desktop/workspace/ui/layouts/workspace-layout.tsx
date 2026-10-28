@@ -115,6 +115,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
                   data-sidebar={sidebarOpen ? "open" : "closed"}
+                  data-panel={panelOpen ? "open" : "closed"}
                   data-panel-maximized={panelMaximized || undefined}
                   style={
                     {

@@ -7,7 +7,9 @@
   min-width: 0;
   height: 100%;
   margin-left: 12px;
-  pointer-events: auto;
+  /* Only the controls and the drag strip take hits. The panel tabs occupy
+     this same row beneath the empty part of the window toolbar. */
+  pointer-events: none;
 }
 
 .workspace-tab-list {
@@ -19,6 +21,21 @@
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.workspace-window-tabs > .desktop-icon-button,
+.workspace-tabs-space {
+  pointer-events: auto;
+}
+
+/* Keep the left drag strip, but let the panel's tabs take clicks on the right. */
+.workspace-window[data-panel="open"] .workspace-tabs-space {
+  clip-path: inset(0 calc(var(--workspace-panel-width) + var(--desktop-gutter)) 0 0);
+}
+
+.workspace-window[data-panel-maximized] .workspace-tabs-space {
+  pointer-events: none;
 }
 
 .workspace-tab-list::-webkit-scrollbar {
