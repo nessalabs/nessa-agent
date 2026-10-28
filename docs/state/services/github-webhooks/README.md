@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "fbda77dedf894eb87580f563e24bbd804b10731f"
+sourceRevision: "eab6d335e064276a95c094d874174fbcbc51344b"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -32,6 +32,7 @@ sources:
   - crates/nessa-server/src/github_relay/application/follow.rs
   - crates/nessa-server/src/github_relay/application/live_events.rs
   - crates/nessa-server/src/github_relay/infrastructure/selection.rs
+  - crates/nessa-vault/src/application/vault.rs
   - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
   - crates/nessa-server/src/product/github.rs
   - crates/nessa-server/tests/product/socket/vault.rs
@@ -126,6 +127,9 @@ before commit leaves that page eligible for replay. A saved cursor resumes after
 restart. Each connection generation fences responses and cleanup from a removed
 binding; disconnect/reconnect cannot revive the previous generation's pending work.
 Local storage deduplicates a redelivered identity while its original copy remains.
+The vault unlock generation is checked again while the selection transaction
+commits. A disable or disconnect started before lock and unlock rolls back its
+binding, event and audit changes, leaving the newer selection intact.
 
 The local owner can read the downloaded inbox without network access. SQLCipher encrypts the whole database and rollback journal, including repository identities and audit records. Its separate random key lives in the passphrase-encrypted local vault. The native app unlocks it once per app session; closing that app or restarting the gateway seals it. The follower stops while locked and catches up after unlock. See [local vault](../gateway/local-vault.md). OS ownership also protects its files; no new unauthenticated local HTTP read route is
 mounted. Existing [conversation admission](../gateway/external-events.md) remains
