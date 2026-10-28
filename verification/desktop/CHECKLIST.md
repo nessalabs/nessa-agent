@@ -336,8 +336,8 @@ Experimental turns it on; the rail stands beside the workspace in
 
 - [ ] **The panes are one flat surface, not cards.** The chat area reaches the
   window's top, right and bottom edges; no pane draws a fill, rim or shadow of
-  its own; a 1px hairline mid-gutter divides two panes, a column's from the
-  window's top to its bottom, a row's to the surface's side or the column's
+  its own; a 1px hairline mid-gutter divides two panes, a column's from below
+  the continuous window toolbar to the window's bottom, a row's to the surface's side or the column's
   hairline. Focus changes no pane's fill or elevation (the unfocused header
   dims). Both themes, beside and stacked. _Check:_ `columns.mjs --only pane-level`;
   `conversation-stress` step `window`.
@@ -356,9 +356,10 @@ Experimental turns it on; the rail stands beside the workspace in
   out first; rain, the lit layer, and steam lay out on the frame after.
   Drag previews must also retain content; verify
   these with the drag and focus checks when changing their motion.
-- [ ] **No two columns overlap**, and nothing sits under the rail, in any
+- [ ] **Content columns do not overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents
-  overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
+  overview, at 1440, 1000 and 760 wide. The overview covers the sidebar's
+  gutter to hide the underlying resize edge. _Check:_ `columns.mjs --only no-overlap`
   (Chromium and WebKit, both layouts).
 - [ ] **Conversation cards clear the window toolbar**: New Session
   is absent from the window toolbar; ⌘N still opens a new conversation, and
@@ -1020,8 +1021,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **Any pane's menu chooses the header picture.** From a conversation
   pane's "…" menu, Choose Header Picture… opens the file dialog and the
   picture chosen shows in the panes' bands; a new session's home draws it from
-  its pane's top edge, behind the title row — in the window's corner with
-  nothing beside it too, behind the window's controls;
+  its pane's top edge, behind the pane title row — in the window's corner with
+  nothing beside it too, immediately below the continuous window toolbar;
   Use Night Scene, offered only with a picture, takes it back; a file that is
   not an image is refused with why, in that pane's header (issue #320).
   _Check:_ `responsive.mjs --only header-picture`, and `safe-area.mjs`.

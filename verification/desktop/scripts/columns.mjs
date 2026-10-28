@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Columns: the window's columns never overlap, and the side rail's corner
+ * Columns: the window's content columns do not overlap, and the side rail's corner
  * holds still.
  *
  *   no-overlap       in each layout, at each size, with the side rail open and
  *                    closed, the sidebar and session list shown and hidden, and
  *                    the Agents overview open and closed, every drawn column —
  *                    the rail, the sidebar, the session list, then the chat
- *                    area or the overview — stands left to right, each
- *                    beginning where the one before it ends or later, none past
+ *                    area or the overview — stands left to right. The overview
+ *                    covers the sidebar's one gutter, and none extends past
  *                    the window's edges. A column placed from the window's edge
  *                    without counting a column beside it (the overview that
  *                    slid under the sidebar once the rail opened) breaks it.
@@ -125,7 +125,7 @@ const checks = [
 
 const meta = {
   name: "columns",
-  summary: "no two columns overlap; the side rail's corner holds still",
+  summary: "content columns keep their bounds; the side rail's corner holds still",
   defaults: { engine: "chromium,webkit" },
   options: {
     only: { type: "string" },
@@ -162,7 +162,8 @@ Checks, per engine, layout and size:
   content-visible pane bodies and fill stay visible through toggles and a new pane mounts fully opaque at unit scale
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
-                   order, none overlapping the next, none past the window's edges
+                   order, only the overview covering the sidebar's gutter,
+                   none past the window's edges
   rail-corner      the bottom-left toggle never moves as the rail or sidebar
                    toggles; "nessa Studio" stays clear in Agents and a full view
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
@@ -196,8 +197,13 @@ const columnSelectors = [
 ]
 
 /** Each drawn column's left and right edge, in window pixels. */
-function measure(columns) {
+function measure({ columns, workspace }) {
   const drawn = []
+  const gutter = parseFloat(
+    getComputedStyle(document.querySelector(workspace)).getPropertyValue(
+      "--desktop-gutter",
+    ),
+  )
   for (const [name, selector] of columns) {
     const element = document.querySelector(selector)
     if (!element) continue
@@ -216,18 +222,23 @@ function measure(columns) {
     if (box.left >= window.innerWidth) continue
     drawn.push({ name, left: Math.round(box.left), right: Math.round(box.right) })
   }
-  return { drawn, width: window.innerWidth }
+  return { drawn, width: window.innerWidth, gutter }
 }
 
-/** What is wrong with one arrangement: an overlap, or a column past the window. */
-function faults({ drawn, width }) {
+/** What is wrong with one arrangement: a content overlap or a column past the window. */
+function faults({ drawn, width, gutter }) {
   const failures = []
   const overview = drawn.some((c) => c.name === "overview")
   const ordered = drawn.filter((c) => c.name !== "chat" || !overview)
   for (let i = 1; i < ordered.length; i++) {
     const before = ordered[i - 1]
     const after = ordered[i]
-    if (after.left < before.right - 1)
+    if (before.name === "sidebar" && after.name === "overview") {
+      if (!Number.isFinite(gutter) || Math.abs(before.right - after.left - gutter) > 1)
+        failures.push(
+          `overview covers ${before.right - after.left}px of the sidebar, expected its ${gutter}px gutter`,
+        )
+    } else if (after.left < before.right - 1)
       failures.push(
         `${after.name} begins at ${after.left}, inside ${before.name} (ends ${before.right})`,
       )
@@ -408,6 +419,7 @@ const body = {
       failures.push("End did not select the last document")
     await page.keyboard.press(keys.overview)
     await need(page, css.overview, "Agents overview opened above the document tabs")
+    await settled(page)
     await page
       .locator(".workspace-titlebar-navigation button:not(:disabled)")
       .last()
@@ -418,7 +430,15 @@ const body = {
         document.activeElement?.getAttribute("role") === "tab" &&
         !!document.activeElement?.closest('[role="tablist"]'),
     )
-    if (!keyboardTab) failures.push("document tabs cannot be reached from Agents by Tab")
+    const keyboardFocus = await page.evaluate(() => ({
+      role: document.activeElement?.getAttribute("role"),
+      label: document.activeElement?.getAttribute("aria-label"),
+      tabIndex: document.activeElement?.getAttribute("tabindex"),
+    }))
+    if (!keyboardTab)
+      failures.push(
+        `document tabs cannot be reached from Agents by Tab: ${JSON.stringify(keyboardFocus)}`,
+      )
     else {
       await page.keyboard.press("ArrowLeft")
       if ((await selected().innerText()) !== firstTitle)
@@ -459,9 +479,10 @@ const body = {
     if (geometry.tabs.some((tab) => tab.overflow !== "ellipsis"))
       failures.push("long document titles do not truncate with an ellipsis")
     if (
-      !geometry.selected ||
-      geometry.selected.left < geometry.list.left - 1 ||
-      geometry.selected.right > geometry.list.right + 1
+      keyboardTab &&
+      (!geometry.selected ||
+        geometry.selected.left < geometry.list.left - 1 ||
+        geometry.selected.right > geometry.list.right + 1)
     )
       failures.push("selected tab is clipped by horizontal overflow")
     if (
@@ -620,7 +641,10 @@ const body = {
               await need(page, css.overview, "the Agents overview")
             }
             await rest(page, size)
-            const seen = await page.evaluate(measure, columnSelectors)
+            const seen = await page.evaluate(measure, {
+              columns: columnSelectors,
+              workspace: css.workspace,
+            })
             const label = describe(seen)
             states.push({ label, drawn: seen.drawn })
             for (const f of faults(seen)) failures.push(`${label}: ${f}`)

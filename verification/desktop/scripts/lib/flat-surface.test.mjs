@@ -28,7 +28,8 @@ function check(damage = {}) {
   const panes = boxes.map((box) => ({ getBoundingClientRect: () => box }))
   const column = {
     dataset: { axis: "x" },
-    getBoundingClientRect: () => rect(496, 8, 504, 692),
+    getBoundingClientRect: () =>
+      rect(496, damage.toolbar && !damage.shortLine ? 56 : 8, 504, 692),
     after: {
       content: '""',
       backgroundColor: "rgb(30, 30, 30)",
@@ -58,7 +59,15 @@ function check(damage = {}) {
   }
   const edges = damage.threeRows ? [row] : [column, row]
   const surface = { getBoundingClientRect: () => bounds, querySelectorAll: () => edges }
-  const document = { querySelector: () => surface, querySelectorAll: () => panes }
+  const document = {
+    querySelector: (selector) =>
+      selector === ".workspace-titlebar"
+        ? damage.toolbar
+          ? { getBoundingClientRect: () => rect(0, 0, 1000, 48) }
+          : null
+        : surface,
+    querySelectorAll: () => panes,
+  }
   const getComputedStyle = (element, pseudo) =>
     pseudo
       ? element.after
@@ -90,6 +99,7 @@ for (const [name, damage] of [
   ["staggered adjacent columns", { staggered: true }],
   ["first adjoining row", { threeRows: true }],
   ["later adjoining row", { threeRows: true, row: { top: "231.5px" } }],
+  ["divider below toolbar", { toolbar: true }],
 ])
   test(`flat surface accepts ${name} gutter`, () => assert.equal(check(damage).length, 0))
 for (const [name, damage] of [
@@ -106,5 +116,6 @@ for (const [name, damage] of [
   ["card shadow", { card: true }],
   ["surface card", { surfaceCard: true }],
   ["rounded surface", { roundedSurface: true }],
+  ["divider that enters toolbar", { toolbar: true, shortLine: true }],
 ])
   test(`flat surface rejects ${name}`, () => assert.ok(check(damage).length > 0))

@@ -667,7 +667,7 @@ async function aroundTheLights(page, rail, failures) {
       ? near(now.at.workspace, now.at.railWidth) &&
         near(now.at.railTop, now.at.barBottom) &&
         near(now.at.railWidth, 48) &&
-        near(now.at.item, now.at.railWidth / 2)
+        near(now.at.item, now.at.toggleMiddle?.[0])
       : near(now.at.workspace, 0)) &&
     (rail === "off" ||
       (near(now.at.toggle, now.at.itemColumn) &&
