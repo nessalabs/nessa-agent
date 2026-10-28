@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: A local command can outlive its calling agent turn and resume that conversation with its outcome.
 parent: gateway
-sourceRevision: "85e8f95f7abd3f7549b772841df63d127f155f20"
+sourceRevision: "051e813e01d396269aef7732fe8ee2bb613a93c3"
 sources:
   - crates/nessa-server/src/conversation/application/service/background_tasks.rs
   - crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs
@@ -59,7 +59,9 @@ The gateway binds the task to the calling conversation, execution and native too
 call before handing execution to Shepherd. A retry with the same task identity
 and command returns the original record. It cannot move the task to a later tool
 row. Concurrent native calls that cannot be distinguished are refused before
-execution.
+execution. The representation adapter accepts Claude's direct argument object
+and Codex's MCP envelope. An envelope must name the same server and tool, and
+both forms pass the same command and identity validation before comparison.
 
 Shepherd owns the command scope independently of the provider. Ending the turn
 or parking the provider does not cancel the task. Explicit cancellation, gateway
