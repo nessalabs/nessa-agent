@@ -379,10 +379,11 @@ export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
 }
 
 /**
- * Closes a pane; its neighbour takes the room, and a draft in it is let go,
- * typed in or not. The last pane cannot close: it goes back to a new
- * session's home under `draftId` (`homeAfterLast`), in its conversation's
- * channel. Showing a home already, nothing changes (`canClosePane`).
+ * Closes a pane; its neighbour takes the room. A draft in the closed pane
+ * remains in its document tab until that tab is closed. The last pane cannot
+ * close: it goes back to a new session's home under `draftId`
+ * (`homeAfterLast`), in its conversation's channel. Showing a home already,
+ * nothing changes (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,
