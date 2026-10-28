@@ -57,6 +57,34 @@ struct Task {
 }
 
 pub(super) struct Arguments;
+// Claude reports the argument object; Codex reports its MCP envelope. Decode
+// both current provider representations here, before comparing domain values.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ObservedInput {
+    Arguments(Start),
+    Envelope(McpInput),
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpInput {
+    server: String,
+    tool: String,
+    arguments: Start,
+}
+impl ObservedInput {
+    fn arguments(self) -> Option<Start> {
+        match self {
+            Self::Arguments(arguments) => Some(arguments),
+            Self::Envelope(input)
+                if input.server == BACKGROUND_SERVER && input.tool == BACKGROUND_START =>
+            {
+                Some(input.arguments)
+            }
+            Self::Envelope(_) => None,
+        }
+    }
+}
 impl BackgroundCallMatcher for Arguments {
     fn matches(
         &self,
@@ -64,8 +92,9 @@ impl BackgroundCallMatcher for Arguments {
         task: &BackgroundTaskId,
         command: &BackgroundCommand,
     ) -> bool {
-        serde_json::from_str::<Start>(arguments)
+        serde_json::from_str::<ObservedInput>(arguments)
             .ok()
+            .and_then(ObservedInput::arguments)
             .and_then(|a| a.validated().ok())
             .is_some_and(|(id, request)| &id == task && &request == command)
     }
