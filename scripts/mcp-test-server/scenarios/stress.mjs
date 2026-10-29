@@ -29,6 +29,7 @@ export const STRESS = {
   await: "stress await",
   watch: "stress watch",
   long: "stress long",
+  oversized: "stress oversized",
   stream: "stress stream",
   window: "stress window",
   table: "stress table",
@@ -74,6 +75,7 @@ export const SAYS = {
   backgroundFinished: "Background outcome received.",
   watched: "Watched: ",
   long: "Long answer: ",
+  oversized: "Oversized answer: ",
   stream: "Streamed: ",
   streamEnd: "Stream finished.",
   window: "Window: ",
@@ -193,7 +195,8 @@ const review = (title, args, allowedText) => ({
  * The scenario for `reviews` reviews in one turn, one review of about
  * `largeBytes` bytes, turns that pause for `pauseMs`, and long answers
  * streamed as `longChunks` chunks of `longChunkBytes` bytes each, so a
- * conversation's history grows fast.
+ * conversation's history grows fast, and an `oversized` answer of
+ * `oversizedChunks` such chunks, longer than one view's frame.
  */
 export function stressScenario({
   reviews = 20,
@@ -201,6 +204,7 @@ export function stressScenario({
   pauseMs = 3_000,
   longChunks = 40,
   longChunkBytes = 300,
+  oversizedChunks = 240,
 } = {}) {
   const many = Array.from({ length: Math.max(1, reviews) }, (_, index) =>
     review(`Review ${index + 1} of ${reviews}`, { index }, `Allowed ${index + 1}.`),
@@ -276,6 +280,23 @@ export function stressScenario({
               "${prompt.text}",
               ...Array.from(
                 { length: longChunks },
+                (_, index) => ` ${index} ${"x".repeat(longChunkBytes)}`,
+              ),
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.oversized,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.oversized,
+              "${prompt.text}",
+              ...Array.from(
+                { length: oversizedChunks },
                 (_, index) => ` ${index} ${"x".repeat(longChunkBytes)}`,
               ),
             ],

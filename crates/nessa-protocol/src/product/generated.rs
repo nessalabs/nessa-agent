@@ -647,6 +647,8 @@ pub struct ConversationMessage {
     pub parts: Vec<ConversationPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts_at: Option<ConversationPartPosition>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -788,6 +790,7 @@ pub struct ConversationView {
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
     pub truncated: bool,
+    pub earlier: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction_view_error: Option<String>,
     pub queue_complete: bool,
@@ -854,6 +857,37 @@ pub struct ConversationPeekResult {
     pub conversation_id: String,
     #[serde(deserialize_with = "Option::deserialize")]
     pub execution_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPartPosition {
+    pub part: u64,
+    pub byte: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPoint {
+    pub execution_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<ConversationPartPosition>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReadEarlierParams {
+    pub conversation_id: String,
+    pub before: ConversationPoint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<ConversationPoint>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationEarlier {
+    pub conversation_id: String,
+    pub messages: Vec<ConversationMessage>,
+    pub tools: Vec<ConversationTool>,
+    pub handoffs: Vec<ConversationHandoff>,
+    pub more: bool,
+    pub truncated: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3940,6 +3974,7 @@ pub mod product_method {
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
+    pub const CONVERSATION_READ_EARLIER: &str = "conversation.readEarlier";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
     pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
     pub const CONVERSATION_SWITCH_AGENT: &str = "conversation.switchAgent";
@@ -4145,7 +4180,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 103
+                items.len() <= 104
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4258,6 +4293,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "channel.create",
     "channel.list",
     "conversation.subscribeEvents",
+    "conversation.readEarlier",
     "conversation.peek",
     "conversation.setModel",
     "conversation.switchAgent",
@@ -4377,6 +4413,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "channel.create"
         | "channel.list"
         | "conversation.subscribeEvents"
+        | "conversation.readEarlier"
         | "conversation.peek"
         | "conversation.setModel"
         | "conversation.switchAgent"

@@ -798,7 +798,7 @@ fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
     let enriched = projection.read();
     assert!(serde_json::to_vec(&enriched).unwrap().len() > MAX_VIEW_BYTES);
     let bounded = bound_view(enriched);
-    assert!(bounded.truncated);
+    assert!(bounded.earlier);
     assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
     assert!(bounded
         .tools

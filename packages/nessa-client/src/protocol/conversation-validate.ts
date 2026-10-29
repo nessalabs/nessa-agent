@@ -6,6 +6,7 @@ import type {
   ConversationObserveResult,
   ConversationSummary,
   ConversationView,
+  ConversationEarlier,
   ConversationPermission,
   ConversationQuestion,
   ConversationLease,
@@ -441,85 +442,12 @@ export function conversationModel(
   oneOf(text(item, "effect"), ["subsequentResponses", "nextTurn"])
   return item as unknown as ConversationSetModelResult
 }
-export function conversationView(value: unknown, expected: string): ConversationView {
-  const item = record(value)
-  exact(item, [
-    "conversationId",
-    "revision",
-    "serverNowMs",
-    "messages",
-    "pending",
-    "permissions",
-    "questions",
-    "tools",
-    "capabilities",
-    "lifecycle",
-    "truncated",
-    "interactionViewError",
-    "queueComplete",
-    "transcriptState",
-    "runtime",
-    "lease",
-    "artifacts",
-    "notes",
-    "unreadable",
-    "unreadableTruncated",
-    "usageLimitAutoContinue",
-    "handoffs",
-    "title",
-    "approvalMode",
-    "approvalModes",
-    "approvalModeChange",
-    "modelChange",
-    "modelChangeEffect",
-    "model",
-  ])
-  if (identity(item, "conversationId") !== expected)
-    throw new Error("Conversation response belongs to another conversation")
-  identity(item, "revision")
-  // The gateway's time the view was sent at: what each deadline's `dueAtMs`
-  // is measured against (`clientDueAtMs`).
-  const serverNowMs = item.serverNowMs
-  if (
-    typeof serverNowMs !== "number" ||
-    !Number.isSafeInteger(serverNowMs) ||
-    serverNowMs < 1
-  )
-    throw new Error("Invalid conversation serverNowMs")
-  if (
-    item.usageLimitAutoContinue !== undefined &&
-    typeof item.usageLimitAutoContinue !== "boolean"
-  )
-    throw new Error("Conversation response has invalid usageLimitAutoContinue")
-  optionalText(item, "title", bounds.maxConversationTitleBytes)
-  flag(item, "truncated")
-  flag(item, "queueComplete")
-  oneOf(text(item, "transcriptState", maxTranscriptStateBytes, false), transcriptStates)
-  const committedMode = text(item, "approvalMode", 4, false)
-  const offeredModes = approvalModeChoices(item.approvalModes)
-  if (!offeredModes.some((choice) => choice.id === committedMode))
-    throw new Error("Conversation mode is unavailable for its model")
-  if (item.approvalModeChange !== undefined) {
-    const change = record(item.approvalModeChange)
-    exact(change, ["requestId", "requestedMode", "status"])
-    identity(change, "requestId")
-    const requested = text(change, "requestedMode", 4, false)
-    if (!offeredModes.some((choice) => choice.id === requested))
-      throw new Error("Conversation requested mode is unavailable")
-    oneOf(text(change, "status"), ["changing", "recovery_required"])
-  }
-  if (item.modelChange !== undefined) {
-    const change = record(item.modelChange)
-    exact(change, ["requestId", "requestedModel", "status"])
-    identity(change, "requestId")
-    text(change, "requestedModel", 256, false)
-    oneOf(text(change, "status"), ["changing", "recovery_required"])
-  }
-  if (item.modelChangeEffect !== undefined)
-    oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
-  text(item, "model", 256, false)
-  if (item.interactionViewError !== undefined)
-    text(item, "interactionViewError", 2048, false)
+/**
+ * The turns `item` lists, checked as a view's: shared by a view and a page of
+ * earlier turns. `targetsListed` says a steering message's target must be
+ * listed too, as it must in a view that left nothing out.
+ */
+function transcriptTurns(item: Record<string, unknown>, targetsListed: boolean) {
   const messages = items(item, "messages", 128)
   const messageIds = new Set<string>()
   const messageStatuses = new Map<string, string>()
@@ -530,7 +458,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageApps = new Map<string, string>()
   const toolPartIds = new Set<string>()
   const noticePartIds = new Set<string>()
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     exact(message, [
       "executionId",
       "userText",
@@ -546,8 +474,19 @@ export function conversationView(value: unknown, expected: string): Conversation
       "usageLimit",
       "parts",
       "steeringOffset",
+      "startsAt",
     ])
     const executionId = identity(message, "executionId")
+    // Only the first turn listed can start partway: what comes before it is
+    // read as earlier turns.
+    if (message.startsAt !== undefined) {
+      if (index !== 0) throw new Error("Conversation turn starts partway after the first")
+      const at = record(message.startsAt)
+      exact(at, ["part", "byte"])
+      for (const key of ["part", "byte"])
+        if (!Number.isSafeInteger(at[key]) || (at[key] as number) < 0)
+          throw new Error("Invalid conversation turn start")
+    }
     if (messageIds.has(executionId))
       throw new Error("Conversation response repeats a message execution")
     if (
@@ -589,7 +528,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       const target = identity(message, "steeringTarget")
       if (target === executionId)
         throw new Error("Conversation steering input targets itself")
-      if (!item.truncated && !messageIds.has(target))
+      if (targetsListed && !messageIds.has(target))
         throw new Error("Conversation steering input targets later or missing work")
       if (message.steeringOffset === undefined)
         throw new Error("Injected input has no observation offset")
@@ -703,78 +642,28 @@ export function conversationView(value: unknown, expected: string): Conversation
     messageFiles.set(executionId, filesKey(linked))
     messageApps.set(executionId, messageAppKey(message.app, "message app"))
   }
-  const pendingIds = new Set<string>()
-  for (const pending of items(item, "pending", 128)) {
-    exact(pending, [
-      "executionId",
-      "text",
-      "attachments",
-      "files",
-      "uploads",
-      "app",
-      "mode",
-    ])
-    const executionId = identity(pending, "executionId")
-    if (pendingIds.has(executionId))
-      throw new Error("Conversation response repeats a pending execution")
-    const status = messageStatuses.get(executionId)
-    if (status !== undefined && status !== "queued")
-      throw new Error("Pending execution is not queued")
-    if (status === undefined && !item.truncated)
-      throw new Error("Pending execution is missing its message")
-    pendingIds.add(executionId)
-    const pendingText = text(pending, "text", 8192)
-    const pendingImages = imagesKey(
-      imageAttachments(pending.attachments, "pending attachments"),
-    )
-    const pendingFiles = filesKey(linkedFiles(pending.files, "pending files"))
-    const uploaded = uploadedFiles(pending.uploads, "pending uploads")
-    if (
-      linkedFiles(pending.files, "pending files").length + uploaded.length >
-      bounds.maxMessageFiles
-    )
-      throw new Error("Too many pending files")
-    const pendingUploads = JSON.stringify(
-      uploaded.map((file) => [file.digest, file.mimeType, file.size, file.name]),
-    )
-    const pendingApp = messageAppKey(pending.app, "pending app")
-    oneOf(text(pending, "mode"), ["queued", "steering"])
-    // The waiting input and its queued message are one submission seen twice;
-    // the same text over different images is as contradictory as different text.
-    if (
-      !item.truncated &&
-      item.queueComplete &&
-      (messageTexts.get(executionId) !== pendingText ||
-        messageImages.get(executionId) !== pendingImages ||
-        messageFiles.get(executionId) !== pendingFiles ||
-        messageApps.get(executionId) !== pendingApp ||
-        messageUploads.get(executionId) !== pendingUploads)
-    )
-      throw new Error("Pending execution contradicts its queued message")
+  return {
+    messages,
+    messageIds,
+    messageStatuses,
+    messageTexts,
+    messageImages,
+    messageFiles,
+    messageUploads,
+    messageApps,
+    toolPartIds,
   }
-  // Each waiting question is listed by a small entry under its key: all it
-  // asks is read with `questionReview` and checked there.
-  const questionKeys = new Set<string>()
-  for (const entry of items(item, "questions", bounds.maxOpenQuestions)) {
-    exact(entry, ["question", "message"])
-    const key = text(entry, "question", 32)
-    if (!reviewKeyPattern.test(key)) throw new Error("Invalid conversation question key")
-    if (questionKeys.has(key)) throw new Error("Conversation response repeats a question")
-    questionKeys.add(key)
-    text(entry, "message", bounds.maxQuestionEntryMessageBytes)
-  }
-  // Each waiting review is listed by its key alone, small and of one size:
-  // what it shows is read with `permissionReview` and checked there.
-  const reviewKeys = new Set<string>()
-  for (const entry of items(item, "permissions", bounds.maxListedReviews)) {
-    exact(entry, ["review", "origin", "toolName"])
-    const key = text(entry, "review", 32)
-    if (!reviewKeyPattern.test(key)) throw new Error("Invalid conversation review key")
-    if (reviewKeys.has(key)) throw new Error("Conversation response repeats a review")
-    reviewKeys.add(key)
-    oneOf(text(entry, "origin", 16), ["harness", "app"])
-    text(entry, "toolName", bounds.maxReviewEntryToolNameBytes)
-  }
+}
+
+/**
+ * The tool calls `item` lists, checked as a view's against the turns'
+ * `toolPartIds`. `complete` says each call and each tool part has the other.
+ */
+function transcriptTools(
+  item: Record<string, unknown>,
+  toolPartIds: ReadonlySet<string>,
+  complete: boolean,
+) {
   const toolIds = new Set<string>()
   // One execution runs in one process, so its tools share that start's choice.
   const executionHooks = new Map<string, string>()
@@ -879,7 +768,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (tool.changesCut !== undefined && typeof tool.changesCut !== "boolean")
       throw new Error("Invalid conversation tool changesCut")
   }
-  if (!item.truncated) {
+  if (complete) {
     for (const toolKey of toolIds) {
       if (!toolPartIds.has(toolKey))
         throw new Error("Conversation tool is orphaned from its message")
@@ -889,6 +778,173 @@ export function conversationView(value: unknown, expected: string): Conversation
         throw new Error("Conversation tool part has no matching tool state")
     }
   }
+  return toolIds
+}
+
+export function conversationView(value: unknown, expected: string): ConversationView {
+  const item = record(value)
+  exact(item, [
+    "conversationId",
+    "revision",
+    "serverNowMs",
+    "messages",
+    "pending",
+    "permissions",
+    "questions",
+    "tools",
+    "capabilities",
+    "lifecycle",
+    "truncated",
+    "earlier",
+    "interactionViewError",
+    "queueComplete",
+    "transcriptState",
+    "runtime",
+    "lease",
+    "artifacts",
+    "notes",
+    "unreadable",
+    "unreadableTruncated",
+    "usageLimitAutoContinue",
+    "handoffs",
+    "title",
+    "approvalMode",
+    "approvalModes",
+    "approvalModeChange",
+    "modelChange",
+    "modelChangeEffect",
+    "model",
+  ])
+  if (identity(item, "conversationId") !== expected)
+    throw new Error("Conversation response belongs to another conversation")
+  identity(item, "revision")
+  // The gateway's time the view was sent at: what each deadline's `dueAtMs`
+  // is measured against (`clientDueAtMs`).
+  const serverNowMs = item.serverNowMs
+  if (
+    typeof serverNowMs !== "number" ||
+    !Number.isSafeInteger(serverNowMs) ||
+    serverNowMs < 1
+  )
+    throw new Error("Invalid conversation serverNowMs")
+  if (
+    item.usageLimitAutoContinue !== undefined &&
+    typeof item.usageLimitAutoContinue !== "boolean"
+  )
+    throw new Error("Conversation response has invalid usageLimitAutoContinue")
+  optionalText(item, "title", bounds.maxConversationTitleBytes)
+  flag(item, "truncated")
+  flag(item, "earlier")
+  flag(item, "queueComplete")
+  oneOf(text(item, "transcriptState", maxTranscriptStateBytes, false), transcriptStates)
+  const committedMode = text(item, "approvalMode", 4, false)
+  const offeredModes = approvalModeChoices(item.approvalModes)
+  if (!offeredModes.some((choice) => choice.id === committedMode))
+    throw new Error("Conversation mode is unavailable for its model")
+  if (item.approvalModeChange !== undefined) {
+    const change = record(item.approvalModeChange)
+    exact(change, ["requestId", "requestedMode", "status"])
+    identity(change, "requestId")
+    const requested = text(change, "requestedMode", 4, false)
+    if (!offeredModes.some((choice) => choice.id === requested))
+      throw new Error("Conversation requested mode is unavailable")
+    oneOf(text(change, "status"), ["changing", "recovery_required"])
+  }
+  if (item.modelChange !== undefined) {
+    const change = record(item.modelChange)
+    exact(change, ["requestId", "requestedModel", "status"])
+    identity(change, "requestId")
+    text(change, "requestedModel", 256, false)
+    oneOf(text(change, "status"), ["changing", "recovery_required"])
+  }
+  if (item.modelChangeEffect !== undefined)
+    oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
+  text(item, "model", 256, false)
+  if (item.interactionViewError !== undefined)
+    text(item, "interactionViewError", 2048, false)
+  const {
+    messages,
+    messageStatuses,
+    messageTexts,
+    messageImages,
+    messageFiles,
+    messageUploads,
+    messageApps,
+    toolPartIds,
+  } = transcriptTurns(item, !item.truncated && !item.earlier)
+  const pendingIds = new Set<string>()
+  for (const pending of items(item, "pending", 128)) {
+    exact(pending, [
+      "executionId",
+      "text",
+      "attachments",
+      "files",
+      "uploads",
+      "app",
+      "mode",
+    ])
+    const executionId = identity(pending, "executionId")
+    if (pendingIds.has(executionId))
+      throw new Error("Conversation response repeats a pending execution")
+    const status = messageStatuses.get(executionId)
+    if (status !== undefined && status !== "queued")
+      throw new Error("Pending execution is not queued")
+    if (status === undefined && !item.truncated)
+      throw new Error("Pending execution is missing its message")
+    pendingIds.add(executionId)
+    const pendingText = text(pending, "text", 8192)
+    const pendingImages = imagesKey(
+      imageAttachments(pending.attachments, "pending attachments"),
+    )
+    const pendingFiles = filesKey(linkedFiles(pending.files, "pending files"))
+    const uploaded = uploadedFiles(pending.uploads, "pending uploads")
+    if (
+      linkedFiles(pending.files, "pending files").length + uploaded.length >
+      bounds.maxMessageFiles
+    )
+      throw new Error("Too many pending files")
+    const pendingUploads = JSON.stringify(
+      uploaded.map((file) => [file.digest, file.mimeType, file.size, file.name]),
+    )
+    const pendingApp = messageAppKey(pending.app, "pending app")
+    oneOf(text(pending, "mode"), ["queued", "steering"])
+    // The waiting input and its queued message are one submission seen twice;
+    // the same text over different images is as contradictory as different text.
+    if (
+      !item.truncated &&
+      item.queueComplete &&
+      (messageTexts.get(executionId) !== pendingText ||
+        messageImages.get(executionId) !== pendingImages ||
+        messageFiles.get(executionId) !== pendingFiles ||
+        messageApps.get(executionId) !== pendingApp ||
+        messageUploads.get(executionId) !== pendingUploads)
+    )
+      throw new Error("Pending execution contradicts its queued message")
+  }
+  // Each waiting question is listed by a small entry under its key: all it
+  // asks is read with `questionReview` and checked there.
+  const questionKeys = new Set<string>()
+  for (const entry of items(item, "questions", bounds.maxOpenQuestions)) {
+    exact(entry, ["question", "message"])
+    const key = text(entry, "question", 32)
+    if (!reviewKeyPattern.test(key)) throw new Error("Invalid conversation question key")
+    if (questionKeys.has(key)) throw new Error("Conversation response repeats a question")
+    questionKeys.add(key)
+    text(entry, "message", bounds.maxQuestionEntryMessageBytes)
+  }
+  // Each waiting review is listed by its key alone, small and of one size:
+  // what it shows is read with `permissionReview` and checked there.
+  const reviewKeys = new Set<string>()
+  for (const entry of items(item, "permissions", bounds.maxListedReviews)) {
+    exact(entry, ["review", "origin", "toolName"])
+    const key = text(entry, "review", 32)
+    if (!reviewKeyPattern.test(key)) throw new Error("Invalid conversation review key")
+    if (reviewKeys.has(key)) throw new Error("Conversation response repeats a review")
+    reviewKeys.add(key)
+    oneOf(text(entry, "origin", 16), ["harness", "app"])
+    text(entry, "toolName", bounds.maxReviewEntryToolNameBytes)
+  }
+  const toolIds = transcriptTools(item, toolPartIds, !item.truncated)
   if (item.runtime !== undefined) {
     const runtime = record(item.runtime)
     exact(runtime, [
@@ -1647,4 +1703,30 @@ export function conversationShares(value: unknown): ConversationSharesResult {
       throw new Error("Invalid conversation shares cursor")
   }
   return result as unknown as ConversationSharesResult
+}
+
+/**
+ * A page of earlier turns (`conversation.readEarlier`): its turns and tool
+ * calls checked as a view's, the fork it may end on, and whether more came
+ * before. A steering message's target may be earlier still.
+ */
+export function conversationEarlier(
+  value: unknown,
+  expected: string,
+): ConversationEarlier {
+  const item = record(value)
+  exact(item, ["conversationId", "messages", "tools", "handoffs", "more", "truncated"])
+  if (identity(item, "conversationId") !== expected)
+    throw new Error("Conversation response belongs to another conversation")
+  flag(item, "more")
+  flag(item, "truncated")
+  const { toolPartIds } = transcriptTurns(item, false)
+  transcriptTools(item, toolPartIds, !item.truncated)
+  const handoffIds = new Set<string>()
+  for (const handoff of items(item, "handoffs", 256)) {
+    const id = conversationHandoff(handoff)
+    if (handoffIds.has(id)) throw new Error("Repeated conversation handoff id")
+    handoffIds.add(id)
+  }
+  return item as unknown as ConversationEarlier
 }

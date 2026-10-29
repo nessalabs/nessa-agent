@@ -324,6 +324,24 @@ export function retryReview({
 }
 
 /**
+ * Reads the turns before the first one a session's transcript shows. A read
+ * that fails is said to the console, and the transcript asks again.
+ * Settles once the read is in the store: true when another may be asked
+ * for, false when it failed or there is none.
+ */
+export function loadEarlier({
+  sessionId,
+}: {
+  sessionId: string
+}): WorkspaceCommand<Promise<boolean>> {
+  return async (_dispatch, _getState, { workspace }) =>
+    (await workspace.loadEarlier?.(sessionId).catch((error: unknown) => {
+      console.warn("Earlier turns were not read", error)
+      return false
+    })) ?? false
+}
+
+/**
  * What became of an answer to a question the agent asked. `sent` once the
  * source has taken it. `not-asked` when this window is not showing that
  * question. `refused` when the source declined it, `unknown` when it is not

@@ -4192,3 +4192,219 @@ it("keeps input attachments when a fresh desktop source reopens a retained conve
     stopReopened()
   }
 })
+
+describe("earlier turns", () => {
+  const done = (id: string, text: string) => ({
+    ...running(id),
+    userText: `asked ${id}`,
+    status: "completed" as const,
+    parts: [{ offset: 0, kind: "text" as const, text, toolId: "", noticeId: "" }],
+  })
+  const ids = (updates: readonly WorkspaceUpdate[]) =>
+    transcriptsOf(updates, conversationA)
+      .at(-1)
+      ?.messages.filter((message) => message.role === "agent")
+      .map((message) => messageText(message))
+
+  it("reads the turns before the view's first a page at a time, and draws them in front", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.earlier.set(conversationA, [
+      done("t1", "one"),
+      done("t2", "two"),
+      done("t3", "three"),
+    ])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "1",
+        earlier: true,
+        messages: [done("t4", "four")],
+      }),
+    )
+    follow()
+    await source.transcript(conversationA)
+    await flush()
+    expect(transcriptsOf(updates, conversationA).at(-1)?.history?.earlier).toBe(true)
+    expect(ids(updates)).toEqual(["four"])
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    expect(ids(updates)).toEqual(["two", "three", "four"])
+    expect(transcriptsOf(updates, conversationA).at(-1)?.history?.earlier).toBe(true)
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "three", "four"])
+    expect(transcriptsOf(updates, conversationA).at(-1)?.history).toBeUndefined()
+    // Nothing more to read: nothing is asked.
+    const asked = gateway.calls.filter((call) => call.method === "readEarlier").length
+    await source.loadEarlier?.(conversationA)
+    expect(gateway.calls.filter((call) => call.method === "readEarlier")).toHaveLength(
+      asked,
+    )
+  })
+
+  it("reads the gap when the view moves on past the turns read", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.earlier.set(conversationA, [done("t1", "one"), done("t2", "two")])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "1",
+        earlier: true,
+        messages: [done("t3", "three")],
+      }),
+    )
+    follow()
+    await source.transcript(conversationA)
+    await flush()
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "three"])
+    // Two more turns came; the view now starts at the fourth.
+    gateway.earlier.set(conversationA, [
+      done("t1", "one"),
+      done("t2", "two"),
+      done("t3", "three"),
+    ])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "2",
+        earlier: true,
+        messages: [done("t4", "four"), done("t5", "five")],
+      }),
+    )
+    gateway.publish(conversationA)
+    await flush()
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "three", "four", "five"])
+  })
+
+  it("lets what was read go when the gateway says its point is not in the history", async () => {
+    const restore = quiet()
+    try {
+      const { gateway, source, updates, follow } = started()
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "1",
+          earlier: true,
+          messages: [done("t4", "four")],
+        }),
+      )
+      follow()
+      await source.transcript(conversationA)
+      await flush()
+      gateway.once("readEarlier", async () => {
+        throw rpcCode("invalid_request")
+      })
+      expect(await source.loadEarlier?.(conversationA)).toBe(false)
+      await flush()
+      expect(ids(updates)).toEqual(["four"])
+      // Turns it will not read are said to be left out, and not asked for again.
+      const history = transcriptsOf(updates, conversationA).at(-1)?.history
+      expect(history).toMatchObject({ omitted: true })
+      expect(history?.earlier).toBeUndefined()
+      const asked = gateway.calls.filter((call) => call.method === "readEarlier").length
+      expect(await source.loadEarlier?.(conversationA)).toBe(false)
+      expect(gateway.calls.filter((call) => call.method === "readEarlier")).toHaveLength(
+        asked,
+      )
+    } finally {
+      restore.mockRestore()
+    }
+  })
+
+  it("joins what the last frame drew when a streaming turn moves the view on, reading nothing", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.earlier.set(conversationA, [done("t1", "one")])
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "1",
+        earlier: true,
+        messages: [done("t2", "two"), { ...done("t3", "abcdef"), status: "running" }],
+      }),
+    )
+    follow()
+    await source.transcript(conversationA)
+    await flush()
+    await source.loadEarlier?.(conversationA)
+    await flush()
+    const asked = gateway.calls.filter((call) => call.method === "readEarlier").length
+    // The reply grew; the view now starts partway through it.
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        revision: "2",
+        earlier: true,
+        messages: [
+          {
+            ...done("t3", "defgh"),
+            userText: "",
+            status: "running",
+            startsAt: { part: 0, byte: 3 },
+          },
+        ],
+      }),
+    )
+    gateway.publish(conversationA)
+    await flush()
+    await flush()
+    expect(ids(updates)).toEqual(["one", "two", "abcdefgh"])
+    expect(gateway.calls.filter((call) => call.method === "readEarlier")).toHaveLength(
+      asked,
+    )
+  })
+
+  it("asks for a stretch that failed twice only when the next frame comes", async () => {
+    const restore = quiet()
+    vi.useFakeTimers()
+    try {
+      const { gateway, source, updates, follow } = started()
+      gateway.earlier.set(conversationA, [done("t1", "one"), done("t2", "two")])
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "1",
+          earlier: true,
+          messages: [done("t3", "three")],
+        }),
+      )
+      follow()
+      await source.transcript(conversationA)
+      await flush()
+      await source.loadEarlier?.(conversationA)
+      await flush()
+      const reads = () =>
+        gateway.calls.filter((call) => call.method === "readEarlier").length
+      const before = reads()
+      for (let each = 0; each < 10; each++)
+        gateway.once("readEarlier", async () => {
+          throw rpcCode("unavailable")
+        })
+      // The view moves on past a turn no frame drew: that stretch is read.
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "2",
+          earlier: true,
+          messages: [done("t5", "five")],
+        }),
+      )
+      gateway.publish(conversationA)
+      await flush()
+      await vi.advanceTimersByTimeAsync(2_000)
+      await flush()
+      expect(reads()).toBe(before + 2)
+      expect(transcriptsOf(updates, conversationA).at(-1)?.history).toMatchObject({
+        omitted: true,
+      })
+      await vi.advanceTimersByTimeAsync(20_000)
+      await flush()
+      expect(reads()).toBe(before + 2)
+    } finally {
+      vi.useRealTimers()
+      restore.mockRestore()
+    }
+  })
+})

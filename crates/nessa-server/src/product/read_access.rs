@@ -218,7 +218,8 @@ async fn unpaired_may_see_review(
     })
 }
 
-/// Admit a paired credential's peek or subscription read through pairing's grant.
+/// Admit a paired credential's peek, earlier-turns or subscription read through
+/// pairing's grant.
 ///
 /// Returns false for unpaired sessions or other methods so their caller asks
 /// the manifest grant. Paired credentials ask `conversation.read`, with the
@@ -234,6 +235,7 @@ pub(super) async fn admit_paired_read(
     if !matches!(
         method,
         "conversation.peek"
+            | "conversation.readEarlier"
             | "conversation.subscribe"
             | "conversation.subscribeEvents"
             | "conversation.list"
@@ -436,8 +438,9 @@ fn paired_action(method: &str) -> AccessAction {
 /// reaches only to be admitted again by its grants: the read and the view
 /// subscription ask [`admit_conversation`], the lists ask [`admit_list`],
 /// and an unsubscribe ends only what was admitted. Rows G12 and G13.
-const ADMITTED_BY_ITS_OWN_CHECK: [&str; 8] = [
+const ADMITTED_BY_ITS_OWN_CHECK: [&str; 9] = [
     "conversation.read",
+    "conversation.readEarlier",
     "conversation.list",
     "conversation.observe",
     "conversation.subscribe",

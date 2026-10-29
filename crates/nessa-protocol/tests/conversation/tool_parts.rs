@@ -12,7 +12,7 @@
 //! call's id); what reaches the projection from a frame, and all this tests
 //! needs, is that id and the status the frame states.
 use super::tests::{committed_tool_view, completed_snapshot, event, projection};
-use crate::conversation::projection::{bound_view, Projection};
+use crate::conversation::projection::{bound_view, Projection, MAX_VIEW_TOOLS};
 use crate::conversation::view::ConversationView;
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use nessa_sdk::application::agent_execution::sessions::SessionSnapshot;
@@ -237,16 +237,15 @@ fn one_tool_id_in_two_turns_is_a_part_in_each() {
     assert_eq!(shown.tools.len(), 2);
 }
 
-/// Row: the view keeps the most recent tool entries only. A call whose entry
-/// was let go keeps its one part, and an update for it brings the entry back
-/// without a second part.
+/// Row: a call among many keeps its row, and a later update finds it without
+/// a second part.
 #[test]
-fn an_update_after_its_entry_was_let_go_adds_no_second_part() {
+fn a_later_update_finds_its_call_among_many() {
     let mut events: Vec<_> = (0..17)
         .map(|call| update(&format!("call-{call}"), Some(ToolStatus::Running)))
         .collect();
     let before = committed_tool_view(&events);
-    assert!(before.tools.iter().all(|tool| tool.tool_id != "call-0"));
+    assert!(before.tools.iter().any(|tool| tool.tool_id == "call-0"));
     events.push(update("call-0", Some(ToolStatus::Completed)));
     let shown = committed_tool_view(&events);
     let parts = tool_parts(&shown, 0);
@@ -258,8 +257,9 @@ fn an_update_after_its_entry_was_let_go_adds_no_second_part() {
         .any(|tool| tool.tool_id == "call-0" && tool.status == "completed"));
 }
 
-/// Row: a turn lists a part for every call it makes, however many. A
-/// call's later update adds no second part.
+/// Row: a turn holds a part for every call it makes, however many. A
+/// call's later update adds no second part. A view lists at most
+/// `MAX_VIEW_TOOLS` of them: the older ones are read as earlier.
 #[test]
 fn every_call_keeps_its_part() {
     let mut events: Vec<_> = (0..512)
@@ -269,10 +269,26 @@ fn every_call_keeps_its_part() {
         events.push(update("late", Some(status)));
     }
     events.push(update("call-0", Some(ToolStatus::Completed)));
-    let shown = committed_tool_view(&events);
-    let parts = tool_parts(&shown, 0);
+    let snapshot = completed_snapshot("execution", events.clone());
+    let whole = Projection::new(
+        "conversation".into(),
+        projection().read().capabilities,
+        Some(&snapshot),
+    )
+    .read();
+    let parts = tool_parts(&whole, 0);
     assert_eq!(parts.len(), 513);
     assert_eq!(parts.first().map(|(id, _)| id.as_str()), Some("call-0"));
+    assert_eq!(parts.last().map(|(id, _)| id.as_str()), Some("late"));
+    let shown = committed_tool_view(&events);
+    let parts = tool_parts(&shown, 0);
+    assert_eq!(parts.len(), MAX_VIEW_TOOLS);
+    assert_eq!(shown.tools.len(), MAX_VIEW_TOOLS);
+    assert!(shown.earlier && !shown.truncated);
+    assert_eq!(
+        shown.messages[0].starts_at.map(|at| at.part),
+        Some(513 - MAX_VIEW_TOOLS)
+    );
     assert_eq!(parts.last().map(|(id, _)| id.as_str()), Some("late"));
     assert!(shown
         .tools

@@ -84,6 +84,7 @@ function publishedView(
       transcriptState: state,
       queueComplete: state === "complete" || state === "complete_empty",
       truncated: false,
+      earlier: false,
       messages:
         state === "complete"
           ? [

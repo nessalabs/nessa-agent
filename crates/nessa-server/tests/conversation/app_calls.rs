@@ -1669,7 +1669,7 @@ async fn the_most_reviews_a_view_lists_are_all_listed_at_their_largest_however_f
     assert_eq!(listed.permissions, [agent, apps].concat());
     assert_eq!(listed.questions, questions);
     assert_eq!(listed.interaction_view_error, None);
-    assert!(listed.truncated);
+    assert!(listed.earlier);
 }
 
 #[tokio::test]

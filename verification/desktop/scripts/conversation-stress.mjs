@@ -362,6 +362,8 @@ const PARK_IDLE_SECONDS = 3
  */
 const LONG_CHUNKS = 40
 const LONG_CHUNK_BYTES = 300
+/** Chunks of an `oversized` answer: about 74 KB, past one view's 60 KB frame. */
+const OVERSIZED_CHUNKS = 240
 /**
  * How many other conversations the `fresh` step creates and sends to at the
  * same moment as the window's own first message: more than the sixteen
@@ -4797,18 +4799,137 @@ const steps = {
           "the last long answer changed when the conversation was opened again",
         )
     }
+    // Last, an answer longer than one view's frame: the view starts partway
+    // through it, and its start is read back as earlier too.
+    // Its view no longer lists the person's message, so the turn is followed
+    // by its id.
+    const oversized = prompt(run, STRESS.oversized, step)
+    const { executionId } = await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, oversized),
+    )
+    const answered = await waitFor(async () => {
+      const shown = await run.client.conversation.read(conversationId)
+      const turn = shown.messages.find((each) => each.executionId === executionId)
+      return turn && ended(turn) ? turn : undefined
+    }, 60_000)
+    if (answered?.status !== "completed")
+      failures.push(`the oversized answer ended ${answered?.status ?? "never"}`)
     // A person opens the long conversation and writes in it.
     await openStressConversation(
       run.page,
       conversationId,
       await titleOf(run, conversationId),
     )
+    // Its view lists only the newest answers. Scrolled back, the window reads
+    // the rest a page at a time until the first turn shows.
+    await readBackToStart(run, STRESS.long, step, failures)
+    // The oversized answer, joined from its pieces, is drawn whole.
+    const drawn = await run.page
+      .locator(".workspace-message")
+      .filter({ hasText: SAYS.oversized })
+      .first()
+      .textContent()
+      .catch(() => "")
+    const pieces = [
+      ...(drawn ?? "").matchAll(new RegExp(`(\\d+) x{${LONG_CHUNK_BYTES}}`, "g")),
+    ].map((match) => Number(match[1]))
+    if (pieces.length !== OVERSIZED_CHUNKS || pieces.some((index, at) => index !== at))
+      failures.push(
+        `the oversized answer is drawn with ${pieces.length} of ${OVERSIZED_CHUNKS} chunks in order`,
+      )
     const last = prompt(run, STRESS.reply, step, " after the long answers")
     const seen = await send(run, conversationId, last, failures)
     await settled(run, conversationId, seen, last, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
+}
+
+/**
+ * Scrolls the open conversation back to its top until its first turn shows:
+ * the window reads the turns before those its view lists a page at a time as
+ * the reader nears the top. Every turn of `step` (`phrase` … ` t<n>`) is then
+ * drawn once, in order. A page that arrives keeps the reader on what they
+ * were reading, and nothing says content was left out.
+ */
+async function readBackToStart(run, phrase, step, failures) {
+  // The pane showing this conversation: an earlier step can leave other
+  // panes open, a hidden one among them.
+  const scroller = run.page
+    .locator(`${css.transcript}:visible`)
+    .filter({ hasText: phrase })
+    .first()
+  const turns = () =>
+    scroller.evaluate((element, phrase) => {
+      const said = [...element.querySelectorAll('.workspace-message[data-role="user"]')]
+        .map((message) => message.textContent ?? "")
+        .filter((text) => text.includes(phrase))
+        .map((text) => Number(/ t(\d+) /.exec(`${text} `)?.[1] ?? -1))
+      return {
+        said,
+        // A page may only lengthen the first turn drawn, adding no message.
+        drawn: element.textContent?.length ?? 0,
+        loading: Boolean(element.querySelector("[data-history-earlier]")),
+        omitted: Boolean(element.querySelector('[data-history-extent="omitted"]')),
+      }
+    }, phrase)
+  if (!(await waitFor(async () => (await turns()).loading, 10_000))) {
+    const shown = await turns()
+    failures.push(
+      `a conversation longer than its view offers no earlier turns (shows ${JSON.stringify(shown.said)})`,
+    )
+    return
+  }
+  // At the top, the first message drawn: where its end is on screen before
+  // the next page arrives, and after. A page joins whole turns above it, or
+  // the start of its own turn inside it; either way, its end stays put.
+  const top = () =>
+    scroller.evaluate((element) => {
+      element.scrollTop = 0
+      const first = element.querySelector(".workspace-message")
+      first?.setAttribute("data-stress-anchor", "")
+      return first?.getBoundingClientRect().bottom ?? null
+    })
+  const anchored = () =>
+    scroller.evaluate(
+      (element) =>
+        element.querySelector("[data-stress-anchor]")?.getBoundingClientRect().bottom ??
+        null,
+    )
+  const end = Date.now() + 60_000
+  let pages = 0
+  let shown = await turns()
+  while (shown.loading && Date.now() < end) {
+    const before = await top()
+    const count = shown.drawn
+    if (!(await waitFor(async () => (await turns()).drawn > count, 15_000))) {
+      failures.push(`scrolled to the top, nothing earlier arrived after ${pages} pages`)
+      return
+    }
+    pages += 1
+    const after = await anchored()
+    if (before !== null && after !== null && Math.abs(after - before) > 2)
+      failures.push(
+        `a page of earlier turns moved what was being read by ${Math.round(after - before)}px`,
+      )
+    await scroller.evaluate((element) =>
+      element
+        .querySelector("[data-stress-anchor]")
+        ?.removeAttribute("data-stress-anchor"),
+    )
+    shown = await turns()
+  }
+  const expected = Array.from({ length: step.turns }, (_, turn) => turn)
+  if (shown.loading || JSON.stringify(shown.said) !== JSON.stringify(expected))
+    failures.push(
+      `read back over ${pages} pages, the window shows turns ${JSON.stringify(shown.said)}${shown.loading ? ", still loading" : ""}`,
+    )
+  if (shown.omitted) failures.push("the long conversation says some content is not shown")
+  log(`long conversation read back to its first turn in ${pages} pages`)
+  // Back at the end, where the person writes next.
+  await scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
 }
 
 /** A menu row's height in nessa_ui's menu recipe, at the default scale. */
@@ -6351,6 +6472,7 @@ async function startStack(options) {
         reviews: knobs.reviews,
         longChunks: LONG_CHUNKS,
         longChunkBytes: LONG_CHUNK_BYTES,
+        oversizedChunks: OVERSIZED_CHUNKS,
       }),
     ),
   )

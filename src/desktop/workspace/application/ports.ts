@@ -178,6 +178,15 @@ export interface WorkspaceSource {
    */
   retryReview?(sessionId: string, approvalId: string): void
   /**
+   * Reads the turns before the first one the session's transcript shows, as
+   * the person scrolls back to them (`Transcript.history.earlier`): a page
+   * at a time, joined in front of the transcript by its next update. Resolves
+   * once that page is in: true when a read went through and another may be
+   * asked for, false when there is none to ask. A source whose transcripts
+   * are whole leaves it out.
+   */
+  loadEarlier?(sessionId: string): Promise<boolean>
+  /**
    * Answers a question the session's agent is waiting on, or declines it
    * (`choices` null). Resolves once the source has taken the answer. The
    * question leaves the conversation when a later read no longer lists it.

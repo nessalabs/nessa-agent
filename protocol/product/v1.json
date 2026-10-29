@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 103,
+          "maxItems": 104,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1279,6 +1279,10 @@
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Target event count when steering was admitted locally; does not imply provider consumption timing."
+        },
+        "startsAt": {
+          "$ref": "#/$defs/ConversationPartPosition",
+          "description": "Where the first listed part starts in the whole turn, when the view begins partway through it. The person's message and the parts before it are read with conversation.readEarlier. Absent when the turn is listed from its start."
         }
       },
       "required": ["executionId", "userText", "attachments", "files", "status", "parts"]
@@ -1810,7 +1814,11 @@
         },
         "truncated": {
           "type": "boolean",
-          "description": "Some history, text or whole interactions were omitted to bound this response; interactionViewError explains omitted actionable units."
+          "description": "Something no read gives back was omitted to bound this response: a gap between the turns listed, notes, artifacts, or whole interactions; interactionViewError explains omitted actionable units. Older turns that only come before the first one listed are earlier instead."
+        },
+        "earlier": {
+          "type": "boolean",
+          "description": "Turns, or the start of the first turn listed, came before what this view lists. They are read with conversation.readEarlier, before the first message's start."
         },
         "interactionViewError": {
           "type": "string",
@@ -1929,6 +1937,7 @@
         "capabilities",
         "lifecycle",
         "truncated",
+        "earlier",
         "queueComplete",
         "transcriptState",
         "title",
@@ -2076,6 +2085,109 @@
         "executionId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 }
       },
       "required": ["conversationId", "executionId"]
+    },
+    "ConversationPartPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A place in a turn: the part, counted from the turn's first, and the byte within that part's text.",
+      "properties": {
+        "part": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "The part, counted from the turn's first part."
+        },
+        "byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "The UTF-8 byte within that part's text where the place falls; 0 at the part's start."
+        }
+      },
+      "required": ["part", "byte"]
+    },
+    "ConversationPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A place in a conversation's history: the start of a turn, before the person's message, when at is absent; otherwise a place among the turn's parts, after the person's message.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The turn the point is in."
+        },
+        "at": {
+          "$ref": "#/$defs/ConversationPartPosition",
+          "description": "A place among the turn's parts, after the person's message; absent for the turn's start, before it."
+        }
+      },
+      "required": ["executionId"]
+    },
+    "ConversationReadEarlierParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read what came before a point in the conversation's history: the turns nearest it that fit one frame. With after, only what comes after that point, to fill a gap between two points.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "before": {
+          "$ref": "#/$defs/ConversationPoint",
+          "description": "Where what is read ends: the first point the reader already holds."
+        },
+        "after": {
+          "$ref": "#/$defs/ConversationPoint",
+          "description": "Where what is read starts, when the reader holds what comes before it; absent to read back toward the first turn."
+        }
+      },
+      "required": ["conversationId", "before"]
+    },
+    "ConversationEarlier": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What came before a point, oldest first, ending where the point is. The first message starts partway through its turn when it carries startsAt.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "messages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationMessage" },
+          "maxItems": 128,
+          "description": "The turns before the point, oldest first; the first may start partway (startsAt) and the last may end partway, where the point falls."
+        },
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationTool" },
+          "maxItems": 128,
+          "description": "The calls the messages made."
+        },
+        "handoffs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationHandoff" },
+          "maxItems": 256,
+          "description": "The fork the conversation began as, with its copied turns, on the page that reaches the start; empty otherwise."
+        },
+        "more": {
+          "type": "boolean",
+          "description": "Something comes before the first message's start (after the after point, when one was given)."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The page left out something no read gives back, as a view's truncated says."
+        }
+      },
+      "required": ["conversationId", "messages", "tools", "handoffs", "more", "truncated"]
     },
     "ConversationReadParams": {
       "type": "object",
