@@ -13,9 +13,9 @@ export function listReviewState(card) {
 }
 
 /** A complete native request must retain its compact grant, not silently use chat. */
-export function requireCompactReview(state) {
+export function requireCompactReview(state, command = "node --version") {
   assert.equal(state.whole, true, "the native command is not drawn whole")
-  assert.match(state.command, /^\$?\s*node --version$/)
+  assert.equal(state.command.replace(/^\$\s*/, ""), command)
   assert.equal(state.grants, 1, "the compact command must offer Allow once")
   assert.equal(state.refusals, 1, "the compact command must offer Deny once")
   assert.equal(state.reviewInChat, 0, "compact approval unexpectedly requires chat")

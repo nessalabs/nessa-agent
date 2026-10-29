@@ -370,15 +370,14 @@ export function permissionCall(
 
 /** A distinct native command, not an MCP call with its wrapper hidden. */
 export function versionReviewCall(agent, id) {
+  if (agent !== "codex") throw new Error("the native version review requires Codex")
   const toolCall = {
     toolCallId: id,
     title: "Node version",
     kind: "execute",
     status: "pending",
     rawInput: { command: "node --version" },
-    ...(agent === "claude"
-      ? { _meta: { claudeCode: { toolName: "Bash" } } }
-      : { name: "exec_command" }),
+    name: "exec_command",
   }
   return {
     update: { sessionUpdate: "tool_call", ...toolCall },

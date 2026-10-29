@@ -2044,8 +2044,18 @@ const steps = {
           return
         }
         const state = await listCard.evaluate(listReviewState)
-        if (kind === "compact") requireCompactReview(state)
-        else requirePreviewReview(state)
+        if (kind === "compact") {
+          if (run.stack.profile.agent === "claude" && permission.argumentsJson !== "{}") {
+            failures.push("the compact MCP fixture contains unexpected input")
+            return
+          }
+          requireCompactReview(
+            state,
+            run.stack.profile.agent === "codex"
+              ? "node --version"
+              : `${permission.toolName} {}`,
+          )
+        } else requirePreviewReview(state)
         if (run.evidence) {
           writeView(
             run.evidence,
@@ -2112,7 +2122,11 @@ const steps = {
           run.main.id,
           answer,
           failures,
-          kind === "compact" ? "Node version" : "A list preview",
+          kind === "compact"
+            ? run.stack.profile.agent === "codex"
+              ? "Node version"
+              : "A compact review"
+            : "A list preview",
           {
             review: permission.review,
             ...(inList
@@ -2141,7 +2155,9 @@ const steps = {
           permission,
           answer,
           expectedReply,
-          ...(kind === "compact" ? { expectedVersion: process.version } : {}),
+          ...(kind === "compact" && run.stack.profile.agent === "codex"
+            ? { expectedVersion: process.version }
+            : {}),
         })
         await run.page
           .locator(css.focusedPane)
@@ -6491,6 +6507,7 @@ async function startStack(options) {
     scenario,
     JSON.stringify(
       stressScenario({
+        agent: profile.agent,
         reviews: knobs.reviews,
         longChunks: LONG_CHUNKS,
         longChunkBytes: LONG_CHUNK_BYTES,

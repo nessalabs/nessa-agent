@@ -33,8 +33,11 @@ no timestamps and cannot establish why the human allow did not settle first.
 These controls reproduce the verifier's false success, not that runtime cause.
 
 The list-answer step distinguishes complete commands from previews. Its compact
-fixture asks for the fixed native `node --version` command and executes it only
-after an allow. The existing MCP wrapper is not shortened or relabeled: an
+fixture uses the fixed native `node --version` command for Codex and executes it
+only after a selected allow. Claude uses its existing short `report_rows {}` MCP
+review: native Bash remains deliberately unreviewable. Scenario construction is
+bound to the explicitly selected agent, and unknown agents fail. The existing
+Codex MCP wrapper is not shortened or relabeled: an
 oversized MCP review remains preview-only in both harnesses. Each shape exercises
 allow and deny. A preview must expose no grant and must retain Review in Chat;
 allowing it requires that explicit route and the original pending review. Both

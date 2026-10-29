@@ -172,12 +172,15 @@ const review = (title, args, allowedText, deniedText = SAYS.denied) => ({
  * conversation's history grows fast.
  */
 export function stressScenario({
+  agent = "claude",
   reviews = 20,
   largeBytes = 24_000,
   pauseMs = 3_000,
   longChunks = 40,
   longChunkBytes = 300,
 } = {}) {
+  if (!["claude", "codex"].includes(agent))
+    throw new Error("unsupported stress fixture agent")
   const many = Array.from({ length: Math.max(1, reviews) }, (_, index) =>
     review(`Review ${index + 1} of ${reviews}`, { index }, `Allowed ${index + 1}.`),
   )
@@ -324,13 +327,28 @@ export function stressScenario({
       {
         when: STRESS.listPermission,
         steps: [
-          {
-            do: "version-review",
-            on: {
-              "allow-once": [{ do: "text", chunks: [SAYS.allowed + " ${prompt.text}"] }],
-              "deny-once": [{ do: "text", chunks: [SAYS.denied + " ${prompt.text}"] }],
-            },
-          },
+          ...(agent === "claude"
+            ? [
+                review(
+                  "A compact review",
+                  {},
+                  SAYS.allowed + " ${prompt.text}",
+                  SAYS.denied + " ${prompt.text}",
+                ),
+              ]
+            : [
+                {
+                  do: "version-review",
+                  on: {
+                    "allow-once": [
+                      { do: "text", chunks: [SAYS.allowed + " ${prompt.text}"] },
+                    ],
+                    "deny-once": [
+                      { do: "text", chunks: [SAYS.denied + " ${prompt.text}"] },
+                    ],
+                  },
+                },
+              ]),
           { do: "end" },
         ],
       },

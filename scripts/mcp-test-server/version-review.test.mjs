@@ -22,7 +22,10 @@ async function run(
   const calls = new Map(),
     updates = []
   let executions = 0
-  const steps = turnFor(parseScenario(stressScenario()), STRESS.listPermission).steps
+  const steps = turnFor(
+    parseScenario(stressScenario({ agent: "codex" })),
+    STRESS.listPermission,
+  ).steps
   if (cancelledBranch) steps[0].on.cancelled = [{ do: "text", chunks: ["Cancelled."] }]
   let cancelled = cancel
   const result = await runSteps(steps, {
@@ -51,7 +54,7 @@ async function run(
   return { result, updates, executions, calls }
 }
 test("native compact fixture keeps the actual command, without an MCP wrapper", () => {
-  for (const agent of ["claude", "codex"]) {
+  for (const agent of ["codex"]) {
     const call = versionReviewCall(agent, "native-call")
     assert.equal(call.update.kind, "execute")
     assert.deepEqual(call.update.rawInput, { command: "node --version" })
@@ -66,7 +69,7 @@ test("native compact fixture keeps the actual command, without an MCP wrapper", 
   }
 })
 test("only an acknowledged allow executes and completes the same native call", async () => {
-  for (const agent of ["claude", "codex"]) {
+  for (const agent of ["codex"]) {
     const r = await run(agent, { outcome: "selected", optionId: "allow-once" })
     assert.equal(r.executions, 1)
     assert.equal(r.result.stopReason, "end_turn")
@@ -79,7 +82,7 @@ test("only an acknowledged allow executes and completes the same native call", a
   }
 })
 test("denial, cancellation and refusal do not execute the native command", async () => {
-  for (const agent of ["claude", "codex"]) {
+  for (const agent of ["codex"]) {
     for (const [outcome, options] of [
       [{ outcome: "selected", optionId: "deny-once" }, {}],
       [{ outcome: "cancelled" }, {}],
@@ -110,7 +113,7 @@ test("native failure is not completed or followed by successful branch output", 
   )
 })
 test("a cancelled outcome carrying an allow id still cannot execute", async () => {
-  for (const agent of ["claude", "codex"]) {
+  for (const agent of ["codex"]) {
     const r = await run(
       agent,
       { outcome: "cancelled", optionId: "allow-once" },
@@ -158,5 +161,25 @@ test("a scenario cannot substitute an arbitrary command into this fixed fixture"
         ],
       }),
     /unknown version-review field command/,
+  )
+})
+
+test("compact fixtures respect each harness's reviewable request shape", () => {
+  const claude = turnFor(
+    parseScenario(stressScenario({ agent: "claude" })),
+    STRESS.listPermission,
+  ).steps[0]
+  assert.equal(claude.do, "permission")
+  assert.equal(claude.tool, "report_rows")
+  assert.deepEqual(claude.arguments, {})
+  const codex = turnFor(
+    parseScenario(stressScenario({ agent: "codex" })),
+    STRESS.listPermission,
+  ).steps[0]
+  assert.equal(codex.do, "version-review")
+  assert.throws(() => versionReviewCall("claude", "call"), /requires Codex/)
+  assert.throws(
+    () => stressScenario({ agent: "unknown" }),
+    /unsupported stress fixture agent/,
   )
 })
