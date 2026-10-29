@@ -1225,7 +1225,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       if (drawn) held = withGap(gap.held, [{ ...drawn, truncated: false }], gap.before)
       else held = gap.held
       earlier.set(sessionId, held)
-      if (!drawn) fillGap(sessionId)
+      // A stretch that failed to be read is asked for again by the next
+      // frame, never by drawing this one again.
+      const again = held.lost === true && reads.get(sessionId)?.sent === view
+      if (!drawn && !again) fillGap(sessionId)
     }
     return withEarlier(view, held)
   }

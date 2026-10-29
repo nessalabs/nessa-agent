@@ -362,6 +362,8 @@ const PARK_IDLE_SECONDS = 3
  */
 const LONG_CHUNKS = 40
 const LONG_CHUNK_BYTES = 300
+/** Chunks of an `oversized` answer: about 74 KB, past one view's 60 KB frame. */
+const OVERSIZED_CHUNKS = 240
 /**
  * How many other conversations the `fresh` step creates and sends to at the
  * same moment as the window's own first message: more than the sixteen
@@ -4778,6 +4780,21 @@ const steps = {
           "the last long answer changed when the conversation was opened again",
         )
     }
+    // Last, an answer longer than one view's frame: the view starts partway
+    // through it, and its start is read back as earlier too.
+    // Its view no longer lists the person's message, so the turn is followed
+    // by its id.
+    const oversized = prompt(run, STRESS.oversized, step)
+    const { executionId } = await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, oversized),
+    )
+    const answered = await waitFor(async () => {
+      const shown = await run.client.conversation.read(conversationId)
+      const turn = shown.messages.find((each) => each.executionId === executionId)
+      return turn && ended(turn) ? turn : undefined
+    }, 60_000)
+    if (answered?.status !== "completed")
+      failures.push(`the oversized answer ended ${answered?.status ?? "never"}`)
     // A person opens the long conversation and writes in it.
     await openStressConversation(
       run.page,
@@ -4787,6 +4804,20 @@ const steps = {
     // Its view lists only the newest answers. Scrolled back, the window reads
     // the rest a page at a time until the first turn shows.
     await readBackToStart(run, STRESS.long, step, failures)
+    // The oversized answer, joined from its pieces, is drawn whole.
+    const drawn = await run.page
+      .locator(".workspace-message")
+      .filter({ hasText: SAYS.oversized })
+      .first()
+      .textContent()
+      .catch(() => "")
+    const pieces = [
+      ...(drawn ?? "").matchAll(new RegExp(`(\\d+) x{${LONG_CHUNK_BYTES}}`, "g")),
+    ].map((match) => Number(match[1]))
+    if (pieces.length !== OVERSIZED_CHUNKS || pieces.some((index, at) => index !== at))
+      failures.push(
+        `the oversized answer is drawn with ${pieces.length} of ${OVERSIZED_CHUNKS} chunks in order`,
+      )
     const last = prompt(run, STRESS.reply, step, " after the long answers")
     const seen = await send(run, conversationId, last, failures)
     await settled(run, conversationId, seen, last, "completed", failures)
@@ -4830,19 +4861,20 @@ async function readBackToStart(run, phrase, step, failures) {
     )
     return
   }
-  // At the top, the first message drawn: where it is on screen before the
-  // next page arrives, and after.
+  // At the top, the first message drawn: where its end is on screen before
+  // the next page arrives, and after. A page joins whole turns above it, or
+  // the start of its own turn inside it; either way, its end stays put.
   const top = () =>
     scroller.evaluate((element) => {
       element.scrollTop = 0
       const first = element.querySelector(".workspace-message")
       first?.setAttribute("data-stress-anchor", "")
-      return first?.getBoundingClientRect().top ?? null
+      return first?.getBoundingClientRect().bottom ?? null
     })
   const anchored = () =>
     scroller.evaluate(
       (element) =>
-        element.querySelector("[data-stress-anchor]")?.getBoundingClientRect().top ??
+        element.querySelector("[data-stress-anchor]")?.getBoundingClientRect().bottom ??
         null,
     )
   const end = Date.now() + 60_000
@@ -6287,6 +6319,7 @@ async function startStack(options) {
         reviews: knobs.reviews,
         longChunks: LONG_CHUNKS,
         longChunkBytes: LONG_CHUNK_BYTES,
+        oversizedChunks: OVERSIZED_CHUNKS,
       }),
     ),
   )

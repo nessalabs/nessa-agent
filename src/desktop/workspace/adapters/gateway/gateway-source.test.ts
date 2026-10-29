@@ -4355,4 +4355,56 @@ describe("earlier turns", () => {
       asked,
     )
   })
+
+  it("asks for a stretch that failed twice only when the next frame comes", async () => {
+    const restore = quiet()
+    vi.useFakeTimers()
+    try {
+      const { gateway, source, updates, follow } = started()
+      gateway.earlier.set(conversationA, [done("t1", "one"), done("t2", "two")])
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "1",
+          earlier: true,
+          messages: [done("t3", "three")],
+        }),
+      )
+      follow()
+      await source.transcript(conversationA)
+      await flush()
+      await source.loadEarlier?.(conversationA)
+      await flush()
+      const reads = () =>
+        gateway.calls.filter((call) => call.method === "readEarlier").length
+      const before = reads()
+      for (let each = 0; each < 10; each++)
+        gateway.once("readEarlier", async () => {
+          throw rpcCode("unavailable")
+        })
+      // The view moves on past a turn no frame drew: that stretch is read.
+      gateway.views.set(
+        conversationA,
+        view(conversationA, {
+          revision: "2",
+          earlier: true,
+          messages: [done("t5", "five")],
+        }),
+      )
+      gateway.publish(conversationA)
+      await flush()
+      await vi.advanceTimersByTimeAsync(2_000)
+      await flush()
+      expect(reads()).toBe(before + 2)
+      expect(transcriptsOf(updates, conversationA).at(-1)?.history).toMatchObject({
+        omitted: true,
+      })
+      await vi.advanceTimersByTimeAsync(20_000)
+      await flush()
+      expect(reads()).toBe(before + 2)
+    } finally {
+      vi.useRealTimers()
+      restore.mockRestore()
+    }
+  })
 })

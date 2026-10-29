@@ -90,15 +90,28 @@ const contentTop = (scroller: HTMLElement, element: Element) =>
   scroller.scrollTop
 
 /**
- * The first message the reader sees in `scroller`, and where it sits in its
- * content: what stays put while earlier turns load above it.
+ * What stays put while earlier turns load above the reader: the first
+ * message they see, held by its top. The first message drawn may start
+ * partway through its turn, and a page lengthens it from above: that one is
+ * held by its bottom, which a page above does not move.
  */
-function atTop(scroller: HTMLElement) {
+interface Anchor {
+  readonly element: Element
+  readonly edge: "top" | "bottom"
+  at: number
+}
+
+const edgeOf = (scroller: HTMLElement, element: Element, edge: Anchor["edge"]) =>
+  contentTop(scroller, element) +
+  (edge === "bottom" ? element.getBoundingClientRect().height : 0)
+
+function atTop(scroller: HTMLElement): Anchor | null {
   const top = scroller.getBoundingClientRect().top
-  const element = [...scroller.querySelectorAll(".workspace-message")].find(
-    (message) => message.getBoundingClientRect().bottom > top,
-  )
-  return element ? { element, top: contentTop(scroller, element) } : null
+  const messages = [...scroller.querySelectorAll(".workspace-message")]
+  const element = messages.find((message) => message.getBoundingClientRect().bottom > top)
+  if (!element) return null
+  const edge = element === messages[0] ? "bottom" : "top"
+  return { element, edge, at: edgeOf(scroller, element, edge) }
 }
 
 /** How close to the end the reader must be for a growing reply to keep them there. */
@@ -315,7 +328,7 @@ export const Transcript = memo(function Transcript({
   // again after each page, so a page that left the place still in reach
   // asks for the next.
   const earlierRef = useRef<HTMLDivElement>(null)
-  const anchor = useRef<{ readonly element: Element; top: number } | null>(null)
+  const anchor = useRef<Anchor | null>(null)
   const [pagesRead, setPagesRead] = useState(0)
   const retryEarlier = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => {
@@ -354,16 +367,16 @@ export const Transcript = memo(function Transcript({
   }, [dispatch, earlier, pagesRead, scrollRef, sessionId])
 
   // Turns loaded above keep the reader on what they were reading: while a
-  // read is under way, what was at the top of the screen stays there. At
-  // the end, the end is followed instead.
+  // read is under way, what was at the top of the screen stays there
+  // (`atTop`). At the end, the end is followed instead.
   useLayoutEffect(() => {
     const scroller = scrollRef.current
     const held = anchor.current
     if (!scroller || !held) return
     if (!held.element.isConnected || pinned.current) return
-    const top = contentTop(scroller, held.element)
-    if (top !== held.top) scroller.scrollTop += top - held.top
-    held.top = top
+    const at = edgeOf(scroller, held.element, held.edge)
+    if (at !== held.at) scroller.scrollTop += at - held.at
+    held.at = at
   }, [messages, earlier, scrollRef])
 
   return (
