@@ -151,6 +151,8 @@ export async function stageImage(
   },
 ): Promise<ImageReference> {
   try {
+    // No longer wanted while its bytes were read: no ticket is taken for it.
+    if (signal.aborted) throw new AttachmentStagingError("interrupted")
     const beginning = await attachments().begin(conversationId, file)
     // Either way the reference is the gateway's. The digest in `file` only
     // identified the upload; it is never what a message names.

@@ -4275,6 +4275,42 @@ it("PS16: a message with images keeps its words, its images and its conversation
   expect(gateway.live(conversationB)).toBe(0)
 })
 
+it("takes no upload ticket for an image whose call ended while its bytes were hashed", async () => {
+  const gateway = fakeGateway()
+  gateway.views.set(conversationS, view(conversationS))
+  const { clock, advance } = manualClock()
+  const hashed = deferred<string>()
+  const source = gatewaySource({
+    connect: () => Promise.resolve(gateway.client),
+    clock,
+    timing,
+    imageBytes: { bytes: testImageBytes.bytes, digest: () => hashed.promise },
+  })
+  const sending = source.send({
+    sessionId: conversationS,
+    messageId: "m",
+    text: "Look",
+    images: [
+      {
+        id: "i",
+        name: "a.png",
+        mimeType: "image/png",
+        size: 1,
+        url: "data:image/png;base64,AQ==",
+      },
+    ],
+    model,
+    initiator: "person",
+  })
+  const refused = expect(sending).rejects.toMatchObject({ reason: "unavailable" })
+  await advance(timing.callMs + 1)
+  await refused
+  hashed.resolve(`sha256:${"1".repeat(64)}`)
+  await flush()
+  expect(gateway.count("attachmentBegin")).toBe(0)
+  expect(gateway.count("send")).toBe(0)
+})
+
 it("refuses a message with images, sending nothing, when composition gave no way to read them", async () => {
   const gateway = fakeGateway()
   const { clock } = manualClock()
