@@ -1,6 +1,7 @@
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
 import type { FailureDiagnostic } from "../model/failure"
+import type { DraftImage } from "../model/draft-images"
 /**
  * What the workspace needs from whoever holds the sessions: the one port a
  * backend implements to attach. `adapters/gateway/` implements it over the
@@ -68,6 +69,13 @@ export interface OutgoingMessage {
    */
   readonly messageId: string
   readonly text: string
+  /**
+   * The images the person put on it, in order: the source uploads each into
+   * the conversation, reading it from its object URL, and sends the message
+   * naming what the conversation holds. Uploaded again with each attempt;
+   * one the conversation already holds is not sent twice.
+   */
+  readonly images?: readonly DraftImage[]
   /** The model the turn runs on, chosen in the composer. */
   readonly model: ModelRef
   /**

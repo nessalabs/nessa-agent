@@ -6,7 +6,9 @@
  * rules of #419 (S), MCP Apps (#384) and an app's review (#436, P). The D
  * rows are the desktop rows of `docs/design/record-subscriptions.md`.
  */
+import { createHash } from "node:crypto"
 import {
+  NessaAttachmentError,
   NessaConnectionClosedError,
   NessaCredentialUnavailableError,
   RetryableConnectError,
@@ -2411,6 +2413,74 @@ describe("writes", () => {
       },
       { method: "subscribe", args: [conversationS, {}] },
     ])
+  })
+
+  it("W1: a first message's images go into its conversation before the message, which names what it holds", async () => {
+    const { gateway, source } = started()
+    const bytes = new Uint8Array([1, 2, 3])
+    // Any URL the window can read the bytes back from; the window's own is an object URL.
+    const url = `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`
+    await source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "",
+      images: [{ id: "i", name: "shot.png", mimeType: "image/png", size: 3, url }],
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+      start: { channelId: "gateway-conversations", title: "Image" },
+    })
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+    expect(gateway.calls.map((call) => call.method)).toEqual([
+      "create",
+      "attachmentBegin",
+      "attachmentUpload",
+      "send",
+      "subscribe",
+    ])
+    expect(gateway.calls[1].args).toEqual([
+      conversationS,
+      { digest, mimeType: "image/png", size: 3 },
+    ])
+    expect(gateway.calls.find((call) => call.method === "send")?.args).toEqual([
+      conversationS,
+      "",
+      [{ digest, mimeType: "image/png", size: 3 }],
+      [],
+      { executionId: "m", requestId: expect.any(String) },
+    ])
+  })
+
+  it("W1: an image the gateway refuses refuses the message, in the upload's words, and sends nothing", async () => {
+    const { gateway, source } = started()
+    gateway.views.set(conversationS, view(conversationS))
+    gateway.once("attachmentBegin", () =>
+      Promise.reject(
+        new NessaAttachmentError(
+          "begin_refused",
+          undefined,
+          undefined,
+          "image_input_unsupported",
+        ),
+      ),
+    )
+    const url = "data:image/png;base64,AQ=="
+    await expect(
+      source.send({
+        sessionId: conversationS,
+        messageId: "m",
+        text: "Look",
+        images: [{ id: "i", name: "shot.png", mimeType: "image/png", size: 1, url }],
+        model,
+        initiator: "person",
+      }),
+    ).rejects.toMatchObject({
+      reason: "not-supported",
+      diagnostic: {
+        message: "This agent's model doesn't take images.",
+        code: "image-input-unsupported",
+      },
+    })
+    expect(gateway.count("send")).toBe(0)
   })
 
   it("W1: a first message in a channel of the person's opens its conversation there", async () => {

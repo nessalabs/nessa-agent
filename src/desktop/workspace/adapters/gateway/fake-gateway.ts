@@ -89,6 +89,8 @@ type Method =
   | "unsubscribe"
   | "observe"
   | "create"
+  | "attachmentBegin"
+  | "attachmentUpload"
   | "send"
   | "answer"
   | "answerQuestion"
@@ -913,6 +915,26 @@ export function fakeGateway(
           })
         return { requestId: "stop", stage: "accepted" }
       }) as never,
+    // The conversation keeps every image as it was sent: the gateway's
+    // normalizing is not this fake's to play.
+    attachments: {
+      begin: (conversationId, file, options) =>
+        answer("attachmentBegin", [conversationId, file], () => {
+          if (!views.has(conversationId)) notFound()
+          return {
+            requestId: options?.requestId ?? "begin",
+            state: "upload_required" as const,
+            ticket: `ticket:${file.digest}`,
+            expiresAtMs: Number.MAX_SAFE_INTEGER,
+          }
+        }) as never,
+      upload: (ticket, file) =>
+        answer("attachmentUpload", [ticket, file], () => ({
+          digest: ticket.slice("ticket:".length),
+          mimeType: file.mimeType,
+          size: file.bytes.size,
+        })) as never,
+    },
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>
         gated(`view:${conversationId}`, signal, () => {

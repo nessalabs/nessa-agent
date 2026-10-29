@@ -15,6 +15,7 @@ import { knownToSource } from "../../model/revision"
 import { sameModel, type ModelRef } from "../../model/workspace-index"
 import { startSession } from "../../model/session-lifecycle"
 import { messageText, type TurnMessage } from "../../model/transcript"
+import { imagesLine, type DraftImage } from "../../model/draft-images"
 import { paneCount, removePane } from "../../../split-panes/model/pane-layout"
 import {
   channelOf,
@@ -68,7 +69,12 @@ export function messageSent(
           drafts: without(state.drafts, sessionId),
           chosenModels: { ...state.chosenModels, [sessionId]: draft.model },
         },
-        startSession(draft, messageText(message), message.at),
+        // Images alone name it by what they are: there are no words to title it.
+        startSession(
+          draft,
+          messageText(message) || imagesLine(message.localImages),
+          message.at,
+        ),
       )
     : startingRun(state, sessionId)
   return {
@@ -79,6 +85,10 @@ export function messageSent(
       initiator === "person"
         ? without(started.composerText, sessionId)
         : started.composerText,
+    // The composer's images go only with a message that took them.
+    composerImages: message.localImages?.length
+      ? without(started.composerImages, sessionId)
+      : started.composerImages,
     outbox: {
       ...started.outbox,
       [sessionId]: [
@@ -191,6 +201,31 @@ function mayBegin(state: WorkspaceState, sessionId: string): boolean {
 }
 
 /**
+ * Images on a refused message the person let go come back to the composer,
+ * with its words when nothing is typed there: they were pasted, and nothing
+ * else holds them. A composer already holding images keeps its own.
+ */
+function imagesReturned(
+  state: WorkspaceState,
+  sessionId: string,
+  message: TurnMessage | undefined,
+): WorkspaceState {
+  const images = message?.localImages
+  if (!message || !images?.length || entry(state.composerImages, sessionId)?.length)
+    return state
+  const typed = entry(state.composerText, sessionId) ?? ""
+  const words = messageText(message)
+  return {
+    ...state,
+    composerImages: { ...state.composerImages, [sessionId]: images },
+    composerText:
+      typed.trim() === "" && words !== ""
+        ? { ...state.composerText, [sessionId]: words }
+        : state.composerText,
+  }
+}
+
+/**
  * The person let a message the source refused go. A session the source never
  * began, left with nothing to begin it, was never a session: an open document
  * returns to its draft home under the same id, visible or hidden. With no
@@ -200,8 +235,15 @@ export function unsentDiscarded(
   state: WorkspaceState,
   { sessionId, messageId }: { sessionId: string; messageId: string },
 ): WorkspaceState {
-  const discarded = withSent(state, sessionId, messageId, (message) =>
-    message.delivery?.state === "failed" ? null : message,
+  const letGo = (entry(state.outbox, sessionId) ?? []).find(
+    (message) => message.id === messageId && message.delivery?.state === "failed",
+  )
+  const discarded = imagesReturned(
+    withSent(state, sessionId, messageId, (message) =>
+      message.delivery?.state === "failed" ? null : message,
+    ),
+    sessionId,
+    letGo,
   )
   const session = sessionOf(discarded, sessionId)
   if (
@@ -218,6 +260,7 @@ export function unsentDiscarded(
   // The access chosen for it goes back with the home, as its model does.
   const access = entry(discarded.accessChoices, sessionId)
   const text = entry(discarded.composerText, sessionId)
+  const images = entry(discarded.composerImages, sessionId)
   const unlisted = forgetSession(discarded, sessionId)
   if (!home) {
     const panes = unlisted.panes
@@ -240,6 +283,10 @@ export function unsentDiscarded(
           text === undefined
             ? unlisted.composerText
             : { ...unlisted.composerText, [sessionId]: text },
+        composerImages:
+          images === undefined
+            ? unlisted.composerImages
+            : { ...unlisted.composerImages, [sessionId]: images },
         accessChoices:
           access?.state === "chosen"
             ? { ...unlisted.accessChoices, [sessionId]: access }
@@ -374,4 +421,39 @@ export function composerTextChanged(
   }
   if (entry(state.composerText, sessionId) === text) return state
   return { ...state, composerText: { ...state.composerText, [sessionId]: text } }
+}
+
+/**
+ * Images put on a session's next message, after those already there, once
+ * the command that offers them has held them to a message's bounds
+ * (`addComposerImages`). A session or new session the window does not hold
+ * keeps none.
+ */
+export function composerImagesAdded(
+  state: WorkspaceState,
+  { sessionId, images }: { sessionId: string; images: readonly DraftImage[] },
+): WorkspaceState {
+  if (!draftOf(state, sessionId) && !sessionOf(state, sessionId)) return state
+  const held = entry(state.composerImages, sessionId) ?? []
+  if (images.length === 0) return state
+  return {
+    ...state,
+    composerImages: { ...state.composerImages, [sessionId]: [...held, ...images] },
+  }
+}
+
+/** One image taken off a session's next message; none left, nothing is kept. */
+export function composerImageRemoved(
+  state: WorkspaceState,
+  { sessionId, imageId }: { sessionId: string; imageId: string },
+): WorkspaceState {
+  const held = entry(state.composerImages, sessionId)
+  if (!held?.some((image) => image.id === imageId)) return state
+  const rest = held.filter((image) => image.id !== imageId)
+  return {
+    ...state,
+    composerImages: rest.length
+      ? { ...state.composerImages, [sessionId]: rest }
+      : without(state.composerImages, sessionId),
+  }
 }

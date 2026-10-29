@@ -41,7 +41,8 @@
  * first text block holds) is kept under that name for the rest of the turn, and a result that is an error fails the turn. A string anywhere
  * in a later step's arguments or text that is `${name.path}` is replaced by
  * that saved value's field, so one call can name what an earlier call made.
- * `${prompt.text}` is the prompt the turn answers; `${session.cwd}` and
+ * `${prompt.text}` is the prompt the turn answers, and `${prompt.images}` the
+ * images it carried (`promptImages`); `${session.cwd}` and
  * `${session.systemPrompt}` are the folder the session was opened in and the
  * system prompt it was given (Claude's `_meta.systemPrompt`; empty for a
  * harness that takes none). With `times`, the same
@@ -248,6 +249,24 @@ export function promptText(prompt) {
     )
     .map((block) => block.text)
     .join("")
+}
+
+/**
+ * The images in a prompt, as one line a turn can say: each image block's
+ * media type and the length of the bytes it carries, in order, or "none". A
+ * check reads it back to know the agent was handed exactly what was sent.
+ */
+export function promptImages(prompt) {
+  const images = Array.isArray(prompt)
+    ? prompt.filter((block) => plain(block) && block.type === "image")
+    : []
+  if (images.length === 0) return "none"
+  return images
+    .map(
+      (block) =>
+        `${block.mimeType} ${typeof block.data === "string" ? Buffer.from(block.data, "base64").length : 0} bytes`,
+    )
+    .join(", ")
 }
 
 /**

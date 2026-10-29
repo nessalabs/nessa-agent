@@ -9,6 +9,7 @@
  * window for every change.
  */
 import type { ChatPanel } from "../../model/chat-panel"
+import type { DraftImage } from "../../model/draft-images"
 import { canChange, formHeld, waitingOn } from "../../application/usecases/sharing"
 import { createSelector } from "@reduxjs/toolkit"
 import {
@@ -171,6 +172,14 @@ export const selectOutbox = (state: Root, sessionId: string): readonly Message[]
 /** What is typed in a session's composer and not sent. */
 export const selectComposerText = (state: Root, sessionId: string): string =>
   entry(state.workspace.composerText, sessionId) ?? ""
+
+const noImages: readonly DraftImage[] = []
+
+/** The images put on a session's next message and not sent. */
+export const selectComposerImages = (
+  state: Root,
+  sessionId: string,
+): readonly DraftImage[] => entry(state.workspace.composerImages, sessionId) ?? noImages
 
 /** The model a session's next message is sent with: chosen in its composer, else its own. */
 export const selectNextModel = (state: Root, sessionId: string): ModelRef | undefined =>

@@ -1254,6 +1254,49 @@ html:not(.dark) [data-surface] {
   color: color-mix(in oklab, var(--foreground) 35%, transparent);
 }
 
+/* Pasted images, a row of tiles above the text, each with its own remove. */
+.desktop-composer-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.desktop-composer-image {
+  position: relative;
+  display: inline-flex;
+}
+
+.desktop-composer-image-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-radius-pill);
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+  cursor: pointer;
+}
+
+.desktop-composer-image-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+.desktop-composer-image-remove:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}
+
 /* A refused access change, said on its own line above the controls. */
 .desktop-composer-notice {
   display: flex;

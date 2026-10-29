@@ -22,6 +22,7 @@ import {
   filled,
   parseScenario,
   permissionCall,
+  promptImages,
   promptText,
   scenarioScript,
   turnFor,
@@ -258,6 +259,19 @@ test("the window scenario parses, and the first named turn wins over the fallbac
       { type: "text", text: "B" },
     ]),
     "AB",
+  )
+  assert.equal(promptImages([{ type: "text", text: "A" }]), "none")
+  assert.equal(
+    promptImages([
+      {
+        type: "image",
+        mimeType: "image/png",
+        data: Buffer.from("four").toString("base64"),
+      },
+      { type: "text", text: "B" },
+      { type: "image", mimeType: "image/jpeg", data: "" },
+    ]),
+    "image/png 4 bytes, image/jpeg 0 bytes",
   )
 })
 

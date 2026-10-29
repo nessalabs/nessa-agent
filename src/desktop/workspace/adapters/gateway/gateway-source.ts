@@ -105,11 +105,13 @@ import {
   isRetryableConnectionError,
   NessaConnectionClosedError,
   RetryableConnectError,
+  NessaAttachmentError,
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
   NessaSessionUnavailableError,
   subscriptionLimits,
+  type AttachmentApi,
   type ChannelApi,
   type ConnectionState,
   type ConversationApi,
@@ -119,7 +121,9 @@ import {
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
+  type ImageAttachment,
   type PermissionReviewWaiting,
+  type PreparedSubmission,
   type QuestionDetail,
   type QuestionDetails,
   type ReviewDetail,
@@ -141,6 +145,14 @@ import {
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { Transcript } from "../../model/transcript"
+import type { DraftImage } from "../../model/draft-images"
+import {
+  AttachmentStagingError,
+  sha256Digest,
+  stageImage,
+  uploadFailureSummary,
+  worthRetrying,
+} from "../../../../conversation"
 import type { Channel, SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
 import {
   channelFrom,
@@ -179,6 +191,8 @@ export interface GatewayClient {
     | "rename"
     | "delete"
   >
+  /** Where a message's images are put before it names them. */
+  readonly attachments: Pick<AttachmentApi, "begin" | "upload">
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   /** The person's channels, which the index lists and a new session names. */
   readonly channels: Pick<ChannelApi, "list" | "create">
@@ -506,16 +520,26 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * once it is not (`dispatch`, C6). A `trace` records the ask and, when the
    * call is refused, the reason — on this same turn, not a later one.
    */
+  // Each open call's end, aborted when it settles or the source is disposed.
+  const callEnds = new Set<AbortController>()
   const within = <T>(
-    work: (live: () => boolean) => Promise<T>,
+    work: (live: () => boolean, ended: AbortSignal) => Promise<T>,
     trace?: ReadTrace,
   ): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       if (disposed) return reject(new WorkspaceSourceError("unavailable"))
       let settled = false
+      // Work that can be stopped part way — an upload — stops with the call.
+      const ended = new AbortController()
+      callEnds.add(ended)
+      const end = () => {
+        callEnds.delete(ended)
+        ended.abort()
+      }
       const cancel = clock.after(timing.callMs, () => {
         const already = settled
         settled = true
+        end()
         // The budget ran out: the same refusal the caller is about to get.
         if (!already) noteTraced(trace, new WorkspaceSourceError("unavailable"))
         reject(new WorkspaceSourceError("unavailable"))
@@ -524,12 +548,13 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       Promise.resolve()
         .then(() => {
           if (!disposed) noteReadAsked(trace)
-          return work(live)
+          return work(live, ended.signal)
         })
         .then(
           (value) => {
             settled = true
             cancel()
+            end()
             if (disposed) reject(new WorkspaceSourceError("unavailable"))
             else resolve(value)
           },
@@ -537,6 +562,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             const already = settled
             settled = true
             cancel()
+            end()
             const refused = refusalOf(error)
             if (!already) noteTraced(trace, refused, error)
             reject(refused)
@@ -1478,57 +1504,71 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const start = message.start !== undefined
       const access = message.start?.access
       const channelId = message.start && gatewayChannelId(message.start.channelId)
-      let prepared
-      try {
-        prepared = prepareSubmission({
-          conversationId: message.sessionId,
-          // The message's id is its turn's: a message the gateway already
-          // took is answered from that turn, never taken twice.
-          executionId: message.messageId,
-          // Each send is a command of its own. A command the gateway refused
-          // keeps that answer, and one whose answer was lost reads as
-          // unresolved for good, so sending again under it could never send.
-          requestId: crypto.randomUUID(),
-          text: message.text,
-          mode: "queued",
-        })
-      } catch (error) {
-        if (error instanceof TypeError)
-          return Promise.reject(new WorkspaceSourceError("not-supported"))
-        throw error
-      }
-      return within(async (live) => {
-        // Only a first message opens its conversation, on the model chosen for it.
-        if (start) {
-          const agent = agentForProvider(model.provider)
-          await dispatch(live, (connected) => {
-            held(prepared.conversationId)
-            return connected.conversation.create({
-              conversationId: prepared.conversationId,
-              ...(agent ? { agent } : {}),
-              model: model.modelId,
-              // The access chosen in the home; the gateway asks when told none,
-              // or starts as the channel says.
-              ...(access ? { approvalMode: access } : {}),
-              // The channel it is in for its whole life; none is the default one.
-              ...(channelId ? { channelId } : {}),
-            })
+      const images = [...(message.images ?? [])]
+      const submission = (attachments: ImageAttachment[]) => {
+        try {
+          return prepareSubmission({
+            conversationId: message.sessionId,
+            // The message's id is its turn's: a message the gateway already
+            // took is answered from that turn, never taken twice.
+            executionId: message.messageId,
+            // Each send is a command of its own. A command the gateway refused
+            // keeps that answer, and one whose answer was lost reads as
+            // unresolved for good, so sending again under it could never send.
+            requestId: crypto.randomUUID(),
+            text: message.text,
+            attachments,
+            mode: "queued",
           })
+        } catch (error) {
+          if (error instanceof TypeError) throw new WorkspaceSourceError("not-supported")
+          throw error
         }
+      }
+      // Every message is checked before anything is sent. One with images is
+      // checked naming stand-ins of their encodings and sizes — its text may
+      // be blank only beside them — and prepared for real once they are
+      // uploaded and it can name what the gateway holds.
+      let prepared: PreparedSubmission | undefined
+      try {
+        const checked = submission(images.map(standIn))
+        prepared = images.length ? undefined : checked
+      } catch (error) {
+        return Promise.reject(error)
+      }
+      // Only a first message opens its conversation, on the model chosen for it.
+      const open = async (live: () => boolean) => {
+        if (!start) return
+        const agent = agentForProvider(model.provider)
         await dispatch(live, (connected) => {
-          held(prepared.conversationId)
+          held(message.sessionId)
+          return connected.conversation.create({
+            conversationId: message.sessionId,
+            ...(agent ? { agent } : {}),
+            model: model.modelId,
+            // The access chosen in the home; the gateway asks when told none,
+            // or starts as the channel says.
+            ...(access ? { approvalMode: access } : {}),
+            // The channel it is in for its whole life; none is the default one.
+            ...(channelId ? { channelId } : {}),
+          })
+        })
+      }
+      const submit = async (live: () => boolean, submitted: PreparedSubmission) => {
+        await dispatch(live, (connected) => {
+          held(submitted.conversationId)
           // The gateway keeps a conversation on the model it was created with:
           // a message asking for another than the one it says it runs is
           // refused rather than sent on the old one, checked here, at the
           // send (W8). Not said yet, it cannot be told.
-          const known = knownModel(prepared.conversationId)
+          const known = knownModel(submitted.conversationId)
           if (
             known &&
             (known.provider !== model.provider || known.modelId !== model.modelId)
           )
             throw new WorkspaceSourceError("not-supported")
           try {
-            return connected.conversation.submit(prepared)
+            return connected.conversation.submit(submitted)
           } catch (error) {
             // A client argument refusal is explicit, unlike a lost acknowledgement.
             if (error instanceof TypeError)
@@ -1537,9 +1577,34 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           }
         })
         // Taken out while it was on its way: sent, but not followed (R8).
-        if (!takenOut(prepared.conversationId)) follow(prepared.conversationId, "held")
-        publish(prepared.conversationId)
-      })
+        if (!takenOut(submitted.conversationId)) follow(submitted.conversationId, "held")
+        publish(submitted.conversationId)
+      }
+      if (prepared) {
+        const submitted = prepared
+        return within(async (live) => {
+          await open(live)
+          await submit(live, submitted)
+        })
+      }
+      // With images, each step is a call of its own, on its own budget: the
+      // conversation opened, which must exist to hold them, then each image
+      // put into it — an upload stops when its call ends — and only then the
+      // message naming what it holds. A refusal of any is the message's.
+      return (async () => {
+        await within((live) => open(live))
+        const attachments: ImageAttachment[] = []
+        for (const image of images)
+          attachments.push(
+            await within((live, ended) =>
+              dispatch(live, (connected) =>
+                uploadImage(connected, message.sessionId, image, clock, ended),
+              ),
+            ),
+          )
+        const submitted = submission(attachments)
+        await within((live) => submit(live, submitted))
+      })()
     },
     approve: (sessionId, approvalId, scope, _initiator, optionId) =>
       scope === "always" && optionId !== REMEMBER_ALLOW_OPTION
@@ -1891,6 +1956,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     },
     dispose() {
       disposed = true
+      for (const ended of [...callEnds]) ended.abort()
+      callEnds.clear()
       stopStreams()
       for (const sessionId of [...reviews.keys()]) dropReviews(sessionId)
       settle(list, { error: new WorkspaceSourceError("unavailable") })
@@ -1916,6 +1983,74 @@ function behind(
     return BigInt(cursor.position) < BigInt(applied.position)
   } catch {
     return false
+  }
+}
+
+/**
+ * What a message names for an image not yet uploaded, to check the message
+ * before anything is sent: its encoding and size, under a digest no bytes have.
+ */
+function standIn(image: DraftImage): ImageAttachment {
+  return {
+    digest: `sha256:${"0".repeat(64)}`,
+    mimeType: image.mimeType as ImageAttachment["mimeType"],
+    size: image.size,
+  }
+}
+
+/**
+ * Puts one of a message's images into its conversation, reading the bytes
+ * back from the object URL the window holds them under, and answers what the
+ * message names it by. Staging is the conversation vertical's
+ * (`stageImage`); a refusal comes back as the send's, in its words.
+ */
+async function uploadImage(
+  connected: Pick<GatewayClient, "attachments">,
+  conversationId: string,
+  image: DraftImage,
+  clock: GatewayClock,
+  /** Aborted when the call this upload is part of ends. */
+  ended: AbortSignal,
+): Promise<ImageAttachment> {
+  let bytes: Blob
+  try {
+    bytes = await (await fetch(image.url)).blob()
+  } catch {
+    throw new WorkspaceSourceError("not-supported", undefined, {
+      message: `${image.name} could not be read.`,
+      code: "unreadable",
+    })
+  }
+  try {
+    return await stageImage(
+      () => connected.attachments,
+      conversationId,
+      { digest: await sha256Digest(bytes), mimeType: image.mimeType, size: bytes.size },
+      bytes,
+      {
+        signal: ended,
+        wait: (ms) => new Promise((resolve) => clock.after(ms, resolve)),
+      },
+    )
+  } catch (error) {
+    if (!(error instanceof AttachmentStagingError)) throw error
+    // A conversation deleted, or not held, is the session gone, as the
+    // same answer to the message itself is (`reasonFor`).
+    const gone =
+      error.reason === "conversation-deleted" ||
+      (error.cause instanceof NessaAttachmentError &&
+        error.cause.refusal === "conversation_not_found")
+    throw new WorkspaceSourceError(
+      gone
+        ? "unknown-session"
+        : // Only a refusal about the image, or about an agent that takes
+          // none, stays the same when tried again; anything else may not.
+          worthRetrying(error.reason)
+          ? "unavailable"
+          : "not-supported",
+      undefined,
+      { message: uploadFailureSummary(error.reason), code: error.reason },
+    )
   }
 }
 

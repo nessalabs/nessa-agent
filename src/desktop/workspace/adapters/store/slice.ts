@@ -27,6 +27,7 @@ import type {
 import type { EdgeMove } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import type { Transcript, TurnMessage } from "../../model/transcript"
+import type { DraftImage } from "../../model/draft-images"
 import type {
   Initiator,
   WorkspaceDependencies,
@@ -361,6 +362,14 @@ const workspaceSlice = createSlice({
       sessions.sessionRead(state, payload),
     setComposerText: (state, { payload }: Payload<{ sessionId: string; text: string }>) =>
       sessions.composerTextChanged(state, payload),
+    composerImagesAdded: (
+      state,
+      { payload }: Payload<{ sessionId: string; images: readonly DraftImage[] }>,
+    ) => sessions.composerImagesAdded(state, payload),
+    composerImageRemoved: (
+      state,
+      { payload }: Payload<{ sessionId: string; imageId: string }>,
+    ) => sessions.composerImageRemoved(state, payload),
 
     // A row's edits in place
     renameStarted: (state, { payload }: Payload<{ sessionId: string }>) =>

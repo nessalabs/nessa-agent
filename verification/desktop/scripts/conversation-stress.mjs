@@ -185,6 +185,11 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               before their number, the numbers stand in one column, and
  *               pressing a number picks that choice and closes the menu;
  *               the message sent in the window after it is answered
+ *   paste       an image is pasted into the composer as a copied screenshot
+ *               is: it shows as a tile and types nothing; sent with the
+ *               message, the composer lets it go, the conversation holds it
+ *               and the agent says it was handed exactly that image; the
+ *               person's message draws it, read back from the conversation
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -234,6 +239,7 @@ import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
+import { tinyPng } from "../../../scripts/conversation-smoke/tiny-png.mjs"
 import { MODELS, repoRoot } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
@@ -4488,6 +4494,79 @@ const steps = {
     })
   },
 
+  async paste(run, step, failures) {
+    // Pasted as a copied screenshot arrives: a file and no text.
+    const box = dock(run.page).locator("textarea")
+    await box.click()
+    await box.evaluate((field, base64) => {
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+      const data = new DataTransfer()
+      data.items.add(new File([bytes], "screenshot.png", { type: "image/png" }))
+      field.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData: data,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    }, tinyPng.toString("base64"))
+    const tiles = dock(run.page).locator(".desktop-composer-images img")
+    if (!(await waitFor(async () => (await tiles.count()) === 1, 5000))) {
+      failures.push(`the composer shows ${await tiles.count()} pasted images, not 1`)
+      return
+    }
+    if (await box.inputValue())
+      failures.push(`the paste typed ${JSON.stringify(await box.inputValue())} as well`)
+    if (run.evidence)
+      await dock(run.page).screenshot({
+        path: join(run.evidence, `paste-${run.engine}-${step.index}-composer.png`),
+      })
+    const text = prompt(run, STRESS.paste, step)
+    const seen = await send(run, run.main.id, text, failures)
+    if (!(await waitFor(async () => (await tiles.count()) === 0, 5000)))
+      failures.push("the pasted image stayed in the composer after Send")
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // The conversation holds one image, and the agent was handed exactly it.
+    const [image, ...more] = turn.attachments ?? []
+    if (!image || more.length)
+      failures.push(
+        `the pasted turn carries ${turn.attachments?.length ?? 0} images, not 1`,
+      )
+    if (!image) return
+    // The very image pasted: a PNG this small is kept as it came.
+    if (image.mimeType !== "image/png" || image.size !== tinyPng.length)
+      failures.push(
+        `the pasted turn holds ${image.mimeType} of ${image.size} bytes, not image/png of ${tinyPng.length}`,
+      )
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const expected = `${SAYS.paste}${image.mimeType} ${image.size} bytes for ${text}`
+    if (said !== expected)
+      failures.push(
+        `the agent said ${JSON.stringify(said)}, not ${JSON.stringify(expected)}`,
+      )
+    await expectShown(run.page, expected, failures, 10_000)
+    // The window draws it on the person's message, read back from the
+    // conversation once it holds the message: the held image, not the pasted
+    // copy the window drew while it was on its way (`data-local-images`).
+    const bubble = run.page
+      .locator('.workspace-message[data-role="user"]')
+      .filter({ hasText: text })
+    if (
+      !(await waitFor(
+        async () =>
+          (await bubble
+            .locator('ul[aria-label="1 attachment"]:not([data-local-images]) img')
+            .count()) === 1,
+        10_000,
+      ))
+    )
+      failures.push("the sent message does not show its pasted image")
+    else if (run.evidence)
+      await bubble.screenshot({
+        path: join(run.evidence, `paste-${run.engine}-${step.index}-sent.png`),
+      })
+  },
   async table(run, step, failures) {
     const text = prompt(run, STRESS.table, step)
     const seen = await send(run, run.main.id, text, failures)

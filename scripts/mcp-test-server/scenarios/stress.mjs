@@ -31,6 +31,7 @@ export const STRESS = {
   long: "stress long",
   window: "stress window",
   table: "stress table",
+  paste: "stress paste",
   trace: "stress trace",
   github: "stress github",
   githubShell: "stress shell github",
@@ -75,6 +76,7 @@ export const SAYS = {
   long: "Long answer: ",
   window: "Window: ",
   table: "Tables: ",
+  paste: "Images: ",
   trace: "Traced: ",
   github: "GitHub: ",
   githubShell: "GitHub in the shell: ",
@@ -250,6 +252,17 @@ export function stressScenario({
                 (_, index) => ` ${index} ${"x".repeat(longChunkBytes)}`,
               ),
             ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        // Says which images the agent was handed, then the prompt.
+        when: STRESS.paste,
+        steps: [
+          {
+            do: "text",
+            chunks: [SAYS.paste, "${prompt.images}", " for ", "${prompt.text}"],
           },
           { do: "end" },
         ],
