@@ -46,6 +46,7 @@ import {
   channelOf,
   draftOf,
   keptDraftIn,
+  letGoOfDrafts,
   focusedChannel,
   itemIn,
   modelForNextTurn,
@@ -379,11 +380,10 @@ export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
 }
 
 /**
- * Closes a pane; its neighbour takes the room. A draft in the closed pane
- * remains in its document tab until that tab is closed. The last pane cannot
- * close: it goes back to a new session's home under `draftId`
- * (`homeAfterLast`), in its conversation's channel. Showing a home already,
- * nothing changes (`canClosePane`).
+ * Closes a pane; its neighbour takes the room, and a draft in it is let go,
+ * typed in or not. The last pane cannot close: it goes back to a new
+ * session's home under `draftId` (`homeAfterLast`), in its conversation's
+ * channel. Showing a home already, nothing changes (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,
@@ -392,7 +392,12 @@ export function closePane(
   const panes = state.panes
   const shown = panes && paneByKey(panes, pane)
   if (!panes || !shown) return state
-  if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
+  const item = itemIn(shown)
+  if (paneCount(panes) > 1)
+    return withPanes(
+      item?.kind === "session" ? letGoOfDrafts(state, [item.sessionId]) : state,
+      removePane(panes, pane),
+    )
   const home = homeAfterLast(state, itemIn(shown))
   if (!home || !draftId) return state
   return createDraft(state, { draftId, ...home, target: pane })

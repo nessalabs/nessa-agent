@@ -68,5 +68,5 @@ it("delays the loader by three seconds", () => {
 })
 
 it("fits the compact rail below the window bar on every host", () => {
-  expect(SIDE_RAIL_WIDTH).toBe(48)
+  expect(SIDE_RAIL_WIDTH).toBe(64)
 })

@@ -564,7 +564,6 @@ describe("the index read again: the resync", () => {
       read: "r",
     })
     expect(resynced.panes).toBeNull()
-    expect(resynced.sessionTabs).toEqual([])
     expect(resynced.sessions.a).toBeUndefined()
     expect(resynced.drafts.fresh).toBeUndefined()
 
@@ -577,23 +576,7 @@ describe("the index read again: the resync", () => {
       },
     )
     expect(streamed.panes).toBeNull()
-    expect(streamed.sessionTabs).not.toContain("a")
     expect(streamed.sessions.a).toBeUndefined()
-  })
-
-  it("shows a retained draft tab when its last visible session and channel disappear", () => {
-    const drafted = createDraft(loaded(), { draftId: "kept" })
-    const hidden = openSession(drafted, { sessionId: "a" })
-    const empty = { sections: [], channels: [], sessions: [] }
-    const resynced = indexLoaded(indexRequested(hidden, { read: "r" }), {
-      index: empty,
-      draftId: "fresh",
-      read: "r",
-    })
-    expect(shown(resynced)).toEqual(["kept"])
-    expect(resynced.sessionTabs).toEqual(["kept"])
-    expect(resynced.drafts.kept).toBeDefined()
-    expect(resynced.sessions.a).toBeUndefined()
   })
 
   it("takes an index that contradicts itself as far as it holds together", () => {

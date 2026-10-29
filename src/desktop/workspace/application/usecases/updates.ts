@@ -35,7 +35,7 @@ import {
   withTranscript,
   type WorkspaceState,
 } from "../workspace-state"
-import { createDraft, openSession } from "./panes"
+import { createDraft } from "./panes"
 
 /** Whether the session was removed at or after this revision of it: it stays out. */
 function removedSince(state: WorkspaceState, session: SessionSummary): boolean {
@@ -114,16 +114,7 @@ function removeSession(
     model: modelForNextTurn(state, sessionId) ?? session.model,
     target: showing.key,
   })
-  const hidden = removed.sessionTabs.find((id) => id !== sessionId)
-  const reopened = hidden
-    ? openSession(removed, { sessionId: hidden, pane: showing.key })
-    : removed
-  const next =
-    restarted !== removed
-      ? restarted
-      : reopened !== removed
-        ? reopened
-        : withPanes(removed, null)
+  const next = restarted !== removed ? restarted : withPanes(removed, null)
   // Nobody asked for a new session here: what the person was looking at stays.
   return { ...next, view: state.view }
 }
