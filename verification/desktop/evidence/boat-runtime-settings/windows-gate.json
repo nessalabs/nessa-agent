@@ -1,0 +1,13 @@
+{
+  "beforeRevision": "fbadc7b8de10ab69030fd6a15a584a0c98e09098",
+  "beforeJob": "https://github.com/nessalabs/nessa-agent/actions/runs/40568186408/job/122415081817",
+  "beforeError": "method default_override is never used; -D dead-code implied by -D warnings",
+  "sourceFixRevision": "49080c0477f23e752bb7dd90dc80e093a9d12558",
+  "fix": "cfg(unix) matches the getter sole consumer in crate::workspaces; no warning suppression",
+  "localValidation": {
+    "allTargetClippy": "pass; exact CI package selection",
+    "parserTestsPassed": 3,
+    "rustFormatting": "pass"
+  },
+  "windowsValidation": "requires next-head CI; not claimed by local Mac checks"
+}

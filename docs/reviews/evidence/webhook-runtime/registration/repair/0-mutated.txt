@@ -1,0 +1,17 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::substituted_reservation_is_rejected_before_auth_and_installation ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::substituted_reservation_is_rejected_before_auth_and_installation stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::substituted_reservation_is_rejected_before_auth_and_installation' (86776) panicked at /tmp/nessa-registration-repair/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_failures.rs:431:13:
+destination, before=false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::substituted_reservation_is_rejected_before_auth_and_installation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.01s

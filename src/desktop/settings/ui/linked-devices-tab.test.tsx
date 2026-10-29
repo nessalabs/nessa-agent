@@ -407,8 +407,14 @@ describe("Linked devices", () => {
       host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
     )
     await closePairingDialog("[data-linked-action='cancel']")
-    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
-    expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
+    // The dialog's return-focus fallback can follow its close timer. Keep the
+    // read held until the actual parked focus is observed, not one timer turn.
+    await act(async () =>
+      vi.waitFor(() => {
+        expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+        expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
+      }),
+    )
     await act(async () => answerRead?.())
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
   })

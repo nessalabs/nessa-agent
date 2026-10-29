@@ -91,6 +91,31 @@ export interface HealthResult {
   /** Time since server startup in milliseconds. */
 
   uptimeMs: number
+  /** Read-only namespace webhook status when configured. No recipient, credential or conversation identifiers are disclosed. */
+  webhook?: WebhookStatus
+}
+
+/**
+ * Read-only namespace webhook status when configured. No recipient, credential or conversation identifiers are disclosed.
+ */
+export interface WebhookStatus {
+  /**
+   * Retained local settlement work; response does not itself confirm durable publication.
+   */
+  pendingOutcome: "none" | "unposted" | "response"
+  /**
+   * Native webhook mutation admission. A retained attempt excludes native mutations through consumed settlement acknowledgement; canonical revoke and unshare are independent.
+   */
+  nativeMutations: "available" | "temporarily-unavailable" | "stopped"
+  /** Most recent non-attempt refusal in this process; it can remain after progress and is not current authority or a delivery outcome. */
+
+  lastRefusal?:
+    | "preparation-busy"
+    | "preparation-unavailable"
+    | "preparation-timed-out"
+    | "destination-refused"
+    | "admission-unavailable"
+    | "source-unavailable"
 }
 
 /** Versioned server-owned shortcut configuration included in the legacy handshake. */
@@ -199,6 +224,24 @@ export type SurfaceKind = "panel" | "web" | "desktop" | "cli"
 
 export type ClientPlatform = "node" | "browser" | "macos" | "linux" | "windows" | "other"
 
+/** Retained local settlement work; response does not itself confirm durable publication. */
+
+export type WebhookPendingOutcome = "none" | "unposted" | "response"
+
+/** Native webhook mutation admission. A retained attempt excludes native mutations through consumed settlement acknowledgement; canonical revoke and unshare are independent. */
+
+export type WebhookNativeMutations = "available" | "temporarily-unavailable" | "stopped"
+
+/** A refusal before a transport attempt; it neither consumes an attempt nor means revocation. */
+
+export type WebhookRefusal =
+  | "preparation-busy"
+  | "preparation-unavailable"
+  | "preparation-timed-out"
+  | "destination-refused"
+  | "admission-unavailable"
+  | "source-unavailable"
+
 export const ClientRole = { Surface: "surface" } as const
 export const Scope = { ServerRead: "server.read" } as const
 export const SurfaceKind = {
@@ -220,6 +263,24 @@ export const ClientPlatform = {
   Linux: "linux",
   Windows: "windows",
   Other: "other",
+} as const
+export const WebhookPendingOutcome = {
+  None: "none",
+  Unposted: "unposted",
+  Response: "response",
+} as const
+export const WebhookNativeMutations = {
+  Available: "available",
+  TemporarilyUnavailable: "temporarily-unavailable",
+  Stopped: "stopped",
+} as const
+export const WebhookRefusal = {
+  PreparationBusy: "preparation-busy",
+  PreparationUnavailable: "preparation-unavailable",
+  PreparationTimedOut: "preparation-timed-out",
+  DestinationRefused: "destination-refused",
+  AdmissionUnavailable: "admission-unavailable",
+  SourceUnavailable: "source-unavailable",
 } as const
 export const ShortcutAction = {
   PanelSummon: "panel.summon",

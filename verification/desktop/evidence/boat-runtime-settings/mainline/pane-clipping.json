@@ -1,0 +1,300 @@
+{
+  "check": "columns",
+  "ok": true,
+  "started": "2026-10-27T21:57:24.317Z",
+  "finished": "2026-10-27T21:57:55.933Z",
+  "target": {
+    "url": "http://127.0.0.1:52481/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "1440x900",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "1000x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "pane-clipping",
+      "states": [
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        },
+        {
+          "outside": true,
+          "focused": true,
+          "top": 0,
+          "left": 0,
+          "headerShift": 0
+        }
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

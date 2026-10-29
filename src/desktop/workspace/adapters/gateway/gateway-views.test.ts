@@ -1741,3 +1741,24 @@ describe("user attachment references across conversation reads", () => {
     }
   }
 })
+
+it("omits an internal turn's empty input while retaining its assistant reply", () => {
+  const transcript = transcriptFrom(
+    view("c", {
+      messages: [turn({ userText: "", parts: [textPart("Task finished.", 0)] })],
+    }),
+    1,
+    at,
+    100,
+  )
+  expect(transcript.messages.filter((message) => message.role === "user")).toEqual([])
+  expect(
+    transcript.messages.some(
+      (message) =>
+        message.role === "agent" &&
+        message.parts.some(
+          (part) => part.kind === "text" && part.text === "Task finished.",
+        ),
+    ),
+  ).toBe(true)
+})

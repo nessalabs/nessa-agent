@@ -911,7 +911,21 @@ const checks = {
     if (panelSaid !== "pending")
       failures.push(`the third call was answered before its tab closed: "${panelSaid}"`)
     // Close its tab: the place is removed (L24), so its mount is released.
-    await page.locator(`${css.chatPanelTabs} [title^="Close "]`).first().click()
+    const close = page.locator(`${css.chatPanelTabs} [title^="Close "]`).first()
+    const closeHit = await close.evaluate((button) => {
+      const box = button.getBoundingClientRect()
+      const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+      return top === button || button.contains(top)
+        ? "close"
+        : top?.outerHTML.slice(0, 200)
+    })
+    if (closeHit !== "close") {
+      failures.push(
+        `the window toolbar covers the panel tab's close control: ${closeHit}`,
+      )
+      return { seen: { panelMode, pointerMoves, closeHit }, failures }
+    }
+    await close.click()
     const closedAt = Date.now()
     await until(
       page,

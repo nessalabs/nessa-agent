@@ -1,0 +1,22 @@
+[
+  {
+    "control": "observation-required",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "ack-before-stop",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "first-cause",
+    "caught": true,
+    "byte_restored": true
+  },
+  {
+    "control": "observed-context",
+    "caught": true,
+    "byte_restored": true
+  }
+]

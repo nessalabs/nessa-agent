@@ -184,7 +184,7 @@ describe("both layouts are the one shell", () => {
       expect(titlebar).toEqual(
         name === "three columns"
           ? ["Hide Sidebar", "Hide Session List", "Go Back", "Go Forward"]
-          : ["Hide Sidebar", "New Session", "Go Back", "Go Forward"],
+          : ["Hide Sidebar", "Go Back", "Go Forward"],
       )
       await act(async () => press("switcher"))
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
@@ -1087,8 +1087,9 @@ describe("a draft's close", () => {
         : undefined
       if (!draftPane) throw new Error("draft pane missing")
       await act(async () => void store.dispatch(closePane({ pane: draftPane.key })))
-      expect(store.getState().workspace.drafts).not.toHaveProperty(draftId)
-      expect(store.getState().workspace.composerText).not.toHaveProperty(draftId)
+      expect(store.getState().workspace.drafts).toHaveProperty(draftId)
+      expect(store.getState().workspace.composerText[draftId]).toBe("unsent line")
+      expect(store.getState().workspace.sessionTabs).toContain(draftId)
       expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
       await act(async () => frames.runFrame())
       await act(async () => frames.runFrame())

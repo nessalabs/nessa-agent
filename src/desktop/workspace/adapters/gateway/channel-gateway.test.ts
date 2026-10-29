@@ -18,6 +18,9 @@ const made: WireChannel = {
   agent: "codex",
   model: "gpt-5.6-terra",
   approvalMode: "auto",
+  coordinatorConversationId: null,
+  coordinatorPlacement: "local",
+  threadPlacement: "local",
   createdAtMs: 1,
 }
 
@@ -40,6 +43,8 @@ describe("making a channel on the gateway", () => {
       name: "design-review",
       agent: "codex",
       model: "gpt-5.6-terra",
+      coordinatorPlacement: "local",
+      threadPlacement: "local",
       approvalMode: "auto",
       notes: "Check every export.",
       resources: ["/Users/me/brand-kit"],
@@ -64,6 +69,8 @@ describe("making a channel on the gateway", () => {
       folder: "/repo",
       agent: "codex",
       model: "gpt-5.6-terra",
+      coordinatorPlacement: "local",
+      threadPlacement: "local",
       approvalMode: "ask",
     })
   })

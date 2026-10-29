@@ -72,15 +72,21 @@
 //! the proxy, which holds no link of the model's, and the app inside it is
 //! someone else's HTML. The app's policy has `frame-src 'none'` and applies
 //! to the proxy's document too (`src/desktop/widgets/app/model/csp.ts`), so
-//! the app can frame nothing and cannot navigate its own frame: each is
-//! refused before it reaches anything — in the browser build's Chromium,
-//! where it is checked (`mcp-apps.mjs --only
+//! the app can frame nothing. In a bundled macOS WKWebView probe (#1192),
+//! hostile app documents attempted script navigation, meta refresh and a
+//! document rewrite to HTTP, plus script navigation to HTTPS and `mailto`.
+//! Each attempt produced a CSP violation before this hook saw an external
+//! URL. The script and refresh frames stayed on `about:srcdoc`; the rewrite
+//! was reported as an app departure. A clicked link in the host page did
+//! reach this hook as `HandToBrowser`, confirming the probe observed native
+//! external navigation. The probe used a debug app bundle and the default
+//! MCP app CSP; its screenshots and bounded host logs are in
+//! `verification/desktop/evidence/1192-webkit-navigation/`. This is a
+//! measured result for those attempts, not a claim about every WebKit exit.
+//! The browser fixture checks the same three HTTP escapes in Chromium and
+//! Playwright WebKit (`mcp-apps.mjs --only
 //! escape-navigate,escape-refresh,escape-rewrite` under
-//! `verification/desktop/scripts/`; its WebKit run is still to come).
-//! Whether WKWebView under Tauri refuses it before this policy runs is not
-//! yet seen; if it does not, this policy would hand an
-//! `http`, `https` or `mailto` URL the app chose to the OS, with no gesture
-//! of the person's (#349, open question 3).
+//! `verification/desktop/scripts/`).
 //!
 //! A dropped URL is the other way a page can be made to navigate, and the page
 //! stops that itself in `src/panel/adapters/use-drop-navigation-guard.ts`. One

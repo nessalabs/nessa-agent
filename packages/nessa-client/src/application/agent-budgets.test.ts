@@ -1,7 +1,10 @@
 import { expect, it } from "vitest"
 // Only a test reaches outside the package root; the source it checks does not.
 import budgets from "../../../../protocol/defaults/agent-startup-budgets.json"
-import { conversationDeleteTimeoutMs } from "./agent-budgets.js"
+import {
+  conversationDeleteTimeoutMs,
+  conversationWorkspaceCreateTimeoutMs,
+} from "./agent-budgets.js"
 
 /**
  * The table states one delete's worst case once, and the gateway's own test
@@ -15,4 +18,10 @@ it("waits out one delete's worst case, plus the stated margin", () => {
     budgets.deletion.worstCaseMs + budgets.client.marginMs,
   )
   expect(conversationDeleteTimeoutMs).toBeGreaterThan(budgets.deletion.worstCaseMs)
+})
+
+it("allows workspace preparation before a channel agent exchange", () => {
+  expect(conversationWorkspaceCreateTimeoutMs).toBe(
+    budgets.workspace.connectMs + conversationDeleteTimeoutMs,
+  )
 })

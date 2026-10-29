@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  backgroundTasks: {
+    default: 1,
+    what: "background commands outliving their calling turn and settling the original tool row",
+  },
   inputFiles: {
     default: 1,
     what: "PDF, ZIP and text inputs uploaded by another surface, retained and drawn in the conversation",
@@ -107,7 +111,7 @@ export const KNOBS = {
   },
   panels: {
     default: 1,
-    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its own tabs or note, no chat tabs; ⌘N docks it and the new session opens in sight), left with Escape, then closed",
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its widget tabs or note, with conversation documents in the window toolbar; ⌘N docks it and the new session opens in sight), left with Escape, then closed",
   },
   onboardings: {
     default: 1,
@@ -155,11 +159,15 @@ export const KNOBS = {
   },
   githubs: {
     default: 1,
-    what: "times GitHub is connected from Settings through a fake GitHub, an agent started after it holds the sign-in, then disconnected",
+    what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
   },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
+  },
+  webhooks: {
+    default: 1,
+    what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
   },
   channels: {
     default: 1,
@@ -220,6 +228,7 @@ export function plan(knobs) {
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
+  add(knobs.backgroundTasks, () => ({ kind: "background" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
@@ -251,6 +260,7 @@ export function plan(knobs) {
   add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
+  add(knobs.webhooks, () => ({ kind: "webhook" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

@@ -789,6 +789,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "input",
       "mcp",
       "structuredContent",
+      "backgroundTaskId",
       "nativeHooks",
       "startedAtMs",
       "endedAtMs",
@@ -846,6 +847,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       // a review and an app's own call. Absent when it could not match them.
       if (mcp.argumentsJson !== undefined)
         text(mcp, "argumentsJson", bounds.maxMcpArgumentsBytes)
+    }
+    if (Object.hasOwn(tool, "backgroundTaskId")) {
+      const task = text(tool, "backgroundTaskId", bounds.maxBackgroundTaskIdBytes, false)
+      if (!new RegExp(bounds.backgroundTaskIdPattern).test(task))
+        throw new Error("Invalid background task identity")
     }
     if (tool.structuredContent !== undefined)
       text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)
@@ -1001,7 +1007,7 @@ const leaseValues = {
     refused: true,
     unreadable: true,
   } satisfies Record<ConversationLease["state"], true>,
-  environment: { here: true, ssh: true, peer: true } satisfies Record<
+  environment: { here: true, ssh: true, peer: true, boat: true } satisfies Record<
     NonNullable<ConversationLease["environment"]>,
     true
   >,

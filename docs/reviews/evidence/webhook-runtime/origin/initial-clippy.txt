@@ -1,0 +1,43 @@
+    Checking nessa-auth v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-auth)
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-client-core)
+    Checking nessa-server v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-server)
+    Checking nessa-device-client v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-device-client)
+warning: constant evaluation is taking a long time
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/slice/mod.rs:117:8
+    |
+    = note: the const evaluator is currently interpreting this expression
+help: the constant being evaluated
+   --> crates/nessa-server/src/env/config.rs:51:9
+    |
+ 51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 63 | / lease_protocol!(
+ 64 | |     "../../../nessa-protocol/src/lease.rs",
+ 65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+ 66 | |     "../env_serve/mod.rs",
+...   |
+105 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+106 | | );
+    | |_- in this macro invocation
+    = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+   --> crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_origin.rs:148:5
+    |
+148 |     drop(command);
+    |     ^^^^^^^^^^^^^
+    |
+note: argument has type `webhooks::application::registration::RegisterWebhook<'_>`
+   --> crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_origin.rs:148:10
+    |
+148 |     drop(command);
+    |          ^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#drop_non_drop
+    = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+error: could not compile `nessa-server` (lib test) due to 1 previous error; 1 warning emitted

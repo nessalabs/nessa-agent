@@ -3079,6 +3079,60 @@ async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
     assert_eq!(listed[0].principal_id, principal);
     assert_eq!(listed[0].receiver_id, None);
 
+    let epoch = stored.policy_revision.unwrap();
+    let hold = opened
+        .store
+        .hold_principal_revision(&id, &principal, epoch)
+        .await
+        .unwrap();
+    let mut revoke = opened.store.change(ShareGrantChange {
+        transition: ShareGrantTransition::Revoke,
+        conversation_id: id.clone(),
+        principal_id: Some(principal.clone()),
+        receiver_id: None,
+        credential_id: CredentialId::new("webhook-credential").unwrap(),
+        expected_policy_revision: None,
+        initiator: caller("revoke-webhook"),
+        at_ms: 8,
+    });
+    assert!(matches!(
+        revoke
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    drop(hold);
+    assert!(revoke.await.unwrap().applied);
+    assert!(matches!(
+        opened
+            .store
+            .hold_principal_revision(&id, &principal, epoch)
+            .await,
+        Err(ConversationError::Revoked)
+    ));
+    let renewed = opened
+        .store
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(ShareAccess::read()),
+            conversation_id: id.clone(),
+            principal_id: Some(principal.clone()),
+            receiver_id: None,
+            credential_id: CredentialId::new("webhook-credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: caller("renew-webhook"),
+            at_ms: 9,
+        })
+        .await
+        .unwrap();
+    assert!(renewed.policy_revision.unwrap() > epoch);
+    assert!(matches!(
+        opened
+            .store
+            .hold_principal_revision(&id, &principal, epoch)
+            .await,
+        Err(ConversationError::Revoked)
+    ));
+
     assert!(grant(&opened.store, &id, "phone").await);
     assert!(opened
         .store

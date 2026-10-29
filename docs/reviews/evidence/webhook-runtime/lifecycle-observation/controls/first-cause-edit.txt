@@ -1,0 +1,3 @@
+RegistrationPhase::ExpiryObserved => self.finish_observed(),
+=>
+RegistrationPhase::ExpiryObserved => self.changed(RegistrationPhase::Stopped, StopObservation::new(StopReason::Revoked { initiator }, at_ms)),

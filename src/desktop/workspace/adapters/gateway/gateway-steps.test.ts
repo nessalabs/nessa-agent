@@ -145,3 +145,20 @@ describe("an edit's line counts", () => {
     })
   })
 })
+
+it("keeps only gateway-associated background calls running after their turn ends", () => {
+  const ended = { ...clock, turnEnded: true }
+  const background = toolStep(
+    tool({ status: "running", backgroundTaskId: "build" }),
+    ended,
+  )
+  expect(background.status).toBe("running")
+  expect(background.backgroundTaskId).toBe("build")
+  expect(toolStep(tool({ status: "running" }), ended).status).toBe("stopped")
+  expect(
+    toolStep(
+      tool({ status: "completed", backgroundTaskId: "build", endedAtMs: 1_000_100 }),
+      ended,
+    ),
+  ).toMatchObject({ status: "completed", endedAtMs: 990_100 })
+})

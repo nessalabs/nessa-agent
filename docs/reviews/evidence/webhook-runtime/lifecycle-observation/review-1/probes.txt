@@ -1,0 +1,10 @@
+
+running 6 tests
+test webhooks::infrastructure::outbox::store::tests::independent_probes::demonstrate_stopped_state_with_unacknowledged_observation_is_accepted ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::demonstrate_stopped_queued_after_observation_ack_is_accepted ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::demonstrate_retired_state_accepts_reintroduced_owed_observation ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::late_retry_after_genuine_stop_and_lost_response_ack_is_valid ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::observation_then_known_response_then_stop_keeps_effect_and_cause_distinct ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::all_original_readers_survive_ack_loss_restart_and_later_revocation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 109 filtered out; finished in 0.12s

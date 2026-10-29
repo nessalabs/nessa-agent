@@ -1,0 +1,17 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::actual_webhook_origin_refuses_bearer_and_resumed_product_entry_after_restart ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::actual_webhook_origin_refuses_bearer_and_resumed_product_entry_after_restart stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::actual_webhook_origin_refuses_bearer_and_resumed_product_entry_after_restart' (124909) panicked at /tmp/nessa-origin-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_origin.rs:83:32:
+called `Result::unwrap_err()` on an `Ok` value: AuthenticatedSession { context: AuthContext { principal_id: PrincipalId("hook"), organization_id: OrganizationId("org"), membership_id: MembershipId("hook-member"), credential_id: CredentialId("credential-1700c2a2-5216-4c85-bbc3-cff8dc941756"), audience_id: AudienceId("gateway") }, expires_at: Some(100), auth_revision: 2 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::actual_webhook_origin_refuses_bearer_and_resumed_product_entry_after_restart
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.01s

@@ -351,7 +351,7 @@ export function report(check, options) {
       const passed = counted.filter((r) => r.ok).length
       const leftOut = results.length - counted.length
       log(
-        `${check}: ${passed}/${counted.length} held${leftOut ? `, ${leftOut} ${DEV_SERVER_ONLY}` : ""}${cannotRun ? " (some could not run)" : ""}`,
+        `${check}: ${passed}/${counted.length} held${leftOut ? `, ${leftOut} not run` : ""}${cannotRun ? " (some could not run)" : ""}`,
       )
       return status
     },

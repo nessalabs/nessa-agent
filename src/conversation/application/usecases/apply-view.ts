@@ -18,32 +18,36 @@ export function applyView(current: Conversation, view: ConversationView): Conver
   for (const message of view.messages) {
     seen.add(message.executionId)
     const local = known.get(message.executionId)
-    projected.push({
-      id: local?.id ?? `${message.executionId}:user`,
-      from: "user",
-      // Local content keeps its previews. Without it — another surface's turn,
-      // or this one after a reload — the images are known only by reference and
-      // the files only by the path the turn named.
-      content:
-        local?.content ??
-        referencedContent(
-          message.userText,
-          message.attachments,
-          message.files,
-          message.uploads,
-        ),
-      receipt: waiting.has(message.executionId)
-        ? "queued"
-        : message.status === "queued"
-          ? "accepted"
-          : "delivered",
-      executionId: message.executionId,
-      actionId: local?.actionId,
-      observedInput: local?.observedInput,
-      mode: local?.mode,
-      steeringTarget: message.steeringTarget,
-      steeringOffset: message.steeringOffset,
-    })
+    // Internal continuations have model input but no person-facing content.
+    // An attachment-only message still has content and keeps its user row.
+    const content =
+      local?.content ??
+      referencedContent(
+        message.userText,
+        message.attachments,
+        message.files,
+        message.uploads,
+      )
+    if (content.length > 0)
+      projected.push({
+        id: local?.id ?? `${message.executionId}:user`,
+        from: "user",
+        // Local content keeps its previews. Without it — another surface's turn,
+        // or this one after a reload — the images are known only by reference and
+        // the files only by the path the turn named.
+        content,
+        receipt: waiting.has(message.executionId)
+          ? "queued"
+          : message.status === "queued"
+            ? "accepted"
+            : "delivered",
+        executionId: message.executionId,
+        actionId: local?.actionId,
+        observedInput: local?.observedInput,
+        mode: local?.mode,
+        steeringTarget: message.steeringTarget,
+        steeringOffset: message.steeringOffset,
+      })
     if (
       (message.status !== "queued" &&
         view.tools.some((tool) => tool.executionId === message.executionId)) ||
@@ -83,23 +87,20 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     if (seen.has(pending.executionId)) continue
     seen.add(pending.executionId)
     const local = known.get(pending.executionId)
-    projected.push({
-      id: local?.id ?? `${pending.executionId}:user`,
-      from: "user",
-      content:
-        local?.content ??
-        referencedContent(
-          pending.text,
-          pending.attachments,
-          pending.files,
-          pending.uploads,
-        ),
-      receipt: "queued",
-      executionId: pending.executionId,
-      actionId: local?.actionId,
-      observedInput: local?.observedInput,
-      mode: local?.mode,
-    })
+    const content =
+      local?.content ??
+      referencedContent(pending.text, pending.attachments, pending.files, pending.uploads)
+    if (content.length > 0)
+      projected.push({
+        id: local?.id ?? `${pending.executionId}:user`,
+        from: "user",
+        content,
+        receipt: "queued",
+        executionId: pending.executionId,
+        actionId: local?.actionId,
+        observedInput: local?.observedInput,
+        mode: local?.mode,
+      })
   }
   // A view can race an admitted send. Keep local intent the server has not
   // acknowledged yet; never resend as a side effect of read. A queued receipt is

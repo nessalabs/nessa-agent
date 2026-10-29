@@ -1,0 +1,50 @@
+[
+  {
+    "index": 0,
+    "file": "registry.rs",
+    "rule": "initiator == \"lifecycle\"",
+    "test": "lifecycle_expiry_before_a_delivery",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 1,
+    "file": "registry.rs",
+    "rule": "initiator == \"lifecycle\"",
+    "test": "automatic_expiry_observer_decoding",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 2,
+    "file": "registry.rs",
+    "rule": "ExpiryObserver::Lifecycle => \"lifecycle\".into()",
+    "test": "lifecycle_expiry_before_a_delivery",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 3,
+    "file": "registry.rs",
+    "rule": "ExpiryObserver::Delivery(id) => format!(\"delivery:{id}\")",
+    "test": "delivery_expiry_observation",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 4,
+    "file": "registry.rs",
+    "rule": "integer(at_ms)?;",
+    "test": "automatic_expiry_observer_decoding",
+    "caught": true,
+    "restored": true
+  },
+  {
+    "index": 5,
+    "file": "registry.rs",
+    "rule": "if saved.stop.is_some() { return Ok(()); }",
+    "test": "first_lifecycle_stop",
+    "caught": true,
+    "restored": true
+  }
+]

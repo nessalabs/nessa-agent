@@ -318,6 +318,7 @@ const settingsParts = {
   credentials: {} as CredentialApi,
   auth: {} as AuthApi,
   github: {} as GithubApi,
+  vault: {} as import("@nessa/client").VaultApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
   agents: {

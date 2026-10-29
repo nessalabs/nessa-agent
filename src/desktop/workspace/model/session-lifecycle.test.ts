@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { agentOf, modelName } from "./workspace-index"
-import { keepShownDrafts, startSession, type Draft } from "./session-lifecycle"
+import { keepDrafts, startSession, type Draft } from "./session-lifecycle"
 
 const opus = { provider: "anthropic", modelId: "claude-opus-5" }
 const draft = (id: string): Draft => ({ id, channelId: "desktop-app", model: opus })
@@ -8,9 +8,9 @@ const draft = (id: string): Draft => ({ id, channelId: "desktop-app", model: opu
 describe("a draft's life", () => {
   it("keeps the drafts a pane still shows, and the same record when none is let go", () => {
     const drafts = { a: draft("a"), b: draft("b") }
-    expect(keepShownDrafts(drafts, new Set(["a", "b", "other"]))).toBe(drafts)
-    expect(keepShownDrafts(drafts, new Set(["b"]))).toEqual({ b: draft("b") })
-    expect(keepShownDrafts(drafts, new Set())).toEqual({})
+    expect(keepDrafts(drafts, new Set(["a", "b", "other"]))).toBe(drafts)
+    expect(keepDrafts(drafts, new Set(["b"]))).toEqual({ b: draft("b") })
+    expect(keepDrafts(drafts, new Set())).toEqual({})
   })
 
   it("starts as a running session titled by its first message, keeping its identity", () => {

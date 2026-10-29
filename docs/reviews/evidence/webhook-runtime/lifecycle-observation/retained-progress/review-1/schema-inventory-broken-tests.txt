@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::schema::tests::retained_progress_inventory_covers_the_canonical_tables' (170443) panicked at /tmp/nessa-retained-progress-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/schema.rs:38:5:
+assertion `left == right` failed
+  left: ["audit", "cursors", "deliveries", "registration_intents", "registrations", "retirements", "source_reset_facts", "source_reset_members", "unclassified_progress"]
+ right: ["audit", "cursors", "deliveries", "registration_intents", "registrations", "retirements", "source_reset_facts", "source_reset_members"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::schema::tests::retained_progress_inventory_covers_the_canonical_tables ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::schema::tests::retained_progress_inventory_covers_the_canonical_tables
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.00s

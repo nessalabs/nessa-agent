@@ -20,12 +20,9 @@
   flex: 1;
   min-height: 0;
   padding-top: 0;
-  /* The room the pane's title row takes above the home — in the top row,
-     the whole titlebar row, so the picture runs up to the window's edge,
-     behind the window's controls too — and the picture's own height. */
+  /* The room the pane's title row takes above the home, and the picture's own height. */
   --workspace-home-reach: calc(
-    var(--desktop-control-size) + 2 * var(--desktop-control-inset) + 2 *
-      var(--workspace-pane-top, 0px)
+    var(--desktop-control-size) + 2 * var(--desktop-control-inset)
   );
   --workspace-home-picture: clamp(120px, 32cqh, 290px);
 }
@@ -432,7 +429,7 @@
   }
 }
 
-/* Up to the window's top edge the picture is as bright as below: it fades
+/* Up to the pane's top edge the picture is as bright as below: it fades
    only out toward the sides and into the pane. */
 .workspace-pane-home > .desktop-home:not([data-page]) .desktop-header-image {
   mask-image:
@@ -462,4 +459,9 @@
   .workspace-dock
   .desktop-composer {
   animation: none;
+}
+
+.workspace-pane-main-agent {
+  color: var(--muted-foreground);
+  white-space: nowrap;
 }

@@ -1,0 +1,22 @@
+Source3e7e965d6b5edbcf29ff6926d736d21090268bdb; UI3118f2d8a15f68825ecef3fe0c337368b3d7f889
+Command: pnpm frontend:check; exit0; native filesystem ownership metadata, unprivileged actor.
+ℹ tests 12
+ℹ pass 12
+ℹ skipped 0
+ℹ tests 458
+ℹ pass 456
+ℹ skipped 2
+ℹ tests 408
+ℹ pass 408
+ℹ skipped 0
+ℹ tests 108
+ℹ pass 108
+ℹ skipped 0
+architecture check passed
+protocol check passed
+ℹ tests 61
+ℹ pass 61
+ℹ skipped 0
+ Test Files  409 passed (409)
+      Tests  5304 passed (5304)
+✓ built in 15.64s

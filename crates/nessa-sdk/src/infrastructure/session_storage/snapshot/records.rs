@@ -217,6 +217,8 @@ pub(super) struct Metadata {
     /// (`deserialize_with` keeps serde from reading its absence as `None`).
     #[serde(deserialize_with = "Option::deserialize")]
     pub(super) user_app: Option<App>,
+    /// Application-generated continuation, never simultaneously an app message.
+    pub(super) user_internal: bool,
     /// What apps gave the model with this message; empty when none did.
     pub(super) user_app_model_context: Vec<AppModelContext>,
     pub(super) estimated_input_tokens: u64,
@@ -452,9 +454,10 @@ impl From<&InvocationRecord> for Metadata {
                 .map(Into::into)
                 .collect(),
             user_app: match value.request.user_message.sender() {
-                MessageSender::Person => None,
+                MessageSender::Person | MessageSender::Internal => None,
                 MessageSender::App(app) => Some(app.into()),
             },
+            user_internal: matches!(value.request.user_message.sender(), MessageSender::Internal),
             user_app_model_context: value
                 .request
                 .user_message
@@ -659,9 +662,11 @@ impl Metadata {
                         .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?
-                .sent_by(match self.user_app {
-                    None => MessageSender::Person,
-                    Some(app) => MessageSender::App(app.decode()?),
+                .sent_by(match (self.user_internal, self.user_app) {
+                    (false, None) => MessageSender::Person,
+                    (true, None) => MessageSender::Internal,
+                    (false, Some(app)) => MessageSender::App(app.decode()?),
+                    (true, Some(_)) => return Err(corrupt("input has two senders")),
                 })
                 .with_app_model_context(
                     self.user_app_model_context

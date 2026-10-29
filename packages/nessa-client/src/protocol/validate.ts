@@ -1,6 +1,12 @@
 import { hasUniqueObjectKeys } from "./unique-json.js"
 import { bounds } from "../generated/product.js"
-import { frameScalars, responsePresence } from "../generated/protocol.js"
+import {
+  WebhookNativeMutations,
+  WebhookPendingOutcome,
+  WebhookRefusal,
+  frameScalars,
+  responsePresence,
+} from "../generated/protocol.js"
 import type { EventFrame, Frame, ResFrame } from "./types.js"
 import type { ProductSessionReady, SessionChallenge } from "./product-types.js"
 
@@ -181,6 +187,22 @@ export function assertHealthResult(value: unknown): import("./types.js").HealthR
     !Number.isInteger(value.uptimeMs)
   ) {
     throw new Error("health response has invalid uptimeMs")
+  }
+  if (Object.hasOwn(value, "webhook")) {
+    const status = value.webhook
+    if (
+      !isRecord(status) ||
+      !Object.values(WebhookPendingOutcome).some(
+        (item) => item === status.pendingOutcome,
+      ) ||
+      !Object.values(WebhookNativeMutations).some(
+        (item) => item === status.nativeMutations,
+      ) ||
+      (Object.hasOwn(status, "lastRefusal") &&
+        !Object.values(WebhookRefusal).some((item) => item === status.lastRefusal))
+    ) {
+      throw new Error("health response has invalid webhook status")
+    }
   }
   return value as unknown as import("./types.js").HealthResult
 }

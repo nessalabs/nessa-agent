@@ -132,6 +132,7 @@ impl Owners {
                 MembershipRole::Member,
                 MembershipStatus::Active,
             );
+            current.origin = test_product_origin(&current.credential);
             snapshots.insert(credential.clone(), current);
             if device != "phone" {
                 continue;

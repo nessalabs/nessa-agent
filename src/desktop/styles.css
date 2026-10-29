@@ -1040,7 +1040,7 @@ html:not(.dark) [data-surface] {
 .split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
-  opacity: 0.3;
+  opacity: 0.24;
 }
 
 @container workspace-pane (max-height: 219px) {

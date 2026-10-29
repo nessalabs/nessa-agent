@@ -1,0 +1,7 @@
+{
+  "row": "sdk Running",
+  "glyphPointerEvents": "auto",
+  "hitTag": "SPAN",
+  "hitClass": "workspace-status",
+  "throughToRow": false
+}

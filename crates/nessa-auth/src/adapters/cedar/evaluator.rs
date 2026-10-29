@@ -118,7 +118,10 @@ impl CedarPolicyEvaluator {
     /// authentication, not policy, so it stays here rather than in Cedar: a
     /// request for one identity is never evaluated against another's facts.
     fn identity_matches(context: &AuthContext, snapshot: &AccessSnapshot) -> bool {
-        snapshot.credential.id() == context.credential_id()
+        snapshot
+            .origin
+            .matches(&snapshot.credential, snapshot.revision)
+            && snapshot.credential.id() == context.credential_id()
             && snapshot.credential.principal_id() == context.principal_id()
             && snapshot.credential.organization_id() == context.organization_id()
             && snapshot.credential.audience_id() == context.audience_id()

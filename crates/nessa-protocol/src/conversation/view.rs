@@ -324,7 +324,7 @@ impl ConversationMessageApp {
     /// The app that wrote `message`, or `None` when the person did.
     pub fn of(message: &UserMessage) -> Option<Self> {
         match message.sender() {
-            MessageSender::Person => None,
+            MessageSender::Person | MessageSender::Internal => None,
             MessageSender::App(app) => Some(Self {
                 execution_id: app.execution_id().as_str().into(),
                 tool_id: app.tool_id().as_str().into(),
@@ -523,6 +523,9 @@ pub struct ConversationAnswerOption {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationTool {
+    /// Gateway-owned task associated with this original native call. Its status outlives the provider turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_task_id: Option<String>,
     pub input: String,
     pub details: String,
     pub execution_id: String,
@@ -951,6 +954,8 @@ pub enum ConversationLeaseState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationLeaseEnvironment {
+    /// A thread workspace in the user's Boat account.
+    Boat,
     /// The gateway's own machine.
     Here,
     /// A machine reached over SSH, named by `host`.

@@ -258,6 +258,7 @@ struct Terms {
 }
 #[derive(Serialize, Deserialize)]
 enum Environment {
+    Boat,
     Here,
     Ssh(String),
     Peer(String),
@@ -448,6 +449,7 @@ impl From<&EnvironmentRef> for Environment {
     fn from(value: &EnvironmentRef) -> Self {
         match value {
             EnvironmentRef::Here => Self::Here,
+            EnvironmentRef::Boat => Self::Boat,
             EnvironmentRef::Ssh(host) => Self::Ssh(host.as_str().into()),
             EnvironmentRef::Peer(peer) => Self::Peer(peer.name()),
         }
@@ -457,6 +459,7 @@ impl Environment {
     fn decode(self) -> Result<EnvironmentRef, StorageError> {
         Ok(match self {
             Self::Here => EnvironmentRef::Here,
+            Self::Boat => EnvironmentRef::Boat,
             Self::Ssh(host) => EnvironmentRef::Ssh(SshDestination::new(host).map_err(corrupt)?),
             Self::Peer(peer) => {
                 EnvironmentRef::Peer(PeerEnvironment::parse(&peer).map_err(corrupt)?)

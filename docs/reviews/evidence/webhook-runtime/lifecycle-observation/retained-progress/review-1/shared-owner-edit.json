@@ -1,0 +1,7 @@
+{
+  "path": "/tmp/nessa-retained-progress-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs",
+  "before": "        progress::validate(connection, registration)?;",
+  "after": "        let _ = registration;",
+  "sourceSHA256": "133b36d69b2deeff9d411602f009faa104e0cc7e16f00e3d17d6a169c6eb1059",
+  "mutatedSHA256": "afb3596286b56ca81f39a2fd2c335a6c29d243390b78bf0bcf6a5c2cc05a11ac"
+}

@@ -97,13 +97,14 @@ pub trait GithubApi: Send + Sync {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoreUnavailable;
 
-/// Where the one sign-in is kept between runs.
+/// Where the one sign-in is kept between runs. Every operation carries the
+/// unlock generation that admitted it; a stale generation is StoreUnavailable.
 #[async_trait]
 pub trait GithubTokenStore: Send + Sync {
-    async fn load(&self) -> Result<Option<GithubSignIn>, StoreUnavailable>;
-    async fn save(&self, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable>;
-    /// Deleting what is not there succeeds.
-    async fn delete(&self) -> Result<(), StoreUnavailable>;
+    async fn load(&self, generation: u64) -> Result<Option<GithubSignIn>, StoreUnavailable>;
+    async fn save(&self, generation: u64, sign_in: &GithubSignIn) -> Result<(), StoreUnavailable>;
+    /// Within the captured generation, deleting an absent entry succeeds.
+    async fn delete(&self, generation: u64) -> Result<(), StoreUnavailable>;
 }
 
 /// Who asked: the authenticated session's identity, as the audit names it.
@@ -136,6 +137,8 @@ pub enum EndCause {
     GithubUnreachable,
     /// GitHub gave a sign-in that the gateway could not keep.
     StoreFailed,
+    /// The local vault session changed before GitHub answered.
+    VaultLocked,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,4 +170,23 @@ pub struct AuditUnavailable;
 #[async_trait]
 pub trait GithubAudit: Send + Sync {
     async fn record(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable>;
+    /// Blocking durable delivery when synchronous lifetime cleanup cannot await.
+    /// Uses the same record identity/writer as ordinary delivery; failures remain visible.
+    fn record_cleanup(&self, record: &GithubAuditRecord) -> Result<(), AuditUnavailable>;
+}
+
+/// Cryptographic availability of the sign-in vault, independent of caller policy.
+pub trait GithubAccess: Send + Sync {
+    fn generation(&self) -> Option<u64>;
+}
+
+/// Generation-scoped bytes for the infrastructure sign-in codec. The vault
+/// compares generation atomically with key access; this port grants no caller policy.
+pub trait GithubSecret: Send + Sync {
+    fn read(
+        &self,
+        generation: u64,
+    ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, StoreUnavailable>;
+    fn write(&self, generation: u64, bytes: &[u8]) -> Result<(), StoreUnavailable>;
+    fn delete(&self, generation: u64) -> Result<(), StoreUnavailable>;
 }

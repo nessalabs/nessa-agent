@@ -1,0 +1,17 @@
+2026-10-28T08:18:54.857721Z  INFO nessa.launch: process started version="0.1.0" profile="debug" os="macos" arch="aarch64" stage="ci" packaged=false exe=/Users/nessa/.codex/worktrees/1190-github-token/nessa-agent/target/debug/bundle/macos/Nessa Navigation Probe.app/Contents/MacOS/Nessa app_bundle=true app_translocated=false log=/Users/nessa/.nessa/ci/logs/host.log
+2026-10-28T08:18:55.031829Z  INFO nessa.launch: startup log log=/Users/nessa/.nessa/ci/logs/host.log
+2026-10-28T08:18:55.032227Z  INFO nessa.launch: navigation probe skipped gateway startup
+2026-10-28T08:18:55.063204Z  INFO nessa.window: window shown label=setup first=true since_process_start_ms=206
+2026-10-28T08:18:55.063231Z  INFO nessa.timing: startup timing mark="window_shown" label=setup since_process_start_ms=206
+2026-10-28T08:18:55.127691Z  INFO nessa.navigation_probe: navigation probe url=tauri://localhost/index.html?surface=setup decision=Allow
+2026-10-28T08:18:55.133918Z  INFO nessa.navigation_probe: navigation probe url=tauri://localhost decision=Allow
+2026-10-28T08:18:55.134051Z  INFO nessa.navigation_probe: navigation probe url=tauri://localhost/desktop.html decision=Allow
+2026-10-28T08:18:55.210258Z  INFO nessa.window: page load finished label="main" url=tauri://localhost since_process_start_ms=353
+2026-10-28T08:18:55.218229Z  INFO nessa.window: page load finished label="setup" url=tauri://localhost/index.html?surface=setup since_process_start_ms=361
+2026-10-28T08:18:55.242195Z  INFO nessa.window: page load finished label="desktop" url=tauri://localhost/desktop.html since_process_start_ms=385
+2026-10-28T08:18:55.264612Z  INFO nessa.navigation_probe: navigation probe url=nessa-sandbox://localhost/proxy.html decision=Allow
+2026-10-28T08:18:55.264770Z  INFO nessa.navigation_probe: navigation probe url=nessa-sandbox://localhost/proxy.html decision=Allow
+2026-10-28T08:18:55.275661Z  INFO nessa.navigation_probe: navigation probe url=about:srcdoc decision=Allow
+2026-10-28T08:18:55.275893Z  INFO nessa.navigation_probe: navigation probe url=about:srcdoc decision=Allow
+2026-10-28T08:18:55.301792Z  INFO nessa.window: window shown label=setup first=false since_process_start_ms=445
+2026-10-28T08:18:59.448713Z  INFO nessa.navigation_probe: navigation probe url=https://example.invalid/probe-positive decision=HandToBrowser

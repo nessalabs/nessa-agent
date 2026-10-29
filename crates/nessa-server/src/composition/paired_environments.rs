@@ -56,6 +56,7 @@ impl ServingCredentials for RegistryServing {
                 let evidence = CredentialEvidence::new(credential.as_str().as_bytes().to_vec())
                     .map_err(|_| AccessError::Unavailable)?;
                 let authenticated = AuthenticateSession {
+                    policy: self.policy.as_ref(),
                     verifier: &verifier,
                     access: self.store.as_ref(),
                     clock: self.clock.as_ref(),

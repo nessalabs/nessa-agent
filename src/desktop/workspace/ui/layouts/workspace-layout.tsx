@@ -13,8 +13,9 @@ import { sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import type { WindowArrangement } from "../../model/shown-window"
 import { IconButton } from "../../../ui/icon-button"
 import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
-import { StudioCorner } from "../chrome/identity-footer"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
+import { WindowTabs } from "../chrome/window-tabs"
+import { StudioCorner } from "../chrome/identity-footer"
 import { PanelMaximize, PanelToggle, WorkspacePanel } from "../chrome/right-panel"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
@@ -96,7 +97,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     panelWidth,
     onTogglePanel,
     onTogglePanelMaximized,
-    onNewSession,
     onPanelDragStart,
     onPanelDragMove,
   } = model
@@ -115,6 +115,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
                   data-sidebar={sidebarOpen ? "open" : "closed"}
+                  data-panel={panelOpen ? "open" : "closed"}
                   data-panel-maximized={panelMaximized || undefined}
                   style={
                     {
@@ -141,7 +142,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       </div>
                     ) : (
                       <div className="workspace-titlebar-navigation">
-                        {/* The expanded panel has no columns beside it to show or hide. */}
                         {panelMaximized ? null : (
                           <IconButton
                             icon="sidebar"
@@ -152,11 +152,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                             onClick={onToggleSidebar}
                           />
                         )}
-                        {/* The cluster's fourth control: the session list's toggle
-                            where there is a list — whose head holds New Session —
-                            else New Session itself. The expanded panel stands for
-                            its chat: no column to show, no new chat under it. */}
-                        {panelMaximized ? null : region.sessionList ? (
+                        {region.sessionList && !panelMaximized ? (
                           <IconButton
                             icon="sessionList"
                             label={`${listOpen ? "Hide" : "Show"} Session List`}
@@ -164,14 +160,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                             aria-expanded={listOpen}
                             onClick={onToggleSessionList}
                           />
-                        ) : (
-                          <IconButton
-                            icon="newSession"
-                            label="New Session"
-                            shortcut={frame.shortcut("newSession")}
-                            onClick={onNewSession}
-                          />
-                        )}
+                        ) : null}
                         <HistoryButtons />
                       </div>
                     )}
@@ -179,10 +168,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       <div className="workspace-titlebar-space" data-tauri-drag-region />
                     ) : (
                       <>
-                        <div
-                          className="workspace-titlebar-space"
-                          data-tauri-drag-region
-                        />
+                        <WindowTabs />
                         <div className="workspace-titlebar-trailing">
                           {panelOpen ? (
                             <PanelMaximize

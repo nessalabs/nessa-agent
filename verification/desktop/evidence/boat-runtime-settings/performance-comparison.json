@@ -1,0 +1,341 @@
+{
+  "baseRevision": "33b0fc6534cc30507061665cbc7d3f04cce48e66",
+  "featureSourceRevision": "49080c0477f23e752bb7dd90dc80e093a9d12558",
+  "featureUiRevision": "29ef4e5985a2858bd0839de5e67050a5078d2a21",
+  "issue": 1177,
+  "host": "macOS arm64",
+  "mode": "prod",
+  "cpuThrottle": 4,
+  "runsPerInteraction": 3,
+  "budgetMs": 50,
+  "caveat": "Concurrent verification on the same Mac, not an isolated performance comparison. Failed checks remain failures; no improvement is claimed.",
+  "base": {
+    "ok": false,
+    "started": "2026-10-27T20:06:09.929Z",
+    "finished": "2026-10-27T20:07:36.415Z",
+    "calibration": {
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 38,
+        "throttledMs": 153,
+        "ratio": 4.05,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 121.20000004768372,
+        "attributed": true,
+        "ok": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    "interactions": [
+      {
+        "name": "sidebar",
+        "layout": "columns",
+        "max": 101.39999985694885,
+        "median": 69.29999995231628,
+        "over50": 29,
+        "ok": false,
+        "failures": ["longest frame 101.39999985694885 ms > 50 ms (runs: 69 65 101)"],
+        "runMaxima": [69.29999995231628, 64.70000004768372, 101.39999985694885],
+        "firstSlowFrame": {
+          "at": 184,
+          "frame": 62.40000009536743,
+          "longTask": null,
+          "loaf": {
+            "duration": 59,
+            "blocking": 0,
+            "styleAndLayout": 1,
+            "scripts": []
+          }
+        }
+      },
+      {
+        "name": "session-list",
+        "layout": "columns",
+        "max": 127.60000014305115,
+        "median": 70.5,
+        "over50": 30,
+        "ok": false,
+        "failures": ["longest frame 127.60000014305115 ms > 50 ms (runs: 69 128 71)"],
+        "runMaxima": [68.5, 127.60000014305115, 70.5],
+        "firstSlowFrame": {
+          "at": -9,
+          "frame": 68.5,
+          "longTask": null,
+          "loaf": {
+            "duration": 70,
+            "blocking": 6,
+            "styleAndLayout": 10,
+            "scripts": [
+              {
+                "duration": 46,
+                "invoker": "DOMWindow.onkeydown",
+                "type": "event-listener",
+                "fn": "s",
+                "source": "desktop-B6j5X4ej.js:254369",
+                "forcedLayout": 16
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "overview-open",
+        "layout": "columns",
+        "max": 104.40000009536743,
+        "median": 85.79999995231628,
+        "over50": 8,
+        "ok": false,
+        "failures": ["longest frame 104.40000009536743 ms > 50 ms (runs: 104 86 72)"],
+        "runMaxima": [104.40000009536743, 85.79999995231628, 71.5],
+        "firstSlowFrame": {
+          "at": 203,
+          "frame": 104.40000009536743,
+          "longTask": 92,
+          "loaf": {
+            "duration": 84,
+            "blocking": 34,
+            "styleAndLayout": 41,
+            "scripts": [
+              {
+                "duration": 40,
+                "invoker": "FrameRequestCallback",
+                "type": "user-callback",
+                "fn": "",
+                "source": "desktop-B6j5X4ej.js:333912",
+                "forcedLayout": 0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "sidebar",
+        "layout": "sidebar",
+        "max": 95.29999995231628,
+        "median": 90,
+        "over50": 29,
+        "ok": false,
+        "failures": ["longest frame 95.29999995231628 ms > 50 ms (runs: 82 90 95)"],
+        "runMaxima": [82.30000019073486, 90, 95.29999995231628],
+        "firstSlowFrame": {
+          "at": -18,
+          "frame": 82.30000019073486,
+          "longTask": 53,
+          "loaf": {
+            "duration": 83,
+            "blocking": 9,
+            "styleAndLayout": 5,
+            "scripts": [
+              {
+                "duration": 54,
+                "invoker": "DOMWindow.onkeydown",
+                "type": "event-listener",
+                "fn": "s",
+                "source": "desktop-B6j5X4ej.js:254369",
+                "forcedLayout": 41
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "overview-open",
+        "layout": "sidebar",
+        "max": 96.20000004768372,
+        "median": 93.20000004768372,
+        "over50": 10,
+        "ok": false,
+        "failures": ["longest frame 96.20000004768372 ms > 50 ms (runs: 85 93 96)"],
+        "runMaxima": [84.70000004768372, 93.20000004768372, 96.20000004768372],
+        "firstSlowFrame": {
+          "at": 208,
+          "frame": 84.70000004768372,
+          "longTask": 83,
+          "loaf": {
+            "duration": 80,
+            "blocking": 27,
+            "styleAndLayout": 37,
+            "scripts": [
+              {
+                "duration": 40,
+                "invoker": "FrameRequestCallback",
+                "type": "user-callback",
+                "fn": "",
+                "source": "desktop-B6j5X4ej.js:333912",
+                "forcedLayout": 0
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "feature": {
+    "ok": false,
+    "started": "2026-10-27T20:03:53.090Z",
+    "finished": "2026-10-27T20:05:16.085Z",
+    "calibration": {
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 38,
+        "throttledMs": 158,
+        "ratio": 4.11,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 132.29999995231628,
+        "attributed": true,
+        "ok": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    "interactions": [
+      {
+        "name": "sidebar",
+        "layout": "columns",
+        "max": 75.59999990463257,
+        "median": 67,
+        "over50": 27,
+        "ok": false,
+        "failures": ["longest frame 75.59999990463257 ms > 50 ms (runs: 63 76 67)"],
+        "runMaxima": [62.90000009536743, 75.59999990463257, 67],
+        "firstSlowFrame": {
+          "at": -3,
+          "frame": 55.799999952316284,
+          "longTask": null,
+          "loaf": {
+            "duration": 60,
+            "blocking": 4,
+            "styleAndLayout": 7,
+            "scripts": [
+              {
+                "duration": 46,
+                "invoker": "DOMWindow.onkeydown",
+                "type": "event-listener",
+                "fn": "s",
+                "source": "desktop-BuLsu-6L.js:257686",
+                "forcedLayout": 29
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "session-list",
+        "layout": "columns",
+        "max": 120.20000004768372,
+        "median": 66.30000019073486,
+        "over50": 28,
+        "ok": false,
+        "failures": ["longest frame 120.20000004768372 ms > 50 ms (runs: 120 66 63)"],
+        "runMaxima": [120.20000004768372, 66.30000019073486, 62.90000009536743],
+        "firstSlowFrame": {
+          "at": -57,
+          "frame": 100.70000004768372,
+          "longTask": null,
+          "loaf": {
+            "duration": 98,
+            "blocking": 0,
+            "styleAndLayout": 2,
+            "scripts": [
+              {
+                "duration": 36,
+                "invoker": "DOMWindow.onkeydown",
+                "type": "event-listener",
+                "fn": "s",
+                "source": "desktop-BuLsu-6L.js:257686",
+                "forcedLayout": 10
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "overview-open",
+        "layout": "columns",
+        "max": 97,
+        "median": 88.80000019073486,
+        "over50": 10,
+        "ok": false,
+        "failures": ["longest frame 97 ms > 50 ms (runs: 85 89 97)"],
+        "runMaxima": [85.40000009536743, 88.80000019073486, 97],
+        "firstSlowFrame": {
+          "at": 203,
+          "frame": 74.5,
+          "longTask": 75,
+          "loaf": {
+            "duration": 68,
+            "blocking": 18,
+            "styleAndLayout": 36,
+            "scripts": [
+              {
+                "duration": 31,
+                "invoker": "FrameRequestCallback",
+                "type": "user-callback",
+                "fn": "",
+                "source": "desktop-BuLsu-6L.js:337229",
+                "forcedLayout": 0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "sidebar",
+        "layout": "sidebar",
+        "max": 88.20000004768372,
+        "median": 80.79999995231628,
+        "over50": 30,
+        "ok": false,
+        "failures": ["longest frame 88.20000004768372 ms > 50 ms (runs: 88 81 68)"],
+        "runMaxima": [88.20000004768372, 80.79999995231628, 68.39999985694885],
+        "firstSlowFrame": {
+          "at": -15,
+          "frame": 88.20000004768372,
+          "longTask": 65,
+          "loaf": {
+            "duration": 93,
+            "blocking": 24,
+            "styleAndLayout": 8,
+            "scripts": [
+              {
+                "duration": 65,
+                "invoker": "DOMWindow.onkeydown",
+                "type": "event-listener",
+                "fn": "s",
+                "source": "desktop-BuLsu-6L.js:257686",
+                "forcedLayout": 49
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "overview-open",
+        "layout": "sidebar",
+        "max": 94.59999990463257,
+        "median": 84.40000009536743,
+        "over50": 13,
+        "ok": false,
+        "failures": ["longest frame 94.59999990463257 ms > 50 ms (runs: 95 84 72)"],
+        "runMaxima": [94.59999990463257, 84.40000009536743, 72.29999995231628],
+        "firstSlowFrame": {
+          "at": 3,
+          "frame": 51.40000009536743,
+          "longTask": null,
+          "loaf": null
+        }
+      }
+    ]
+  }
+}

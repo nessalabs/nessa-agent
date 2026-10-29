@@ -4,7 +4,8 @@ The connected row uses the fake GitHub account in the conversation stress fixtur
 
 ![Connected GitHub account](github-connected.png)
 
-Checks on `codex/1190-github-token` in the isolated checkout:
+Historical checks at `bc85988eb333e518e1308eea7375acc4a959ec4e`, before the
+vault/live-event integration below. These results do not qualify the integrated tree:
 
 ```text
 conversation-stress: 53/53 held

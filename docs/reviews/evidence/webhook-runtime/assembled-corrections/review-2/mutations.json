@@ -1,0 +1,12 @@
+[
+  {
+    "name": "session-origin",
+    "caught": true,
+    "restored": "1304dfc9a33113bf3a077fd3580aedb41464f26e3b4b18b0738d6e504217e3f9"
+  },
+  {
+    "name": "cleanup-cutoff",
+    "caught": true,
+    "restored": "9d6a7bdba5fdad5ee57ecf900313422d76742093910ebac4429a2d0f505afdb9"
+  }
+]

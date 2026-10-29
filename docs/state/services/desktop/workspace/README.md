@@ -3,8 +3,9 @@ id: "desktop-workspace"
 title: "Desktop workspace"
 kind: "feature"
 status: "mixed"
-summary: "The desktop organizes sessions into panes and provides search, focus, widgets and local preferences."
+summary: "The desktop keeps conversation documents in window tabs and arranges visible ones in panes."
 parent: "desktop"
+sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
 sources:
   - "src/desktop/dependencies.ts"
   - "src/desktop/workspace/application/workspace-state.ts"
@@ -13,6 +14,8 @@ sources:
   - "src/desktop/workspace/adapters/store/index-commands.ts"
   - "src/desktop/workspace/adapters/store/pane-commands.ts"
   - "src/desktop/workspace/adapters/store/session-commands.ts"
+  - "src/desktop/workspace/application/usecases/session-tabs.ts"
+  - "src/desktop/workspace/ui/chrome/window-tabs.tsx"
   - "src/desktop/widgets/app/model/lifecycle.ts"
 diagramLinks:
   Integrations: desktop-mcp-integration-management
@@ -35,7 +38,9 @@ diagramLinks:
 
 # Desktop workspace
 
-The desktop organizes sessions into panes and provides search, focus, widgets and local preferences, with a right panel beside the panes.
+The desktop keeps open conversation documents in window tabs and arranges the
+visible ones in panes. It provides search, focus, widgets and local preferences,
+with each conversation's right panel beside the panes.
 
 Layout can survive navigation in memory, but a restart does not restore every pane or draft. The connection mode determines whether actions reach the gateway or a sample source.
 

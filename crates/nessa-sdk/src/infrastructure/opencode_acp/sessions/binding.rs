@@ -526,7 +526,9 @@ impl AgentProvider for OpencodeAcpProvider {
         &self,
         host: Arc<dyn crate::application::agent_execution::providers::HarnessHost>,
     ) -> Result<Arc<dyn AgentProvider>, AgentError> {
-        let config = self.config.on_host(host.workspace().to_path_buf());
+        let config = self
+            .config
+            .on_host(host.workspace().to_path_buf(), host.mcp_relay());
         config.validate()?;
         Ok(Arc::new(Self {
             config,

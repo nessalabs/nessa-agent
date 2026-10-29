@@ -11,7 +11,12 @@
 //! is [`CommandPolicy`]. What a share of it lets a paired party do is its
 //! [`ShareAccess`], whose Drive policy names the hosts its turns may run
 //! commands on.
+mod background_task;
 mod command_policy;
+pub use background_task::{
+    BackgroundCommand, BackgroundTaskId, TaskCause, TaskDelivery, TaskInitiator, TaskInputError,
+    TaskLifecycle, TaskOutcome, TaskStop, TaskTransitionError,
+};
 mod entities;
 mod receiver;
 mod scheduled_message;
@@ -27,12 +32,13 @@ pub use scheduled_message::{
     ObservedUsageLimit, OpenContinuation,
 };
 pub use value_objects::{
-    Capabilities, Capability, Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName,
-    ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources,
-    CommandHosts, ConversationDeletion, DeletionContradiction, PaneContent, PanePlace,
-    ProviderSessionErasure, ProviderSessionLink, ShareAccess, ShareAccessError, ToolCall,
-    ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource, WidgetRef,
-    WindowArrangement, WindowColumn, WindowPane, WindowRefusal, WindowShowing, WorkspaceWindow,
+    Capabilities, Capability, Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId,
+    ChannelName, ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest,
+    ChannelResources, CommandHosts, ConversationDeletion, DeletionContradiction, PaneContent,
+    PanePlace, ProviderSessionErasure, ProviderSessionLink, ShareAccess, ShareAccessError,
+    ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
+    VmLifetime, VmLifetimeScope, VmLifetimeSettings, WidgetRef, WindowArrangement, WindowColumn,
+    WindowPane, WindowRefusal, WindowShowing, WorkspacePlacement, WorkspaceWindow,
     MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
     MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES,
     MAX_CHANNEL_RESOURCE_BYTES,

@@ -13,9 +13,10 @@
 use crate::{
     application::{
         credential_admin::{
-            AuthRevisionSource, CredentialAdmin, CredentialAdminError, CredentialTransitionReader,
-            IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
-            ListTransitionsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
+            AuthRevisionSource, CredentialAdmin, CredentialAdminError, CredentialIssuePurpose,
+            CredentialTransitionReader, IssueCredentialOutcome, IssueCredentialRequest,
+            ListCredentialsRequest, ListTransitionsRequest, RevokeCredentialOutcome,
+            RevokeCredentialRequest,
         },
         credential_registry::{
             CredentialRegistryFault, CredentialRegistryStorageRole, JsonFaultCategory,
@@ -23,13 +24,15 @@ use crate::{
         },
         dto::{
             CredentialGrantDto, CredentialMetadataDto, CredentialTransitionDto, InitiatorDto,
-            MembershipInputDto, MembershipRoleDto, MembershipStateDto, OrganizationInputDto,
-            PrincipalInputDto, PrincipalKindDto, ResourceDto, TransitionCauseDto,
+            IssuanceCauseDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
+            OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
+            TransitionCauseDto,
         },
         pairing::StageGate,
         ports::{
-            AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
-            Decision, GrantPolicyEvaluator, IssuePath, PortFuture, VerifiedCredential,
+            AccessAdmission, AccessError, AccessHold, AccessReader, AccessSnapshot,
+            CredentialEvidence, CredentialVerifier, Decision, GrantPolicyEvaluator, IssuePath,
+            PortFuture, VerifiedCredential,
         },
     },
     domain::{
@@ -48,6 +51,7 @@ use std::{
     fmt,
     fs::File,
     io::{self, Read, Write},
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -55,6 +59,7 @@ use std::{
     },
 };
 use subtle::ConstantTimeEq;
+use tokio::sync::{OwnedRwLockWriteGuard, RwLock as AdmissionRwLock};
 
 mod pairing;
 
@@ -119,6 +124,8 @@ pub enum LocalStoreError {
     Capacity,
     Conflict,
     NotFound,
+    /// A matching webhook receipt retains an older ambiguous issuance origin.
+    OriginRecoveryRequired,
     Io(io::Error),
 }
 
@@ -159,6 +166,8 @@ impl fmt::Display for LocalStoreError {
             Self::Capacity => formatter.write_str("credential registry capacity reached"),
             Self::Conflict => formatter.write_str("credential command conflicts with stored state"),
             Self::NotFound => formatter.write_str("credential was not found"),
+            Self::OriginRecoveryRequired => formatter
+                .write_str("credential origin requires explicit revoke and reissue recovery"),
             Self::Io(error) => write!(formatter, "credential registry I/O failed: {error}"),
         }
     }
@@ -294,8 +303,9 @@ pub struct LocalCredentialStore {
     grants: Arc<dyn GrantPolicyEvaluator>,
     root: PathBuf,
     path: PathBuf,
-    _lock: RegistryLock,
+    _lock: Arc<RegistryLock>,
     registry: Mutex<Option<Registry>>,
+    admission: Arc<AdmissionRwLock<()>>,
     published: RwLock<Option<Registry>>,
     subscribers: Mutex<Vec<mpsc::Sender<u64>>>,
     healthy: AtomicBool,
@@ -306,6 +316,36 @@ pub struct LocalCredentialStore {
     fail_next_directory_sync: AtomicBool,
     #[cfg(test)]
     fail_before_replace: AtomicBool,
+}
+
+struct RegistrySlot<'a> {
+    // Release the effect fence before handing the canonical mutex to the next
+    // writer. Otherwise it can spuriously observe this completed writer.
+    _fence: OwnedRwLockWriteGuard<()>,
+    guard: MutexGuard<'a, Option<Registry>>,
+}
+
+impl Deref for RegistrySlot<'_> {
+    type Target = Option<Registry>;
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl DerefMut for RegistrySlot<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl AccessAdmission for LocalCredentialStore {
+    fn hold<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessHold> {
+        Box::pin(async move {
+            let fence = Arc::clone(&self.admission).read_owned().await;
+            let snapshot = self.read(credential).await?;
+            Ok(AccessHold::held(snapshot, (fence, Arc::clone(&self._lock))))
+        })
+    }
 }
 
 impl LocalCredentialStore {
@@ -405,8 +445,9 @@ impl LocalCredentialStore {
             grants,
             root,
             path,
-            _lock: RegistryLock(lock),
+            _lock: Arc::new(RegistryLock(lock)),
             registry: Mutex::new(registry.clone()),
+            admission: Arc::new(AdmissionRwLock::new(())),
             published: RwLock::new(registry),
             subscribers: Mutex::new(Vec::new()),
             healthy: AtomicBool::new(true),
@@ -437,7 +478,7 @@ impl LocalCredentialStore {
     /// principal are `Ok(None)`. A stored principal whose kind does not parse
     /// is `Conflict`.
     pub fn principal_kind(&self, id: &str) -> Result<Option<PrincipalKind>, LocalStoreError> {
-        let slot = self.slot()?;
+        let slot = self.unfenced_slot()?;
         let Some(registry) = slot.as_ref() else {
             return Ok(None);
         };
@@ -550,12 +591,16 @@ impl LocalCredentialStore {
         &self,
         request: IssueCredentialRequest,
     ) -> Result<IssueCredentialOutcome, LocalStoreError> {
-        self.issue_internal(request, IssuePath::ProductIssue)
+        let path = match request.purpose {
+            CredentialIssuePurpose::Product => IssuePath::ProductIssue,
+            CredentialIssuePurpose::Webhook => IssuePath::WebhookIssue,
+        };
+        self.issue_internal(request, path)
     }
 
-    /// Issue over `path`: [`IssuePath::ProductIssue`] or
-    /// [`IssuePath::SurfaceProvision`]. A provisioning is a rotation; a product
-    /// issue only adds.
+    /// Issue over the ProductIssue, WebhookIssue or SurfaceProvision path.
+    /// Provisioning rotates; product and webhook issuance only add. The
+    /// existing grant-policy owner decides the restrictions on each path.
     fn issue_internal(
         &self,
         request: IssueCredentialRequest,
@@ -585,6 +630,14 @@ impl LocalCredentialStore {
                 .ok_or(LocalStoreError::Corrupt)?
                 .metadata
                 .clone();
+            if request.purpose == CredentialIssuePurpose::Webhook {
+                let credential = domain_credential(&metadata)?;
+                let origin = credential_origin(current, &credential)
+                    .map_err(|_| LocalStoreError::Corrupt)?;
+                if origin.requires_webhook_recovery() {
+                    return Err(LocalStoreError::OriginRecoveryRequired);
+                }
+            }
             let transitions =
                 transitions_of_command(current, &request.issuer_principal_id, &request.request_id);
             if transitions.is_empty() {
@@ -652,10 +705,13 @@ impl LocalCredentialStore {
                 Some(&request.request_id),
             )?;
         }
-        let cause = if provisioning {
-            IssuanceCause::SurfaceProvision
-        } else {
-            IssuanceCause::AdminIssue
+        let cause = match path {
+            IssuePath::WebhookIssue => IssuanceCause::WebhookIssue,
+            IssuePath::SurfaceProvision => IssuanceCause::SurfaceProvision,
+            IssuePath::ProductIssue => IssuanceCause::AdminIssue,
+            IssuePath::Bootstrap | IssuePath::OwnerRecovery | IssuePath::StoredOnLoad => {
+                return Err(LocalStoreError::Corrupt)
+            }
         };
         record_transition(
             &mut next,
@@ -756,6 +812,7 @@ impl LocalCredentialStore {
             .collect();
         self.issue_internal(
             IssueCredentialRequest {
+                purpose: CredentialIssuePurpose::Product,
                 request_id,
                 issuer_principal_id,
                 credential_id,
@@ -946,6 +1003,26 @@ impl LocalCredentialStore {
         request: RevokeCredentialRequest,
     ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
         let mut slot = self.slot()?;
+        self.revoke_in_slot(request, &mut slot)
+    }
+
+    fn revoke_fenced(
+        &self,
+        request: RevokeCredentialRequest,
+        fence: OwnedRwLockWriteGuard<()>,
+    ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
+        let mut slot = RegistrySlot {
+            _fence: fence,
+            guard: self.unfenced_slot()?,
+        };
+        self.revoke_in_slot(request, &mut slot)
+    }
+
+    fn revoke_in_slot(
+        &self,
+        request: RevokeCredentialRequest,
+        slot: &mut RegistrySlot<'_>,
+    ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
         if request.request_id.trim().is_empty() || request.request_id.len() > 200 {
             return Err(LocalStoreError::Conflict);
@@ -1013,7 +1090,7 @@ impl LocalCredentialStore {
             revocation_of(&next, &request.credential_id).ok_or(LocalStoreError::Corrupt)?;
         self.persist(&next)?;
         let revision = next.revision;
-        *slot = Some(next.clone());
+        **slot = Some(next.clone());
         self.publish_snapshot(next)?;
         self.publish_revision(revision);
         Ok(RevokeCredentialOutcome {
@@ -1022,7 +1099,21 @@ impl LocalCredentialStore {
         })
     }
 
-    fn slot(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
+    fn slot(&self) -> Result<RegistrySlot<'_>, LocalStoreError> {
+        // Ordinary writers retain the existing mutex serialization. Only try
+        // the effect fence while holding it: a current read hold still refuses
+        // without waiting, including when an async revoke has queued behind it.
+        let guard = self.unfenced_slot()?;
+        let fence = Arc::clone(&self.admission)
+            .try_write_owned()
+            .map_err(|_| LocalStoreError::Locked)?;
+        Ok(RegistrySlot {
+            _fence: fence,
+            guard,
+        })
+    }
+
+    fn unfenced_slot(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
         if !self.healthy.load(Ordering::Acquire) {
             return Err(LocalStoreError::Corrupt);
         }
@@ -1033,8 +1124,16 @@ impl LocalCredentialStore {
         Ok(guard)
     }
 
-    fn registry(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
+    fn mutation_registry(&self) -> Result<RegistrySlot<'_>, LocalStoreError> {
         let guard = self.slot()?;
+        if guard.is_none() {
+            return Err(LocalStoreError::NotInitialized);
+        }
+        Ok(guard)
+    }
+
+    fn registry(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
+        let guard = self.unfenced_slot()?;
         if guard.is_none() {
             return Err(LocalStoreError::NotInitialized);
         }
@@ -1195,12 +1294,33 @@ impl AccessReader for LocalCredentialStore {
                     })
                     .cloned()
                     .ok_or(AccessError::IdentityMismatch)?;
-                Ok(AccessSnapshot {
+                let origin = credential_origin(registry, &credential)?;
+                let revocation = if credential.revoked_at().is_some() {
+                    let record = registry
+                        .transitions
+                        .iter()
+                        .rev()
+                        .find(|record| record.credential_id == credential.id().as_str())
+                        .ok_or(AccessError::Unavailable)?;
+                    Some(
+                        crate::application::revocation::CredentialRevocation::restore(
+                            record.clone(),
+                            &credential,
+                        )?,
+                    )
+                } else {
+                    None
+                };
+                let snapshot = AccessSnapshot {
+                    origin,
+                    revocation,
                     credential,
                     membership: Membership::try_from(membership)
                         .map_err(|_| AccessError::Unavailable)?,
                     revision: registry.revision,
-                })
+                };
+                snapshot.revocation_fact()?;
+                Ok(snapshot)
             })
         })
     }
@@ -1224,7 +1344,8 @@ impl CredentialAdmin for LocalCredentialStore {
         request: RevokeCredentialRequest,
     ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
         Box::pin(async move {
-            self.revoke_sync(request)
+            let _fence = Arc::clone(&self.admission).write_owned().await;
+            self.revoke_fenced(request, _fence)
                 .map_err(CredentialAdminError::from)
         })
     }
@@ -1280,6 +1401,7 @@ impl From<LocalStoreError> for CredentialAdminError {
             LocalStoreError::Conflict => Self::Conflict,
             LocalStoreError::Capacity => Self::Capacity,
             LocalStoreError::NotFound => Self::NotFound,
+            LocalStoreError::OriginRecoveryRequired => Self::OriginRecoveryRequired,
             LocalStoreError::Locked
             | LocalStoreError::NotInitialized
             | LocalStoreError::AlreadyInitialized
@@ -1288,6 +1410,25 @@ impl From<LocalStoreError> for CredentialAdminError {
             | LocalStoreError::Io(_) => Self::Unavailable,
         }
     }
+}
+
+/// Restore the authority's original fact from the same locked/published registry
+/// as current metadata. Receipt replay and access snapshots share this decoder.
+fn credential_origin(
+    registry: &Registry,
+    credential: &Credential,
+) -> Result<crate::application::origin::CredentialOrigin, AccessError> {
+    let original = registry
+        .transitions
+        .iter()
+        .find(|transition| transition.credential_id == credential.id().as_str())
+        .ok_or(AccessError::Unavailable)?;
+    let origin =
+        crate::application::origin::CredentialOrigin::restore(original.clone(), credential)?;
+    if !origin.matches(credential, registry.revision) {
+        return Err(AccessError::Unavailable);
+    }
+    Ok(origin)
 }
 
 fn issue_secret(credential_id: &str) -> Result<(CredentialEvidence, String), LocalStoreError> {
@@ -1521,6 +1662,13 @@ fn validate_transitions(
             .ok_or_else(invalid)?;
         seen += chain.len();
         let (first, rest) = chain.split_first().ok_or_else(invalid)?;
+        let current = domain_credential(&stored.metadata).map_err(|_| invalid())?;
+        let origin =
+            crate::application::origin::CredentialOrigin::restore((*first).clone(), &current)
+                .map_err(|_| invalid())?;
+        if !origin.matches(&current, registry.revision) {
+            return Err(invalid());
+        }
         if !matches!(first.cause, TransitionCauseDto::Issued { .. }) || rest.len() > 1 {
             return Err(invalid());
         }
@@ -1596,6 +1744,12 @@ fn validate_registry(
         .collect();
     let principals: HashSet<_> = registry.principals.iter().map(|value| &value.id).collect();
     validate_transitions(registry, config, &principals)?;
+    let original_issuance: HashMap<_, _> = registry
+        .transitions
+        .iter()
+        .filter(|transition| matches!(transition.cause, TransitionCauseDto::Issued { .. }))
+        .map(|transition| (transition.credential_id.as_str(), transition))
+        .collect();
     let memberships: HashSet<_> = registry.memberships.iter().map(|value| &value.id).collect();
     let membership_bindings: HashSet<_> = registry
         .memberships
@@ -1731,12 +1885,22 @@ fn validate_registry(
             .ok_or(LocalStoreError::Corrupt)
             .and_then(principal_kind);
         kind.and_then(|kind| {
+            let path = match original_issuance
+                .get(credential.metadata.id.as_str())
+                .map(|record| &record.cause)
+            {
+                Some(TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::WebhookIssue,
+                }) => IssuePath::WebhookIssue,
+                Some(TransitionCauseDto::Issued { .. }) => IssuePath::StoredOnLoad,
+                _ => return Err(LocalStoreError::Corrupt),
+            };
             validate_grants(
                 grants,
                 &credential.metadata,
                 kind,
                 &registry.gateway_id,
-                IssuePath::StoredOnLoad,
+                path,
             )
         })
         .map_err(|_| {
@@ -1778,6 +1942,23 @@ fn validate_registry(
         .iter()
         .map(|receipt| (&receipt.issuer_principal_id, &receipt.request_id))
         .collect();
+    let mut issue_by_credential: HashMap<&str, (usize, &IssueReceipt)> = HashMap::new();
+    for receipt in &registry.issue_receipts {
+        issue_by_credential
+            .entry(receipt.credential_id.as_str())
+            .and_modify(|entry| entry.0 += 1)
+            .or_insert((1, receipt));
+    }
+    // Only the newly distinguished webhook path promises this command shape.
+    // Ordinary historical actor/correlation facts retain their existing meaning.
+    if original_issuance.values().any(|original| {
+        matches!(original.cause, TransitionCauseDto::Issued { cause: IssuanceCauseDto::WebhookIssue })
+            && !issue_by_credential.get(original.credential_id.as_str()).is_some_and(|(count, receipt)| *count == 1
+                && original.correlation.as_deref() == Some(receipt.request_id.as_str())
+                && matches!(&original.initiator, InitiatorDto::Principal { id } if id == &receipt.issuer_principal_id))
+    }) {
+        return Err(CredentialRegistryFault::InvalidState(RegistryInvariant::CommandReceipt));
+    }
     if issue_commands.len() != registry.issue_receipts.len()
         || revoke_commands.len() != registry.revoke_receipts.len()
         || registry.issue_receipts.iter().any(|receipt| {
@@ -2026,13 +2207,19 @@ fn validate_grants(
 }
 
 fn issue_fingerprint(request: &IssueCredentialRequest) -> Result<String, LocalStoreError> {
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "principal": request.principal,
         "membership": request.membership,
         "audienceId": request.audience_id,
         "expiresAt": request.expires_at,
         "grants": request.grants,
     });
+    // The issuing use case is part of command identity. Ordinary product
+    // issuance has no additional purpose restriction; the webhook use case
+    // cannot replay its receipt (or bypass its Cedar path) as product issuance.
+    if request.purpose == CredentialIssuePurpose::Webhook {
+        value["purpose"] = serde_json::json!("webhook");
+    }
     let bytes = serde_json::to_vec(&value).map_err(|_| LocalStoreError::Corrupt)?;
     Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)))
 }
@@ -2130,6 +2317,70 @@ mod tests {
             Poll::Ready(value) => value,
             Poll::Pending => panic!("local adapter unexpectedly yielded"),
         }
+    }
+
+    #[test]
+    fn effect_hold_fences_revocation_and_reads_the_committed_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let id = CredentialId::new("owner-credential").unwrap();
+        let hold = ready(store.hold(&id)).unwrap();
+        assert_eq!(
+            store.principal_kind("owner").unwrap(),
+            Some(PrincipalKind::Human)
+        );
+        assert_eq!(store.identity().unwrap().gateway_id, "gateway-1");
+        let request = RevokeCredentialRequest {
+            request_id: "revoke-held".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: id.as_str().into(),
+            revoked_at: 120,
+        };
+        assert!(matches!(
+            store.revoke_sync(request.clone()),
+            Err(LocalStoreError::Locked)
+        ));
+        let mut revoke = store.revoke(request);
+        assert!(matches!(
+            revoke
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+        assert_eq!(
+            ready(store.read(&id)).unwrap().credential.revoked_at(),
+            None
+        );
+        drop(hold);
+        assert!(matches!(
+            revoke
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(_))
+        ));
+        assert_eq!(
+            ready(store.hold(&id))
+                .unwrap()
+                .snapshot
+                .credential
+                .revoked_at(),
+            Some(120)
+        );
+    }
+
+    #[test]
+    fn effect_hold_retains_the_physical_registry_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let id = CredentialId::new("owner-credential").unwrap();
+        let hold = ready(store.hold(&id)).unwrap();
+        drop(store);
+        assert!(matches!(open_store(&path), Err(LocalStoreError::Locked)));
+        drop(hold);
+        assert!(open_store(&path).is_ok());
     }
 
     fn trusted_root(path: &Path) -> (&Path, &Path) {
@@ -2237,6 +2488,7 @@ mod tests {
         let audience = AudienceId::new("gateway-1").unwrap();
         let session = ready(
             AuthenticateSession {
+                policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 verifier: &store,
                 access: &store,
                 clock: &clock,
@@ -2419,6 +2671,7 @@ mod tests {
         store.bootstrap(bootstrap()).unwrap();
         let receiver = store.subscribe().unwrap();
         let request = IssueCredentialRequest {
+            purpose: CredentialIssuePurpose::Product,
             request_id: "issue-1".into(),
             issuer_principal_id: "owner".into(),
             credential_id: "reader-credential".into(),
@@ -3185,6 +3438,7 @@ mod tests {
     }
     fn member_issue(request_id: &str, credential_id: &str) -> IssueCredentialRequest {
         IssueCredentialRequest {
+            purpose: CredentialIssuePurpose::Product,
             request_id: request_id.into(),
             issuer_principal_id: "owner".into(),
             credential_id: credential_id.into(),
@@ -3830,3 +4084,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/local/webhook_issue.rs"]
+mod webhook_issue_tests;

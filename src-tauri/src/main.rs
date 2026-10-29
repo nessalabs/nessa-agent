@@ -26,6 +26,7 @@ mod saving;
 mod settings;
 mod shortcut;
 mod shortcuts;
+mod vault;
 // Read by the launchd registration alone, which is the macOS gateway adapter:
 // the table it consults says which loopback port a stage's background service
 // gets, and no other platform registers one yet. Gated to match that adapter
@@ -140,6 +141,7 @@ fn main() {
             saving::save_file_part,
             saving::save_file_finish,
             saving::save_file_abort,
+            vault::infrastructure::vault_command,
             startup::host_startup,
             startup::restart_nessa,
             startup::quit_nessa,
@@ -376,6 +378,7 @@ fn main() {
                 // One resolution, at the entry point. The decision itself takes
                 // what it needs as parameters and lives below.
                 if let Some(deps) = composition::resolve(app) {
+                    deps.vault.close();
                     // A notice outliving the app would name a review nobody
                     // is told has settled.
                     review_notices::infrastructure::leave_before_exit(app);

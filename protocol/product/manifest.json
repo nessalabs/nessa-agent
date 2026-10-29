@@ -274,6 +274,10 @@
       "params": null,
       "grant": "credential.manage"
     },
+    "github.liveEvents": {
+      "params": "GithubLiveEventsParams",
+      "grant": "credential.manage"
+    },
     "github.status": {
       "params": null,
       "grant": "credential.manage"
@@ -369,6 +373,50 @@
     "conversation.fork": {
       "params": "ConversationForkParams",
       "grant": "conversation.write"
+    },
+    "vault.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "vault.setup": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.unlock": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
+    "vault.lock": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.save": {
+      "params": "BoatSaveParams",
+      "grant": "credential.manage"
+    },
+    "boat.disconnect": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "boat.runtimeSettings": {
+      "params": "BoatRuntimeReadParams",
+      "grant": "credential.manage"
+    },
+    "boat.setRuntimeSettings": {
+      "params": "BoatRuntimeSetParams",
+      "grant": "credential.manage"
+    },
+    "conversation.webhook.cursor": {
+      "params": "ConversationWebhookCursorParams",
+      "grant": "credential.manage"
+    },
+    "conversation.webhook.reset": {
+      "params": "ConversationWebhookResetParams",
+      "grant": "credential.manage"
     }
   },
   "events": {

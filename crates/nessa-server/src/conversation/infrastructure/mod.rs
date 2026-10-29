@@ -118,12 +118,18 @@ mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is
 // built, tests included, where both ends exist.
+mod background_tasks;
 mod channels;
 mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
+#[cfg(test)]
+pub(crate) use store::GrantWritePause;
 mod thread_reports;
+pub use background_tasks::LocalBackgroundTasks;
+#[cfg(unix)]
+pub use background_tasks::ShepherdBackgroundTasks;
 pub use channels::{LocalChannelFolders, LocalChannelStore};
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
@@ -205,6 +211,14 @@ pub(crate) use record_read::TestReadGate;
 
 mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
+
+#[cfg(unix)]
+mod workspaces;
+#[cfg(unix)]
+pub(crate) use workspaces::ThreadWorkspaces;
+
+mod workspace_runtime_config;
+pub(crate) use workspace_runtime_config::BoatRuntimeConfig;
 
 #[cfg(any(unix, test))]
 mod input_files;

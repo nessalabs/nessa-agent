@@ -35,6 +35,7 @@ use nessa_sdk::domain::agent_execution::leases::{
 // The schema's bound on `ConversationTool.input` is the SDK's bound on the
 // input an agent reports. A review's input past it is left off the tool row;
 // the review still offers all of it.
+use nessa_sdk::domain::agent_execution::prompts::MessageSender;
 use nessa_sdk::domain::agent_execution::tools::{McpTool, MAX_TOOL_INPUT_BYTES};
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
@@ -175,6 +176,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
     if let Some(terms) = terms {
         view.environment = Some(match &terms.environment {
             EnvironmentRef::Here => ConversationLeaseEnvironment::Here,
+            EnvironmentRef::Boat => ConversationLeaseEnvironment::Boat,
             EnvironmentRef::Ssh(host) => {
                 view.host = Some(host.as_str().to_owned());
                 ConversationLeaseEnvironment::Ssh
@@ -899,7 +901,15 @@ impl Projection {
                     next.view.queue_complete = false;
                     continue;
                 };
-                let text = record.request.user_message.text_str();
+                let internal = matches!(
+                    record.request.user_message.sender(),
+                    MessageSender::Internal
+                );
+                let text = if internal {
+                    ""
+                } else {
+                    record.request.user_message.text_str()
+                };
                 let mode = match record.submission {
                     SubmissionMode::Steering | SubmissionMode::BoundarySteering => {
                         ConversationPendingMode::Steering
@@ -917,6 +927,7 @@ impl Projection {
                             .user_message
                             .images()
                             .iter()
+                            .filter(|_| !internal)
                             .map(Into::into)
                             .collect(),
                         uploads: record
@@ -924,6 +935,7 @@ impl Projection {
                             .user_message
                             .uploads()
                             .iter()
+                            .filter(|_| !internal)
                             .map(Into::into)
                             .collect(),
                         files: record
@@ -931,6 +943,7 @@ impl Projection {
                             .user_message
                             .files()
                             .iter()
+                            .filter(|_| !internal)
                             .map(Into::into)
                             .collect(),
                         app: ConversationMessageApp::of(&record.request.user_message),
@@ -1565,6 +1578,7 @@ impl Projection {
                         self.view.truncated = true;
                     }
                     self.view.tools.push(ConversationTool {
+                        background_task_id: None,
                         input: String::new(),
                         details: String::new(),
                         execution_id: id.into(),
@@ -1758,13 +1772,21 @@ impl Projection {
             .find(|event| event.stage == InvocationStage::Injected)
             .and_then(|event| event.target.as_ref())
             .map(|target| target.as_str().to_owned());
-        self.view.messages[index].user_text =
-            clipped(record.request.user_message.text_str(), MAX_TEXT);
+        let internal = matches!(
+            record.request.user_message.sender(),
+            MessageSender::Internal
+        );
+        self.view.messages[index].user_text = if internal {
+            String::new()
+        } else {
+            clipped(record.request.user_message.text_str(), MAX_TEXT)
+        };
         self.view.messages[index].attachments = record
             .request
             .user_message
             .images()
             .iter()
+            .filter(|_| !internal)
             .map(Into::into)
             .collect();
         self.view.messages[index].uploads = record
@@ -1772,6 +1794,7 @@ impl Projection {
             .user_message
             .uploads()
             .iter()
+            .filter(|_| !internal)
             .map(Into::into)
             .collect();
         self.view.messages[index].files = record
@@ -1779,6 +1802,7 @@ impl Projection {
             .user_message
             .files()
             .iter()
+            .filter(|_| !internal)
             .map(Into::into)
             .collect();
         self.view.messages[index].app = ConversationMessageApp::of(&record.request.user_message);

@@ -51,6 +51,9 @@ export function inMemoryChannels({
         topic: "",
         folder: draft.folder ?? `~/.nessa/channels/${id}`,
         defaults: { model: draft.model, access: draft.access },
+        coordinatorPlacement: draft.coordinatorPlacement,
+        threadPlacement: draft.threadPlacement,
+        coordinatorConversationId: `sample-coordinator-${made.size + 1}`,
       })
       made.set(requestId, channel)
       return Promise.resolve(channel)

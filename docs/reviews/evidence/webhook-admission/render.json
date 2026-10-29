@@ -1,0 +1,18 @@
+{
+  "page": "gateway-webhook-admission",
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "sourceRevision": "d4b6e6cba2dd345c129d00f4115d272944f0f079",
+  "browser": "151.0.7922.173",
+  "diagrams": [
+    {
+      "state": "rendered",
+      "svgs": 4,
+      "rect": {
+        "width": 1136,
+        "height": 844
+      },
+      "text": "Admission guards and effectsIn DetailsFit70%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,sans-serif"
+    }
+  ],
+  "pageErrors": []
+}

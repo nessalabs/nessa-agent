@@ -375,7 +375,8 @@ async function changeMidDrag(page, layout, name, act, expectAfter) {
 }
 
 /** Stationary chats remain live through an actual layout change, frame by frame. */
-async function stationaryThrough(page, { focus, count, change }) {
+async function stationaryThrough(page, layout, { focus, count, change }) {
+  await hideColumns(page, layout)
   await openPanes(page, 4)
   await page.locator(css.pane).nth(focus).locator(css.field).focus()
   await settled(page)
@@ -553,7 +554,14 @@ const checks = {
       await lift(page, 2)
       await page.mouse.move(middle.x + middle.w + 30, middle.y + dy, { steps: 10 })
       const zones = await recordZones(page)
-      await page.mouse.move(middle.x + middle.w * 0.45, middle.y + dy, { steps: 30 })
+      // Move once per painted frame: a burst of synthetic moves can share one
+      // WebKit timestamp, making the heading read as rest during the sweep.
+      const from = middle.x + middle.w + 30
+      const to = middle.x + middle.w * 0.45
+      for (let step = 1; step <= 16; step++) {
+        await page.mouse.move(from + ((to - from) * step) / 16, middle.y + dy)
+        await frames(page, 1)
+      }
       await frames(page, 2)
       const recorded = await zones.take()
       const evidence = sweepZoneEvidence(recorded, restAfter, zoneSaid.vertical)
@@ -1423,14 +1431,14 @@ Object.assign(checks, {
     await shapes.stop()
     return { before, during, highlight: box, failures }
   },
-  "stationary-layout-flight": (page) =>
-    stationaryThrough(page, {
+  "stationary-layout-flight": (page, layout) =>
+    stationaryThrough(page, layout, {
       focus: 3,
       count: 3,
       change: (p) => p.keyboard.press(keys.closePane),
     }),
-  "stationary-drop-commit": (page) =>
-    stationaryThrough(page, {
+  "stationary-drop-commit": (page, layout) =>
+    stationaryThrough(page, layout, {
       focus: 0,
       count: 4,
       change: async (p, before) => {

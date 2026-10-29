@@ -23,7 +23,7 @@
   display: flex;
   flex: 1;
   min-width: 0;
-  padding: 0;
+  padding: var(--desktop-titlebar-height) 0 0;
 }
 
 .workspace-pane {
@@ -31,13 +31,14 @@
   min-width: 0;
   flex-direction: column;
   container: workspace-pane / size;
-  /* The top row's header is its titlebar row (below); a lower row's header
-     is the pane's own top. */
-  --workspace-pane-top: calc(max(0, 1 - var(--ri)) * var(--desktop-gutter));
-  /* No edge of its own: the line between panes is the edge in their gutter
-     (`split-panes.css`), so there is one, not two. */
   background: transparent;
-  overflow: hidden;
+  border-left: calc(min(1, var(--ci)) * 1px) solid var(--desktop-rim);
+  border-top: calc(min(1, var(--ri)) * 1px) solid var(--desktop-rim);
+  /* A clipping surface, not another scroll container. Hidden overflow let
+     the pane retain an offset after a long conversation and split, moving
+     its header out of the titlebar (#1184, conversation-stress.mjs window).
+     The transcript owns its scrolling. */
+  overflow: clip;
 }
 
 /*
@@ -98,21 +99,14 @@
 
 /* ——— The pane's header ——— */
 
-/*
- * The header is the pane's titlebar row, level with the window's controls —
- * one header per chat, its name, menu and ×, with no tab above it. What
- * follows it begins below the titlebar's height wherever the pane is, so a
- * transcript scrolled, a narrow pane's heading, or a home's picture's
- * controls never pass under the window's controls. Above the body, whose
- * header picture reaches up behind it.
- */
+/* Pane controls sit inside the card, below the window's navigation row. */
+/* Above the body, whose home header picture reaches up behind it. */
 .workspace-pane-header {
   position: relative;
   z-index: 1;
   display: flex;
   height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
-  margin: var(--workspace-pane-top) 0;
   align-items: center;
   gap: 8px;
   padding: var(--desktop-control-inset) var(--desktop-control-inset)
@@ -382,25 +376,19 @@
 .workspace-widget-window {
   position: absolute;
   z-index: 2;
-  /* The chat surface itself, as a pane is: up to the window's top, its
-     header in the titlebar row, on the window's own ground and light — no
-     slab with an edge of its own. The panes beneath are hidden while it is
-     up (`[data-window-widget]`, below), so nothing shows through. */
-  --workspace-pane-top: var(--desktop-gutter);
-  top: 0;
+  top: var(--desktop-titlebar-height);
   right: 0;
   bottom: 0;
   left: 0;
   display: flex;
   min-width: 0;
   flex-direction: column;
-  background: transparent;
+  background: var(--background);
   overflow: hidden;
 }
 
-/* With nothing to its left, its header steps past the window's controls, as a corner pane's does. */
-.workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {
-  padding-left: var(--desktop-titlebar-safe-start);
+.workspace[data-panes-alone] .workspace-widget-window {
+  left: 0;
 }
 
 /* And it ends before the panel's toggle, as the top-right pane's does. */

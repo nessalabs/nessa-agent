@@ -1,0 +1,5 @@
+{
+  "path": "crates/nessa-auth/src/adapters/cedar/attributes.rs",
+  "old": "crate::domain::IssuanceCause::WebhookIssue => \"webhook_issue\",",
+  "new": "crate::domain::IssuanceCause::WebhookIssue => \"admin_issue\","
+}

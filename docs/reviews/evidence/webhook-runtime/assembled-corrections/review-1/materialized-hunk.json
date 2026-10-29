@@ -1,0 +1,5 @@
+{
+  "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs",
+  "old": "WITH cutoffs AS MATERIALIZED (",
+  "new": "WITH cutoffs AS ("
+}

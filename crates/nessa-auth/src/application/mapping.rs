@@ -91,6 +91,7 @@ impl TryFrom<CredentialTransitionDto> for CredentialTransition {
             TransitionCauseDto::Issued { cause } => TransitionCause::Issued(match cause {
                 IssuanceCauseDto::Bootstrap => IssuanceCause::Bootstrap,
                 IssuanceCauseDto::AdminIssue => IssuanceCause::AdminIssue,
+                IssuanceCauseDto::WebhookIssue => IssuanceCause::WebhookIssue,
                 IssuanceCauseDto::DevicePairing => IssuanceCause::DevicePairing,
                 IssuanceCauseDto::SurfaceProvision => IssuanceCause::SurfaceProvision,
                 IssuanceCauseDto::OwnerRecovery => IssuanceCause::OwnerRecovery,
@@ -148,6 +149,7 @@ impl CredentialTransitionDto {
                     cause: match cause {
                         IssuanceCause::Bootstrap => IssuanceCauseDto::Bootstrap,
                         IssuanceCause::AdminIssue => IssuanceCauseDto::AdminIssue,
+                        IssuanceCause::WebhookIssue => IssuanceCauseDto::WebhookIssue,
                         IssuanceCause::DevicePairing => IssuanceCauseDto::DevicePairing,
                         IssuanceCause::SurfaceProvision => IssuanceCauseDto::SurfaceProvision,
                         IssuanceCause::OwnerRecovery => IssuanceCauseDto::OwnerRecovery,

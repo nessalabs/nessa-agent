@@ -1,0 +1,25 @@
+# Adversarial hardening review, round 3
+
+Reviewed base `9bd6a8482ee567d2a263cfbbdd75d7abdd2af3e8` through source head `b5776acd35d6d6df3856224ab4618212b58d3dfe` in `/Users/nessa/.codex/worktrees/github-webhooks-1107/nessa-agent`, stacked PR #1137 over #1123. The only dirty file was the pending `docs/state/services/github-webhooks/README.md` checkpoint. No source edits or build invalidation performed.
+
+Result: **no new actionable findings** in this full review round. Previous dispositions were checked against adjacent paths, rather than assumed closed. The already-recorded stale runbook two-minute ticket description was corrected in the documentation follow-up; the public contract and implementation agree on 900-second tickets / 720-second renewal.
+
+## Scope and relationships checked
+
+- Native OS-secret entry identity is derived from the canonical namespace and purpose. Checked unsupported-store vs missing-entry handling, existing-default-keychain selection, noninteractive macOS read/update/add/delete, encrypted Linux Secret Service sessions with prompt timeout zero, and explicit Windows native credential builder. Checked that the shared agent-read adapter retains its prior search-list semantics.
+- Sign-in transition ownership remains GithubConnections. Checked process-shared token-store lock, verified OS write/readback preceding legacy JSON removal, matching interrupted upgrades, contradictory receipt refusal, and legacy-first disconnect deletion preventing resurrection.
+- Inbox key lifetime is separate from sign-in. Checked serialized key creation/readback, missing-key refusal for existing ciphertext, cached-key semantics and SQLCipher key application before schema reads. Inspected plaintext export/reopen verification/atomic replacement, private temporary storage, encrypted rollback-journal behavior and wrong-key failure preserving encrypted source.
+- Signed delivery installation/repository identity drives quota/index accounting. Checked one-statement global and per-installation admission; duplicate handling; DELETE-trigger accounting by installation; registry/user metadata counters and rollback behavior. Checked budget minute/day capture uses one clock snapshot and older windows cannot reset newer counters.
+- Verified Github user identity precedes per-user budget; authorization still uses current provider facts and Cedar before inbox payload access. Checked expected-user mismatch and denied private access do not acquire payloads, tickets remain stage/user/repository bound, and wakes contain only hints. The existing generation and cursor fences remain in the encrypted store; disconnect cleanup still completes before deleting sign-in.
+- Checked edge throttling happens before provider/D1 paths; room capacity is rechecked after awaited alarm persistence; ticket replay shares user socket cap; request/metadata logs contain no tokens or webhook bodies. Checked disabled stages do not fall back to dev and stage rollout guards preserve distinct identities/resources.
+- Inspected native crypto/Secret Service CI seams and frozen-tree frontend fixture corrections. Strict cross-platform success still depends on the current CI run; no Windows/Linux native runtime proof is claimed by this macOS review.
+
+## Independent checks / attempted falsification
+
+1. `pnpm --dir packages/github-webhooks test`: **44 passed**. Real D1/Miniflare fixture, including signature rejection, quotas/concurrency, user budgets, private access, socket replay/capacity, expiry indexes and execution counters. Log `/tmp/nessa-review-round3-worker.log`.
+2. Independent Python SQLite migration/counter probe: **1,800 operations**, seed1137, interleaving delivery insert/delete, duplicate IDs, user insert/delete and transaction rollback. After every operation, installation bytes/count, global user/repository count and per-installation repository count matched authoritative rows. Probe `/tmp/nessa-review-round3-accounting.py`, receipt `/tmp/nessa-review-round3-accounting.json`.
+3. Re-ran provided native test binary's real disposable locked-keychain case: **1 passed, 0.30 seconds**. Read/write/delete refused; only test-created keychain locked/deleted. Log `/tmp/nessa-review-round3-locked-keychain.log`. This used the existing provided compiled test artifact, not a new cross-platform rebuild.
+
+## Explicit exclusions and accepted boundaries
+
+Not a comprehensive penetration test or security certification. No live private Github installation was exercised. No Windows/Linux runtime environment was available to this reviewer; current CI must verify those platform seams. No power-loss testing or real login-keychain lock was performed. Existing macOS WebKit link-tab baseline issue #1136 remains separate. Source review does not independently establish provider-managed at-rest encryption or current billing state. Worker sees webhook plaintext; no E2EE claim. Previously copied plaintext backups/snapshots are not erased, old gateways must stop before migration, and acquired keys remain in memory until process exit. Free caps do not provide a distributed denial-of-service SLA or capacity for10,000 busy users.

@@ -1,0 +1,30 @@
+
+running 26 tests
+test webhooks::application::message_tests::status_and_failure_classification_preserve_ambiguity ... ok
+test webhooks::application::message_tests::application_values_bound_retained_bytes_and_redact_diagnostics ... ok
+test webhooks::domain::delivery_tests::admission_pins_epoch_and_timestamp ... ok
+test webhooks::domain::delivery_tests::observations_are_terminal_except_bounded_retry ... ok
+test webhooks::domain::delivery_tests::refusal_cannot_cancel_an_inflight_observation ... ok
+test webhooks::domain::delivery_tests::retries_are_bounded_and_keep_identity ... ok
+test webhooks::domain::delivery_tests::restart_does_not_repost_an_unknown_effect ... ok
+test webhooks::domain::destination_tests::destinations_are_constrained_and_paths_are_redacted ... ok
+test webhooks::infrastructure::https::https_tests::destination_policy_rejects_nonpublic_answers_and_transition_prefixes ... ok
+test webhooks::infrastructure::https::https_tests::bad_dns_answers_are_refused_before_connect ... ok
+test webhooks::infrastructure::https::https_tests::dns_deadline_and_concurrency_are_bounded_without_a_waiter_queue ... ok
+test webhooks::infrastructure::https::https_tests::expired_preparation_refuses_before_polling_a_request ... ok
+test webhooks::infrastructure::https::https_tests::cancelled_dns_waiter_keeps_the_physical_workers_permit ... ok
+test webhooks::infrastructure::https::https_tests::local_backpressure_precedes_sending_and_does_not_consume_an_attempt ... ok
+test webhooks::infrastructure::https::https_tests::isolated_tls_recipient_verifies_exact_signed_bytes ... ok
+test webhooks::infrastructure::https::https_tests::redirect_is_a_response_and_receives_no_second_request ... ok
+test webhooks::infrastructure::https::https_tests::lost_or_malformed_headers_do_not_claim_zero_response_bytes ... ok
+test webhooks::infrastructure::https::https_tests::retained_dns_capacity_refuses_preparation_while_delivery_stays_queued ... ok
+test webhooks::infrastructure::https::https_tests::oversized_headers_remain_unknown ... ok
+test webhooks::infrastructure::message_tests::compact_encoding_preserves_quoted_whitespace_and_rejects_invalid_identity ... ok
+test webhooks::infrastructure::message_tests::record_envelope_preserves_the_records_page_owner_representation ... ok
+test webhooks::infrastructure::message_tests::retry_contract_preserves_id_timestamp_body_and_signature ... ok
+test webhooks::infrastructure::message_tests::wire_bytes_and_mac_match_an_independent_golden_vector ... ok
+test webhooks::infrastructure::message_tests::malformed_and_oversized_records_fail_before_a_body_is_retained ... ok
+test webhooks::infrastructure::https::https_tests::responses_are_bounded_without_retaining_remote_text ... ok
+test webhooks::infrastructure::https::https_tests::a_hung_response_is_bounded ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s

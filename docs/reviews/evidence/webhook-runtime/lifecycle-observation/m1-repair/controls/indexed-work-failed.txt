@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::cleanup_tests::queued_lifecycle_selection_does_not_walk_terminal_history' (149128) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/cleanup.rs:249:13:
+assertion `left == right` failed
+  left: 3090
+ right: 21
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::cleanup_tests::queued_lifecycle_selection_does_not_walk_terminal_history ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::cleanup_tests::queued_lifecycle_selection_does_not_walk_terminal_history
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 116 filtered out; finished in 0.03s

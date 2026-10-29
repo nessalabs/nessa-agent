@@ -1,0 +1,5 @@
+{
+  "path": "crates/nessa-auth/src/application/origin.rs",
+  "old": "self.revision <= revision",
+  "new": "true"
+}

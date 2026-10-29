@@ -1285,7 +1285,7 @@ mod tests {
         }
         // A record without either field is not of this shape: corrupt, not
         // read as the person's with nothing given (no older reader is kept).
-        for field in ["user_app", "user_app_model_context"] {
+        for field in ["user_app", "user_internal", "user_app_model_context"] {
             let mut older = valid.clone();
             older["changes"][0]["InputAccepted"]["metadata"]
                 .as_object_mut()
@@ -1302,6 +1302,23 @@ mod tests {
                 "{field}"
             );
         }
+        let mut ambiguous = valid.clone();
+        ambiguous["changes"][0]["InputAccepted"]["metadata"]["user_internal"] = true.into();
+        assert!(matches!(
+            decode_one(
+                &serde_json::to_vec(&ambiguous).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
+        let mut internal = record.clone();
+        internal.request.user_message =
+            UserMessage::text_only(PromptText::new("actual task output").unwrap())
+                .sent_by(MessageSender::Internal);
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(internal.clone()))).unwrap();
+        assert!(
+            matches!(decode_one(&bytes, &ProviderContext::Absent).unwrap(), SessionChange::InputAccepted(next) if *next == internal)
+        );
         // A person's message says so: `user_app` is null.
         let person = UserMessage::text_only(PromptText::new("mine").unwrap());
         let mut record = record;

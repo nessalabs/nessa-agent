@@ -103,6 +103,7 @@ jobs:
       NESSA_CHAOS_SHRINK: "20"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/secret-service
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

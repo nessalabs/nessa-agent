@@ -5,7 +5,7 @@ kind: "operation"
 status: "mixed"
 summary: "Restart loads the saved conversation records and reconstructs the committed history."
 parent: "sdk-runtime"
-sourceRevision: "36695f3a8bd80a8d2b769b9a608339c54e31b3ec"
+sourceRevision: "5ae45faa95fd88ae96c5f213e0e3fcd811284a91"
 sources:
   - "crates/nessa-sdk/src/infrastructure/session_storage/record.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -50,6 +50,14 @@ stateDiagram-v2
         Restoration does not rerun them.
     end note
 ```
+
+## Completion provenance
+
+A saved internal background completion restores as internal input, with the same
+execution identity. It does not become a person's message after reopening.
+Snapshot decoding rejects a record marked as both app-authored and internal.
+These facts use the existing folding and semantic-validation states above; this
+review covers provenance and does not broaden the provider-restoration guarantee.
 
 ## Discarding unreadable history
 

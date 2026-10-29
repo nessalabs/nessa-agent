@@ -1,0 +1,9 @@
+   Compiling nessa-auth v0.1.0 (/tmp/independent-webhook-issuance-final-review/checkout/crates/nessa-auth)
+    Finished `test` profile [unoptimized] target(s) in 3.35s
+     Running unittests src/lib.rs (/tmp/independent-webhook-issuance-review/target/debug/deps/nessa_auth-d8c2b69b9ce32e17)
+
+running 2 tests
+test adapters::local::registry::webhook_issue_tests::final_review_full_capacity_keeps_receipt_replay_and_purpose_conflict_before_capacity ... ok
+test adapters::local::registry::webhook_issue_tests::final_review_policy_unavailability_and_deny_refuse_before_effects_at_both_stages ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.01s

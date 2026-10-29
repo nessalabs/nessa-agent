@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 91,
+          "maxItems": 103,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -922,12 +922,7 @@
           "description": "Original filename, at most 255 UTF-8 bytes. No separators or control characters; not a destination path."
         }
       },
-      "required": [
-        "digest",
-        "mimeType",
-        "size",
-        "name"
-      ]
+      "required": ["digest", "mimeType", "size", "name"]
     },
     "LinkedFile": {
       "type": "object",
@@ -1587,6 +1582,13 @@
       "additionalProperties": false,
       "description": "Bounded presentation of an observed tool call.",
       "properties": {
+        "backgroundTaskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "Gateway-owned background task bound to this original native call. Its running status remains authoritative after the provider turn ends."
+        },
         "executionId": {
           "type": "string",
           "minLength": 1,
@@ -3270,7 +3272,7 @@
         },
         "environment": {
           "type": "string",
-          "enum": ["here", "ssh", "peer"],
+          "enum": ["here", "ssh", "peer", "boat"],
           "description": "Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files."
         },
         "host": {
@@ -6348,14 +6350,41 @@
       },
       "required": ["userCode", "verificationUri", "expiresInSeconds"]
     },
+    "GithubLiveEvents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "repositories": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "gaps": { "type": "integer", "minimum": 0, "maximum": 16 }
+      },
+      "required": ["enabled", "repositories", "gaps"],
+      "description": "Live delivery is opted in for this gateway's signed-in GitHub account. Gaps report expired catch-up history; they are not acknowledged automatically."
+    },
+    "GithubLiveEventsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "acceptGaps": {
+          "type": "boolean",
+          "description": "Explicit acknowledgement of missing history, continue within retained events."
+        }
+      },
+      "required": ["enabled"]
+    },
     "GithubConnection": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
+      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its passphrase-protected local vault, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
       "properties": {
         "state": {
           "$ref": "#/$defs/GithubConnectState",
           "description": "Where the sign-in stands."
+        },
+        "liveEvents": {
+          "$ref": "#/$defs/GithubLiveEvents",
+          "description": "Present when this build stage has a live relay configured."
         },
         "account": {
           "$ref": "#/$defs/GithubAccount",
@@ -6390,9 +6419,12 @@
         "github_unreachable",
         "github_rejected",
         "github_storage_unavailable",
-        "github_audit_unavailable"
+        "github_audit_unavailable",
+        "github_live_unavailable",
+        "github_live_capacity",
+        "vault_locked"
       ],
-      "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
+      "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the encrypted local vault could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
     },
     "PeerEnrollParams": {
       "type": "object",
@@ -7855,6 +7887,20 @@
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "When the channel was made, in Unix milliseconds; 0 for the default channel."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
+        },
+        "coordinatorConversationId": {
+          "type": ["string", "null"],
+          "description": "Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity."
         }
       },
       "required": [
@@ -7865,7 +7911,10 @@
         "agent",
         "model",
         "approvalMode",
-        "createdAtMs"
+        "createdAtMs",
+        "coordinatorPlacement",
+        "threadPlacement",
+        "coordinatorConversationId"
       ]
     },
     "ChannelCreateParams": {
@@ -7928,6 +7977,16 @@
             "x-utf8MaxBytes": 4096
           },
           "description": "Existing absolute files and folders to attach, none twice, at most x-channelRules.maxResourceBytes of paths in all; omitted is none."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel coordinator should run, independently of worker threads."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread."
         }
       },
       "required": ["requestId", "name", "agent", "model"]
@@ -8022,6 +8081,320 @@
         }
       },
       "required": ["revision", "applied"]
+    },
+    "VaultState": {
+      "type": "string",
+      "enum": ["unconfigured", "locked", "unlocked"],
+      "description": "The local vault state. Unlock belongs to the connection that proved its passphrase; closing its owner locks the vault."
+    },
+    "VaultStatus": {
+      "description": "The current state of the local encrypted vault; never includes secret contents.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/VaultState",
+          "description": "Whether protected local credentials are unconfigured, locked, or available to this app session."
+        }
+      },
+      "required": ["state"]
+    },
+    "VaultPassphraseParams": {
+      "description": "Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "passphrase": {
+          "type": "string",
+          "description": "Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json."
+        }
+      },
+      "required": ["passphrase"]
+    },
+    "VaultErrorCode": {
+      "type": "string",
+      "enum": [
+        "vault_unavailable",
+        "vault_locked",
+        "vault_passphrase_policy",
+        "vault_wrong_passphrase",
+        "vault_busy",
+        "vault_cooldown",
+        "vault_session_closed",
+        "vault_session_owned",
+        "vault_already_configured",
+        "vault_capacity",
+        "vault_audit_unavailable",
+        "vault_migration_unavailable"
+      ],
+      "description": "Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault."
+    },
+    "BoatSaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Boat infrastructure token. Never returned or logged."
+        }
+      },
+      "required": ["token"],
+      "description": "Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription."
+    },
+    "BoatErrorCode": {
+      "description": "Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
+      "type": "string",
+      "enum": [
+        "vault_locked",
+        "boat_not_configured",
+        "invalid_request",
+        "boat_storage_unavailable",
+        "boat_resource_missing",
+        "boat_unreachable",
+        "boat_worker_unavailable",
+        "boat_environment_blocks_credentials",
+        "boat_provisioning_uncertain",
+        "boat_cleanup_uncertain"
+      ]
+    },
+    "BoatStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["locked", "disconnected", "connected"],
+          "description": "Locked when the vault cannot be read, disconnected when no connection is saved, or connected after validation and encrypted persistence."
+        },
+        "environment": {
+          "type": "string",
+          "description": "The dedicated Boat environment saved with this connection; present only while connected."
+        },
+        "image": {
+          "type": "string",
+          "description": "The release-owned shared worker image saved with this connection; present only while connected."
+        }
+      },
+      "required": ["state"],
+      "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
+    },
+    "VmLifetimeMode": {
+      "type": "string",
+      "enum": ["never", "after"],
+      "description": "Disable automatic stop or stop after a positive duration, including active work."
+    },
+    "VmLifetimeSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295,
+      "description": "Positive whole seconds representable by the Boat provider."
+    },
+    "BoatVmLifetime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/VmLifetimeMode",
+          "description": "Disable automatic stop or use the finite seconds value."
+        },
+        "seconds": {
+          "$ref": "#/$defs/VmLifetimeSeconds",
+          "description": "Present only in after mode. Includes time spent on active work."
+        }
+      },
+      "required": ["mode"],
+      "description": "The never mode omits seconds; after requires seconds. Validated together before any configuration write."
+    },
+    "BoatRuntimeSelection": {
+      "type": "string",
+      "enum": ["default", "never", "after"],
+      "description": "Use the default (or reset the global initial choice), disable auto-stop, or choose a finite lifetime."
+    },
+    "BoatRuntimeReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings."
+        }
+      },
+      "description": "Read default and optional channel override from one ordinary configuration snapshot. Does not read a Boat token.",
+      "required": []
+    },
+    "BoatRuntimeSetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings."
+        },
+        "mode": {
+          "$ref": "#/$defs/BoatRuntimeSelection",
+          "description": "Default removes the channel override or resets the global initial choice. Never disables automatic stop; after requires seconds."
+        },
+        "seconds": {
+          "$ref": "#/$defs/VmLifetimeSeconds",
+          "description": "Positive provider-compatible duration, required only in after mode."
+        }
+      },
+      "required": ["mode"],
+      "description": "Change ordinary lifetime settings without a token. Default/never forbid seconds; after requires it. New allocations and archived-VM resumes use the saved choice; active VM deadlines are unchanged. Read settings after an uncertain response; calls are not replayed."
+    },
+    "BoatRuntimeSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultLifetime": {
+          "$ref": "#/$defs/BoatVmLifetime",
+          "description": "The Nessa default used by inheriting channels; initially no automatic stop."
+        },
+        "channelOverride": {
+          "$ref": "#/$defs/BoatVmLifetime",
+          "description": "The requested channel's explicit choice. Omission inherits the default; never remains unlimited when the default changes."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The stored channel whose settings were read or saved. Omitted only for the global default; an override requires this identity."
+        }
+      },
+      "required": ["defaultLifetime"],
+      "description": "Non-secret settings. An omitted override inherits the default; explicit never remains unlimited when the default changes. Initial default is no automatic stop; provider/account limits still apply."
+    },
+    "ConversationWebhookCursorParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read the owner-only registered webhook checkpoint. Performs no canonical record I/O or delivery control.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector."
+        },
+        "includeSourceHead": {
+          "type": "boolean",
+          "description": "Explicitly request a separately observed canonical Head under current owner read authority. Omitted/false performs no canonical admission or physical Head I/O. This does not reconcile or mutate the native checkpoint."
+        }
+      },
+      "required": ["conversationId", "credentialId"]
+    },
+    "ConversationWebhookResetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Reset only a frozen webhook checkpoint. requestId is its server-issued frozen capture UUID. Fresh owner authorization applies on replay; no caller-supplied scope or offset is accepted.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The frozen capture UUID returned by the owner cursor query. Explicit retries retain this exact identity."
+        }
+      },
+      "required": ["conversationId", "credentialId", "requestId"]
+    },
+    "ConversationWebhookCursorResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Complete scope/incarnation bound to the native checkpoint; its presence grants no read or delivery authority."
+        },
+        "position": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Canonical unsigned decimal position committed in this native scope."
+        },
+        "resetRequired": {
+          "type": "boolean",
+          "description": "Whether fresh source capture requires an explicit owner reset for this frozen generation."
+        },
+        "requestId": {
+          "type": ["string", "null"],
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Frozen capture UUID when resetRequired is true; null otherwise. Not a caller-selected rewind identity."
+        },
+        "observedSourceHead": {
+          "$ref": "#/$defs/ConversationRecordsHeadResult",
+          "description": "Present only when explicitly requested and successfully read. Observed after the native checkpoint; these are separate non-atomic observations. Not a delivery, reset, publication or current-at-commit acknowledgement."
+        }
+      },
+      "required": ["scope", "position", "resetRequired", "requestId"]
+    },
+    "ConversationWebhookResetResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Immutable result: reset applied for this explicitly observed scope at position zero. Does not promise current-at-commit, resumed delivery or current resetRequired status. Same request replays this result without another rewind.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Original frozen capture request UUID; matching replay returns the same selection without another rewind."
+        },
+        "receiptId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Immutable native selection and audit receipt UUID for this applied reset."
+        },
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Complete server-observed incarnation selected by this reset. It need not remain current when the native commit completes."
+        },
+        "position": {
+          "type": "string",
+          "const": "0",
+          "description": "Scoped checkpoint selected by the reset, always zero in the returned observed incarnation."
+        },
+        "appliedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Original native selection observation time in Unix milliseconds, retained unchanged on replay."
+        }
+      },
+      "required": ["requestId", "receiptId", "scope", "position", "appliedAtMs"]
     }
   }
 }

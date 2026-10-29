@@ -118,36 +118,31 @@ heading, the text sits on the window beneath it and scrolls, with a thin
 translucent scrollbar kept for orientation and dragging, and the toolbar rests at the foot. It opens at seven
 lines and closes at three, apart so a draft near one threshold does not flip
 the layout, and the change is immediate, with no animation. In a narrow composer the project shows only its folder, so the model keeps
-its name.
-The workspace keeps navigation in the window's top row, with New Session there
-in a layout without a session list, and at the head of the session list in one
-with it.
-Chats have no tabs: each pane's one header (its name, menu and close) is that
-row, and in the window's corner it starts after the navigation, so folding the
-sidebar cannot put a pane's actions behind it. The chat surface, the sidebar and
-each pane's header picture run up to the window's top edge, the picture behind
-the window's controls too. Only what opens in a chat's right panel is a tab,
-in the panel's own top row (`workspace/model/chat-panel.ts`).
-Column titles clear that group, moving below only where they cannot fit. The side rail (Settings › Advanced › Experimental) is a compact 48px
-column below that bar on every host, independent of the native traffic lights.
-Its toggle is nessa's mark at the sidebar's foot: wherever the rail is offered,
-Studio's square steps aside and the toggle stands in the footer's control-sized
-mark slot, on its line just before "nessa Studio"; with the rail open beside the
-sidebar it travels past the rail on the drawer's curve.
-The toggle remains available with both side columns closed. The workspace sidebar
-uses a soft gradient wash without a rounded card, rim or shadow. Its content clears the titlebar while the wash blends into the window's
-background. A rail item's full view covers the underlying workspace up to the
-window's top, including its cards and chat navigation controls. Each plugin
-keeps one top sidebar toggle for its rail, alongside the persistent bottom toggle.
-The workspace sidebar uses the window's theme lights for its frameless
-gradient. Its content begins below the titlebar row, and folding it slides it
-toward its edge on the drawer's curve (`--desktop-drawer`) while what stands
-beside it follows.
-Corner controls follow one geometry in `styles.css`: each sits the same
-distance from its pane's top and side edges, and its corner radius is the pane's
-radius minus that distance, so hover shapes are concentric with the pane. The
-titlebar's height derives from it (48px), and the native traffic lights are
-centred on the same row.
+its name. The app controls SidebarProvider from its shared layout; the
+provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
+Cmd/Ctrl+Alt+B for the right one.
+The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
+leading/trailing slots, optional labeled history actions, height, and native-control
+inset. It renders design-system Buttons and forwards native header props; it does
+not detect the OS, call Tauri, control Sidebar state, or own navigation history.
+Reuse it with AppShell by placing it before AppShellBody and passing a
+SidebarTrigger in `leading`. Each consuming app configures its native window and
+drag permissions. No changes to `nessa_ui` are required.
+
+The classic shell uses one titlebar over its split view. The workspace titlebar
+holds sidebar and session-list toggles, history, open conversation document tabs,
+and the right-panel toggle. New Tab is beside the document strip; Command-N also
+starts a new session. Pane cards begin below the toolbar, with their own actions
+inside each pane. The right panel sits beside those panes and has its own widget
+tabs; maximizing it covers the workspace and docks again when another chat opens.
+
+The side rail is an experimental 48px column. Its toggle holds a stable
+bottom-left slot while the rail and sidebar fold. With the rail offered,
+"nessa Studio" stands beside that toggle. The sidebar uses a frameless gradient
+wash that extends to the window top; its content begins below the titlebar.
+A rail item's full view covers the workspace and keeps a top toggle for its
+rail. Corner controls use the geometry in `styles.css`, with the native traffic
+lights centered on the same 48px row.
 With the left sidebar collapsed, resting the pointer on the window's left
 edge slides it in over the content, Dock-style, until the pointer has been away
 for a moment; Esc dismisses it. It slides fully solid and never fades: opacity
@@ -277,6 +272,58 @@ pane's card (`onScreen`, one rule), and the conversations it shows are read
 and kept like a pane's, bounded (`retention.overviewConversations`); a peek is
 not reading the session, which stays unread.
 
+The desktop window's document tabs are owned by `workspace/application/workspace-state.ts`
+(`sessionTabs`), with explicit closure in `application/usecases/session-tabs.ts`.
+`ui/chrome/window-tabs.tsx` projects these documents into the shared window toolbar.
+A document selected through the existing open command focuses an already visible
+pane or changes only the focused pane; tab state never owns a second split layout.
+Hidden tabs do not count as shown conversations for read receipts or approvals,
+and transcripts retain the existing bounded-cache lifecycle. Draft text stays
+with its document until explicit tab closure. Pane closure removes a split while
+keeping its document available in the tab strip. Closing a background tab can
+replace its pane with a hidden document without changing the focused pane.
+
+Document closure follows the tab owner, with the pane layout recording what is
+visible. Its cases are:
+
+| Closed document | Hidden document available | Valid channel for a new home | Pane result |
+| --- | --- | --- | --- |
+| Hidden | Any | Any | Keep the current panes |
+| Visible | Yes | Any | Show the hidden document in that pane; preserve focus on another pane |
+| Visible, one of several panes | No | Any | Remove that pane and give its room to its neighbor |
+| Visible, last pane | No | Yes | Show a fresh draft home and release the closed draft's text |
+| Visible, last pane | No | No | Clear the pane; no draft can be sent to the removed channel |
+| Visible, last pane; generated id collides | No | Any | Keep the document until a unique replacement id is supplied |
+
+Every successful closure removes the document from the tab set and releases its
+draft only if it was an unsent draft. A channel taken from the focused document must
+still exist in the latest index before it can be a new draft's home.
+
+Source removal follows `application/usecases/updates.ts`, whether delivered by
+an index resync or the update stream:
+
+| Removed session's pane | Valid draft home after removal | Hidden document available | Result |
+| --- | --- | --- | --- |
+| Hidden | Any | Any | Remove its document tab and session |
+| One of several | Any | Any | Remove its pane and tab; keep the other panes |
+| Last | Yes | Any | Replace it with a fresh draft home and tab |
+| Last | No | Yes | Show the hidden document in the pane |
+| Last | No | No | Clear the pane and tab, without leaving a removed session visible |
+
+`updates.test.ts` exercises the last three rows with a retained channel, a
+hidden draft, and an index that removes every channel; the no-home case also
+covers stream removal.
+
+When the last failed first message is discarded, the session lifecycle in
+`application/usecases/sessions.ts` follows the remaining evidence:
+
+| Source has begun it | Another message may begin it | Document tab open | Valid draft home | Result |
+| --- | --- | --- | --- | --- |
+| Yes | Any | Any | Any | Keep the sourced session |
+| No | Yes | Any | Any | Keep the pending session |
+| No | No | Yes, visible or hidden | Yes | Return to a draft under the same id and tab |
+| No | No | Any | No | Forget the unconfirmed session and clear any pane showing it |
+| No | No | No | Yes | Forget the unconfirmed session |
 
 Each chat's right panel is owned by `workspace/application/workspace-state.ts`
 (`panels`, by session): `model/chat-panel.ts` holds its tabs and the one in
@@ -295,8 +342,7 @@ A chat's panel goes with the chat.
   draws it yet; a widget by reference (`widget-ref.ts`, until the widgets
   vertical of ADR 326 owns it); the revision rule every replacement follows
   (`revision.ts`); session grouping, search and time labels; and the new
-  session's lifecycle, a draft never listed and kept while a pane shows it or
-  something is typed in it,
+  session's lifecycle, a draft never listed and kept until its document tab closes,
   and a session the source never began going back to it when its last
   refused message is discarded.
 - `application/` owns the `WorkspaceSource` port (`ports.ts`: index,
@@ -1111,3 +1157,103 @@ bootstraps first access, and local recovery/provisioning retain their exclusive
 registry lock. Cloud selection fails explicitly until its implementation exists.
 See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
+
+## Hosted GitHub webhook ingress and local relay
+
+`packages/github-webhooks` composes the Workers Free signed receiver, bounded D1
+inbox, GitHub identity adapter, Cedar repository policy and SQLite Durable Object
+wake-up channels. Native edge limits precede provider work; atomic verified-user budgets and signed-installation storage quotas bound shared capacity. An authenticated page rechecks the GitHub user and current
+repository access; an installation is not a user. Per-repository sequence/expiry
+watermarks support bounded offline catch-up and explicit gaps. No private payload
+is sent over the wake-up socket. Source wire bounds are published in
+`protocol/defaults/github-relay-contract.json`.
+
+`crates/nessa-server/src/github_relay` owns the native consumer and private local
+SQLCipher-encrypted inbox, keyed from the session-unlocked local vault. `GithubConnections` remains the sole token owner through its injected vault entry; its injected
+credential adapter discovers the App-selected repositories. `LiveEvents` owns
+selection changes through one private SQLite transaction, including deletion
+evidence, cursor preservation and gap acknowledgement. Its application coordinates
+credentials, source and store. An injected selection admission holds the vault
+unlock generation through the transaction commit, so a selection begun before
+a lock cannot erase bindings restored after the next unlock. The credential
+port preserves GitHub's redacted, zeroizing `AccessToken`; each page obtains a
+fresh request-scoped copy, released
+before persistence or idle watching. Success and body-bearing refusals share one
+streamed response bound; watch frame/message limits fit the changed notification
+and RFC control frames. Composition starts the optional follower under the serving gateway and exposes
+the existing GitHub sign-in and Settings live-events opt-in, alongside local
+connect/events/disconnect CLI commands. The packaged host's existing baked
+stage selects the compiled table in `protocol/defaults/github-relays.json`.
+Production has no dev fallback; a future stage needs its own GitHub App and cloud
+resources. The consumer saves event pages/cursors atomically and fences old
+connection generations. It imports data without creating conversational authority
+or automatically dispatching turns.
+
+The [module map and operations runbook](../packages/github-webhooks/README.md),
+[receiver ADR](adr/todo/1107-github-webhook-receiver.md) and
+[relay ADR](adr/todo/1117-github-relay.md) own the boundaries and lifecycle.
+
+## Local vault
+
+`nessa-vault` owns encrypted named entries and the connection-scoped unlock lifetime.
+The gateway composes it before agents and GitHub, so onboarding can create it independently.
+The native host retains one `nessa vault session` child over anonymous pipes across
+window reloads. The child uses `nessa-client-core::local_product`; the host keeps
+its existing Rust toolchain floor. Pipe EOF closes the authenticated socket, whose
+unique guard seals the vault even if request work still holds cloned state.
+The passphrase never enters command arguments, environment variables or settings.
+
+`src/vault` owns the setup/unlock dialog and typed UI port. Protected GitHub use
+asks that port to unlock; backend Cedar admission and cryptographic availability
+remain authoritative. GitHub's token and SQLCipher key use separate named entries
+in the encrypted vault. Existing OS entries are read only for a verified one-time
+import; their sources are retired after matching encrypted receipts.
+See [the vault lifecycle](state/services/gateway/local-vault.md) and
+[ADR 1152](adr/todo/1152-local-vault.md).
+
+### Channel execution placement
+
+A channel independently places its main agent and its worker threads on Local or
+Boat. The channel store owns those choices and the current main conversation
+identity. The workspace context owns encrypted Boat connection settings and
+thread-to-VM allocation receipts. Workspace SDK prepares an attached workspace;
+conversation infrastructure carries existing agent leases over SSH, with scoped
+MCP relay forwarding and SFTP artifact channels. Authorization remains in the
+existing conversation, credential and MCP policies. The gateway never treats a
+missing VM as permission to allocate a replacement or fall back to Local.
+Receipt-publication failure, including a port panic, enters a target-bearing
+recovery path that records evidence independently. A pending new allocation
+attempts rollback even if audit delivery fails; existing, replayed or
+unrecognized receipt targets are retained. Provider-side thread correlation survives local persistence
+failure; unconfirmed cleanup stays uncertain.
+
+Boat admission checks the complete supported agent-credential posture and binds
+the immutable provider environment/version identity to the received VM before
+workspace authority. Creation rechecks after the provider's name-based create;
+reconnect checks before resume and again before SDK open. Private receipt
+histories admit only Provisioning then Assigned or Refused, with one further
+Assigned-to-Refused transition for later drift. A durably Refused receipt cannot
+reconnect or create a replacement; old receipts without proof are retained as
+Unverified and cannot execute. Refusal records retain expected/observed identity
+and cause independently of the UI. Only an acknowledged pending allocation may
+roll back automatically; reconnect and idempotent replay preserve existing VM
+data. Storage, audit and cleanup failures remain
+separately observable. Provider-side mutation during name-based create remains a
+trust boundary; these checks do not attest physical erasure.
+
+The main agent runs when messaged or notified by workers. Cloud wake endpoints,
+VM parking, live migration and local-folder mounts are outside this alpha. See
+[ADR 1160](adr/todo/1160-boat-workspaces.md) for ordering, failure and lifecycle
+contracts, and [workspace verification](../scripts/workspaces/README.md) for the
+opt-in provider test.
+
+
+## Background commands
+
+The optional `nessa-background` MCP tools reuse the authenticated session relay
+and conversation tool admission. Shepherd owns a command's process scope; the
+conversation application owns the original call binding, durable lifecycle and
+internal completion delivery. Status projection updates the existing waterfall
+row after the provider turn has ended. Local workspace placement is required;
+remote commands are refused. See [background tasks](state/services/gateway/background-tasks.md)
+for recovery and cleanup limits.

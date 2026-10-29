@@ -1,0 +1,125 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-27T20:03:51.728Z",
+  "finished": "2026-10-27T20:06:02.263Z",
+  "target": {
+    "url": "http://127.0.0.1:51968/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 24274,
+      "seen": {
+        "index": 1,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 23979,
+      "seen": {
+        "index": 2,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 547,
+      "seen": {
+        "index": 3,
+        "kind": "reply"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 19868,
+      "seen": {
+        "index": 4,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 315,
+      "seen": {
+        "index": 5,
+        "kind": "reply"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "006 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 293,
+      "seen": {
+        "index": 6,
+        "kind": "reply"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 3,
+        "turns": 2
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 75,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 14
+        },
+        {
+          "conversations": 7,
+          "churned": 77,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 9
+        }
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

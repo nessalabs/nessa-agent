@@ -1,0 +1,13 @@
+{
+  "minimumCharacters": 12,
+  "maximumPassphraseBytes": 1024,
+  "maximumEntryBytes": 16384,
+  "maximumEntries": 32,
+  "maximumFileBytes": 262144,
+  "kdfMemoryKiB": 65536,
+  "kdfIterations": 3,
+  "kdfParallelism": 1,
+  "failedAttempts": 5,
+  "cooldownSeconds": 30,
+  "auditRows": 1000
+}

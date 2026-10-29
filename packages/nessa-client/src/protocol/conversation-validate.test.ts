@@ -313,6 +313,23 @@ describe("conversation view agreement", () => {
     )
   })
 
+  it("retains a background task association and rejects malformed identities", () => {
+    const value = view()
+    Object.assign(value.tools[0]!, { backgroundTaskId: "background-1" })
+    expect(conversationView(value, "conversation").tools[0]?.backgroundTaskId).toBe(
+      "background-1",
+    )
+    for (const invalid of [
+      "",
+      "contains space",
+      "a".repeat(bounds.maxBackgroundTaskIdBytes + 1),
+      null,
+    ]) {
+      Object.assign(value.tools[0]!, { backgroundTaskId: invalid })
+      expect(() => conversationView(value, "conversation")).toThrow()
+    }
+  })
+
   it("accepts complete matching pending and tool evidence", () => {
     expect(conversationView(view(), "conversation").revision).toBe("1")
   })

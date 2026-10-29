@@ -51,10 +51,11 @@ fn read_input(
         GithubRepository::new(&read.owner, &read.repository).map_err(|_| "invalid_request")?;
     let kind = match (tool, read.number) {
         ("read_repository", None) => GithubReadKind::Repository,
-        ("read_issue", Some(number)) if number > 0 => GithubReadKind::Issue(number),
-        ("read_pull_request", Some(number)) if number > 0 => GithubReadKind::PullRequest(number),
+        ("read_issue", Some(number)) => GithubReadKind::Issue(number),
+        ("read_pull_request", Some(number)) => GithubReadKind::PullRequest(number),
         _ => return Err("invalid_request"),
     };
+    repository.path(kind).map_err(|_| "invalid_request")?;
     Ok((repository, kind))
 }
 
@@ -73,6 +74,7 @@ fn answer(value: Value) -> Value {
 
 fn error(error: GithubReadError) -> &'static str {
     match error {
+        GithubReadError::Cancelled => "github_call_cancelled",
         GithubReadError::NotConnected => "github_not_connected",
         GithubReadError::Api(GithubReadFailure::NotFound) => "github_not_found",
         GithubReadError::Api(GithubReadFailure::Unauthorized) => "github_unauthorized",
@@ -180,10 +182,7 @@ impl BuiltInServer for GithubTools {
                 {
                     return failed("github_source_refused");
                 }
-                if *stop.borrow() {
-                    return failed("github_call_cancelled");
-                }
-                match connections.read_repository(&repository, kind).await {
+                match connections.read_repository(&repository, kind, stop).await {
                     Ok(value) => answer(value),
                     Err(problem) => failed(error(problem)),
                 }
