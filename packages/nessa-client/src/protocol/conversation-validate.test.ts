@@ -1399,6 +1399,40 @@ it("accepts required work beside a usage limit on a failed turn", () => {
   ).toThrow(/required-work failure/)
 })
 
+it("accepts a joined reply, a long message and many calls up to the frame's own bound", () => {
+  // Streamed chunks join into one part and nothing caps a reply's text, so a
+  // part, a message and a turn's calls are bounded by the frame alone.
+  const sample = view()
+  const reply = "w".repeat(50_000)
+  const long = {
+    ...sample,
+    // The view's tool states are bounded; calls past them mark it truncated.
+    truncated: true,
+    messages: [
+      {
+        ...sample.messages[1],
+        userText: "u".repeat(40_000),
+        parts: [
+          { offset: 0, kind: "text", text: reply, toolId: "", noticeId: "" },
+          ...Array.from({ length: 600 }, (_, index) => ({
+            offset: index + 1,
+            kind: "tool",
+            text: "",
+            toolId: `tool-${index}`,
+            noticeId: "",
+          })),
+        ],
+      },
+    ],
+    pending: [],
+    tools: [],
+  }
+  const read = conversationView(long, "conversation").messages[0]!
+  expect(read.parts[0]?.text).toBe(reply)
+  expect(read.parts).toHaveLength(601)
+  expect(read.userText).toHaveLength(40_000)
+})
+
 it("accepts the inclusive reset bound the schema publishes", () => {
   const sample = view()
   const limited = (resetsAtMs: number) => ({

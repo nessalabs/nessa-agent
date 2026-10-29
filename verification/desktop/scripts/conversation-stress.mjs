@@ -1979,23 +1979,48 @@ const steps = {
     await run.page.keyboard.press(keys.toggleSidebar)
     if (!(await shows(run.page, last, 10_000)))
       failures.push("after the sidebar closed and opened, the newest words are gone")
-    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    let { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     await expectShown(run.page, SAYS.streamEnd, failures)
-    // A fresh read holds the whole reply, every word in order, joined into
-    // a few parts, with nothing left out.
-    const view = await run.client.conversation.read(run.main.id)
-    const answer = view.messages.find((each) => each.executionId === turn?.executionId)
-    const said = (answer?.parts ?? []).map((part) => part.text ?? "").join("")
     const whole = `${SAYS.stream}${text}${Array.from(
       { length: STREAM_WORDS },
       (_, index) => streamWord(index),
     ).join("")} ${SAYS.streamEnd}`
+    const reply = (view) => {
+      const answer = view.messages.find((each) => each.executionId === turn?.executionId)
+      return {
+        answer,
+        said: (answer?.parts ?? []).map((part) => part.text ?? "").join(""),
+      }
+    }
+    // The main chat holds more than this reply, so its view may begin partway
+    // through it: what it must hold is the reply's end, the newest words.
+    const { said: newest } = reply(await run.client.conversation.read(run.main.id))
+    if (!newest || !whole.endsWith(newest))
+      failures.push(
+        `the main chat's read reply does not end with its newest words: ${JSON.stringify(newest.slice(-40))}`,
+      )
+    // A chat of this reply alone holds all of it: a fresh read, checked as the
+    // window checks a view, holds every word in order, joined into a few parts.
+    const conversationId = randomUUID()
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, text),
+    )
+    const alone = await settled(
+      run,
+      conversationId,
+      new Set(),
+      text,
+      "completed",
+      failures,
+    )
+    turn = alone.turn
+    const { answer, said } = reply(await run.client.conversation.read(conversationId))
     if (said !== whole)
       failures.push(
         `the read reply is ${said.length} of ${whole.length} bytes, ending ${JSON.stringify(said.slice(-40))}`,
       )
-    // The whole reply is checked above; `view.truncated` is not, since a busy
-    // run's older turns may give way to fit the frame.
     if ((answer?.parts.length ?? 0) > 4)
       failures.push(`the reply is ${answer?.parts.length} parts, not joined`)
   },

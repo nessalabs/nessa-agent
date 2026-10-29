@@ -601,7 +601,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Invalid steering offset")
     let previousOffset = -1
-    for (const part of items(message, "parts", 512)) {
+    for (const part of items(message, "parts", 4096)) {
       exact(part, [
         "offset",
         "kind",
@@ -616,7 +616,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       previousOffset = part.offset as number
       const kind = text(part, "kind")
       oneOf(kind, ["text", "thought", "tool", "local_notice"])
-      text(part, "text")
+      text(part, "text", 65536)
       const toolId = text(part, "toolId", 256)
       const noticeId = text(part, "noticeId", 20)
       const noticeKind = part.noticeKind
@@ -654,7 +654,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       }
       if (part.messageId !== undefined) identity(part, "messageId")
     }
-    const userText = text(message, "userText")
+    const userText = text(message, "userText", 65536)
     const status = text(message, "status")
     oneOf(status, [
       "queued",

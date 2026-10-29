@@ -114,14 +114,16 @@ export const WATCH_CALLS = 12
 
 /**
  * A `stream` turn's reply: `STREAM_WORDS` small chunks, as a provider streams
- * a long answer a few characters at a time: more than 512 chunks and more
- * than 16 KB, so a view that cut a reply at either shows only part of it.
- * Each word names its place, so a check can see which was shown last.
+ * a long answer a few characters at a time: 1,200 chunks, about 43 KB. That
+ * is more than 512 chunks and past the 32 KB a part's text was once held to on
+ * the wire, so a reply joined into one part longer than that still reaches
+ * the window whole. Each word names its place, so a check can see which was
+ * shown last.
  */
 export const STREAM_WORDS = 1200
-/** The `index`th word of a `stream` reply. */
+/** The `index`th word of a `stream` reply, 36 bytes. */
 export const streamWord = (index) =>
-  ` w${String(index).padStart(4, "0")}${"y".repeat(12)}`
+  ` w${String(index).padStart(4, "0")}${"y".repeat(30)}`
 /**
  * How long a `stream` turn holds after its words, before its last sentence,
  * for the window to be read while the turn is still live.
