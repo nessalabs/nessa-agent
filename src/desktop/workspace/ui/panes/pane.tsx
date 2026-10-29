@@ -91,14 +91,14 @@ export const Pane = memo(function Pane({
           selectPaneSession(store.getState(), key) === shown,
       )
       setArriving(from ? { sessionId: shown, from } : null)
-      void dispatch(sendMessage({ sessionId: shown, text, initiator: "person" })).then(
-        (outcome) => {
-          if (outcome === "not-asked") {
-            restoreFocus()
-            setArriving((current) => (current?.from === from ? null : current))
-          }
-        },
-      )
+      void dispatch(
+        sendMessage({ sessionId: shown, text, initiator: "person", withImages: true }),
+      ).then((outcome) => {
+        if (outcome === "not-asked") {
+          restoreFocus()
+          setArriving((current) => (current?.from === from ? null : current))
+        }
+      })
     },
     [dispatch, key, store],
   )

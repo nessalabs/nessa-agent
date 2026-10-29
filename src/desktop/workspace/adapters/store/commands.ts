@@ -78,6 +78,8 @@ export {
   openWidget,
 } from "./pane-commands"
 export {
+  DRAFT_IMAGE_LIMITS,
+  addComposerImages,
   answerQuestion,
   approve,
   archiveSession,
@@ -85,6 +87,7 @@ export {
   deny,
   pinSession,
   providerLoginAvailable,
+  removeComposerImage,
   renameSession,
   forkSession,
   loadEarlier,

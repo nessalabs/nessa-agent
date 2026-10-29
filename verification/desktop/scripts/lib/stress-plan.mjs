@@ -125,6 +125,10 @@ export const KNOBS = {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway, with a code opened by Pair a device while it is on",
   },
+  pastes: {
+    default: 1,
+    what: "images pasted into the composer as a screenshot is, shown as tiles, sent with the message and handed to the agent",
+  },
   tables: {
     default: 1,
     what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply",
@@ -266,6 +270,7 @@ export function plan(knobs) {
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   add(knobs.webhooks, () => ({ kind: "webhook" }))
+  add(knobs.pastes, () => ({ kind: "paste" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

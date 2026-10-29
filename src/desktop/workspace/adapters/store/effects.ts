@@ -26,6 +26,7 @@ import { entry, sessionOf, type WorkspaceState } from "../../application/workspa
 import { fromSource } from "../../model/revision"
 import { workspaceActions } from "./slice"
 import { shownWindow } from "../../application/usecases/window"
+import { releasedImageUrls } from "../../application/usecases/draft-images"
 
 type Root = { workspace: WorkspaceState }
 /** The store's own dispatch: thunks run with the window's dependencies (`store.ts`). */
@@ -249,6 +250,19 @@ export function workspaceEffects(
             }),
           )
       }
+    },
+  })
+  // A pasted image's bytes are held for as long as the workspace names them.
+  listener.startListening({
+    predicate: (_action, current, previous) =>
+      current.workspace.composerImages !== previous.workspace.composerImages ||
+      current.workspace.outbox !== previous.workspace.outbox,
+    effect: (_action, api) => {
+      for (const url of releasedImageUrls(
+        api.getOriginalState().workspace,
+        api.getState().workspace,
+      ))
+        URL.revokeObjectURL(url)
     },
   })
   return listener

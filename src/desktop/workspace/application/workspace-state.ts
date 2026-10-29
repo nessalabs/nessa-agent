@@ -36,6 +36,7 @@ import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import type { ChatPanel } from "../model/chat-panel"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
+import type { DraftImage } from "../model/draft-images"
 import { settledBy, type AccessChoice } from "../model/access"
 import type {
   ShareDraft,
@@ -180,6 +181,13 @@ export interface WorkspaceState {
    * session let go, it goes; an agent's message leaves it as it is.
    */
   readonly composerText: Readonly<Record<string, string>>
+  /**
+   * The images put on a session's next message and not sent, by session or
+   * new session, in the order they were added (`model/draft-images.ts`). Kept
+   * and let go as `composerText` is; the person's send takes them onto the
+   * message.
+   */
+  readonly composerImages: Readonly<Record<string, readonly DraftImage[]>>
   /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
   /**
@@ -419,6 +427,7 @@ export const initialWorkspace: WorkspaceState = {
   modelChoices: {},
   accessChoices: {},
   composerText: {},
+  composerImages: {},
   panes: null,
   panels: {},
   panelAsked: 0,
@@ -652,7 +661,11 @@ export function withPanes(
   panes: PaneLayout | null,
 ): WorkspaceState {
   if (panes === state.panes) return state
-  const kept = new Set([...paneIds(panes), ...Object.keys(state.composerText)])
+  const kept = new Set([
+    ...paneIds(panes),
+    ...Object.keys(state.composerText),
+    ...Object.keys(state.composerImages),
+  ])
   const drafts = keepShownDrafts(state.drafts, kept)
   const dropped =
     drafts === state.drafts
@@ -673,6 +686,7 @@ export function letGoOfDrafts(
     ...state,
     drafts: gone.reduce(without, state.drafts),
     composerText: gone.reduce(without, state.composerText),
+    composerImages: gone.reduce(without, state.composerImages),
     accessChoices: gone.reduce(without, state.accessChoices),
     panels: gone.reduce(without, state.panels),
   }
@@ -692,7 +706,8 @@ export function keptDraftIn(
       (draft) =>
         draft.channelId === channelId &&
         !shown.has(draft.id) &&
-        Object.hasOwn(state.composerText, draft.id),
+        (Object.hasOwn(state.composerText, draft.id) ||
+          Object.hasOwn(state.composerImages, draft.id)),
     )
     .at(-1)?.id
 }
@@ -760,6 +775,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     accessChoices: without(state.accessChoices, sessionId),
     modelChoices: without(state.modelChoices, sessionId),
     composerText: without(state.composerText, sessionId),
+    composerImages: without(state.composerImages, sessionId),
     overview:
       state.overview.selected === sessionId
         ? { ...state.overview, selected: null }
