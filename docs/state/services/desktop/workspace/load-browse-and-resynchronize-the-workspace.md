@@ -5,7 +5,6 @@ kind: "statechart"
 status: "mixed"
 summary: "The desktop loads a workspace source and uses it to show sessions and summaries."
 parent: "desktop-workspace"
-sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
 sources:
   - "src/desktop/workspace/application/ports.ts"
   - "src/desktop/dependencies.ts"
@@ -15,8 +14,6 @@ sources:
   - "src/desktop/workspace/adapters/store/index-commands.ts"
   - "src/desktop/workspace/adapters/store/effects.ts"
   - "src/desktop/workspace/application/usecases/updates.ts"
-  - "src/desktop/workspace/application/usecases/session-tabs.ts"
-  - "src/desktop/workspace/application/workspace-state.ts"
   - "src/desktop/workspace/model/retention.ts"
   - "src/desktop/workspace/application/usecases/updates.test.ts"
   - "src/desktop/workspace/adapters/store/commands.test.ts"
@@ -27,11 +24,8 @@ diagramLinks: {}
 
 The desktop loads a workspace source and uses it to show sessions and summaries. Refreshing replaces those summaries while preserving valid local selections.
 
-When the source removes a visible session, the window removes its document tab.
-The pane shows a new draft if a current channel permits one, or another open
-document. If neither is available, the last pane clears. A hidden local draft
-keeps its tab and can reopen even after the source removes its old channel.
-Sending from that draft requires its channel to return to the current index.
+When the source removes a visible session, its pane closes. The last pane
+shows a new draft if a current channel permits one; otherwise it clears.
 
 The selected [connection mode](README.md#connection-modes) supplies gateway data, a seeded workspace, or an in-memory sample. Some preferences persist, but the complete arrangement of panes does not. Losing a local view is different from deleting a server conversation.
 

@@ -32,8 +32,8 @@ import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overvie
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { WindowArrangement } from "../model/shown-window"
-import { keepDrafts, type Draft } from "../model/session-lifecycle"
 import type { SessionView } from "../model/session-groups"
+import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import type { ChatPanel } from "../model/chat-panel"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import { settledBy, type AccessChoice } from "../model/access"
@@ -182,8 +182,6 @@ export interface WorkspaceState {
   readonly composerText: Readonly<Record<string, string>>
   /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
-  /** Open conversation documents; pane placement stays in `panes`. Drafts remain while their document tab is open. */
-  readonly sessionTabs: readonly string[]
   /**
    * Each chat's right panel: the widgets open in it as tabs, and the one in
    * front (`model/chat-panel.ts`). The panel beside the panes shows the
@@ -422,7 +420,6 @@ export const initialWorkspace: WorkspaceState = {
   accessChoices: {},
   composerText: {},
   panes: null,
-  sessionTabs: [],
   panels: {},
   panelAsked: 0,
   view: { channelId: "" },
@@ -643,42 +640,29 @@ export function without<T>(
 }
 
 /**
- * Applies a change of panes and remembers their document tabs. Drafts stay with
- * an open tab even while another document occupies its pane (session-tabs.test.ts).
+ * Applies a change of panes, letting go of any draft no pane shows any more,
+ * with its access and its panel — unless something is typed in it, which
+ * nothing else would bring back: that one is kept for New Session to show
+ * again (`keptDraftIn`). Closing a draft's pane lets it go on purpose
+ * (`letGoOfDrafts`). The one place panes change, so no blank draft outlives
+ * its pane.
  */
 export function withPanes(
   state: WorkspaceState,
   panes: PaneLayout | null,
 ): WorkspaceState {
   if (panes === state.panes) return state
-  const shown = new Set(paneIds(panes))
-  // Remember documents displaced from the focused pane as well as newly opened ones.
-  // Their transcripts still follow the bounded cache; hidden tabs are not "on screen".
-  const sessionTabs = [...paneIds(state.panes), ...shown].reduce<readonly string[]>(
-    (tabs, id) =>
-      (entry(state.sessions, id) || entry(state.drafts, id)) && !tabs.includes(id)
-        ? [...tabs, id]
-        : tabs,
-    state.sessionTabs,
-  )
-  const drafts = keepDrafts(
-    state.drafts,
-    new Set([...shown, ...sessionTabs, ...Object.keys(state.composerText)]),
-  )
+  const kept = new Set([...paneIds(panes), ...Object.keys(state.composerText)])
+  const drafts = keepShownDrafts(state.drafts, kept)
   const dropped =
     drafts === state.drafts
       ? []
       : Object.keys(state.drafts).filter((id) => !Object.hasOwn(drafts, id))
   // A failed read belongs to what showed it: shown again, a session is read afresh.
-  return keepShownFailures({
-    ...letGoOfDrafts(state, dropped),
-    panes,
-    sessionTabs,
-    drafts,
-  })
+  return keepShownFailures({ ...letGoOfDrafts(state, dropped), panes })
 }
 
-/** Release drafts and every record owned by them. */
+/** `ids`' drafts let go, with their typing, their access and their panels. */
 export function letGoOfDrafts(
   state: WorkspaceState,
   ids: readonly string[],
@@ -691,16 +675,18 @@ export function letGoOfDrafts(
     composerText: gone.reduce(without, state.composerText),
     accessChoices: gone.reduce(without, state.accessChoices),
     panels: gone.reduce(without, state.panels),
-    sessionTabs: state.sessionTabs.filter((id) => !gone.includes(id)),
   }
 }
 
-/** The latest typed draft in a channel that no pane currently shows. */
+/**
+ * The draft with something typed in it that no pane shows, in `channelId`:
+ * the latest started, if any. What New Session shows again rather than a blank one.
+ */
 export function keptDraftIn(
   state: WorkspaceState,
   channelId: string,
 ): string | undefined {
-  const shown = new Set(paneIds(state.panes))
+  const shown = new Set(state.panes ? paneIds(state.panes) : [])
   return Object.values(state.drafts)
     .filter(
       (draft) =>
@@ -762,7 +748,6 @@ export function modelForNextTurn(
 export function forgetSession(state: WorkspaceState, sessionId: string): WorkspaceState {
   return {
     ...state,
-    sessionTabs: state.sessionTabs.filter((id) => id !== sessionId),
     panels: without(state.panels, sessionId),
     sessions: without(state.sessions, sessionId),
     transcripts: without(state.transcripts, sessionId),

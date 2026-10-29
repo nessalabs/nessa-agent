@@ -9,7 +9,6 @@ import {
   canNudge,
   canOpenBeside,
   closePane,
-  closeSessionTab,
   dropSession,
   fitPanes,
   loadWorkspace,
@@ -40,7 +39,8 @@ describe("new sessions and closing", () => {
     expect(store.getState().workspace.drafts[draftId]).toBeDefined()
     store.dispatch(closePane())
     expect(shown(store)).toEqual(["a"])
-    expect(store.getState().workspace.drafts[draftId]).toBeDefined()
+    // Nothing was typed in it: it closes with its pane, not kept as a tab.
+    expect(store.getState().workspace.drafts[draftId]).toBeUndefined()
   })
 
   it("opens a channel with no sessions on a new session's home", async () => {
@@ -353,24 +353,4 @@ describe("what a drag carries into the grid", () => {
     )
     expect(shown(store)).toEqual(["d"])
   })
-})
-
-it("closing a visible document tab leaves the Agents view selected", async () => {
-  const { store } = await ready()
-  store.dispatch(openSession({ sessionId: "c" }))
-  store.dispatch(showContent({ content: "agents" }))
-  store.dispatch(closeSessionTab({ sessionId: "c" }))
-  expect(store.getState().workspace.content).toBe("agents")
-  expect(store.getState().workspace.sessionTabs).not.toContain("c")
-})
-
-it("closing a hidden document tab leaves the Agents view and panes in place", async () => {
-  const { store } = await ready()
-  store.dispatch(openSession({ sessionId: "c" }))
-  store.dispatch(showContent({ content: "agents" }))
-  const panes = store.getState().workspace.panes
-  store.dispatch(closeSessionTab({ sessionId: "a" }))
-  expect(store.getState().workspace.content).toBe("agents")
-  expect(store.getState().workspace.panes).toBe(panes)
-  expect(store.getState().workspace.sessionTabs).not.toContain("a")
 })

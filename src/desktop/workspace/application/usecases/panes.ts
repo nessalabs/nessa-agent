@@ -46,6 +46,7 @@ import {
   channelOf,
   draftOf,
   keptDraftIn,
+  letGoOfDrafts,
   focusedChannel,
   itemIn,
   modelForNextTurn,
@@ -293,14 +294,15 @@ export function createDraft(
     restore?: boolean
   },
 ): WorkspaceState {
-  const panes = state.panes
-  if (!panes || showable(state, sessionItem(draftId))) return state
+  // With no pane at all (everything shown was removed), it opens alone.
+  const side = state.panes ? beside : undefined
+  if (showable(state, sessionItem(draftId))) return state
   const home = draftHome(state, { channelId, model })
   if (!home) return state
   const kept = restore ? keptDraftIn(state, home.channelId) : undefined
   if (kept)
-    return beside
-      ? openBeside(state, { sessionId: kept, target, side: beside, room, replace: false })
+    return side
+      ? openBeside(state, { sessionId: kept, target, side, room, replace: false })
       : openSession(state, { sessionId: kept, pane: target })
   const drafted: WorkspaceState = {
     ...state,
@@ -309,11 +311,11 @@ export function createDraft(
       [draftId]: { id: draftId, ...home },
     },
   }
-  const placed = beside
+  const placed = side
     ? openBeside(drafted, {
         sessionId: draftId,
         target,
-        side: beside,
+        side,
         room,
         replace: false,
       })
@@ -379,11 +381,10 @@ export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
 }
 
 /**
- * Closes a pane; its neighbour takes the room. A draft in the closed pane
- * remains in its document tab until that tab is closed. The last pane cannot
- * close: it goes back to a new session's home under `draftId`
- * (`homeAfterLast`), in its conversation's channel. Showing a home already,
- * nothing changes (`canClosePane`).
+ * Closes a pane; its neighbour takes the room, and a draft in it is let go,
+ * typed in or not. The last pane cannot close: it goes back to a new
+ * session's home under `draftId` (`homeAfterLast`), in its conversation's
+ * channel. Showing a home already, nothing changes (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,
@@ -392,7 +393,12 @@ export function closePane(
   const panes = state.panes
   const shown = panes && paneByKey(panes, pane)
   if (!panes || !shown) return state
-  if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
+  const item = itemIn(shown)
+  if (paneCount(panes) > 1)
+    return withPanes(
+      item?.kind === "session" ? letGoOfDrafts(state, [item.sessionId]) : state,
+      removePane(panes, pane),
+    )
   const home = homeAfterLast(state, itemIn(shown))
   if (!home || !draftId) return state
   return createDraft(state, { draftId, ...home, target: pane })
