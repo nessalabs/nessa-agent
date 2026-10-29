@@ -148,7 +148,6 @@ import type { Transcript } from "../../model/transcript"
 import type { DraftImage } from "../../model/draft-images"
 import {
   AttachmentStagingError,
-  sha256Digest,
   stageImage,
   uploadFailureSummary,
   worthRetrying,
@@ -414,6 +413,15 @@ const settle = <T>(follow: Followed<T>, outcome: { value: T } | { error: unknown
     else waiter.reject(outcome.error)
 }
 
+/**
+ * How the source reads a message's images, supplied by composition: the
+ * bytes behind an image's URL, and the digest an upload is named by.
+ */
+export interface ImageBytes {
+  readonly bytes: (url: string) => Promise<Blob>
+  readonly digest: (bytes: Blob) => Promise<string>
+}
+
 export function gatewaySource<C extends GatewayClient = GatewayClient>(options: {
   /** Connects a client: called again after a failed attempt, or once the last one closed. */
   readonly connect: () => Promise<C>
@@ -423,6 +431,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   readonly apps?: GatewayViewObserver
   /** The reviews still waiting, each time the gateway says so. An empty list means none. */
   readonly onReviewWaiting?: (reviews: readonly WaitingReview[]) => void
+  /** Reads a message's images back to upload them; without it, a message with images is refused. */
+  readonly imageBytes?: ImageBytes
 }): GatewaySource<C> {
   const { clock } = options
   const timing = options.timing ?? defaultGatewayTiming
@@ -1501,22 +1511,23 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       // Capture before connection/create: the caller may reuse its mutable
       // draft or model object while either effect is pending (PS16).
       const model = Object.freeze({ ...message.model })
+      const { sessionId, messageId, text } = message
       const start = message.start !== undefined
       const access = message.start?.access
       const channelId = message.start && gatewayChannelId(message.start.channelId)
-      const images = [...(message.images ?? [])]
+      const images = (message.images ?? []).map((image) => Object.freeze({ ...image }))
       const submission = (attachments: ImageAttachment[]) => {
         try {
           return prepareSubmission({
-            conversationId: message.sessionId,
+            conversationId: sessionId,
             // The message's id is its turn's: a message the gateway already
             // took is answered from that turn, never taken twice.
-            executionId: message.messageId,
+            executionId: messageId,
             // Each send is a command of its own. A command the gateway refused
             // keeps that answer, and one whose answer was lost reads as
             // unresolved for good, so sending again under it could never send.
             requestId: crypto.randomUUID(),
-            text: message.text,
+            text,
             attachments,
             mode: "queued",
           })
@@ -1541,9 +1552,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         if (!start) return
         const agent = agentForProvider(model.provider)
         await dispatch(live, (connected) => {
-          held(message.sessionId)
+          held(sessionId)
           return connected.conversation.create({
-            conversationId: message.sessionId,
+            conversationId: sessionId,
             ...(agent ? { agent } : {}),
             model: model.modelId,
             // The access chosen in the home; the gateway asks when told none,
@@ -1591,6 +1602,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       // conversation opened, which must exist to hold them, then each image
       // put into it — an upload stops when its call ends — and only then the
       // message naming what it holds. A refusal of any is the message's.
+      const read = options.imageBytes
+      if (!read) return Promise.reject(new WorkspaceSourceError("not-supported"))
       return (async () => {
         await within((live) => open(live))
         const attachments: ImageAttachment[] = []
@@ -1598,7 +1611,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           attachments.push(
             await within((live, ended) =>
               dispatch(live, (connected) =>
-                uploadImage(connected, message.sessionId, image, clock, ended),
+                uploadImage(connected, sessionId, image, read, clock, ended),
               ),
             ),
           )
@@ -2008,13 +2021,14 @@ async function uploadImage(
   connected: Pick<GatewayClient, "attachments">,
   conversationId: string,
   image: DraftImage,
+  read: ImageBytes,
   clock: GatewayClock,
   /** Aborted when the call this upload is part of ends. */
   ended: AbortSignal,
 ): Promise<ImageAttachment> {
   let bytes: Blob
   try {
-    bytes = await (await fetch(image.url)).blob()
+    bytes = await read.bytes(image.url)
   } catch {
     throw new WorkspaceSourceError("not-supported", undefined, {
       message: `${image.name} could not be read.`,
@@ -2025,7 +2039,7 @@ async function uploadImage(
     return await stageImage(
       () => connected.attachments,
       conversationId,
-      { digest: await sha256Digest(bytes), mimeType: image.mimeType, size: bytes.size },
+      { digest: await read.digest(bytes), mimeType: image.mimeType, size: bytes.size },
       bytes,
       {
         signal: ended,

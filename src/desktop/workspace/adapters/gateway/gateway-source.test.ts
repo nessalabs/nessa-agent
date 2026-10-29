@@ -88,12 +88,21 @@ const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve()
 }
 
+/** Images read back from data URLs, named by their SHA-256 as the window's Web Crypto would. */
+const testImageBytes = {
+  bytes: async (url: string) => (await fetch(url)).blob(),
+  digest: async (bytes: Blob) =>
+    `sha256:${createHash("sha256")
+      .update(new Uint8Array(await bytes.arrayBuffer()))
+      .digest("hex")}`,
+}
+
 function started(
   gateway: FakeGateway = fakeGateway(),
   connect: () => Promise<FakeGateway["client"]> = () => Promise.resolve(gateway.client),
 ) {
   const { clock, advance } = manualClock()
-  const source = gatewaySource({ connect, clock, timing })
+  const source = gatewaySource({ connect, clock, timing, imageBytes: testImageBytes })
   const updates: WorkspaceUpdate[] = []
   const follow = () => source.subscribe((update) => updates.push(update))
   return { gateway, source, updates, follow, advance }
@@ -4216,6 +4225,75 @@ it("PS16: captures immutable workspace intent before creation can await", async 
   ])
   expect(gateway.live(conversationS)).toBe(1)
   expect(gateway.live(conversationB)).toBe(0)
+})
+
+it("PS16: a message with images keeps its words, its images and its conversation while creation awaits", async () => {
+  const { gateway, source } = started()
+  const created = deferred<void>()
+  gateway.once("create", (normal) => created.promise.then(normal))
+  const image = {
+    id: "i",
+    name: "shot.png",
+    mimeType: "image/png",
+    size: 1,
+    url: "data:image/png;base64,AQ==",
+  }
+  const message = {
+    sessionId: conversationS as string,
+    messageId: "original-turn",
+    text: "original",
+    images: [image],
+    model: { ...model },
+    initiator: "person" as const,
+    start: { channelId: "gateway-conversations", title: "original" },
+  }
+  const sending = source.send(message)
+  await flush()
+  expect(gateway.count("create")).toBe(1)
+  message.sessionId = conversationB
+  message.messageId = "other-turn"
+  message.text = "edited"
+  image.mimeType = "image/gif"
+  message.images = []
+  created.resolve()
+  await sending
+  await flush()
+  const digest = `sha256:${createHash("sha256")
+    .update(new Uint8Array([1]))
+    .digest("hex")}`
+  expect(gateway.calls.find((call) => call.method === "attachmentBegin")?.args).toEqual([
+    conversationS,
+    { digest, mimeType: "image/png", size: 1 },
+  ])
+  expect(gateway.calls.find((call) => call.method === "send")?.args).toEqual([
+    conversationS,
+    "original",
+    [{ digest, mimeType: "image/png", size: 1 }],
+    [],
+    { executionId: "original-turn", requestId: expect.any(String) },
+  ])
+  expect(gateway.live(conversationB)).toBe(0)
+})
+
+it("refuses a message with images, sending nothing, when composition gave no way to read them", async () => {
+  const gateway = fakeGateway()
+  const { clock } = manualClock()
+  const source = gatewaySource({
+    connect: () => Promise.resolve(gateway.client),
+    clock,
+    timing,
+  })
+  await expect(
+    source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "Look",
+      images: [{ id: "i", name: "a.png", mimeType: "image/png", size: 1, url: "data:," }],
+      model,
+      initiator: "person",
+    }),
+  ).rejects.toMatchObject({ reason: "not-supported" })
+  expect(gateway.calls).toEqual([])
 })
 
 it("keeps input attachments when a fresh desktop source reopens a retained conversation", async () => {
