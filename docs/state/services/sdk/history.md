@@ -5,13 +5,16 @@ kind: "operation"
 status: "implemented"
 summary: "Nessa shows live output while saving conversation records in small batches."
 parent: "sdk"
-sourceRevision: "5ae45faa95fd88ae96c5f213e0e3fcd811284a91"
+sourceRevision: "32b4d2ec9cd9638151d7d39a3d0f38243ef64416"
 sources:
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/semantic.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/validation.rs"
+  - "crates/nessa-sdk/src/application/agent_execution/sessions/authorship.rs"
+  - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/records.rs"
+  - "crates/nessa-sdk/tests/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/streaming_persistence.rs"
 diagramLinks: {}
 ---
@@ -51,12 +54,21 @@ stateDiagram-v2
 
 ## Internal completion input
 
-Committed history retains whether an input came from a person, an app, or an
-internal completion. Restoration keeps that provenance; a record cannot describe
-both an app sender and an internal sender. The gateway can therefore resume the
+Committed history retains whether an input came from a person, an app, an agent
+in another conversation, or an internal completion. Restoration keeps that
+provenance. A record that claims two sender kinds is refused. Agent input keeps
+its source conversation and execution in its saved initiation, from which its
+message sender is reconstructed. Submission and restoration both require the
+sender and initiation to name the same source. The gateway can therefore resume the
 same provider session with tool output while omitting that input from user bubbles.
 The save and restoration states above stay the same. This review covers the new
-sender fact and its snapshot agreement, not a new provider restoration protocol.
+sender facts and their snapshot agreement. The source changes since the prior
+checkpoint affect admission and restoration validation; the record writer,
+streaming boundaries and provider restoration protocol are unchanged. The codec
+regression covers valid agent and internal input, plus records claiming both
+agent and internal or app origins. The session-manager regression crosses valid
+source identities before admission and on restore. Runtime results are recorded
+on PR #1194; this source checkpoint alone does not claim those checks passed.
 
 ## Further reading
 
