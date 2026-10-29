@@ -35,7 +35,8 @@
  *                    list, or the panes) and the pane's composer — its left
  *                    edge and its centre — move over several frames, one way,
  *                    to where they rest; with reduced motion they land at once.
- *   split-motion     ⌘D splits the chat in front and ⌘W closes the new pane:
+ *   split-motion     after reclaiming side-column room,
+ *                    ⌘D splits the chat in front and ⌘W closes the new pane:
  *                    each pane's edges and the first composer's centre move
  *                    over several frames, one way, to where they rest; the
  *                    new pane slides in at its size; with reduced motion
@@ -95,12 +96,12 @@ const cutOff = (page) =>
     ),
   )
 
+const sessionListChecks = ["list-request", "list-request-claude", "list-request-narrow"]
+
 const checks = [
   "pane-clipping",
   "channels-alone",
-  "list-request",
-  "list-request-claude",
-  "list-request-narrow",
+  ...sessionListChecks,
   "quiet-composer",
   "overview-narrow",
   "sidebar-motion",
@@ -136,6 +137,9 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
 
   --only <list>    Checks, comma-separated: ${checks.join(", ")}
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
+
+The three list-request checks require the columns layout. In sidebar layout
+they are reported as not run because that layout has no separate session list.
 
 Checks, per engine, layout and size:
   pane-clipping   focusing an overflowing fixture leaves each pane root at
@@ -316,6 +320,17 @@ async function selectGateway(page) {
     .getByRole("button", { name: /^gateway\b/ })
     .first()
     .click()
+}
+
+/** Removal is driven from the list, even when a split folded it out of view. */
+async function showSessionRows(page, layout) {
+  const column = layout === "columns" ? css.sessionList : css.sidebar
+  if (!(await page.locator(column).isVisible())) {
+    await page.keyboard.press(
+      layout === "columns" ? keys.toggleSessionList : keys.toggleSidebar,
+    )
+    await settled(page)
+  }
 }
 
 const body = {
@@ -880,8 +895,7 @@ const body = {
     return { short, after, tall, failures }
   },
 
-  "list-request": async ({ page, layout }) => {
-    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
+  "list-request": async ({ page }) => {
     const failures = []
     // The default desktop-app channel's signing request is too long to allow
     // from the list. The gateway channel has the short reconnect request.
@@ -920,8 +934,7 @@ const body = {
     return { failures, detail: { id, command } }
   },
 
-  "list-request-narrow": async ({ page, layout }) => {
-    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
+  "list-request-narrow": async ({ page }) => {
     const failures = []
     await selectGateway(page)
     const edge = page.getByRole("separator", { name: "Resize Session List" })
@@ -1000,8 +1013,7 @@ const body = {
     return { failures, detail: { columns, ...seen } }
   },
 
-  "list-request-claude": async ({ page, layout }) => {
-    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
+  "list-request-claude": async ({ page }) => {
     const failures = []
     await selectGateway(page)
     // The list at its narrowest: its edge moved left until it holds.
@@ -1247,7 +1259,10 @@ const body = {
     return { runs, failures }
   },
 
-  "split-motion": async ({ page }) => {
+  "split-motion": async ({ page, layout }) => {
+    // The split must be admitted before its motion can be measured. Side-column
+    // motion has its own check; leave room for two readable panes at 760px too.
+    await hideColumns(page, layout)
     const failures = []
     const runs = []
     // Each pane's edges, and the composer's centre in the pane that was there.
@@ -2059,7 +2074,8 @@ const body = {
    * switcher opens beside it can belong to another channel, and the list
    * shows only the channel in view.
    */
-  "reply-held": async ({ page }) => {
+  "reply-held": async ({ page, layout }) => {
+    await hideColumns(page, layout)
     const text = "unsent reply"
     const before = await page.locator(css.pane).count()
     const open = page.locator(css.focusedPane).first()
@@ -2109,6 +2125,7 @@ const body = {
     const row = place.list
       ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
       : page.locator(`[data-session-row="${place.id}"]`).first()
+    await showSessionRows(page, layout)
     await row.hover()
     const archive = row.locator('[data-session-action="archive"]')
     if ((await archive.count()) > 0) await archive.click()
@@ -2141,7 +2158,8 @@ const body = {
    * pane stays. The box keeps Stop and that turn on the next frame.
    * Send in its place, while the turn is still showing, is the bug.
    */
-  "stop-held": async ({ page }) => {
+  "stop-held": async ({ page, layout }) => {
+    await showSessionRows(page, layout)
     const title = "Split panes for the chat workspace"
     const activity = "Editing workspace-panes.tsx"
     const before = await page.locator(css.pane).count()
@@ -2207,6 +2225,7 @@ const body = {
         true,
       )
     }, css.pane)
+    await showSessionRows(page, layout)
     await row.hover()
     const archive = row.locator('[data-session-action="archive"]')
     if ((await archive.count()) > 0) await archive.click()
@@ -2250,6 +2269,15 @@ await main(meta, async ({ options, rep, url }) => {
       for (const size of sizes)
         for (const name of only) {
           const base = { engine, layout, size: `${size.width}x${size.height}` }
+          if (layout !== "columns" && sessionListChecks.includes(name)) {
+            rep.add({
+              ...base,
+              name,
+              skipped: "no session list in this layout",
+              failures: [],
+            })
+            continue
+          }
           await attempt(rep, { ...base, name }, async () => {
             const opened = await openPage(browser, {
               url,

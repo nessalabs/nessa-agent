@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Opening beside a pane first looks for space on the right, then below."
 parent: "desktop-workspace"
-sourceRevision: "318f9e1474b6b1aaee24f428792fc27638b749ce"
+sourceRevision: "3db7cdea6b545e18545799f590c058646ab9d620"
 sources:
   - "src/desktop/workspace/ui/panes/panes.css"
   - "src/desktop/workspace/ui/panes/conversation.css"
@@ -58,6 +58,14 @@ The pane root clips overflowing content; its transcript owns scrolling. Focusing
 a descendant does not scroll the root or move its header out of the titlebar.
 `columns.mjs --only pane-clipping` checks this with an overflowing focus fixture
 in both browser engines and layouts.
+
+The split-motion and unsent-reply browser fixtures reclaim side-column room
+before opening a second pane. In columns layout they hide the session list;
+split admission can then fold the sidebar to fit the new pane. This reaches
+an admitted, readable layout even in a narrow window. Removal fixtures reveal the session rows before using
+their actions. This setup does not change the refusal when a real split has
+insufficient room, or the requirement to retain the closing pane's content
+until its box leaves.
 
 ```mermaid
 stateDiagram-v2
