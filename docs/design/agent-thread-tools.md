@@ -176,6 +176,7 @@ the message text.
 | An accepted agent note is waiting when a person starts the next turn | The note retains its agent author and can be carried into the turn | No grant read or owner attribution is needed for this admitted note |
 | Watched child turn settles and its report is delivered | Agent(child conversation, watched execution); queue once in parent | A restored delivery reads the parent's saved execution before retrying |
 | Target access is refused before submission | No target turn or note | An earlier saved target receipt remains the authority for an exact retry |
+| Public input admission, incremental save or full restore receives disagreeing sender and initiation origins | Reject before accepting or appending the input | Prior committed history remains unchanged; encoding must not repair the sender |
 | An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
 | An agent-authored target turn lists command hosts or calls `run` | The command policy receives an Agent principal; Cedar refuses host and run questions with `command.agent_host` | No command lease starts; an unpermitted host is not offered, and the policy refusal is logged |
 
