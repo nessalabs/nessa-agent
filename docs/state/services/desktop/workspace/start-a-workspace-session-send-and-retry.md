@@ -5,11 +5,8 @@ kind: "statechart"
 status: "mixed"
 summary: "A new desktop session begins as a local draft."
 parent: "desktop-workspace"
-sourceRevision: "79b641248948cde7837a813ef9ac6885ada23045"
 sources:
   - "src/desktop/workspace/application/usecases/sessions.ts"
-  - "src/desktop/workspace/application/usecases/session-tabs.ts"
-  - "src/desktop/workspace/application/usecases/panes.ts"
   - "src/desktop/workspace/model/session-lifecycle.ts"
   - "src/desktop/workspace/adapters/store/commands.ts"
   - "src/desktop/workspace/adapters/store/session-commands.ts"
@@ -25,12 +22,10 @@ diagramLinks: {}
 
 A new desktop session begins as a local draft. Sending keeps a stable input ID so a retry can refer to the same message.
 
-A draft keeps its text while its document tab is open, even when another
-document occupies its pane. Sending or retrying a local session requires its
-channel to remain in the current index. If the source refused its first send,
-discarding that message restores the draft in a current channel when one is
-available. With no current channel, it removes the local session and any pane
-showing it.
+Sending or retrying a local session requires its channel to remain in the
+current index. If the source refused its first send, discarding that message
+restores the draft in a current channel when one is available. With no current
+channel, it removes the local session and any pane showing it.
 
 The current-channel decision is checked again immediately before a local
 message reaches the source. An index can replace the channel list after the
@@ -56,15 +51,14 @@ stateDiagram-v2
     Sending --> AwaitingReplacement: Source accepted / clear sending mark
     Sending --> Failed: Typed refusal or unknown outcome
     Failed --> Sending: Retry [channel current] / same message identity
-    Failed --> Draft: Discard last failed [source never began, current home available]
-    Failed --> Forgotten: Discard last failed [source never began, no current home]
+    Failed --> Draft: Discard last failed message [never began, still shown, current home]
+    Failed --> Forgotten: Discard last failed message [never began, unshown or no current home]
     Sending --> Confirmed: Replacement includes message identity
     AwaitingReplacement --> Confirmed: Replacement includes message identity
     Failed --> Confirmed: Replacement includes message identity
-    Draft --> Kept: Another document takes its pane / retain tab and text
-    Draft --> Forgotten: Close its document tab
-    Kept --> Draft: Select its tab or ask for a new session in its channel
-    Kept --> Forgotten: Close its document tab
+    Draft --> Forgotten: No pane shows draft [nothing typed] or its pane closed
+    Draft --> Kept: No pane shows draft [typed in]
+    Kept --> Draft: New session asked for in its channel
     note right of Sending
         One message's delivery projection.
         Source replacement removes its outbox entry.

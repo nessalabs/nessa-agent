@@ -517,13 +517,31 @@ it("puts nothing of a pane but its picture under the window's controls: its head
   )
   const body = (sheet: string, selector: string) =>
     sheet.slice(sheet.indexOf(selector)).split("}")[0]
-  // Cards, including full-window widgets, begin below the window toolbar.
-  expect(body(panes, ".workspace-chat {")).toMatch(
-    /padding:\s*var\(--desktop-titlebar-height\)/,
+  // A top-row pane's header fills the titlebar row — a gutter, the header,
+  // a gutter: `--desktop-titlebar-height` — so what follows begins below it.
+  expect(body(panes, ".workspace-pane {")).toMatch(
+    /--workspace-pane-top:\s*calc\(max\(0, 1 - var\(--ri\)\) \* var\(--desktop-gutter\)\)/,
+  )
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /height:\s*calc\(var\(--desktop-control-size\) \+ 2 \* var\(--desktop-control-inset\)\)/,
+  )
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /margin:\s*var\(--workspace-pane-top\) 0/,
   )
   expect(body(panes, ".workspace-widget-window {")).toMatch(
-    /top:\s*var\(--desktop-titlebar-height\)/,
+    /--workspace-pane-top:\s*var\(--desktop-gutter\)/,
   )
+  // In the corner, the header's name and controls start after the window's.
+  const corner = body(panes, ".workspace[data-panes-alone]\n  .workspace-pane:is(")
+  expect(corner).toMatch(
+    /\.workspace-pane-header \{\s*padding-left: var\(--desktop-titlebar-safe-start\)/,
+  )
+  expect(
+    body(
+      panes,
+      ".workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {",
+    ),
+  ).toMatch(/padding-left: var\(--desktop-titlebar-safe-start\)/)
 })
 
 it("moves Settings' sidebar by transform, never by animating its width", () => {

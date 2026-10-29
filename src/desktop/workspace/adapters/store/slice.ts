@@ -44,7 +44,6 @@ import * as overview from "../../application/usecases/overview"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
-import * as sessionTabs from "../../application/usecases/session-tabs"
 import * as chatPanel from "../../application/usecases/chat-panel"
 import * as sessions from "../../application/usecases/sessions"
 import * as access from "../../application/usecases/access"
@@ -63,11 +62,6 @@ const workspaceSlice = createSlice({
   name: "workspace",
   initialState: initialWorkspace as WorkspaceState,
   reducers: {
-    // Documents share the existing pane arrangement.
-    sessionTabClosed: (
-      state,
-      { payload }: Payload<{ sessionId: string; draftId: string }>,
-    ) => sessionTabs.closeSessionTab(state, payload),
     // A chat's right panel: its widgets, as tabs (`usecases/chat-panel.ts`).
     panelTabShown: (
       state,
@@ -530,9 +524,7 @@ const goesSomewhere: ReadonlySet<string> = new Set(
  * over the panes, only when it changed them, so no pane changes unseen
  * beneath it; one that changes nothing — a move at the edge, a close of no
  * pane — leaves the view as it is. Fitting the panes to the window is not
- * asked by anyone, and leaves the view as it is. Closing a document tab stays
- * in the current view: the tab strip shows its removal even over Agents, and
- * a hidden tab close does not change a pane.
+ * asked by anyone, and leaves the view as it is.
  */
 const changesPanes: ReadonlySet<string> = new Set(
   [

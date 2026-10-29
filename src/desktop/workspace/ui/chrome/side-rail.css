@@ -15,7 +15,9 @@
   display: flex;
   height: 100svh;
   box-sizing: border-box;
-  overflow: hidden;
+  /* Clipped, never a scroller: nothing — a focus, a scrollIntoView — can
+     move the whole window sideways under its own edges. */
+  overflow: clip;
   background: var(--background);
   color: var(--foreground);
   font-family: var(--nessa-font-sans);
@@ -219,11 +221,16 @@
   }
 }
 
-/* A bottom-left slot inset equally from the window's left and bottom edges. */
+/*
+ * One place, open or closed: the bottom-left corner, in the rail's column —
+ * the rail's items and the titlebar's sidebar toggle stand over it — and on
+ * the footer row's line, 13px above its foot (`ui/identity.css`). Toggling
+ * the rail moves what is beside it, never the toggle under the pointer.
+ */
 .side-rail-toggle {
   position: absolute;
   z-index: 42;
-  bottom: var(--rail-column);
+  bottom: calc(var(--desktop-gutter) + 13px);
   left: var(--rail-column);
 }
 
@@ -247,14 +254,6 @@
     transform 220ms var(--rail-spring);
 }
 
-/* With the rail folded, its slot sits inside the sidebar footer. */
-.workspace-window[data-rail="closed"] .workspace-identity {
-  padding-left: calc(
-    var(--rail-column) - var(--desktop-gutter) + var(--desktop-control-size) +
-      var(--desktop-control-inset)
-  );
-}
-
 /*
  * Wherever the rail is offered, its toggle is nessa's mark and "nessa Studio"
  * stands beside it in the corner (`StudioCorner`), one gap after the mark,
@@ -265,9 +264,6 @@
  */
 .workspace-window:is([data-rail="open"], [data-rail="closed"]) .workspace-identity {
   padding-left: calc(var(--rail-column) - var(--desktop-gutter));
-  /* Keep the 52px footer row while centring its mark on the fixed toggle. */
-  padding-top: 14px;
-  padding-bottom: 10px;
 }
 
 .workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
@@ -283,7 +279,7 @@
 .side-rail-studio {
   position: absolute;
   z-index: 42;
-  bottom: var(--rail-column);
+  bottom: calc(var(--desktop-gutter) + 13px);
   left: calc(var(--rail-column) + var(--desktop-control-size));
   display: flex;
   font-size: var(--desktop-text-body);
@@ -368,12 +364,6 @@
 }
 
 /* "nessa Studio" in a full view: where the sidebar card's foot puts it. */
-.rail-view-foot {
-  position: absolute;
-  bottom: var(--desktop-gutter);
-  left: var(--desktop-gutter);
-}
-
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view),
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
   animation: none !important;

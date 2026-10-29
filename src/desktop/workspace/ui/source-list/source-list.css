@@ -21,15 +21,26 @@
   width: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
   flex: none;
   flex-direction: column;
-  /* A wash rather than a framed pane, continuous with the window's light. */
+  /* A material, not a card: one tone lighter (dark) or darker (light) than the
+     window, full height and up behind the traffic lights, with the window's
+     light washing its top. Its edge is a hairline that fades in below the
+     titlebar, so nothing rules across the window's top row. */
   --sidebar-wash: radial-gradient(
-    ellipse 70% 70% at 50% 20%,
-    color-mix(in oklab, var(--desktop-light-high) 30%, transparent),
-    transparent 70%
+    ellipse 90% 60% at 30% 0%,
+    color-mix(in oklab, var(--desktop-light-high) 26%, transparent),
+    transparent 75%
   );
-  padding-top: var(--desktop-titlebar-height);
-  margin: 0 0 var(--desktop-gutter) var(--desktop-gutter);
-  background: var(--sidebar-wash);
+  padding: var(--desktop-titlebar-height) 0 var(--desktop-gutter) var(--desktop-gutter);
+  margin: 0;
+  background:
+    linear-gradient(
+        to bottom,
+        transparent calc(var(--desktop-titlebar-height) * 0.5),
+        var(--desktop-rim) calc(var(--desktop-titlebar-height) + 40px)
+      )
+      right top / 1px 100% no-repeat,
+    var(--sidebar-wash),
+    var(--desktop-sidebar-material);
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
