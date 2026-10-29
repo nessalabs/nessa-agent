@@ -111,7 +111,7 @@ export const KNOBS = {
   },
   listAnswers: {
     default: 1,
-    what: "reviews answered from the session list's Needs you card: it reads the transcript card's command, and its answer settles the turn",
+    what: "compact/preview answer cycles: compact allow+deny, preview deny in list+allow in chat",
   },
   panels: {
     default: 1,
