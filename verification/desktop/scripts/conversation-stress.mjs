@@ -4875,7 +4875,9 @@ async function oneHeaderPerChat(page, when, failures) {
     b.top < a.bottom - 1
   if (state.strip) failures.push(`${when}: a tab strip is drawn for the chats`)
   if (state.barPaint.fill !== "rgba(0, 0, 0, 0)" || state.barPaint.rule !== "none")
-    failures.push(`${when}: the titlebar paints a toolbar: ${JSON.stringify(state.barPaint)}`)
+    failures.push(
+      `${when}: the titlebar paints a toolbar: ${JSON.stringify(state.barPaint)}`,
+    )
   for (const name of state.names)
     if (state.barText.includes(name))
       failures.push(`${when}: the titlebar names the chat "${name}"`)
