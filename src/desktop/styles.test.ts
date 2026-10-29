@@ -484,6 +484,12 @@ it("lays night-scene text out on the frame after its box is measured", () => {
   expect(layers).toMatch(/contain:\s*layout paint style/)
 })
 
+// CSS comments neither hide the active rule nor count as an active rule.
+const shortHomeRuleKeepsSliver = (source: string) =>
+  /@container \(max-height: 520px\) \{\s*\.desktop-header:not\(\[data-sliver\]\) \{\s*display:\s*none/.test(
+    source.replace(/\/\*[\s\S]*?\*\//g, ""),
+  )
+
 it("keeps a conversation's sliver of the header still, beneath the text, and out of short panes", () => {
   const body = (selector: string) => styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(styles).toContain(".desktop-header[data-sliver] {")
@@ -495,13 +501,32 @@ it("keeps a conversation's sliver of the header still, beneath the text, and out
     /\.desktop-night-scene\[data-still\] \.desktop-night-scene-rain > span,\s*\.desktop-night-scene\[data-still\] \.desktop-night-scene-steam > span \{\s*animation:\s*none/,
   )
   // The general short-home rule must not hide this sliver at 520px.
-  expect(styles).toMatch(
-    /@container \(max-height: 520px\) \{\s*\.desktop-header:not\(\[data-sliver\]\) \{\s*display:\s*none/,
-  )
+  expect(shortHomeRuleKeepsSliver(styles)).toBe(true)
   // Gone from a pane shorter than 220px.
   expect(styles).toMatch(
     /@container workspace-pane \(max-height: 219px\) \{\s*\.desktop-header\[data-sliver\] \{\s*display:\s*none/,
   )
+})
+
+it("rejects a short-home rule that also hides the conversation sliver", () => {
+  const missingProtection = styles.replace(
+    ".desktop-header:not([data-sliver]) {",
+    ".desktop-header {",
+  )
+  expect(shortHomeRuleKeepsSliver(missingProtection)).toBe(false)
+})
+
+it("a commented-out short-home guard cannot replace the active protection", () => {
+  const missingProtection = styles.replace(
+    ".desktop-header:not([data-sliver]) {",
+    ".desktop-header {",
+  )
+  const commentedGuard = `
+    /* @container (max-height: 520px) {
+      .desktop-header:not([data-sliver]) { display: none; }
+    } */
+  `
+  expect(shortHomeRuleKeepsSliver(missingProtection + commentedGuard)).toBe(false)
 })
 
 it("keeps a running step's time on one line, whatever the pane's width", () => {
