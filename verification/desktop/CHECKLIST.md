@@ -972,7 +972,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   source taking an established session out of two panes drops its composer
   text at once and keeps the box. On the next frame that box still shows
   the reply. After the box goes, the pane count is what it was before the
-  split. _Check:_ `columns.mjs --only reply-held`.
+  split. The check reclaims side-column room before typing into the two-pane fixture
+  and reveals the session rows before removing it, including at 760px.
+  _Check:_ `columns.mjs --only reply-held`.
 - [ ] **A message still on its way stays until that box goes.** The source
   removing the session drops the outbox at once, including a send it
   refused. The box still shows that message and the send failure until
@@ -986,7 +988,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **Stop stays until that box goes while a turn was running.** The
   source removing the session drops the transcript at once. The box still
   shows the turn and Stop, rather than Send, until the box itself goes.
-  _Check:_ `columns.mjs --only stop-held`. The layout test removes a
+  _Check:_ `columns.mjs --only stop-held`; the fixture reveals the session rows
+  again if opening beside folded them away. The layout test removes a
   session whose conversation was showing a running turn.
 - [ ] **A model change stays until that box goes.** The source removing
   the session drops the choice and the transcript's model control at
@@ -2210,7 +2213,9 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   Review in Chat. _Check:_ `columns.mjs` (`list-request`: Allow moves
   the row out of Needs you; `list-request-claude`: Claude's five-answer shell
   review at the list's narrowest, read as the transcript reads it, answers
-  that fit their words, under 260px); `conversation-stress.mjs`
+  that fit their words, under 260px). These request-card checks run in columns
+  layout; sidebar layout has no separate session list and is reported as not run.
+  `conversation-stress.mjs`
   (`listAnswer`); unit tests `list-request.test.tsx` (only what is drawn is
   asked: never a pinned row, a row the search hides, or a folded list's; the
   bound of 12; a card's controls keep their keys).
