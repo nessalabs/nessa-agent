@@ -31,3 +31,13 @@ post-click wait, rather than granting a second settlement interval.
 Historical #1039 ACP evidence proves a deadline deny reached the provider. It has
 no timestamps and cannot establish why the human allow did not settle first.
 These controls reproduce the verifier's false success, not that runtime cause.
+
+The list-answer step distinguishes complete commands from previews. Its compact
+fixture asks for the fixed native `node --version` command and executes it only
+after an allow. The existing MCP wrapper is not shortened or relabeled: an
+oversized MCP review remains preview-only in both harnesses. Each shape exercises
+allow and deny. A preview must expose no grant and must retain Review in Chat;
+allowing it requires that explicit route and the original pending review. Both
+list and chat answers retain the exact command/ACK and disappearance checks above.
+The original Terra raised-run failure (compact Allow assumed for a wrapped MCP
+review) remains failure evidence, not a production visibility-policy defect.

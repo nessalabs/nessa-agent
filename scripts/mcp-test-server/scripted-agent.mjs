@@ -526,6 +526,19 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
         if (!target) throw new Error(`the session has no ${name} server`)
         return target.request("tools/call", args)
       },
+      // The compact-review fixture runs only this fixed, credential-free command.
+      // No arbitrary shell or scenario-supplied executable is introduced.
+      runVersion: () => {
+        const result = spawnSync(process.execPath, ["--version"], {
+          cwd: session.opened.cwd,
+          encoding: "utf8",
+          timeout: MCP_DEADLINE_MS,
+          maxBuffer: 1024,
+        })
+        if (result.error || result.status !== 0)
+          throw new Error("the native Node version command failed")
+        return { content: [{ type: "text", text: result.stdout.trim() }] }
+      },
       messageId: () => `msg-${randomUUID()}`,
       toolId: () =>
         agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`,

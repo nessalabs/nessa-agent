@@ -18,6 +18,7 @@ export const STRESS = {
   webhook: "stress webhook witness",
   model: "stress model witness",
   permission: "stress permission",
+  listPermission: "stress compact version review",
   reviews: "stress reviews",
   large: "stress large review",
   wait: "stress wait",
@@ -316,6 +317,19 @@ export function stressScenario({
             save: "shell",
           },
           { do: "text", chunks: [SAYS.githubShell, "${shell.stdout}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.listPermission,
+        steps: [
+          {
+            do: "version-review",
+            on: {
+              "allow-once": [{ do: "text", chunks: [SAYS.allowed] }],
+              "deny-once": [{ do: "text", chunks: [SAYS.denied] }],
+            },
+          },
           { do: "end" },
         ],
       },

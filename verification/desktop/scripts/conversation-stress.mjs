@@ -290,6 +290,11 @@ import {
   selectStressModel,
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
+import {
+  listReviewState,
+  requireCompactReview,
+  requirePreviewReview,
+} from "./lib/stress-list-reviews.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import {
   observeReviewAnswers,
@@ -1134,7 +1139,14 @@ async function card(page, ms = 30_000) {
 }
 
 /** Answers the one card shown, by the effect `answer` names, from the review's own options. */
-async function answerCard(run, conversationId, answer, failures, reason) {
+async function answerCard(
+  run,
+  conversationId,
+  answer,
+  failures,
+  reason,
+  { click, review } = {},
+) {
   const cards = await card(run.page)
   if (!cards) {
     failures.push(
@@ -1161,10 +1173,15 @@ async function answerCard(run, conversationId, answer, failures, reason) {
     conversationId,
     0,
     (_turn, current) =>
-      current.permissions.some((each) => !reason || each.title === reason),
+      current.permissions.some(
+        (each) =>
+          (!reason || each.title === reason) && (!review || each.review === review),
+      ),
     10,
   )
-  const permission = view?.permissions?.find((each) => !reason || each.title === reason)
+  const permission = view?.permissions?.find(
+    (each) => (!reason || each.title === reason) && (!review || each.review === review),
+  )
   // A review the deadline would deny waits long enough to answer from the
   // phone, and the card counts it down in minutes.
   const deadline = permission?.deadline
@@ -1197,10 +1214,12 @@ async function answerCard(run, conversationId, answer, failures, reason) {
   let acknowledged = false
   let gone
   try {
-    await asking
-      .first()
-      .getByRole("button", { name: label, exact: true })
-      .click({ timeout: 10_000 })
+    if (click) await click(label)
+    else
+      await asking
+        .first()
+        .getByRole("button", { name: label, exact: true })
+        .click({ timeout: 10_000 })
     ;[acknowledged, gone] = await Promise.all([
       waitFor(() => observation.acknowledged(), 30_000),
       waitFor(async () => {
@@ -1979,45 +1998,118 @@ const steps = {
   },
 
   async listAnswer(run, step, failures) {
-    const text = prompt(run, STRESS.permission, step)
-    const seen = await send(run, run.main.id, text, failures)
-    // The conversation asks; the session list's Needs you card asks the same.
-    const listCard = run.page.locator(
-      `[data-list-group="needs-you"] .workspace-request-card:has([data-session-row="${run.main.id}"])`,
-    )
-    const shown = await listCard
-      .locator(".workspace-request")
-      .first()
-      .waitFor({ timeout: 30_000 })
-      .then(() => true)
-      .catch(() => false)
-    if (!shown) {
-      failures.push("the session list shows no request card for the waiting conversation")
-      return
-    }
-    const words = async (locator) =>
-      ((await locator.first().textContent()) ?? "").replace(/\s+/g, " ").trim()
-    const fromList = await words(listCard.locator(".workspace-approval-command"))
-    const fromPane = await words(
-      run.page.locator(`${css.agentApproval} .workspace-approval-command`),
-    )
-    if (fromList !== fromPane)
-      failures.push(
-        `the list's card reads "${fromList}", the conversation's "${fromPane}"`,
-      )
-    await listCard
-      .locator(`button[data-answer="${step.answer === "allow" ? "once" : "deny"}"]`)
-      .first()
-      .click()
-    await settled(run, run.main.id, seen, text, "completed", failures)
-    await expectShown(
-      run.page,
-      step.answer === "allow" ? SAYS.allowed : SAYS.denied,
-      failures,
-    )
-    // Answered, the card goes with the row out of Needs you.
-    if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
-      failures.push("the answered card is still in Needs you")
+    // Both shapes and both answers are exercised without changing product policy.
+    for (const kind of ["compact", "preview"])
+      for (const answer of [step.answer, step.answer === "allow" ? "deny" : "allow"]) {
+        const text = `${prompt(run, kind === "compact" ? STRESS.listPermission : STRESS.large, step)} ${kind} ${answer}`
+        const seen = await send(run, run.main.id, text, failures)
+        const { view, turn } = await untilTurn(
+          run,
+          run.main.id,
+          { text },
+          (current, view) =>
+            view.permissions.some((each) => each.executionId === current.executionId),
+          30,
+        )
+        const permission = view?.permissions.find(
+          (each) => each.executionId === turn?.executionId,
+        )
+        if (!permission) {
+          failures.push(`${kind} list review did not name the exact sent turn`)
+          return
+        }
+        if (
+          !["allow", "deny"].every((effect) =>
+            permission.options.some((option) => option.effect === effect),
+          )
+        ) {
+          failures.push("the fixture review must offer both allow and deny effects")
+          return
+        }
+        const listCard = run.page.locator(
+          `[data-list-group="needs-you"] .workspace-request-card:has([data-session-row="${run.main.id}"])`,
+        )
+        await listCard.locator(".workspace-request").waitFor({ timeout: 30_000 })
+        await listCard
+          .locator(".workspace-request-loading")
+          .waitFor({ state: "detached", timeout: 30_000 })
+        if (
+          !(await waitFor(
+            async () => (await run.page.locator(css.agentApproval).count()) === 1,
+            5_000,
+          ))
+        ) {
+          failures.push("the list review does not have one matching chat card")
+          return
+        }
+        const state = await listCard.evaluate(listReviewState)
+        if (kind === "compact") requireCompactReview(state)
+        else requirePreviewReview(state)
+        if (run.evidence) {
+          writeView(
+            run.evidence,
+            `views/${run.engine}-list-${step.index}-${kind}-${answer}.json`,
+            {
+              state,
+              review: permission.review,
+              executionId: permission.executionId,
+            },
+          )
+          await run.page.screenshot({
+            path: join(
+              run.evidence,
+              `${run.engine}-list-${step.index}-${kind}-${answer}.png`,
+            ),
+          })
+        }
+        const words = async (locator) =>
+          ((await locator.textContent()) ?? "").replace(/\s+/g, " ").trim()
+        const fromList = await words(listCard.locator(".workspace-approval-command"))
+        const fromPane = await words(
+          run.page.locator(`${css.agentApproval} .workspace-approval-command`),
+        )
+        if (fromList !== fromPane)
+          failures.push("the list and chat show different review input")
+        if (kind === "preview" && answer === "allow") {
+          await listCard
+            .getByRole("button", { name: "Review in Chat", exact: true })
+            .click({ timeout: 10_000 })
+          const current = await readWithReviews(run.client, run.main.id)
+          if (!current.permissions.some((each) => each.review === permission.review)) {
+            failures.push("Review in Chat answered or lost the pending review")
+            return
+          }
+        }
+        const inList = kind === "compact" || answer === "deny"
+        const confirmed = await answerCard(
+          run,
+          run.main.id,
+          answer,
+          failures,
+          kind === "compact" ? "Node version" : "A large review",
+          {
+            review: permission.review,
+            ...(inList
+              ? {
+                  click: (label) =>
+                    listCard
+                      .getByRole("button", { name: label, exact: true })
+                      .click({ timeout: 10_000 }),
+                }
+              : {}),
+          },
+        )
+        if (!confirmed || failures.length) return
+        await settled(run, run.main.id, seen, text, "completed", failures)
+        await expectShown(
+          run.page,
+          answer === "allow" ? SAYS.allowed : SAYS.denied,
+          failures,
+        )
+        if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
+          failures.push("the answered card is still in Needs you")
+        if (failures.length) return
+      }
   },
 
   async reviews(run, step, failures) {
