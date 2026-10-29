@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { runInNewContext } from "node:vm"
+import { JSDOM } from "jsdom"
 
 import { css, selectorFor } from "./selectors.mjs"
 import {
   openStressConversation,
   selectedStressConversation,
+  chatIdentityTexts,
 } from "./stress-conversation.mjs"
 
 const title = "stress reply r1 aside s1"
@@ -302,5 +304,42 @@ test("Home missing or ambiguous fixture models cannot fall back to another selec
       /not uniquely offered/,
     )
     assert.equal(picker.chosen(), undefined)
+  }
+})
+
+test("rendered UUID and named chat pill retain the same awaited identity", () => {
+  const dom = new JSDOM(
+    `<p>Awaited ${intended}: Echo: reply</p><p>Awaited <button data-chat-pill="${intended}"><svg><title>Claude</title></svg>Friendly chat name</button>: Echo: reply</p>`,
+  )
+  try {
+    const lines = chatIdentityTexts([...dom.window.document.querySelectorAll("p")])
+    assert.deepEqual(lines, [
+      `Awaited ${intended}: Echo: reply`,
+      `Awaited ${intended}: Echo: reply`,
+    ])
+    assert.equal(
+      dom.window.document.querySelector("button").textContent,
+      "ClaudeFriendly chat name",
+      "the live DOM must remain untouched",
+    )
+  } finally {
+    dom.window.close()
+  }
+})
+
+test("a matching label cannot conceal the wrong target or substitute an earlier reply", () => {
+  const dom = new JSDOM(
+    `<p>Awaited <button data-chat-pill="${earlier}">${intended}</button>: Echo: reply</p><p>Awaited <button data-chat-pill="${intended}">Friendly chat name</button>: Echo: earlier reply</p><p>Awaited Friendly chat name: Echo: reply</p>`,
+  )
+  try {
+    const expected = `Awaited ${intended}: Echo: reply`
+    const lines = chatIdentityTexts([...dom.window.document.querySelectorAll("p")])
+    assert.equal(
+      lines.some((line) => line === expected),
+      false,
+    )
+    assert.ok(lines[0].includes(earlier))
+  } finally {
+    dom.window.close()
   }
 })

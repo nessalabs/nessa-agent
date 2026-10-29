@@ -288,6 +288,7 @@ import {
   openStressConversation,
   selectedStressConversation,
   selectStressModel,
+  chatIdentityTexts,
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import {
@@ -3716,7 +3717,17 @@ const steps = {
       failures.push(
         `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
       )
-    await expectShown(run.page, `${SAYS.awaited}${found[1]}: ${reply}`, failures)
+    const expected = fold(`${SAYS.awaited}${found[1]}: ${reply}`)
+    const shown = await waitFor(async () => {
+      const lines = await run.page
+        .locator(`${css.focusedPane} .workspace-message[data-role="agent"] p:visible`)
+        .evaluateAll(chatIdentityTexts)
+      return lines.some((line) => fold(line) === expected)
+    }, 30_000)
+    if (!shown)
+      failures.push(
+        `the window does not show the exact awaited chat identity and reply: ${expected}`,
+      )
     // The reply came back in the call, so no report wakes the conversation.
     // A report would be queued as soon as the thread's turn settled, which
     // was before the call returned.

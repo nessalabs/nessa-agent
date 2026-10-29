@@ -1,5 +1,15 @@
 import { css, selectorFor } from "./selectors.mjs"
 
+/** Read semantic chat identities even after the renderer replaces UUIDs with titles. */
+export function chatIdentityTexts(nodes) {
+  return nodes.map((node) => {
+    const copy = node.cloneNode(true)
+    for (const pill of copy.querySelectorAll("[data-chat-pill]"))
+      pill.replaceWith(pill.getAttribute("data-chat-pill"))
+    return copy.textContent ?? ""
+  })
+}
+
 /** Home shows one provider tab at a time; choose only the named fixture model. */
 export async function selectStressModel(page, trigger, displayName) {
   await trigger.click()
