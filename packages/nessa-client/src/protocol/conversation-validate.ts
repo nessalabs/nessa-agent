@@ -1711,7 +1711,10 @@ export function conversationShares(value: unknown): ConversationSharesResult {
  * calls checked as a view's, the fork it may end on, and whether more came
  * before. A steering message's target may be earlier still.
  */
-export function conversationEarlier(value: unknown, expected: string): ConversationEarlier {
+export function conversationEarlier(
+  value: unknown,
+  expected: string,
+): ConversationEarlier {
   const item = record(value)
   exact(item, ["conversationId", "messages", "tools", "handoffs", "more", "truncated"])
   if (identity(item, "conversationId") !== expected)
