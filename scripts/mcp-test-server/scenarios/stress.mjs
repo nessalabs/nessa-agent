@@ -118,11 +118,19 @@ export const TRACE_PAUSE_MS = 400
 export const TRACE_HOLD_MS = 8000
 /**
  * The calls a `trace` turn makes, in order: what each is called with, which
- * the gateway keeps as its input, and how each ends.
+ * the gateway keeps as its input, and how each ends. One is announced under
+ * a title far longer than the window's name column, as a harness names a
+ * web search, so the run shows how a long name is cut.
  */
 export const TRACE_CALLS = [
   { tool: "report_rows", arguments: {}, status: "completed" },
-  { tool: "link_resources", arguments: {}, status: "completed" },
+  {
+    tool: "link_resources",
+    title:
+      'Search "site:github.com/nessalabs/nessa-agent/issues startup problems must be handled by Nessa or explained in plain words crashes endless spinners"',
+    arguments: {},
+    status: "completed",
+  },
   // The server refuses what it does not take, so this call fails either
   // way; the arguments are there to be kept as its input.
   { tool: "always_fails", arguments: { reason: "stress trace" }, status: "failed" },
@@ -275,8 +283,8 @@ export function stressScenario({
         // after the last while the run is still live.
         when: STRESS.trace,
         steps: [
-          ...TRACE_CALLS.flatMap(({ tool, arguments: args }, index) => [
-            { do: "tool", tool, arguments: args },
+          ...TRACE_CALLS.flatMap(({ tool, title, arguments: args }, index) => [
+            { do: "tool", tool, ...(title ? { title } : {}), arguments: args },
             {
               do: "pause",
               ms: index < TRACE_CALLS.length - 1 ? TRACE_PAUSE_MS : TRACE_HOLD_MS,
