@@ -2091,8 +2091,18 @@
       "additionalProperties": false,
       "description": "A place in a turn: the part, counted from the turn's first, and the byte within that part's text.",
       "properties": {
-        "part": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
-        "byte": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+        "part": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "The part, counted from the turn's first part."
+        },
+        "byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "The UTF-8 byte within that part's text where the place falls; 0 at the part's start."
+        }
       },
       "required": ["part", "byte"]
     },
@@ -2105,9 +2115,13 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "x-utf8MaxBytes": 256
+          "x-utf8MaxBytes": 256,
+          "description": "The turn the point is in."
         },
-        "at": { "$ref": "#/$defs/ConversationPartPosition" }
+        "at": {
+          "$ref": "#/$defs/ConversationPartPosition",
+          "description": "A place among the turn's parts, after the person's message; absent for the turn's start, before it."
+        }
       },
       "required": ["executionId"]
     },
@@ -2123,8 +2137,14 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
         },
-        "before": { "$ref": "#/$defs/ConversationPoint" },
-        "after": { "$ref": "#/$defs/ConversationPoint" }
+        "before": {
+          "$ref": "#/$defs/ConversationPoint",
+          "description": "Where what is read ends: the first point the reader already holds."
+        },
+        "after": {
+          "$ref": "#/$defs/ConversationPoint",
+          "description": "Where what is read starts, when the reader holds what comes before it; absent to read back toward the first turn."
+        }
       },
       "required": ["conversationId", "before"]
     },
@@ -2143,7 +2163,8 @@
         "messages": {
           "type": "array",
           "items": { "$ref": "#/$defs/ConversationMessage" },
-          "maxItems": 128
+          "maxItems": 128,
+          "description": "The turns before the point, oldest first; the first may start partway (startsAt) and the last may end partway, where the point falls."
         },
         "tools": {
           "type": "array",

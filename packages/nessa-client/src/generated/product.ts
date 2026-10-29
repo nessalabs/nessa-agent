@@ -830,25 +830,32 @@ export interface ConversationPeekResult {
 }
 /** A place in a turn: the part, counted from the turn's first, and the byte within that part's text. */
 export interface ConversationPartPosition {
+  /** The part, counted from the turn's first part. */
   part: number
+  /** The UTF-8 byte within that part's text where the place falls; 0 at the part's start. */
   byte: number
 }
 /** A place in a conversation's history: the start of a turn, before the person's message, when at is absent; otherwise a place among the turn's parts, after the person's message. */
 export interface ConversationPoint {
+  /** The turn the point is in. */
   executionId: string
+  /** A place among the turn's parts, after the person's message; absent for the turn's start, before it. */
   at?: ConversationPartPosition
 }
 /** Read what came before a point in the conversation's history: the turns nearest it that fit one frame. With after, only what comes after that point, to fill a gap between two points. */
 export interface ConversationReadEarlierParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
+  /** Where what is read ends: the first point the reader already holds. */
   before: ConversationPoint
+  /** Where what is read starts, when the reader holds what comes before it; absent to read back toward the first turn. */
   after?: ConversationPoint
 }
 /** What came before a point, oldest first, ending where the point is. The first message starts partway through its turn when it carries startsAt. */
 export interface ConversationEarlier {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
+  /** The turns before the point, oldest first; the first may start partway (startsAt) and the last may end partway, where the point falls. */
   messages: ConversationMessage[]
   /** The calls the messages made. */
   tools: ConversationTool[]

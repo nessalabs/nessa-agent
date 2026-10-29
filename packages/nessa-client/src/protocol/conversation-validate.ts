@@ -864,7 +864,6 @@ export function conversationView(value: unknown, expected: string): Conversation
     text(item, "interactionViewError", 2048, false)
   const {
     messages,
-    messageIds,
     messageStatuses,
     messageTexts,
     messageImages,

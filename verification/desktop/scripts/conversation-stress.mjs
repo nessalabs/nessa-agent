@@ -4803,7 +4803,12 @@ const steps = {
  * were reading, and nothing says content was left out.
  */
 async function readBackToStart(run, phrase, step, failures) {
-  const scroller = run.page.locator(css.transcript).first()
+  // The pane showing this conversation: an earlier step can leave other
+  // panes open, a hidden one among them.
+  const scroller = run.page
+    .locator(`${css.transcript}:visible`)
+    .filter({ hasText: phrase })
+    .first()
   const turns = () =>
     scroller.evaluate((element, phrase) => {
       const said = [...element.querySelectorAll('.workspace-message[data-role="user"]')]
@@ -4847,7 +4852,7 @@ async function readBackToStart(run, phrase, step, failures) {
     const before = await top()
     const count = shown.drawn
     if (!(await waitFor(async () => (await turns()).drawn > count, 15_000))) {
-      failures.push(`scrolled to the top, no earlier turn arrived after ${pages} pages`)
+      failures.push(`scrolled to the top, nothing earlier arrived after ${pages} pages`)
       return
     }
     pages += 1
