@@ -183,3 +183,14 @@ test("compact fixtures respect each harness's reviewable request shape", () => {
     /unsupported stress fixture agent/,
   )
 })
+
+test("compact preview coverage stays separate from the unchanged large-input workload", () => {
+  for (const agent of ["claude", "codex"]) {
+    const scenario = parseScenario(stressScenario({ agent }))
+    assert.equal(
+      turnFor(scenario, STRESS.listPreview).steps[0].arguments.body.length,
+      128,
+    )
+    assert.equal(turnFor(scenario, STRESS.large).steps[0].arguments.body.length, 24_000)
+  }
+})

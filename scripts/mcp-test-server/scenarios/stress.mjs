@@ -357,7 +357,7 @@ export function stressScenario({
         steps: [
           review(
             "A list preview",
-            { body: "x".repeat(largeBytes) },
+            { body: "x".repeat(128) },
             SAYS.allowed + " ${prompt.text}",
             SAYS.denied + " ${prompt.text}",
           ),

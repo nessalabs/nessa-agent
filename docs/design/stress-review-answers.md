@@ -38,7 +38,10 @@ only after a selected allow. Claude uses its existing short `report_rows {}` MCP
 review: native Bash remains deliberately unreviewable. Scenario construction is
 bound to the explicitly selected agent, and unknown agents fail. The existing
 Codex MCP wrapper is not shortened or relabeled: an
-oversized MCP review remains preview-only in both harnesses. Each shape exercises
+MCP review with a 128-byte body exceeds the compact card's three-line threshold
+and remains preview-only in both harnesses. The existing 24-KB large-review step
+and its load are unchanged; duplicating that payload in this visibility control
+would test the separate 60-KB view-projection bound instead. Each shape exercises
 allow and deny. A preview must expose no grant and must retain Review in Chat;
 allowing it requires that explicit route and the original pending review. Both
 list and chat answers retain the exact command/ACK and disappearance checks above.
