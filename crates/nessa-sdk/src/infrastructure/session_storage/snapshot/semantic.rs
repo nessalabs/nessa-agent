@@ -1025,6 +1025,9 @@ mod tests {
         .unwrap();
         let record = InvocationRecord {
             target_event_offset: None,
+            resumed_from: None,
+            decline: None,
+            cancellation_delivery: None,
             submission: SubmissionMode::Queued,
             request: ExecutionRequest {
                 execution_id: ExecutionId::new("file-turn").unwrap(),
