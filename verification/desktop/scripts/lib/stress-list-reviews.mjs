@@ -28,3 +28,41 @@ export function requirePreviewReview(state) {
   assert.equal(state.refusals, 1, "the preview must retain Deny once")
   assert.equal(state.reviewInChat, 1, "the preview must offer Review in Chat")
 }
+
+/** Neither earlier transcript text nor another tool can pay this answer's proof. */
+export function requireListTurnResult({
+  turn,
+  tools,
+  permission,
+  answer,
+  expectedReply,
+  expectedVersion,
+}) {
+  assert.equal(
+    turn?.executionId,
+    permission.executionId,
+    "a different turn settled the list review",
+  )
+  assert.equal(turn.status, "completed")
+  const text = turn.parts
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  assert.equal(text, expectedReply, "the current turn returned the wrong answer")
+  const matching = tools.filter(
+    (tool) =>
+      tool.executionId === permission.executionId && tool.toolId === permission.toolId,
+  )
+  assert.equal(matching.length, 1, "the original review must settle exactly one tool")
+  const tool = matching[0]
+  assert.equal(tool.status, answer === "allow" ? "completed" : "failed")
+  if (answer === "deny")
+    assert.equal(tool.details, "", "denial retained executable output")
+  else if (expectedVersion)
+    assert.equal(
+      tool.details,
+      expectedVersion,
+      "native command output differs from the actual runtime",
+    )
+  else assert.ok(tool.details.length > 0, "the allowed MCP tool returned no output")
+}

@@ -11,36 +11,43 @@ import { STRESS, stressScenario } from "./scenarios/stress.mjs"
 async function run(
   agent,
   outcome,
-  { cancel = false, reject = false, executionFails = false } = {},
+  {
+    cancel = false,
+    reject = false,
+    executionFails = false,
+    cancelledBranch = false,
+    cancelAfterReply = false,
+  } = {},
 ) {
   const calls = new Map(),
     updates = []
   let executions = 0
-  const result = await runSteps(
-    turnFor(parseScenario(stressScenario()), STRESS.listPermission).steps,
-    {
-      agent,
-      sessionId: "session",
-      cancelled: () => cancel,
-      toolId: () => "native-call",
-      messageId: () => "message",
-      update: (frame) => updates.push(frame),
-      rememberCall: (name, id) => calls.set(name, id),
-      openCall: (name) => calls.get(name),
-      clearCall: (name) => calls.delete(name),
-      requestPermission: async (request) => {
-        assert.equal(request.toolCall.rawInput.command, "node --version")
-        if (reject) throw new Error("request failed")
-        return { outcome }
-      },
-      runVersion: async () => {
-        executions++
-        if (executionFails) throw new Error("native command failed")
-        return { content: [{ type: "text", text: "v24.0.0" }] }
-      },
-      callTool: () => assert.fail("a native command must not be an MCP call"),
+  const steps = turnFor(parseScenario(stressScenario()), STRESS.listPermission).steps
+  if (cancelledBranch) steps[0].on.cancelled = [{ do: "text", chunks: ["Cancelled."] }]
+  let cancelled = cancel
+  const result = await runSteps(steps, {
+    agent,
+    sessionId: "session",
+    cancelled: () => cancelled,
+    toolId: () => "native-call",
+    messageId: () => "message",
+    update: (frame) => updates.push(frame),
+    rememberCall: (name, id) => calls.set(name, id),
+    openCall: (name) => calls.get(name),
+    clearCall: (name) => calls.delete(name),
+    requestPermission: async (request) => {
+      assert.equal(request.toolCall.rawInput.command, "node --version")
+      if (reject) throw new Error("request failed")
+      if (cancelAfterReply) cancelled = true
+      return { outcome }
     },
-  )
+    runVersion: async () => {
+      executions++
+      if (executionFails) throw new Error("native command failed")
+      return { content: [{ type: "text", text: "v24.0.0" }] }
+    },
+    callTool: () => assert.fail("a native command must not be an MCP call"),
+  })
   return { result, updates, executions, calls }
 }
 test("native compact fixture keeps the actual command, without an MCP wrapper", () => {
@@ -101,6 +108,38 @@ test("native failure is not completed or followed by successful branch output", 
     r.updates.some((f) => f.sessionUpdate === "agent_message_chunk"),
     false,
   )
+})
+test("a cancelled outcome carrying an allow id still cannot execute", async () => {
+  for (const agent of ["claude", "codex"]) {
+    const r = await run(
+      agent,
+      { outcome: "cancelled", optionId: "allow-once" },
+      { cancelledBranch: true },
+    )
+    assert.equal(r.executions, 0)
+    assert.equal(
+      r.updates.some((frame) => frame.status === "completed"),
+      false,
+    )
+    assert.equal(r.updates.at(-1).status, "failed")
+  }
+})
+test("a late allow after caller cancellation and an unknown selection do not execute", async () => {
+  for (const options of [{ cancelAfterReply: true }, {}]) {
+    const r = await run(
+      "codex",
+      {
+        outcome: "selected",
+        optionId: options.cancelAfterReply ? "allow-once" : "unknown",
+      },
+      options,
+    )
+    assert.equal(r.executions, 0)
+    assert.equal(
+      r.updates.some((frame) => frame.status === "completed"),
+      false,
+    )
+  }
 })
 test("a scenario cannot substitute an arbitrary command into this fixed fixture", () => {
   assert.throws(

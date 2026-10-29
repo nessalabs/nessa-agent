@@ -39,5 +39,9 @@ oversized MCP review remains preview-only in both harnesses. Each shape exercise
 allow and deny. A preview must expose no grant and must retain Review in Chat;
 allowing it requires that explicit route and the original pending review. Both
 list and chat answers retain the exact command/ACK and disappearance checks above.
+Review in Chat starts from a different tab and must restore the exact conversation,
+review and composer. Each reply includes its unique request text; the check reads
+that exact terminal turn and original tool, including actual Node version output
+after allow and no executable output after deny. Earlier replies cannot satisfy it.
 The original Terra raised-run failure (compact Allow assumed for a wrapped MCP
 review) remains failure evidence, not a production visibility-policy defect.

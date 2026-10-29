@@ -680,7 +680,11 @@ async function ask(step, ctx) {
     abandon()
     return { fail: decision.message }
   }
-  if (native && result.outcome?.optionId === ALLOW_ONCE) {
+  if (
+    native &&
+    result.outcome?.outcome === "selected" &&
+    result.outcome.optionId === ALLOW_ONCE
+  ) {
     if (ctx.cancelled()) return { stopReason: "cancelled" }
     try {
       const version = await ctx.runVersion()

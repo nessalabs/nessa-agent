@@ -19,6 +19,7 @@ export const STRESS = {
   model: "stress model witness",
   permission: "stress permission",
   listPermission: "stress compact version review",
+  listPreview: "stress list preview",
   reviews: "stress reviews",
   large: "stress large review",
   wait: "stress wait",
@@ -150,7 +151,7 @@ export const GITHUB_FINGERPRINTS = `node -e '${[
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
 
-const review = (title, args, allowedText) => ({
+const review = (title, args, allowedText, deniedText = SAYS.denied) => ({
   do: "permission",
   tool: TOOL,
   arguments: args,
@@ -160,7 +161,7 @@ const review = (title, args, allowedText) => ({
       { do: "tool", tool: TOOL, arguments: {} },
       { do: "text", chunks: [allowedText] },
     ],
-    "deny-once": [{ do: "text", chunks: [SAYS.denied] }],
+    "deny-once": [{ do: "text", chunks: [deniedText] }],
   },
 })
 
@@ -326,10 +327,22 @@ export function stressScenario({
           {
             do: "version-review",
             on: {
-              "allow-once": [{ do: "text", chunks: [SAYS.allowed] }],
-              "deny-once": [{ do: "text", chunks: [SAYS.denied] }],
+              "allow-once": [{ do: "text", chunks: [SAYS.allowed + " ${prompt.text}"] }],
+              "deny-once": [{ do: "text", chunks: [SAYS.denied + " ${prompt.text}"] }],
             },
           },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.listPreview,
+        steps: [
+          review(
+            "A list preview",
+            { body: "x".repeat(largeBytes) },
+            SAYS.allowed + " ${prompt.text}",
+            SAYS.denied + " ${prompt.text}",
+          ),
           { do: "end" },
         ],
       },

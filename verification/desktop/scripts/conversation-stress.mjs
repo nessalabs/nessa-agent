@@ -294,6 +294,7 @@ import {
   listReviewState,
   requireCompactReview,
   requirePreviewReview,
+  requireListTurnResult,
 } from "./lib/stress-list-reviews.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import {
@@ -2001,7 +2002,7 @@ const steps = {
     // Both shapes and both answers are exercised without changing product policy.
     for (const kind of ["compact", "preview"])
       for (const answer of [step.answer, step.answer === "allow" ? "deny" : "allow"]) {
-        const text = `${prompt(run, kind === "compact" ? STRESS.listPermission : STRESS.large, step)} ${kind} ${answer}`
+        const text = `${prompt(run, kind === "compact" ? STRESS.listPermission : STRESS.listPreview, step)} ${kind} ${answer}`
         const seen = await send(run, run.main.id, text, failures)
         const { view, turn } = await untilTurn(
           run,
@@ -2071,9 +2072,32 @@ const steps = {
         if (fromList !== fromPane)
           failures.push("the list and chat show different review input")
         if (kind === "preview" && answer === "allow") {
+          // The route must restore this chat, not succeed because it was open already.
+          await run.page
+            .getByRole("button", { name: /^New Tab/ })
+            .click({ timeout: 10_000 })
+          await run.page
+            .locator(`${css.focusedPane} ${css.paneHome} ${css.field}`)
+            .waitFor({ timeout: 15_000 })
           await listCard
             .getByRole("button", { name: "Review in Chat", exact: true })
             .click({ timeout: 10_000 })
+          const restored = await waitFor(
+            async () =>
+              (await selectedStressConversation(run.page, run.main.title)) ===
+                run.main.id &&
+              (await run.page
+                .locator(`${css.focusedPane} ${css.agentApproval}`)
+                .count()) === 1 &&
+              (await dock(run.page).locator("textarea").isVisible()),
+            15_000,
+          )
+          if (!restored) {
+            failures.push(
+              "Review in Chat did not restore the exact conversation, review and composer",
+            )
+            return
+          }
           const current = await readWithReviews(run.client, run.main.id)
           if (!current.permissions.some((each) => each.review === permission.review)) {
             failures.push("Review in Chat answered or lost the pending review")
@@ -2086,7 +2110,7 @@ const steps = {
           run.main.id,
           answer,
           failures,
-          kind === "compact" ? "Node version" : "A large review",
+          kind === "compact" ? "Node version" : "A list preview",
           {
             review: permission.review,
             ...(inList
@@ -2100,12 +2124,26 @@ const steps = {
           },
         )
         if (!confirmed || failures.length) return
-        await settled(run, run.main.id, seen, text, "completed", failures)
-        await expectShown(
-          run.page,
-          answer === "allow" ? SAYS.allowed : SAYS.denied,
+        const { view: completed, turn: ended } = await settled(
+          run,
+          run.main.id,
+          seen,
+          text,
+          "completed",
           failures,
         )
+        const expectedReply = `${answer === "allow" ? SAYS.allowed : SAYS.denied} ${text}`
+        requireListTurnResult({
+          turn: ended,
+          tools: completed?.tools ?? [],
+          permission,
+          answer,
+          expectedReply,
+          ...(kind === "compact" ? { expectedVersion: process.version } : {}),
+        })
+        await run.page
+          .getByText(expectedReply, { exact: true })
+          .waitFor({ timeout: 30_000 })
         if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
           failures.push("the answered card is still in Needs you")
         if (failures.length) return

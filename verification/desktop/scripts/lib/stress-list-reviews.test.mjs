@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { requireCompactReview, requirePreviewReview } from "./stress-list-reviews.mjs"
+import {
+  requireCompactReview,
+  requirePreviewReview,
+  requireListTurnResult,
+} from "./stress-list-reviews.mjs"
 
 const compact = {
   whole: true,
@@ -34,4 +38,88 @@ test("a missing compact grant or a substituted command cannot pass", () => {
   assert.throws(() => requireCompactReview({ ...compact, grants: 0 }), /Allow once/)
   assert.throws(() => requireCompactReview({ ...compact, command: "$ other" }))
   assert.throws(() => requireCompactReview({ ...compact, refusals: 0 }), /Deny once/)
+})
+
+const permission = { executionId: "current", toolId: "original" }
+const result = {
+  permission,
+  answer: "allow",
+  expectedReply: "Allowed. unique request",
+  expectedVersion: "v24.0.0",
+  turn: {
+    executionId: "current",
+    status: "completed",
+    parts: [{ kind: "text", text: "Allowed. unique request" }],
+  },
+  tools: [
+    {
+      executionId: "current",
+      toolId: "original",
+      status: "completed",
+      details: "v24.0.0",
+    },
+  ],
+}
+test("only the current turn's exact reply and original tool completion satisfy an answer", () => {
+  requireListTurnResult(result)
+  assert.throws(
+    () =>
+      requireListTurnResult({
+        ...result,
+        turn: {
+          ...result.turn,
+          parts: [{ kind: "text", text: "Allowed. earlier request" }],
+        },
+      }),
+    /wrong answer/,
+  )
+  assert.throws(
+    () =>
+      requireListTurnResult({
+        ...result,
+        turn: { ...result.turn, executionId: "earlier" },
+      }),
+    /different turn/,
+  )
+  assert.throws(
+    () =>
+      requireListTurnResult({
+        ...result,
+        tools: [{ ...result.tools[0], toolId: "another" }],
+      }),
+    /original review/,
+  )
+  assert.throws(
+    () =>
+      requireListTurnResult({
+        ...result,
+        tools: [{ ...result.tools[0], details: "fabricated" }],
+      }),
+    /actual runtime/,
+  )
+  assert.throws(() =>
+    requireListTurnResult({
+      ...result,
+      tools: [{ ...result.tools[0], status: "failed" }],
+    }),
+  )
+})
+test("a denied current turn must have failed its original tool without executable output", () => {
+  const denied = {
+    ...result,
+    answer: "deny",
+    expectedReply: "Denied. unique request",
+    turn: { ...result.turn, parts: [{ kind: "text", text: "Denied. unique request" }] },
+    tools: [{ ...result.tools[0], status: "failed", details: "" }],
+  }
+  requireListTurnResult(denied)
+  assert.throws(
+    () =>
+      requireListTurnResult({
+        ...denied,
+        tools: [{ ...denied.tools[0], details: "v24.0.0" }],
+      }),
+    /executable output/,
+  )
+  assert.throws(() => requireListTurnResult({ ...denied, tools: result.tools }))
 })
