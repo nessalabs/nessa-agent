@@ -1767,19 +1767,23 @@ says why where the conversations would be.
   load run. The table itself is nessa_ui's `MessageMarkdown` / `Table`
   (`edgeFade`), with its own story checks.
 
-- [ ] **A run of tool calls draws each call on one time axis, and an instant
-  call is a dot.**
+- [ ] **A run of tool calls draws each call on one time axis, an instant
+  call is a dot, and a long name is cut before the bar.**
   _Check:_ `conversation-stress.mjs`'s `trace` step (knob `traces`): the
   scripted agent makes three calls, one failing. The window folds them into
   "Ran 3 tools", which opens to one row per call with its status. Each bar
   starts within 3% of the axis where its call started, is at least as wide as
   it is tall (a call of a few milliseconds is a round dot, never a hairline),
-  and ends no more than 0.5 px past the axis. A call's card shows its input.
+  and ends no more than 0.5 px past the axis. One call is announced under a
+  title far longer than its column, as a harness names a web search: every
+  row's name ends before its bar's track starts, and the long one is cut
+  with an ellipsis while still holding its whole title. A call's card shows
+  its input.
   While the run is still at work (the agent holds after its last call), the
   trace alone says so: its line reads "Working", open or folded, the call at
   work is named once in its run, and no live row repeats it below
   (`shownActivity` in `model/transcript.ts`). Chromium in the PR job; WebKit with the stress load run. The trace itself is
-  nessa_ui's `ToolTrace`, with its own story checks (`Instant`).
+  nessa_ui's `ToolTrace`, with its own story checks (`Instant`, `LongLabel`).
 
 ### Onboarding readiness recovery
 

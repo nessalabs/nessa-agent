@@ -4370,6 +4370,25 @@ const steps = {
           width: box?.width ?? 0,
           height: box?.height ?? 0,
           over: bar && track ? box.right - track.right : 0,
+          // The name column: how far its label and detail reach past the
+          // start of the bar's track, and whether the label is cut.
+          name: (() => {
+            const column = row.children[1]
+            if (!(column instanceof HTMLElement) || !track) return null
+            const parts = [...column.children].filter(
+              (part) => !part.classList.contains("sr-only"),
+            )
+            const label = parts[0]
+            return {
+              text: label?.textContent ?? "",
+              past: Math.max(
+                ...[column, ...parts].map(
+                  (part) => part.getBoundingClientRect().right - track.left,
+                ),
+              ),
+              cut: label ? label.scrollWidth > label.clientWidth : false,
+            }
+          })(),
         }
       }),
     )
@@ -4396,6 +4415,24 @@ const steps = {
         failures.push(
           `row ${index + 1}'s bar ends ${row.over.toFixed(1)} px past the axis`,
         )
+      // A name never runs under the bar: a long one is cut where the track
+      // starts, and keeps its whole text for a reader.
+      const title = TRACE_CALLS[index].title
+      if (!row.name) failures.push(`row ${index + 1} has no name column`)
+      else {
+        if (row.name.past > 0.5)
+          failures.push(
+            `row ${index + 1}'s name runs ${row.name.past.toFixed(1)} px under the bar`,
+          )
+        if (title && !row.name.cut)
+          failures.push(
+            `row ${index + 1}'s long name ${JSON.stringify(row.name.text)} is not cut`,
+          )
+        if (title && row.name.text !== title)
+          failures.push(
+            `row ${index + 1}'s name reads ${JSON.stringify(row.name.text)}, not its title`,
+          )
+      }
     }
     // A call's card shows the input it was made with.
     const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
