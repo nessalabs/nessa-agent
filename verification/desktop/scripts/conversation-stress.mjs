@@ -4805,12 +4805,6 @@ async function headersLand(page, when, failures) {
 }
 
 /**
- * The chats have no tabs (C1): no tab strip, and each top-row pane has one header —
- * its name, menu and close — in the titlebar's row, none of it on the
- * window's controls (the cluster on the left, the panel's own on the
- * right), and its picture up to the window's top edge, behind them.
- */
-/**
  * How many tabs or tab lists the window draws for its chats: any shown one
  * outside the right panel and outside what a chat shows (a tool card's own
  * Input/Output tabs are the chat's content, not tabs for chats); one in a
@@ -4829,6 +4823,12 @@ function chatTabs(page) {
   )
 }
 
+/**
+ * The chats have no tabs (C1): no tab strip, and each top-row pane has one header —
+ * its name, menu and close — in the titlebar's row, none of it on the
+ * window's controls (the cluster on the left, the panel's own on the
+ * right), and its picture up to the window's top edge, behind them.
+ */
 async function oneHeaderPerChat(page, when, failures) {
   const state = await page.evaluate(
     ({ titlebar, pane, header }) => {
