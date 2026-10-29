@@ -2052,7 +2052,8 @@ the same view. One turn failed before it replied, one was cancelled after a
 partial reply, one was left unresolved with no diagnostic, and one is still
 running and asking three questions. The view also carries the gateway's
 notice that a review was left out. The script runs in Chromium and WebKit
-and is dev-only in run-all.
+and is dev-only in run-all. Question actions target the conversation pane;
+the final removal checks still cover the entire desktop, including Needs you.
 
 - [ ] **A failed, cancelled, or unresolved turn stays visible, with the
   gateway's status and diagnostic apart from a message that was not sent.**
