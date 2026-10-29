@@ -577,6 +577,13 @@ describe("the index read again: the resync", () => {
     )
     expect(streamed.panes).toBeNull()
     expect(streamed.sessions.a).toBeUndefined()
+
+    // With a channel listed again, New Session opens a pane from nothing.
+    const relisted = { ...streamed, channels: loaded().channels }
+    for (const beside of [undefined, "right"] as const)
+      expect(
+        shown(createDraft(relisted, { draftId: "again", beside, room: roomy })),
+      ).toEqual(["again"])
   })
 
   it("takes an index that contradicts itself as far as it holds together", () => {

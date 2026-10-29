@@ -560,10 +560,7 @@ async function setSideRail(page, on, failures) {
  */
 async function expandedForItsChat(run, failures) {
   const page = run.page
-  if (
-    await page.locator('[role="tablist"]:not(#workspace-panel [role="tablist"])').count()
-  )
-    failures.push("the window draws a tab strip for the chats")
+  if (await chatTabs(page)) failures.push("the window draws a tab strip for the chats")
   const panel = page.locator("#workspace-panel")
   if (
     !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
@@ -4808,11 +4805,30 @@ async function headersLand(page, when, failures) {
 }
 
 /**
- * The chats have no tabs (C1): no tab strip, and each pane has one header —
+ * The chats have no tabs (C1): no tab strip, and each top-row pane has one header —
  * its name, menu and close — in the titlebar's row, none of it on the
  * window's controls (the cluster on the left, the panel's own on the
  * right), and its picture up to the window's top edge, behind them.
  */
+/**
+ * How many tabs or tab lists the window draws for its chats: any shown one
+ * outside the right panel and outside what a chat shows (a tool card's own
+ * Input/Output tabs are the chat's content, not tabs for chats); one in a
+ * pane's header counts.
+ */
+function chatTabs(page) {
+  return page.evaluate(
+    ({ pane, paneHeader }) =>
+      [...document.querySelectorAll('[role="tablist"], [role="tab"]')].filter(
+        (tab) =>
+          tab.getClientRects().length > 0 &&
+          !tab.closest("[inert], #workspace-panel") &&
+          (!tab.closest(pane) || tab.closest(paneHeader)),
+      ).length,
+    { pane: css.pane, paneHeader: css.paneHeader },
+  )
+}
+
 async function oneHeaderPerChat(page, when, failures) {
   const state = await page.evaluate(
     ({ titlebar, pane, header }) => {
@@ -4822,10 +4838,6 @@ async function oneHeaderPerChat(page, when, failures) {
       }
       const shown = (e) => e.getClientRects().length > 0
       return {
-        // Any tab or tab list outside the right panel would be tabs for the chats.
-        strip: [...document.querySelectorAll('[role="tablist"], [role="tab"]')].filter(
-          (tab) => !tab.closest("#workspace-panel"),
-        ).length,
         bar: document.querySelector(titlebar).getBoundingClientRect().height,
         // The titlebar is unified with the window: no fill and no rule of its
         // own, so what is under it (the sidebar, a pane's picture) runs up.
@@ -4873,7 +4885,7 @@ async function oneHeaderPerChat(page, when, failures) {
     b.left < a.right - 1 &&
     a.top < b.bottom - 1 &&
     b.top < a.bottom - 1
-  if (state.strip) failures.push(`${when}: a tab strip is drawn for the chats`)
+  if (await chatTabs(page)) failures.push(`${when}: a tab strip is drawn for the chats`)
   if (state.barPaint.fill !== "rgba(0, 0, 0, 0)" || state.barPaint.rule !== "none")
     failures.push(
       `${when}: the titlebar paints a toolbar: ${JSON.stringify(state.barPaint)}`,

@@ -71,6 +71,8 @@ stateDiagram-v2
     Measuring --> Arranged: No room [new beside] / refuse unchanged
     Arranged --> Arranged: Close pane / reflow and choose remaining focus
     Arranged --> Arranged: Close last session / new draft when available
+    Arranged --> Empty: Source removes last session [no listed channel for a draft]
+    Empty --> Arranged: Open a session or New Session / create one pane
     note right of Arranged
         Operation chart of one layout, not execution state.
         Four panes and three columns bound arrangement.

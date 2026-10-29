@@ -294,14 +294,15 @@ export function createDraft(
     restore?: boolean
   },
 ): WorkspaceState {
-  const panes = state.panes
-  if (!panes || showable(state, sessionItem(draftId))) return state
+  // With no pane at all (everything shown was removed), it opens alone.
+  const side = state.panes ? beside : undefined
+  if (showable(state, sessionItem(draftId))) return state
   const home = draftHome(state, { channelId, model })
   if (!home) return state
   const kept = restore ? keptDraftIn(state, home.channelId) : undefined
   if (kept)
-    return beside
-      ? openBeside(state, { sessionId: kept, target, side: beside, room, replace: false })
+    return side
+      ? openBeside(state, { sessionId: kept, target, side, room, replace: false })
       : openSession(state, { sessionId: kept, pane: target })
   const drafted: WorkspaceState = {
     ...state,
@@ -310,11 +311,11 @@ export function createDraft(
       [draftId]: { id: draftId, ...home },
     },
   }
-  const placed = beside
+  const placed = side
     ? openBeside(drafted, {
         sessionId: draftId,
         target,
-        side: beside,
+        side,
         room,
         replace: false,
       })
