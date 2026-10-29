@@ -70,6 +70,7 @@ const sessionReady = {
   ],
   methods: [
     "server.health",
+    "channel.list",
     "auth.session",
     "agents.list",
     "conversation.subscribeList",
@@ -78,6 +79,8 @@ const sessionReady = {
     "conversation.share",
     "conversation.unshare",
     "credential.list",
+    "pairing.pending",
+    "pairing.tunnel",
   ],
 }
 
@@ -232,6 +235,8 @@ function scriptedGateway(scenario = {}) {
     switch (method) {
       case "server.health":
         return { ok: true, payload: { ok: true, runtimeStatus: "ready", uptimeMs: 1 } }
+      case "channel.list":
+        return { ok: true, payload: { channels: [], complete: true } }
       case "auth.session":
         return { ok: true, payload: sessionReady }
       case "conversation.subscribeList":
@@ -248,6 +253,17 @@ function scriptedGateway(scenario = {}) {
         }
       case "credential.list":
         return { ok: true, payload: { credentials: scenario.devices ?? devices } }
+      case "pairing.tunnel":
+        return {
+          ok: true,
+          payload: {
+            enabled: false,
+            mode: "quick",
+            hasToken: false,
+            ingress: "127.0.0.1:47651",
+            status: "off",
+          },
+        }
       case "pairing.pending":
         // Linked devices, once the empty dialog's link has opened it.
         return { ok: true, payload: { items: [] } }

@@ -210,7 +210,8 @@ await main(
                   ...(requests.some(
                     (request) =>
                       request.executionId !== "exact-live-execution" ||
-                      request.questionId !== "retained-question",
+                      request.questionId !== "retained-question" ||
+                      request.question !== "abcdef0123456789abcdef0123456789",
                   )
                     ? ["action turn/question identities mixed"]
                     : []),

@@ -6082,6 +6082,8 @@ await main(
         await run.client.conversation.submit(run.client.conversation.prepare(id, first))
         await settled(run, id, new Set(), first, "completed", setup)
         run.main = { id, title: await titleOf(run, id) }
+        // A previous engine's restart can leave the shared gateway vault locked.
+        await unlockRequestedVault(run.client, run.page)
         await openStressConversation(run.page, run.main.id, run.main.title)
         if (setup.length) {
           rep.add({ name: "setup", ...base, failures: setup })

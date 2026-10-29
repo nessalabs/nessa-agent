@@ -655,7 +655,9 @@ on.
 
 - [ ] **The card opens a tab in the chat's right panel, no pane**, the list in activity
   order with a closed child called closed, and a child opens on its
-  transcript. Focus stays in the panel. _Check:_ `subagents.mjs --only panel`.
+  transcript. Focus stays in the panel. Expanded, the widget starts below the
+  shared window toolbar and covers retained panes with the theme background.
+  _Check:_ `subagents.mjs --only panel`.
 - [ ] **The transcript follows a new line while it is at the end, and stays
   put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
 - [ ] **Escape steps back to the list.** In the panel a second Escape changes
