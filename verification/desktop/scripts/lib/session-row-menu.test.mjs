@@ -8,14 +8,7 @@ test("the current row menu includes Fork with optional sharing in its product or
     true,
   )
   assert.equal(
-    sessionRowMenuMatches([
-      "Rename",
-      "Pin",
-      "Fork",
-      "Share…",
-      "Archive",
-      "Delete…",
-    ]),
+    sessionRowMenuMatches(["Rename", "Pin", "Fork", "Share…", "Archive", "Delete…"]),
     true,
   )
 })
@@ -32,6 +25,12 @@ test("missing, duplicate, unexpected and reordered actions cannot pass", () => {
 })
 
 test("a pinned row offers Unpin in the same position", () => {
-  assert.equal(sessionRowMenuMatches(["Rename", "Unpin", "Fork", "Archive", "Delete…"]), true)
-  assert.equal(sessionRowMenuMatches(["Rename", "Pin to Sidebar", "Fork", "Archive", "Delete…"]), false)
+  assert.equal(
+    sessionRowMenuMatches(["Rename", "Unpin", "Fork", "Archive", "Delete…"]),
+    true,
+  )
+  assert.equal(
+    sessionRowMenuMatches(["Rename", "Pin to Sidebar", "Fork", "Archive", "Delete…"]),
+    false,
+  )
 })
