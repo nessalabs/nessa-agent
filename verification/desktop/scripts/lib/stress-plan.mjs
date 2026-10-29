@@ -163,7 +163,7 @@ export const KNOBS = {
   },
   githubs: {
     default: 1,
-    what: "times GitHub is connected from Settings through a fake GitHub, an agent started after it holds the sign-in, then disconnected",
+    what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
   },
   launches: {
     default: 1,

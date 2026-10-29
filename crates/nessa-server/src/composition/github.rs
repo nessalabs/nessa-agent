@@ -1,6 +1,6 @@
 //! The GitHub sign-in, composed once per run: the Nessa GitHub App, GitHub
-//! over HTTPS, its encrypted app-session vault entry and audit, and what each
-//! agent open reads of it.
+//! over HTTPS, its encrypted app-session vault entry and audit, and the gateway
+//! broker and live-event relay that use it.
 //!
 //! `NESSA_GITHUB_APP` names a file describing another app in place of the
 //! released one, so the stress check can point a gateway at a fake GitHub on
@@ -8,20 +8,16 @@
 //! only reads it.
 use std::{path::Path, sync::Arc};
 
-use nessa_sdk::infrastructure::acp::sessions::OpenCredentials;
-
 use super::local_auth::{conversation_root, SystemClock};
 use crate::github::application::GithubConnections;
-use crate::github::infrastructure::{
-    DurableGithubAudit, GithubApp, GithubHttps, GithubLaunchCredentials, GithubTokenVault,
-};
+use crate::github::infrastructure::{DurableGithubAudit, GithubApp, GithubHttps, GithubTokenVault};
 use crate::product::GithubRoutes;
 use crate::timer::TokioTimer;
 
-/// The routes the github methods answer from, and what agents read.
+/// The routes the GitHub methods answer from.
 pub(super) struct GithubComposition {
     pub(super) routes: Arc<GithubRoutes>,
-    pub(super) credentials: OpenCredentials,
+    pub(super) connections: Arc<GithubConnections>,
 }
 
 /// The sign-in kept under `namespace`, or `None` — logged — when the app
@@ -102,14 +98,12 @@ pub(super) async fn compose(
         None
     };
     Some(GithubComposition {
-        credentials: OpenCredentials::read_from(Arc::new(GithubLaunchCredentials::new(
-            connections.clone(),
-        ))),
         routes: Arc::new(GithubRoutes {
-            connections,
+            connections: connections.clone(),
             install_url,
             live,
             changes: tokio::sync::Mutex::new(()),
         }),
+        connections,
     })
 }

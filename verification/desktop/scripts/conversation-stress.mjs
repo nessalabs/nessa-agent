@@ -154,12 +154,11 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               avatar host answered by the page), its login and
  *               "Connected", its actions out only under the pointer or
  *               keyboard focus; the sign-in is a private
- *               file the gateway never logs; an agent started after it has
- *               GH_TOKEN and a git credential helper for github.com, both the
- *               token, and so do the commands it runs through Nessa's own
- *               shell tool; Disconnect forgets it, and an agent started after
- *               that has neither, nor do its commands; the audit holds each
- *               step and no token
+ *               file the gateway never logs; agents and shell commands have
+ *               no Nessa GitHub token or git helper while connected or after
+ *               Disconnect. A source-authorized gateway tool reads a fixed
+ *               repository with the connected token. The audit holds each
+ *               sign-in step and no token
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
@@ -215,7 +214,7 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import {
   chmodSync,
   existsSync,
@@ -2311,7 +2310,6 @@ const steps = {
     }
     const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
     const signIn = join(namespace, "github", "sign-in.json")
-    const print = createHash("sha256").update(github.token).digest("hex").slice(0, 16)
     const row = run.page.locator(css.github)
     const state = () => row.getAttribute("data-github-state").catch(() => null)
     // Each state the person sees, kept with the evidence.
@@ -2390,7 +2388,10 @@ const steps = {
           10_000,
         )
         if (!pictured) failures.push("the row did not draw the account's picture")
-        if (!avatars.some((url) => url.includes(`/u/${FAKE_ACCOUNT.id}?`)))
+        run.githubAvatarRequested ||= avatars.some((url) =>
+          url.includes(`/u/${FAKE_ACCOUNT.id}?`),
+        )
+        if (!run.githubAvatarRequested)
           failures.push(
             `the picture was not asked for by id: ${avatars.join(", ") || "none"}`,
           )
@@ -2463,16 +2464,14 @@ const steps = {
         failures.push("the OS-held sign-in is unavailable")
       if (run.stack.gateway.log().includes(github.token))
         failures.push("the gateway logged the GitHub token")
-      // An agent opened now is started with the sign-in, for gh and for git.
-      await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
-      await githubAgent(
-        run,
-        step,
-        " connected",
-        `token=${print} git=${print}`,
-        failures,
-        true,
-      )
+      await githubAgent(run, step, " connected", "token=none git=none", failures)
+      await githubAgent(run, step, " connected", "token=none git=none", failures, true)
+      const priorRepositoryReads = github.calls.repository
+      await githubReadAgent(run, step, failures)
+      if (github.calls.repository !== priorRepositoryReads + 1)
+        failures.push(
+          `the broker made ${github.calls.repository - priorRepositoryReads} repository reads, not one`,
+        )
       if (failures.length) return
       await run.exclusive(async () => {
         await openAccounts(run.page)
@@ -5889,6 +5888,18 @@ async function githubAgent(run, step, extra, said, failures, shell = false) {
     failures.push(
       `an agent started${extra} says ${JSON.stringify(answer)}${shell ? " from its shell tool" : ""}, not ${said}`,
     )
+}
+
+/** The gateway uses its sign-in for a bounded repository GET, then returns no token. */
+async function githubReadAgent(run, step, failures) {
+  const text = prompt(run, STRESS.githubRead, step, " connected")
+  const seen = await send(run, run.main.id, text, failures)
+  const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+  if (!turn) return
+  const answer = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  if (answer !== `${SAYS.githubRead}nessalabs/nessa-agent`)
+    failures.push(`the brokered repository read says ${JSON.stringify(answer)}`)
+  await expectShown(run.page, `${SAYS.githubRead}nessalabs/nessa-agent`, failures)
 }
 
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */

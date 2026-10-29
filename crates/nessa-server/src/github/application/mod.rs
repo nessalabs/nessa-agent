@@ -2,9 +2,9 @@
 mod connections;
 mod ports;
 
-pub use connections::{GithubConnections, GithubError};
+pub use connections::{GithubConnections, GithubError, GithubReadError};
 pub use ports::{
     ApiFailure, AuditUnavailable, DeviceAuthorization, DeviceCode, EndCause, GithubAccess,
-    GithubApi, GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubSecret,
-    GithubTokenStore, PollAnswer, StoreUnavailable,
+    GithubApi, GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubReadFailure,
+    GithubSecret, GithubTokenStore, PollAnswer, StoreUnavailable,
 };

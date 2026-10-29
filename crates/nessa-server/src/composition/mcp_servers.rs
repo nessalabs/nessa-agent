@@ -360,15 +360,6 @@ pub(super) async fn compose(
     servers
         .replace_all(launch_set, remotes)
         .map_err(|error| RunError::Agent(error.to_string()))?;
-    // Nessa's own shell runs the agent's commands, so each harness session of
-    // it is started with the GitHub sign-in as it stands when that session
-    // opens (`composition::github`, docs/design/github-connect.md). A server
-    // the person configured is never given it.
-    #[cfg(unix)]
-    servers.give_open_credentials(
-        crate::mcp_servers::domain::MANAGED_SERVER_NAME,
-        agents.open_credentials.clone(),
-    );
     if let Some(http) = crate::mcp_servers::infrastructure::ReqwestExchange::new() {
         servers.set_remote_transport(
             Arc::new(http),

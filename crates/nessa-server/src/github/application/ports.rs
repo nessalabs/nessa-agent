@@ -3,8 +3,11 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde_json::Value;
 
-use super::super::domain::{AccessToken, ConnectEnd, GithubAccount, GithubSignIn};
+use super::super::domain::{
+    AccessToken, ConnectEnd, GithubAccount, GithubReadKind, GithubRepository, GithubSignIn,
+};
 
 /// The secret half of a device authorization, sent back with each poll.
 /// `Debug` does not print it.
@@ -60,6 +63,19 @@ pub enum ApiFailure {
     Malformed,
 }
 
+/// A fixed repository read did not produce a usable answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubReadFailure {
+    /// The repository resource does not exist or is not visible to this sign-in.
+    NotFound,
+    /// GitHub refused this sign-in for the operation.
+    Unauthorized,
+    /// GitHub could not be reached, timed out, or was rate-limited.
+    Unreachable,
+    /// A redirect, oversized answer, or malformed JSON was refused.
+    InvalidAnswer,
+}
+
 /// The three calls of a device-flow sign-in, for the Nessa GitHub App the
 /// adapter was built for.
 #[async_trait]
@@ -68,6 +84,13 @@ pub trait GithubApi: Send + Sync {
     async fn poll(&self, device_code: &DeviceCode) -> Result<PollAnswer, ApiFailure>;
     /// The account `token` signs in as.
     async fn account(&self, token: &AccessToken) -> Result<GithubAccount, ApiFailure>;
+    /// One bounded GET beneath the configured GitHub API host and repository.
+    async fn read_repository(
+        &self,
+        token: &AccessToken,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+    ) -> Result<Value, GithubReadFailure>;
 }
 
 /// The store could not be read or written.

@@ -8,14 +8,18 @@
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use tokio::task::AbortHandle;
+use serde_json::Value;
+use tokio::{sync::watch, task::AbortHandle};
 use uuid::Uuid;
 
 use super::ports::{
     ApiFailure, AuditUnavailable, DeviceCode, EndCause, GithubAccess, GithubApi, GithubAudit,
-    GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubTokenStore, PollAnswer,
+    GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubReadFailure, GithubTokenStore,
+    PollAnswer,
 };
-use crate::github::domain::{AccessToken, ConnectEnd, GithubSignIn, GithubStatus};
+use crate::github::domain::{
+    AccessToken, ConnectEnd, GithubReadKind, GithubRepository, GithubSignIn, GithubStatus,
+};
 use crate::timer::{within, Moment, Timer};
 
 /// Why a change was not made as asked.
@@ -30,6 +34,17 @@ pub enum GithubError {
     /// A record could not be kept. Before a change, nothing changed; after a
     /// sign-out's token was deleted, it is deleted (read the status again).
     AuditUnavailable,
+}
+
+/// A repository read could not return a GitHub answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubReadError {
+    /// Nessa holds no connected GitHub sign-in at this call.
+    NotConnected,
+    /// The caller stopped the read or dropped its cancellation sender.
+    Cancelled,
+    /// GitHub or its response refused the bounded read.
+    Api(GithubReadFailure),
 }
 
 /// The sign-in, and what changes it.
@@ -163,6 +178,57 @@ impl GithubConnections {
             State::Connected { sign_in, .. } => Some(sign_in.token.clone()),
             _ => None,
         }
+    }
+
+    /// Read one resource within the vault generation that admitted this call.
+    /// The generation's change gate orders local reads before Disconnect.
+    /// Cancellation drops the lock wait or HTTP future; a sent GET may already
+    /// have reached GitHub. See the read ordering table in `github-connect.md`
+    /// and `tests/github/reads.rs` plus `read_http.rs` for forced interleavings.
+    pub async fn read_repository(
+        &self,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+        mut stop: watch::Receiver<bool>,
+    ) -> Result<Value, GithubReadError> {
+        let generation = self
+            .inner
+            .access
+            .generation()
+            .ok_or(GithubReadError::NotConnected)?;
+        let _change = tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => return Err(GithubReadError::Cancelled),
+            change = self.inner.change_in(generation) => {
+                change.map_err(|_| GithubReadError::NotConnected)?
+            }
+        };
+        // Cancellation can arrive as the gate opens. Inspect it before copying
+        // the token, and let it win over a simultaneously ready adapter below.
+        if *stop.borrow() || stop.has_changed().is_err() {
+            return Err(GithubReadError::Cancelled);
+        }
+        let token = match &*self.inner.state.lock().unwrap() {
+            State::Connected {
+                generation: held,
+                sign_in,
+                ..
+            } if *held == generation && self.inner.access.generation() == Some(generation) => {
+                sign_in.token.clone()
+            }
+            _ => return Err(GithubReadError::NotConnected),
+        };
+        let answer = tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => return Err(GithubReadError::Cancelled),
+            answer = self.inner.api.read_repository(&token, repository, kind) => answer,
+        };
+        // A new unlock has an independent change gate. Its progress does not
+        // make this departed generation's response available to the agent.
+        if self.inner.access.generation() != Some(generation) {
+            return Err(GithubReadError::NotConnected);
+        }
+        answer.map_err(GithubReadError::Api)
     }
 
     /// Restore encrypted persistence after an explicit vault unlock. No provider call.

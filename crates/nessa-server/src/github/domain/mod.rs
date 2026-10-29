@@ -1,5 +1,8 @@
 //! What a GitHub sign-in is, without the network, the store or the clock.
 
+mod repository;
+pub use repository::{GithubReadInputError, GithubReadKind, GithubRepository};
+
 /// The GitHub account a sign-in belongs to: its numeric id, which never
 /// changes, and its login, which can.
 #[derive(Clone, Debug, PartialEq, Eq)]
