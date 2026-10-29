@@ -46,6 +46,8 @@ describe("a pasted image's bytes", () => {
       ...initialWorkspace,
       composerImages: { s: [image("a")] },
     }
-    expect(releasedImageUrls(pasted, { ...pasted, sessionTabs: ["s"] })).toEqual([])
+    expect(
+      releasedImageUrls(pasted, { ...pasted, composerText: { s: "typed" } }),
+    ).toEqual([])
   })
 })

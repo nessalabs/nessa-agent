@@ -104,6 +104,7 @@ type Method =
   | "switchAgent"
   | "fork"
   | "read"
+  | "readEarlier"
   | "archive"
   | "rename"
   | "delete"
@@ -355,6 +356,7 @@ export function view(
     },
     lifecycle: { phase: "attached" },
     truncated: false,
+    earlier: false,
     queueComplete: true,
     transcriptState: "complete",
     title: null,
@@ -373,6 +375,11 @@ export interface FakeGateway {
   readonly windows: { revision: number; window: WorkspaceWindow | undefined }[]
   readonly rows: Map<string, ConversationSummary>
   readonly views: Map<string, ConversationView>
+  /**
+   * Each conversation's turns before the first its view lists, oldest
+   * first, whole. `readEarlier` answers two at a time, nearest the point.
+   */
+  readonly earlier: Map<string, readonly ConversationView["messages"][number][]>
   /**
    * The execution each conversation's peek says is active, which a stop
    * names. Apart from the views on purpose: a view's message can still say
@@ -476,6 +483,7 @@ export function fakeGateway(
   const windows: FakeGateway["windows"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
+  const earlier: FakeGateway["earlier"] = new Map()
   const active = new Map<string, string>()
   const reviews = new Map<string, ConversationPermission>()
   const channels: FakeGateway["channels"] = []
@@ -730,6 +738,26 @@ export function fakeGateway(
               ),
             })
           return { requestId: "withdraw", stage: "accepted" }
+        }) as never,
+      readEarlier: (...args) =>
+        answer("readEarlier", args, () => {
+          const [id, before, after] = args
+          const turns = [...(earlier.get(id) ?? []), ...(views.get(id)?.messages ?? [])]
+          const at = (point: { executionId: string }) =>
+            turns.findIndex((turn) => turn.executionId === point.executionId)
+          const end = at(before)
+          const from = after ? at(after) : 0
+          if (end < 0 || from < 0)
+            throw new NessaRpcError("invalid_request", "No such point")
+          const start = Math.max(from, end - 2)
+          return {
+            conversationId: id,
+            messages: turns.slice(start, end),
+            tools: [],
+            handoffs: [],
+            more: start > from,
+            truncated: false,
+          }
         }) as never,
       // Committed as asked; the view says it from now on.
       read: (id) => answer("read", [id], () => views.get(id) ?? view(id)) as never,
@@ -1006,6 +1034,7 @@ export function fakeGateway(
     windows,
     rows,
     views,
+    earlier,
     active,
     reviews,
     channels,

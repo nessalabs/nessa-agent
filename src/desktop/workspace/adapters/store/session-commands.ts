@@ -322,8 +322,7 @@ export function resendMessage({
  * says why while it shows the session); `unknown` when it is not known to be
  * taken (`outcomeOf`); `answering` already, a first answer on
  * its way; or `not-asked` — the window holds no such approval: the session is
- * not on screen (`onScreen`: in a pane, in the open overview, or as one of
- * the session list's request cards), or its
+ * not on screen (`onScreen`: in a pane or in the open overview), or its
  * conversation has moved on. Nothing is sent
  * then, and the source records nothing, since nothing was asked of it.
  */
@@ -404,6 +403,24 @@ export function retryReview({
 }): WorkspaceCommand {
   return (_dispatch, _getState, { workspace }) =>
     workspace.retryReview?.(sessionId, approvalId)
+}
+
+/**
+ * Reads the turns before the first one a session's transcript shows. A read
+ * that fails is said to the console, and the transcript asks again.
+ * Settles once the read is in the store: true when another may be asked
+ * for, false when it failed or there is none.
+ */
+export function loadEarlier({
+  sessionId,
+}: {
+  sessionId: string
+}): WorkspaceCommand<Promise<boolean>> {
+  return async (_dispatch, _getState, { workspace }) =>
+    (await workspace.loadEarlier?.(sessionId).catch((error: unknown) => {
+      console.warn("Earlier turns were not read", error)
+      return false
+    })) ?? false
 }
 
 /**

@@ -946,6 +946,38 @@ test("a tool step with times makes that many calls at once and saves every resul
   assert.deepEqual(said, ["Saved 3 results."])
 })
 
+test("a tool step with a title announces the call under it", async () => {
+  assert.throws(
+    () =>
+      parseScenario({
+        turns: [{ steps: [{ do: "tool", tool: "x", arguments: {}, title: " " }] }],
+      }),
+    /a title is a non-empty string/,
+  )
+  const title = 'Search "site:github.com/nessalabs/nessa-agent/issues"'
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          { do: "tool", tool: "report_rows", arguments: {}, title },
+          { do: "tool", tool: "report_rows", arguments: {}, title, times: 2 },
+          { do: "tool", tool: "report_rows", arguments: {} },
+          { do: "end" },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const done = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.equal(done.result.stopReason, "end_turn")
+  const titles = done.notes
+    .map((note) => note.params.update)
+    .filter((update) => update.sessionUpdate === "tool_call")
+    .map((update) => update.title)
+  assert.deepEqual(titles, [title, title, title, "report_rows"])
+})
+
 test("the stress check's scenario is one the agent runs, its trace calling tools the server has", async () => {
   const { stressScenario, TRACE_CALLS } = await import("./scenarios/stress.mjs")
   const { TOOLS } = await import("./server.mjs")

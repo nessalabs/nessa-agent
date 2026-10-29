@@ -58,7 +58,13 @@ pub struct ConversationView {
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
+    /// Something was left out that no read gives back: a gap between the
+    /// turns listed, a tool's output, a note. Older turns that are only
+    /// before the first one listed are [`Self::earlier`] instead.
     pub truncated: bool,
+    /// Turns, or the start of the first turn listed, came before what this
+    /// view lists and are read with `conversation.readEarlier`. Always sent.
+    pub earlier: bool,
     /// Whether the bounded view contains every currently waiting identity.
     pub queue_complete: bool,
     /// Completeness of the committed transcript independently of display limits.
@@ -231,6 +237,13 @@ pub struct ConversationMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_work_failed: Option<bool>,
     pub parts: Vec<ConversationPart>,
+    /// Where the turn's first listed part starts in the whole turn, when the
+    /// view begins partway through it. What comes before — the person's
+    /// message and the parts ahead of it — is read with
+    /// `conversation.readEarlier`. Absent when the turn is listed from its
+    /// start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starts_at: Option<ConversationPartPosition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_offset: Option<usize>,
     #[serde(skip)]
@@ -260,6 +273,42 @@ pub struct ConversationMessage {
     /// continuation is scheduled is added when the gateway publishes the view.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_limit: Option<ConversationUsageLimit>,
+}
+
+/// A place in a turn: the part, counted from the turn's first, and the byte
+/// within that part's text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationPartPosition {
+    pub part: usize,
+    pub byte: usize,
+}
+
+/// A place in a conversation's history: the start of a turn, before the
+/// person's message, when `at` is absent; otherwise a place among its parts,
+/// after the person's message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationPoint {
+    pub execution_id: String,
+    pub at: Option<ConversationPartPosition>,
+}
+
+/// What came before a point in a conversation, as `conversation.readEarlier`
+/// answers. `messages` end where the point is, oldest first; the first one
+/// starts partway through its turn when it carries `starts_at`. `tools` are
+/// the calls those messages made. `handoffs` holds the fork the conversation
+/// began as, with its copied turns, once the page reaches the start. `more`
+/// says whether anything is before the first message's start. `truncated`
+/// says the page left out something no read gives back, as a view's does.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationEarlier {
+    pub conversation_id: String,
+    pub messages: Vec<ConversationMessage>,
+    pub tools: Vec<ConversationTool>,
+    pub handoffs: Vec<ConversationHandoff>,
+    pub more: bool,
+    pub truncated: bool,
 }
 
 /// Which harness reported a usage limit. OpenCode is not a value.

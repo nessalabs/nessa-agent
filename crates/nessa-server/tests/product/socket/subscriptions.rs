@@ -2958,6 +2958,7 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     use nessa_protocol::product::generated::{action_for_method, PRODUCT_READY_METHODS};
     let own_checks = [
         "conversation.read",
+        "conversation.readEarlier",
         "conversation.peek",
         "conversation.subscribeEvents",
         "conversation.list",

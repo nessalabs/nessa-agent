@@ -244,11 +244,14 @@ import { MODELS, repoRoot } from "../../../scripts/mcp-test-server/local-gateway
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
+  STREAM_HOLD_MS,
+  STREAM_WORDS,
   STRESS,
   TABLE_LINES,
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
+  streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { browse } from "./lib/mdns-probe.mjs"
@@ -365,6 +368,8 @@ const PARK_IDLE_SECONDS = 3
  */
 const LONG_CHUNKS = 40
 const LONG_CHUNK_BYTES = 300
+/** Chunks of an `oversized` answer: about 74 KB, past one view's 60 KB frame. */
+const OVERSIZED_CHUNKS = 240
 /**
  * How many other conversations the `fresh` step creates and sends to at the
  * same moment as the window's own first message: more than the sixteen
@@ -559,12 +564,14 @@ async function setSideRail(page, on, failures) {
 
 /**
  * The expanded right panel is the chat in front's: its own tabs, or with
- * nothing open its note, and no toggles for the columns it covers. ⌘N docks it before the new session opens, so the
+ * nothing open its note, no tab strip for the chats and no toggles for the
+ * columns it covers. ⌘N docks it before the new session opens, so the
  * session is in front, in sight — never under the panel. The chat is
  * brought back, docked.
  */
 async function expandedForItsChat(run, failures) {
   const page = run.page
+  if (await chatTabs(page)) failures.push("the window draws a tab strip for the chats")
   const panel = page.locator("#workspace-panel")
   if (
     !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
@@ -676,12 +683,30 @@ async function aroundTheLights(page, rail, failures) {
     (rail === "open"
       ? near(now.at.workspace, now.at.railWidth) &&
         near(now.at.railTop, now.at.barBottom) &&
-        near(now.at.railWidth, 48) &&
-        near(now.at.item, now.at.toggleMiddle?.[0])
+        near(now.at.railWidth, 64) &&
+        near(now.at.item, now.at.railWidth / 2) &&
+        // A narrow floating pill below the window bar, clear of the traffic
+        // lights and the window's edges, holding the items and the toggle,
+        // on the sidebar's material.
+        now.at.pill !== null &&
+        near(now.at.pill.width, 36) &&
+        now.at.railFill === now.at.sidebarFill &&
+        now.at.pill.top >= now.at.barBottom - 0.5 &&
+        now.at.pill.left > 0 &&
+        now.at.pill.bottom < now.at.windowBottom &&
+        now.at.pill.radius >= now.at.pill.width / 2 - 0.5 &&
+        near(now.at.pill.left + now.at.pill.width / 2, now.at.item) &&
+        now.at.itemTop > now.at.pill.top &&
+        // The corner row (the toggle and "nessa Studio") stands below it.
+        now.at.toggleTop >= now.at.pill.bottom
       : near(now.at.workspace, 0)) &&
+    // The toggle is nessa's mark: in the footer's mark slot, right before
+    // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
     (rail === "off" ||
-      (near(now.at.toggle, now.at.itemColumn) &&
-        near(now.at.toggleBottom, now.at.windowBottom - now.at.itemColumn)))
+      (now.at.slot && now.at.toggleMiddle
+        ? near(now.at.toggleMiddle[0], now.at.slot[0]) &&
+          near(now.at.toggleMiddle[1], now.at.slot[1])
+        : near(now.at.toggle, now.at.itemColumn)))
   if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
   const now = await railLayout(page)
   failures.push(
@@ -1924,46 +1949,108 @@ const steps = {
     )
   },
 
-  async listAnswer(run, step, failures) {
+  async waitingRow(run, step, failures) {
     const text = prompt(run, STRESS.permission, step)
     const seen = await send(run, run.main.id, text, failures)
-    // The conversation asks; the session list's Needs you card asks the same.
-    const listCard = run.page.locator(
-      `[data-list-group="needs-you"] .workspace-request-card:has([data-session-row="${run.main.id}"])`,
-    )
-    const shown = await listCard
-      .locator(".workspace-request")
-      .first()
+    // The conversation asks; the session list only lists it under Needs you.
+    const group = run.page.locator('[data-list-group="needs-you"]')
+    const row = group.locator(`[data-session-row="${run.main.id}"]`)
+    const listed = await row
       .waitFor({ timeout: 30_000 })
       .then(() => true)
       .catch(() => false)
-    if (!shown) {
-      failures.push("the session list shows no request card for the waiting conversation")
+    if (!listed) {
+      failures.push("the waiting conversation is not listed under Needs you")
       return
     }
-    const words = async (locator) =>
-      ((await locator.first().textContent()) ?? "").replace(/\s+/g, " ").trim()
-    const fromList = await words(listCard.locator(".workspace-approval-command"))
-    const fromPane = await words(
-      run.page.locator(`${css.agentApproval} .workspace-approval-command`),
-    )
-    if (fromList !== fromPane)
+    // A plain row: nothing of the request, no answers, no form beside it.
+    const drawn = await group.evaluate((element) => ({
+      role: element.getAttribute("role"),
+      controls: [...element.querySelectorAll("button, input, textarea")]
+        .filter((control) => !control.closest("[data-session-row]"))
+        .map((control) => control.getAttribute("aria-label") ?? control.textContent),
+      asks: element.querySelectorAll(".workspace-approval-command, .workspace-question")
+        .length,
+    }))
+    if (drawn.role !== "listbox") failures.push(`Needs you is a ${drawn.role}`)
+    if (drawn.controls.length || drawn.asks)
       failures.push(
-        `the list's card reads "${fromList}", the conversation's "${fromPane}"`,
+        `Needs you draws the request beside its row: ${JSON.stringify(drawn.controls)}`,
       )
-    await listCard
-      .locator(`button[data-answer="${step.answer === "allow" ? "once" : "deny"}"]`)
-      .first()
-      .click()
+    // Opened from its row, the chat asks, and is answered there.
+    await row.click()
+    await answerCard(run, run.main.id, step.answer, failures, "Report the rows")
     await settled(run, run.main.id, seen, text, "completed", failures)
     await expectShown(
       run.page,
       step.answer === "allow" ? SAYS.allowed : SAYS.denied,
       failures,
     )
-    // Answered, the card goes with the row out of Needs you.
-    if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
-      failures.push("the answered card is still in Needs you")
+    if (!(await waitFor(async () => (await row.count()) === 0, 10_000)))
+      failures.push("the answered row is still in Needs you")
+  },
+
+  async stream(run, step, failures) {
+    const text = prompt(run, STRESS.stream, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const last = streamWord(STREAM_WORDS - 1).trim()
+    // Live: the reply's newest words are drawn while the turn still runs,
+    // though it streamed more chunks and text than a message keeps.
+    if (!(await shows(run.page, last, STREAM_HOLD_MS + 20_000)))
+      failures.push(`while streaming, the window never showed the newest words (${last})`)
+    else if ((await pageText(run.page)).includes(fold(SAYS.streamEnd)))
+      failures.push("the newest words were drawn only after the turn ended")
+    // The sidebar closed and opened again draws the same reply, not an
+    // emptied one.
+    await run.page.keyboard.press(keys.toggleSidebar)
+    await sleep(400)
+    await run.page.keyboard.press(keys.toggleSidebar)
+    if (!(await shows(run.page, last, 10_000)))
+      failures.push("after the sidebar closed and opened, the newest words are gone")
+    let { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(run.page, SAYS.streamEnd, failures)
+    const whole = `${SAYS.stream}${text}${Array.from(
+      { length: STREAM_WORDS },
+      (_, index) => streamWord(index),
+    ).join("")} ${SAYS.streamEnd}`
+    const reply = (view) => {
+      const answer = view.messages.find((each) => each.executionId === turn?.executionId)
+      return {
+        answer,
+        said: (answer?.parts ?? []).map((part) => part.text ?? "").join(""),
+      }
+    }
+    // The main chat holds more than this reply, so its view may begin partway
+    // through it: what it must hold is the reply's end, the newest words.
+    const { said: newest } = reply(await run.client.conversation.read(run.main.id))
+    if (!newest || !whole.endsWith(newest))
+      failures.push(
+        `the main chat's read reply does not end with its newest words: ${JSON.stringify(newest.slice(-40))}`,
+      )
+    // A chat of this reply alone holds all of it: a fresh read, checked as the
+    // window checks a view, holds every word in order, joined into a few parts.
+    const conversationId = randomUUID()
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, text),
+    )
+    const alone = await settled(
+      run,
+      conversationId,
+      new Set(),
+      text,
+      "completed",
+      failures,
+    )
+    turn = alone.turn
+    const { answer, said } = reply(await run.client.conversation.read(conversationId))
+    if (said !== whole)
+      failures.push(
+        `the read reply is ${said.length} of ${whole.length} bytes, ending ${JSON.stringify(said.slice(-40))}`,
+      )
+    if ((answer?.parts.length ?? 0) > 4)
+      failures.push(`the reply is ${answer?.parts.length} parts, not joined`)
   },
 
   async reviews(run, step, failures) {
@@ -3415,6 +3502,22 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
+    // One header per chat, in the titlebar's row — beside the session list,
+    // and with the panes alone at the window's edge.
+    await headersLand(run.page, "beside the session list", failures)
+    await run.page.keyboard.press(keys.toggleSessionList)
+    await waitFor(
+      async () =>
+        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 1,
+      5_000,
+    )
+    await headersLand(run.page, "with the panes alone", failures)
+    await run.page.keyboard.press(keys.toggleSessionList)
+    await waitFor(
+      async () =>
+        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 0,
+      5_000,
+    )
     if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
     await run.page.keyboard.press(keys.closePane)
@@ -3681,27 +3784,10 @@ const steps = {
         clients.push(await connectClient(run.stack.gateway, INSTANCE, "panel"))
       for (let n = 0; n < FRESH_BURST; n += 1)
         burst.push(startedBeside(run, clients[n % FRESH_CLIENTS], step, n, failures))
-      const tabs = run.page.getByRole("tablist", { name: "Open views" })
-      const previous = await tabs
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")
-      await run.page.getByRole("button", { name: /^New Tab/ }).click()
+      await run.page.keyboard.press(keys.newSession)
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
       await home.locator(css.field).fill(text)
-      const draft = await tabs
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")
-      if (previous) {
-        await tabs.locator(`[data-session-tab="${previous}"] [role="tab"]`).click()
-        await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
-        if ((await home.locator(css.field).inputValue()) !== text)
-          failures.push(
-            "switching workspace tabs lost the new conversation's first message",
-          )
-      }
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
         () => selectedStressConversation(run.page, text),
@@ -4336,6 +4422,25 @@ const steps = {
           width: box?.width ?? 0,
           height: box?.height ?? 0,
           over: bar && track ? box.right - track.right : 0,
+          // The name column: how far its label and detail reach past the
+          // start of the bar's track, and whether the label is cut.
+          name: (() => {
+            const column = row.children[1]
+            if (!(column instanceof HTMLElement) || !track) return null
+            const parts = [...column.children].filter(
+              (part) => !part.classList.contains("sr-only"),
+            )
+            const label = parts[0]
+            return {
+              text: label?.textContent ?? "",
+              past: Math.max(
+                ...[column, ...parts].map(
+                  (part) => part.getBoundingClientRect().right - track.left,
+                ),
+              ),
+              cut: label ? label.scrollWidth > label.clientWidth : false,
+            }
+          })(),
         }
       }),
     )
@@ -4362,6 +4467,24 @@ const steps = {
         failures.push(
           `row ${index + 1}'s bar ends ${row.over.toFixed(1)} px past the axis`,
         )
+      // A name never runs under the bar: a long one is cut where the track
+      // starts, and keeps its whole text for a reader.
+      const title = TRACE_CALLS[index].title
+      if (!row.name) failures.push(`row ${index + 1} has no name column`)
+      else {
+        if (row.name.past > 0.5)
+          failures.push(
+            `row ${index + 1}'s name runs ${row.name.past.toFixed(1)} px under the bar`,
+          )
+        if (title && !row.name.cut)
+          failures.push(
+            `row ${index + 1}'s long name ${JSON.stringify(row.name.text)} is not cut`,
+          )
+        if (title && row.name.text !== title)
+          failures.push(
+            `row ${index + 1}'s name reads ${JSON.stringify(row.name.text)}, not its title`,
+          )
+      }
     }
     // A call's card shows the input it was made with.
     const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
@@ -4755,18 +4878,137 @@ const steps = {
           "the last long answer changed when the conversation was opened again",
         )
     }
+    // Last, an answer longer than one view's frame: the view starts partway
+    // through it, and its start is read back as earlier too.
+    // Its view no longer lists the person's message, so the turn is followed
+    // by its id.
+    const oversized = prompt(run, STRESS.oversized, step)
+    const { executionId } = await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, oversized),
+    )
+    const answered = await waitFor(async () => {
+      const shown = await run.client.conversation.read(conversationId)
+      const turn = shown.messages.find((each) => each.executionId === executionId)
+      return turn && ended(turn) ? turn : undefined
+    }, 60_000)
+    if (answered?.status !== "completed")
+      failures.push(`the oversized answer ended ${answered?.status ?? "never"}`)
     // A person opens the long conversation and writes in it.
     await openStressConversation(
       run.page,
       conversationId,
       await titleOf(run, conversationId),
     )
+    // Its view lists only the newest answers. Scrolled back, the window reads
+    // the rest a page at a time until the first turn shows.
+    await readBackToStart(run, STRESS.long, step, failures)
+    // The oversized answer, joined from its pieces, is drawn whole.
+    const drawn = await run.page
+      .locator(".workspace-message")
+      .filter({ hasText: SAYS.oversized })
+      .first()
+      .textContent()
+      .catch(() => "")
+    const pieces = [
+      ...(drawn ?? "").matchAll(new RegExp(`(\\d+) x{${LONG_CHUNK_BYTES}}`, "g")),
+    ].map((match) => Number(match[1]))
+    if (pieces.length !== OVERSIZED_CHUNKS || pieces.some((index, at) => index !== at))
+      failures.push(
+        `the oversized answer is drawn with ${pieces.length} of ${OVERSIZED_CHUNKS} chunks in order`,
+      )
     const last = prompt(run, STRESS.reply, step, " after the long answers")
     const seen = await send(run, conversationId, last, failures)
     await settled(run, conversationId, seen, last, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
+}
+
+/**
+ * Scrolls the open conversation back to its top until its first turn shows:
+ * the window reads the turns before those its view lists a page at a time as
+ * the reader nears the top. Every turn of `step` (`phrase` … ` t<n>`) is then
+ * drawn once, in order. A page that arrives keeps the reader on what they
+ * were reading, and nothing says content was left out.
+ */
+async function readBackToStart(run, phrase, step, failures) {
+  // The pane showing this conversation: an earlier step can leave other
+  // panes open, a hidden one among them.
+  const scroller = run.page
+    .locator(`${css.transcript}:visible`)
+    .filter({ hasText: phrase })
+    .first()
+  const turns = () =>
+    scroller.evaluate((element, phrase) => {
+      const said = [...element.querySelectorAll('.workspace-message[data-role="user"]')]
+        .map((message) => message.textContent ?? "")
+        .filter((text) => text.includes(phrase))
+        .map((text) => Number(/ t(\d+) /.exec(`${text} `)?.[1] ?? -1))
+      return {
+        said,
+        // A page may only lengthen the first turn drawn, adding no message.
+        drawn: element.textContent?.length ?? 0,
+        loading: Boolean(element.querySelector("[data-history-earlier]")),
+        omitted: Boolean(element.querySelector('[data-history-extent="omitted"]')),
+      }
+    }, phrase)
+  if (!(await waitFor(async () => (await turns()).loading, 10_000))) {
+    const shown = await turns()
+    failures.push(
+      `a conversation longer than its view offers no earlier turns (shows ${JSON.stringify(shown.said)})`,
+    )
+    return
+  }
+  // At the top, the first message drawn: where its end is on screen before
+  // the next page arrives, and after. A page joins whole turns above it, or
+  // the start of its own turn inside it; either way, its end stays put.
+  const top = () =>
+    scroller.evaluate((element) => {
+      element.scrollTop = 0
+      const first = element.querySelector(".workspace-message")
+      first?.setAttribute("data-stress-anchor", "")
+      return first?.getBoundingClientRect().bottom ?? null
+    })
+  const anchored = () =>
+    scroller.evaluate(
+      (element) =>
+        element.querySelector("[data-stress-anchor]")?.getBoundingClientRect().bottom ??
+        null,
+    )
+  const end = Date.now() + 60_000
+  let pages = 0
+  let shown = await turns()
+  while (shown.loading && Date.now() < end) {
+    const before = await top()
+    const count = shown.drawn
+    if (!(await waitFor(async () => (await turns()).drawn > count, 15_000))) {
+      failures.push(`scrolled to the top, nothing earlier arrived after ${pages} pages`)
+      return
+    }
+    pages += 1
+    const after = await anchored()
+    if (before !== null && after !== null && Math.abs(after - before) > 2)
+      failures.push(
+        `a page of earlier turns moved what was being read by ${Math.round(after - before)}px`,
+      )
+    await scroller.evaluate((element) =>
+      element
+        .querySelector("[data-stress-anchor]")
+        ?.removeAttribute("data-stress-anchor"),
+    )
+    shown = await turns()
+  }
+  const expected = Array.from({ length: step.turns }, (_, turn) => turn)
+  if (shown.loading || JSON.stringify(shown.said) !== JSON.stringify(expected))
+    failures.push(
+      `read back over ${pages} pages, the window shows turns ${JSON.stringify(shown.said)}${shown.loading ? ", still loading" : ""}`,
+    )
+  if (shown.omitted) failures.push("the long conversation says some content is not shown")
+  log(`long conversation read back to its first turn in ${pages} pages`)
+  // Back at the end, where the person writes next.
+  await scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
 }
 
 /** A menu row's height in nessa_ui's menu recipe, at the default scale. */
@@ -4847,6 +5089,140 @@ async function reportLine(run, report, failures) {
   if (!front)
     failures.push("pressing the report's pill did not bring its chat to the front")
   await openStressConversation(run.page, run.main.id, run.main.title)
+}
+
+/**
+ * `oneHeaderPerChat` once the panes come to rest after a column folds or
+ * opens: what it measures is read again until it holds, or the columns'
+ * motion has had its time; what still fails then is the step's.
+ */
+async function headersLand(page, when, failures) {
+  let last = []
+  await waitFor(async () => {
+    last = []
+    await oneHeaderPerChat(page, when, last)
+    return last.length === 0
+  }, 5_000)
+  failures.push(...last)
+}
+
+/**
+ * How many tabs or tab lists the window draws for its chats: any shown one
+ * outside the right panel and outside what a chat shows (a tool card's own
+ * Input/Output tabs are the chat's content, not tabs for chats); one in a
+ * pane's header counts.
+ */
+function chatTabs(page) {
+  return page.evaluate(
+    ({ pane, paneHeader }) =>
+      [...document.querySelectorAll('[role="tablist"], [role="tab"]')].filter(
+        (tab) =>
+          tab.getClientRects().length > 0 &&
+          !tab.closest("[inert], #workspace-panel") &&
+          (!tab.closest(pane) || tab.closest(paneHeader)),
+      ).length,
+    { pane: css.pane, paneHeader: css.paneHeader },
+  )
+}
+
+/**
+ * The chats have no tabs (C1): no tab strip, and each top-row pane has one header —
+ * its name, menu and close — in the titlebar's row, none of it on the
+ * window's controls (the cluster on the left, the panel's own on the
+ * right), and its picture up to the window's top edge, behind them.
+ */
+async function oneHeaderPerChat(page, when, failures) {
+  const state = await page.evaluate(
+    ({ titlebar, pane, header }) => {
+      const box = (e) => {
+        const b = e.getBoundingClientRect()
+        return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }
+      }
+      const shown = (e) => e.getClientRects().length > 0
+      return {
+        bar: document.querySelector(titlebar).getBoundingClientRect().height,
+        // The titlebar is unified with the window: no fill and no rule of its
+        // own, so what is under it (the sidebar, a pane's picture) runs up.
+        barPaint: (() => {
+          const style = getComputedStyle(document.querySelector(titlebar))
+          return { fill: style.backgroundColor, rule: style.boxShadow }
+        })(),
+        // Text the titlebar draws itself: a chat's name there is a tab again.
+        barText: document.querySelector(titlebar).innerText.trim(),
+        names: [...document.querySelectorAll(`${pane} .workspace-pane-name`)]
+          .map((name) => name.textContent.trim())
+          .filter(Boolean),
+        controls: [
+          ...document.querySelectorAll(
+            `${titlebar} .workspace-titlebar-navigation button, ${titlebar} .workspace-titlebar-trailing button`,
+          ),
+        ]
+          .filter(shown)
+          .map(box),
+        panes: [...document.querySelectorAll(pane)].map((each) => ({
+          headers: [...each.querySelectorAll(header)].map((h) => ({
+            box: box(h),
+            parts: [...h.querySelectorAll("button, .workspace-pane-name")]
+              .filter(shown)
+              .map(box),
+          })),
+          box: box(each),
+          scroll: {
+            top: each.scrollTop,
+            left: each.scrollLeft,
+            height: each.scrollHeight,
+            viewport: each.clientHeight,
+            overflow: getComputedStyle(each).overflow,
+          },
+          picture: [...each.querySelectorAll(".desktop-header, .desktop-header-image")]
+            .filter(shown)
+            .map(box)[0],
+        })),
+      }
+    },
+    { titlebar: css.titlebar, pane: css.pane, header: css.paneHeader },
+  )
+  const overlaps = (a, b) =>
+    a.left < b.right - 1 &&
+    b.left < a.right - 1 &&
+    a.top < b.bottom - 1 &&
+    b.top < a.bottom - 1
+  if (await chatTabs(page)) failures.push(`${when}: a tab strip is drawn for the chats`)
+  if (state.barPaint.fill !== "rgba(0, 0, 0, 0)" || state.barPaint.rule !== "none")
+    failures.push(
+      `${when}: the titlebar paints a toolbar: ${JSON.stringify(state.barPaint)}`,
+    )
+  for (const name of state.names)
+    if (state.barText.includes(name))
+      failures.push(`${when}: the titlebar names the chat "${name}"`)
+  for (const [at, pane] of state.panes.entries()) {
+    const name = `${when}, pane ${at + 1}`
+    if (pane.scroll.top !== 0 || pane.scroll.left !== 0)
+      failures.push(`${name}: its root scrolled: ${JSON.stringify(pane.scroll)}`)
+    if (pane.headers.length !== 1) {
+      failures.push(`${name}: ${pane.headers.length} headers, not one`)
+      continue
+    }
+    const [header] = pane.headers
+    if (header.box.top < -1 || header.box.bottom > state.bar + 1)
+      failures.push(
+        `${name}: its header is not in the titlebar row: ${JSON.stringify({ header: header.box, pane: pane.box, scroll: pane.scroll })}`,
+      )
+    for (const part of header.parts)
+      for (const control of state.controls)
+        if (overlaps(part, control))
+          failures.push(
+            `${name}: its header sits on a window control: ${JSON.stringify({ part, control })}`,
+          )
+    if (
+      pane.picture &&
+      (pane.picture.top > 0.5 || pane.picture.left > pane.box.left + 0.5)
+    )
+      failures.push(
+        `${name}: its picture does not reach the window's top and its pane's left: ${JSON.stringify({ picture: pane.picture, pane: pane.box })}`,
+      )
+  }
+  return state
 }
 
 async function flatPanes(page, failures) {
@@ -6175,6 +6551,7 @@ async function startStack(options) {
         reviews: knobs.reviews,
         longChunks: LONG_CHUNKS,
         longChunkBytes: LONG_CHUNK_BYTES,
+        oversizedChunks: OVERSIZED_CHUNKS,
       }),
     ),
   )

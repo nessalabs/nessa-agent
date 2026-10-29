@@ -119,6 +119,8 @@ import {
   type ConversationListResult,
   type ConversationObserveCursor,
   type ConversationSummary,
+  type ConversationEarlier,
+  type ConversationPoint,
   type ConversationView,
   type ConversationViewCursor,
   type ImageAttachment,
@@ -167,6 +169,16 @@ import {
   transcriptFrom,
 } from "./gateway-views"
 import { waitingReviews, type WaitingReview } from "./review-notices"
+import {
+  gapOf,
+  leading,
+  samePoint,
+  startOf,
+  withEarlier,
+  withGap,
+  withPage,
+  type EarlierTurns,
+} from "./earlier-turns"
 
 /** What the adapter asks of a gateway client: its conversations, its subscriptions, and how its connection stands. */
 export interface GatewayClient {
@@ -186,6 +198,7 @@ export interface GatewayClient {
     | "switchAgent"
     | "fork"
     | "read"
+    | "readEarlier"
     | "archive"
     | "rename"
     | "delete"
@@ -459,6 +472,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const firstSeen = new Map<string, Map<string, number>>()
   // What each conversation's listed reviews show, read from their live owner.
   const reviews = new Map<string, ReviewDetails>()
+  // The turns read before each conversation's view, as the person scrolled
+  // back (`earlier-turns.ts`), and the reads of them under way, one at a time.
+  const earlier = new Map<string, EarlierTurns>()
+  const readingEarlier = new Map<string, Promise<unknown>>()
+  const fillingGap = new Set<string>()
+  // Conversations whose earlier turns the gateway refused to read: the
+  // history the view came from is not the one it now holds.
+  const unpageable = new Set<string>()
   // And what each of its listed questions asks, read the same way.
   const questions = new Map<string, QuestionDetails>()
   // The keys of what a conversation's window had read whole when it let the
@@ -849,6 +870,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     unfollow(sessionId, new WorkspaceSourceError("unknown-session"))
     // Its last frame goes with it: listed again, nothing it said then speaks for it.
     reads.delete(sessionId)
+    earlier.delete(sessionId)
+    unpageable.delete(sessionId)
     dropReviews(sessionId)
     emit({ kind: "session-removed", sessionId, revision })
   }
@@ -1121,6 +1144,131 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
+  /** Applies the latest frame of `sessionId` again: what it is drawn with changed. */
+  const reapply = (sessionId: string) => {
+    const latest = reads.get(sessionId)
+    if (!disposed && latest)
+      applyRead(sessionId, latest.sent, latest.cursor, latest.receivedAtMs)
+  }
+
+  /**
+   * One read of turns before `before` (after `after`, when given). A point
+   * the gateway's history does not hold means what was read came from
+   * another history: it is let go, the view drawn without it, and the read
+   * answers nothing.
+   */
+  const readEarlierPage = async (
+    sessionId: string,
+    before: ConversationPoint,
+    after?: ConversationPoint,
+  ): Promise<ConversationEarlier | undefined> => {
+    const page = await within((live) =>
+      dispatch(live, (connected) =>
+        connected.conversation.readEarlier(sessionId, before, after),
+      ).catch((error: unknown) => {
+        if (error instanceof NessaRpcError && error.code === "invalid_request")
+          return undefined
+        throw error
+      }),
+    )
+    if (!page) {
+      earlier.delete(sessionId)
+      unpageable.add(sessionId)
+      reapply(sessionId)
+    }
+    return page
+  }
+
+  /** Runs `work` on `sessionId`'s earlier turns once the read before it is done. */
+  const serially = <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
+    const next = (readingEarlier.get(sessionId) ?? Promise.resolve()).then(work)
+    readingEarlier.set(sessionId, next)
+    void next.then(noop, noop).then(() => {
+      if (readingEarlier.get(sessionId) === next) readingEarlier.delete(sessionId)
+    })
+    return next
+  }
+
+  /**
+   * Reads what lies between the turns read before and the view's first turn,
+   * now that the view moved on, page by page, and joins it in.
+   */
+  const fillGap = (sessionId: string, retry = true) => {
+    if (fillingGap.has(sessionId)) return
+    fillingGap.add(sessionId)
+    serially(sessionId, async () => {
+      fillingGap.delete(sessionId)
+      const latest = reads.get(sessionId)
+      const held = earlier.get(sessionId)
+      const gap = latest && held ? gapOf(latest.sent, held) : undefined
+      if (!gap) return
+      const pages: ConversationEarlier[] = []
+      let before = gap.before
+      for (;;) {
+        const page = await readEarlierPage(sessionId, before, gap.after)
+        if (!page) return
+        pages.unshift(page)
+        const first = page.messages[0]
+        if (!page.more || !first) break
+        before = startOf(first)
+      }
+      if (earlier.get(sessionId) !== held) return
+      earlier.set(sessionId, withGap(gap.held, pages, gap.before))
+      reapply(sessionId)
+    }).catch((error: unknown) => {
+      fillingGap.delete(sessionId)
+      console.warn("The turns between those read and the view were not read", error)
+      // Asked again once, a moment on, unless a frame asks first. Failed
+      // again, the hole is said until a later frame's read fills it.
+      if (retry)
+        setTimeout(() => {
+          if (!disposed && reads.has(sessionId)) fillGap(sessionId, false)
+        }, 2_000)
+      else {
+        const held = earlier.get(sessionId)
+        if (held) {
+          earlier.set(sessionId, { ...held, lost: true })
+          reapply(sessionId)
+        }
+      }
+    })
+  }
+
+  /**
+   * `view` with the turns read before it. A view that lists everything lets
+   * them go; one that moved on since they were read has its gap read.
+   */
+  const withHeld = (sessionId: string, view: ConversationView) => {
+    let held = earlier.get(sessionId)
+    if (!view.earlier) unpageable.delete(sessionId)
+    // A view whose earlier turns the gateway would not read has left them
+    // out, and says so.
+    if (unpageable.has(sessionId)) return { ...view, earlier: false, truncated: true }
+    if (held && !view.earlier) {
+      earlier.delete(sessionId)
+      held = undefined
+    }
+    const gap = held ? gapOf(view, held) : undefined
+    if (gap) {
+      // What the frame before drew between the two is joined in now; only
+      // what it did not draw is read.
+      const previous = reads.get(sessionId)?.sent
+      const first = previous?.messages[0]
+      const drawn =
+        previous && first && samePoint(gap.after, startOf(first))
+          ? leading(previous, gap.before)
+          : undefined
+      if (drawn) held = withGap(gap.held, [{ ...drawn, truncated: false }], gap.before)
+      else held = gap.held
+      earlier.set(sessionId, held)
+      // A stretch that failed to be read is asked for again by the next
+      // frame, never by drawing this one again.
+      const again = held.lost === true && reads.get(sessionId)?.sent === view
+      if (!drawn && !again) fillGap(sessionId)
+    }
+    return withEarlier(view, held)
+  }
+
   /**
    * Applies a frame: a view a person would see differently is the
    * conversation's next count, and is said; one that differs at most in its
@@ -1133,14 +1281,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     receivedAtMs: number,
   ): Transcript => {
     const sent = view
+    // The turns read before the view's first one are drawn in front of it.
+    const shown = withHeld(sessionId, sent)
     // A view lists each waiting review by its key; what it shows is read
     // from its live owner, and the frame applied again as each arrives,
     // before the review offers any answer (`Approval.loading`).
-    const changed = () => {
-      const latest = reads.get(sessionId)
-      if (!disposed && latest)
-        applyRead(sessionId, latest.sent, latest.cursor, latest.receivedAtMs)
-    }
+    const changed = () => reapply(sessionId)
     let loader = reviews.get(sessionId)
     if (!loader) {
       loader = reviewDetails({
@@ -1168,7 +1314,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     asking.follow(sent.questions)
     const asked = asking.details()
     const held = reads.get(sessionId)
-    const key = viewKey(view, details, asked)
+    const key = viewKey(shown, details, asked)
     if (held && held.key === key) {
       reads.set(sessionId, { ...held, sent, cursor, receivedAtMs })
       return held.transcript
@@ -1176,14 +1322,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
     const transcript = transcriptFrom(
-      view,
+      shown,
       revision,
       seenIn(sessionId),
       receivedAtMs,
       details,
       asked,
     )
-    reads.set(sessionId, { sent, view, receivedAtMs, key, transcript, cursor })
+    reads.set(sessionId, { sent, view: shown, receivedAtMs, key, transcript, cursor })
     tellApps(() => options.apps?.observe(sent))
     emit({ kind: "transcript", transcript })
     // The summary follows what the frame says: an approval waiting, the model it runs on.
@@ -1319,6 +1465,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               throw error
             // The client is ahead of the history the gateway holds: start over.
             reads.delete(sessionId)
+            earlier.delete(sessionId)
+            unpageable.delete(sessionId)
             dropReviews(sessionId, true)
             if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
             return subscribe(connected, undefined)
@@ -1380,6 +1528,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         unfollow(oldest, new WorkspaceSourceError("unavailable"))
         // Not followed, it says only what its row says (`needs-you` is a frame's).
         reads.delete(oldest)
+        earlier.delete(oldest)
+        unpageable.delete(oldest)
         dropReviews(oldest, true)
         publish(oldest)
       }
@@ -1628,6 +1778,22 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         : answer(sessionId, approvalId, optionId, "allow"),
     deny: (sessionId, approvalId, _initiator, optionId) =>
       answer(sessionId, approvalId, optionId, "deny"),
+    loadEarlier: (sessionId) =>
+      serially(sessionId, async () => {
+        const latest = reads.get(sessionId)
+        const newest = latest?.sent.messages[0]
+        if (!latest?.sent.earlier || !newest || unpageable.has(sessionId)) return false
+        const held = earlier.get(sessionId)
+        if (held && !held.more) return false
+        const first = held?.messages[0] ?? newest
+        const page = await readEarlierPage(sessionId, startOf(first))
+        if (!page) return false
+        // Let go, or read again from another point, meanwhile: asked again.
+        if (earlier.get(sessionId) !== held || !reads.has(sessionId)) return true
+        earlier.set(sessionId, withPage(held, page, startOf(newest)))
+        reapply(sessionId)
+        return true
+      }),
     retryReview: (sessionId, approvalId) => {
       const key = reviewOf(approvalId)
       if (key) reviews.get(sessionId)?.retry(key)

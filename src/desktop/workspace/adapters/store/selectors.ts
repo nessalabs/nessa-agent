@@ -84,7 +84,6 @@ export const selectSessionListChosen = (state: Root) =>
 /** How many columns of panes there are; the side columns are fitted around them. */
 export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
-export const selectSessionTabs = (state: Root) => state.workspace.sessionTabs
 /** Which pane is where, ignoring sizes: motion's shape, painted with the boxes. */
 export const selectPaneShape = (state: Root): string => {
   const layout = state.workspace.panes

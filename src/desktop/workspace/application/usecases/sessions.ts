@@ -227,9 +227,10 @@ function imagesReturned(
 
 /**
  * The person let a message the source refused go. A session the source never
- * began, left with nothing to begin it, was never a session: an open document
- * returns to its draft home under the same id, visible or hidden. With no
- * document tab, it leaves the window.
+ * began, left with nothing to begin it, was never a session: its pane goes
+ * back to a new session's home under the same id — in its channel while that
+ * is still listed — and it leaves the lists. With no home to go back to, its
+ * pane closes.
  */
 export function unsentDiscarded(
   state: WorkspaceState,
@@ -271,10 +272,9 @@ export function unsentDiscarded(
       paneCount(panes) > 1 ? removePane(panes, showing.key) : null,
     )
   }
-  return discarded.sessionTabs.includes(sessionId)
+  return discarded.panes && paneShowingSession(discarded.panes, sessionId)
     ? {
         ...unlisted,
-        sessionTabs: discarded.sessionTabs,
         drafts: {
           ...unlisted.drafts,
           [sessionId]: { id: sessionId, ...home },

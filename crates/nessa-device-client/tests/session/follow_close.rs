@@ -115,8 +115,10 @@ fn settled_view(conversation: &str) -> ConversationView {
             steering_target: None,
             parts: Vec::new(),
             steering_offset: None,
+            starts_at: None,
         }],
         pending: Vec::new(),
+        earlier: false,
         permissions: Vec::new(),
         tools: Vec::new(),
         capabilities: ConversationCapabilities {
