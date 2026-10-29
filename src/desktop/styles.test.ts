@@ -487,7 +487,7 @@ it("lays night-scene text out on the frame after its box is measured", () => {
 // CSS comments neither hide the active rule nor count as an active rule.
 const shortHomeRuleKeepsSliver = (source: string) =>
   /@container \(max-height: 520px\) \{\s*\.desktop-header:not\(\[data-sliver\]\) \{\s*display:\s*none/.test(
-    source.replace(/\/\*[\s\S]*?\*\//g, ""),
+    source.replace(/\/\*[\s\S]*?\*\//g, " "),
   )
 
 it("keeps a conversation's sliver of the header still, beneath the text, and out of short panes", () => {
@@ -527,6 +527,14 @@ it("a commented-out short-home guard cannot replace the active protection", () =
     } */
   `
   expect(shortHomeRuleKeepsSliver(missingProtection + commentedGuard)).toBe(false)
+})
+
+it("a comment cannot join a split declaration into the short-home guard", () => {
+  const splitDeclaration = styles.replace(
+    /(\.desktop-header:not\(\[data-sliver\]\)\s*\{\s*)display:/,
+    "$1dis/**/play:",
+  )
+  expect(shortHomeRuleKeepsSliver(splitDeclaration)).toBe(false)
 })
 
 it("keeps a running step's time on one line, whatever the pane's width", () => {
