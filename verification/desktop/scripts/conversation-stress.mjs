@@ -2084,8 +2084,10 @@ const steps = {
             .click({ timeout: 10_000 })
           const restored = await waitFor(
             async () =>
-              (await selectedStressConversation(run.page, run.main.title)) ===
-                run.main.id &&
+              // Needs-you headings use aria-current; ordinary options use aria-selected.
+              (await listCard
+                .locator(`[data-session-row="${run.main.id}"]`)
+                .getAttribute("aria-current")) === "true" &&
               (await run.page
                 .locator(`${css.focusedPane} ${css.agentApproval}`)
                 .count()) === 1 &&
