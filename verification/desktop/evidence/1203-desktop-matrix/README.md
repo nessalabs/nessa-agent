@@ -83,3 +83,95 @@ The pane and pairing state documentation was reviewed. Pairing's existing
 Shown/Hidden transitions remain unchanged; its focus destination is now explicit.
 The other repairs change verification data and preconditions, so they introduce
 no product state transitions requiring another state-diagram update.
+
+## Completed functional matrix
+
+The functional matrix totals **1,631 passing applicable checks across 37 suites**.
+This is a consolidated report, not one uninterrupted run: the initial five suites
+completed before the runner was interrupted, the remaining 32 suites ran to
+completion, and repaired suites were rerun. The original failures remain recorded
+below. The subagent total replaces its four panel cases with the repaired rerun;
+its other nine original cases passed. No failing result was counted as a pass.
+
+The final selector repair is `8c7735d4c`: question actions address the conversation
+pane instead of matching both that pane and Needs you. Whole-desktop and panel
+removal assertions remain intact. Turn outcomes passes **13/13** in Chromium and
+WebKit, both layouts. Reverting the selector produces the original strict-match
+failure; restoring it passes. This verification-only change adds no product
+state transition, so it does not advance a state-page source checkpoint.
+
+| Original failing suite | Original result | Repaired result |
+| --- | --- | --- |
+| Committed transcript | 0/2; fixture startup prevented expansion | 121/121 |
+| Conversation unread | 1/5 | 5/5 |
+| Linked devices | 18/19 | 19/19 |
+| Share dialog | 3/27 | 27/27 |
+| Subagents | 9/13 | 13/13, four panel cases replaced |
+| Turn outcomes | 6/12; opening failed before console check | 13/13 |
+
+The 22 exclusions are 18 session-list checks in sidebar layout, which has no
+session list, and four dev-only retained-app checks in the production
+message-sync run. Performance was excluded with `--skip-perf`; these fixture and
+focus repairs make no performance claim. Native WKWebView was not measured.
+
+| Suite | Passed | Not run |
+| --- | ---: | ---: |
+| focus | 93/93 | 0 |
+| shared-controls | 33/33 | 0 |
+| icon-buttons | 13/13 | 0 |
+| resize-observers | 5/5 | 0 |
+| smoke | 33/33 | 0 |
+| drag | 189/189 | 0 |
+| responsive | 35/35 | 0 |
+| safe-area | 91/91 | 0 |
+| columns | 283/283 | 18 |
+| committed-transcript | 121/121 | 0 |
+| local-tab-lifetimes | 25/25 | 0 |
+| lease-details | 109/109 | 0 |
+| load-fallback | 16/16 | 0 |
+| gateway-states | 15/15 | 0 |
+| conversation-unread | 5/5 | 0 |
+| mode-publication | 3/3 | 0 |
+| panel-list-follow | 3/3 | 0 |
+| linked-devices | 19/19 | 0 |
+| share-dialog | 27/27 | 0 |
+| session-rows | 6/6 | 0 |
+| settings-page | 25/25 | 0 |
+| widgets | 49/49 | 0 |
+| subagents | 13/13 | 0 |
+| mcp-apps | 101/101 | 0 |
+| app-review | 37/37 | 0 |
+| approval-deadline | 3/3 | 0 |
+| clock-snapshots | 5/5 | 0 |
+| message-sync | 15/15 | 4 |
+| command-order | 9/9 | 0 |
+| published-files | 25/25 | 0 |
+| transcript-notes | 17/17 | 0 |
+| transcript-unreadable | 5/5 | 0 |
+| tool-disclosure | 21/21 | 0 |
+| user-attachments | 145/145 | 0 |
+| turn-outcomes | 13/13 | 0 |
+| send-failure | 15/15 | 0 |
+| refused-messages | 9/9 | 0 |
+| **Total (37 suites)** | **1631/1631** | **22** |
+
+## Production scripted run
+
+Source behavior: `30a58f4e2`; subsequent changes affect verification selectors
+and documentation only. Command: `pnpm test:e2e:scripted --mode prod` with an
+isolated output directory. Summary:
+
+Verdict: pass
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| resize-observers | pass | pass |
+| mcp-apps-gateway | not run: dev server only | not run: dev server only |
+| gateway-window | pass | pass |
+| scripted-scenarios | pass | pass |
+
+Relevant log lines:
+
+- console chromium: console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:61498/favicon.ico) (harmless)
+- console chromium: console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:61917/favicon.ico) (harmless)
+- console chromium: console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:62301/favicon.ico) (harmless)
