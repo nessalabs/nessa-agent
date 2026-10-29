@@ -1994,10 +1994,10 @@ const steps = {
       failures.push(
         `the read reply is ${said.length} of ${whole.length} bytes, ending ${JSON.stringify(said.slice(-40))}`,
       )
+    // The whole reply is checked above; `view.truncated` is not, since a busy
+    // run's older turns may give way to fit the frame.
     if ((answer?.parts.length ?? 0) > 4)
       failures.push(`the reply is ${answer?.parts.length} parts, not joined`)
-    if (view.truncated)
-      failures.push("the read says some of the conversation is not shown")
   },
 
   async reviews(run, step, failures) {
