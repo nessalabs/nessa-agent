@@ -1,15 +1,17 @@
 # Desktop matrix repair (#1203)
 
-The repaired fixtures reach the existing UI through visible controls. No product
-UI or pane lifecycle changed. The earlier tooltip, home-shape and sideways-drag
+The repaired fixtures reach the existing UI through visible controls. Pairing
+dialog closure now returns focus explicitly to its row in WebKit, where a pointer
+click can leave the previous settings control focused. Pane lifecycle is unchanged. The earlier tooltip, home-shape and sideways-drag
 reports are resolved by the intervening workspace change (#1197).
 
 ## Source and environment
 
 - Base: `c92faad8e3ea1667ef7b9f5bf5d1847b32a57f19`.
 - Executable verification changes: `2e8e26ee1b011ab781bdc67cac04ca7eff4bb42e`.
-- Final reviewed head: `094019a712bf596eba7e1f712e0274f340f6c85b` (later commits
-  only correct explanatory wording and documentation checkpoints).
+- Initial narrow-fixture review: `094019a712bf596eba7e1f712e0274f340f6c85b`.
+- Final reviewed source: `30a58f4e25121a2f503dc3c3c1ed30ffa1a432f7`, including pairing
+  focus and the additional fixture repairs found by the complete matrix.
 - macOS, isolated Vite cache and loopback port; Playwright Chromium and WebKit.
   These are browser results, not native WKWebView or performance measurements.
 
@@ -53,3 +55,29 @@ The narrow fixture reaches two readable panes before typing an unsent reply:
 It reveals the session list before hovering the removal actions:
 
 ![Session removal actions](removal-actions.jpg)
+
+## Additional matrix repairs
+
+The complete run exposed stale committed-review/question fixtures, missing
+channel-list and tunnel responses in strict gateway mocks, and a tunnel check
+that sampled its loading state. The fixtures now use the current published
+contracts and wait for the state they assert. Restored committed controls pass
+121/121; unread-conversation checks pass 5/5; linked-device checks pass 19/19.
+
+The pairing focus regression fails before the runtime fix (17/18 unit tests)
+and with that fix reverted in a separate checkout. The restored suite passes
+18/18. WebKit now places focus on Show code after Escape closes the modal:
+
+![Focus returns to Show code in WebKit](pairing-focus.png)
+
+The subagent panel check now measures the existing toolbar boundary and opaque
+theme background, as the production styles and their test require; its four
+browser/layout cases and console check pass 5/5. Strict mock responses preserve
+the unexpected-method assertion; share-dialog passes 27/27 after answering the
+channel-list and tunnel reads. Linking stress setup handles a vault unlock prompt
+before selecting a conversation after a prior engine restarted the gateway.
+
+The pane and pairing state documentation was reviewed. Pairing's existing
+Shown/Hidden transitions remain unchanged; its focus destination is now explicit.
+The other repairs change verification data and preconditions, so they introduce
+no product state transitions requiring another state-diagram update.
