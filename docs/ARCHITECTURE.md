@@ -1124,7 +1124,7 @@ what the window last published over `workspace.publish`; see
 
 ## Nessa-owned tools over MCP
 
-`crates/nessa-mcp` is the stdio MCP server for all Nessa-provided tools. Claude's
+`crates/nessa-mcp` is the stdio MCP server for Nessa's managed shell tool. Claude's
 native file/web tools remain provider-owned. No tool request selects executable
 configuration. The gateway holds the connection to each configured MCP server
 for each harness session (ADR 344): each provider open gets a stand-in in the
@@ -1143,6 +1143,16 @@ carried in the stand-in's environment. The conversation view fills
 [mcp-connections](design/mcp-connections.md).
 The shell tool coordinates an injected Shepherd runner and private process audit
 through its application ports. See the [MCP server](../crates/nessa-mcp/README.md).
+
+The gateway also serves `nessa-github` as a built-in MCP server, composed beside
+thread, background and environment tools. It admits the live source turn through
+Cedar before `GithubConnections` uses the current vault generation for a fixed
+repository, issue or pull request GET. Cancellation interrupts the generation
+lock wait or local HTTP future; a departed generation's answer is refused.
+Nessa's sign-in is not placed in provider or managed-shell environments. Raw
+`gh` and git commands therefore need separately configured credentials. This
+broker remains read-only; the [GitHub read lifecycle](state/services/gateway/github-reads.md)
+and [design table](design/github-connect.md) describe its scope and orderings.
 
 ## CLI surface
 
