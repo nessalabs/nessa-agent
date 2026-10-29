@@ -15,17 +15,17 @@ use nessa_sdk::{
 };
 use sha2::{Digest, Sha256};
 
-struct Fixture {
+pub(in crate::conversation::application) struct Fixture {
     #[cfg(unix)]
     _public_parent: tempfile::TempDir,
     directory: tempfile::TempDir,
-    service: ConversationService,
+    pub(in crate::conversation::application) service: ConversationService,
     provider: Arc<ProviderFactory>,
     attachments: Arc<MemoryAttachments>,
     audit: Arc<RecordingFileLinkAudit>,
-    id: ConversationId,
+    pub(in crate::conversation::application) id: ConversationId,
 }
-fn caller(action: &str) -> ConversationCaller {
+pub(in crate::conversation::application) fn caller(action: &str) -> ConversationCaller {
     ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),
         principal_id: PrincipalId::new("person").unwrap(),
@@ -34,7 +34,7 @@ fn caller(action: &str) -> ConversationCaller {
     }
 }
 impl Fixture {
-    async fn new() -> Self {
+    pub(in crate::conversation::application) async fn new() -> Self {
         #[cfg(unix)]
         let public_parent = tempfile::tempdir().unwrap();
         #[cfg(unix)]
@@ -115,7 +115,12 @@ impl Fixture {
             id,
         }
     }
-    fn keep(&self, bytes: &[u8], media: &str, name: &str) -> UploadedFileReference {
+    pub(in crate::conversation::application) fn keep(
+        &self,
+        bytes: &[u8],
+        media: &str,
+        name: &str,
+    ) -> UploadedFileReference {
         let file = UploadedFileReference::new(
             Sha256Digest::from_bytes(Sha256::digest(bytes).into()),
             MediaType::parse(media).unwrap(),
@@ -161,7 +166,10 @@ impl Fixture {
             .await
             .map(|_| ())
     }
-    async fn ended(&self, execution: &str) -> nessa_protocol::conversation::view::ConversationView {
+    pub(in crate::conversation::application) async fn ended(
+        &self,
+        execution: &str,
+    ) -> nessa_protocol::conversation::view::ConversationView {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let view = self.service.read(self.id.clone(), caller("read")).await.unwrap();
@@ -436,64 +444,4 @@ async fn unsupported_local_placement_is_refused_before_any_file_effect() {
     assert_eq!(ended.stage, InputFileStage::Failed);
     assert_eq!(ended.failure, Some(UserFileError::NotOffered));
     assert!(!ended.delivered);
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn uploaded_person_turn_retains_its_exact_command_provenance() {
-    use nessa_sdk::application::agent_execution::sessions::SessionStorage;
-    use nessa_sdk::domain::agent_execution::executions::Initiation;
-    use nessa_sdk::infrastructure::session_storage::RecordStorage;
-
-    let fixture = Fixture::new().await;
-    let directory = tempfile::tempdir().unwrap();
-    let commands = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
-    fixture.service.bind_commands(commands.clone());
-    let file = fixture.keep(b"person receipt", "text/plain", "receipt.txt");
-    fixture
-        .service
-        .submit_command(
-            commands.clone(),
-            fixture.id.clone(),
-            caller("uploaded-person"),
-            Initiation::owner(),
-            false,
-            "uploaded-person".into(),
-            SubmittedMessage {
-                text: String::new(),
-                uploads: vec![SubmittedUpload {
-                    digest: file.digest().to_string(),
-                    media_type: file.media_type().as_str().into(),
-                    size: file.size(),
-                    name: file.name().into(),
-                }],
-                ..Default::default()
-            },
-            SubmissionMode::Queue,
-        )
-        .await
-        .unwrap();
-    fixture.ended("uploaded-person").await;
-    let committed = fixture
-        .service
-        .inner
-        .storage
-        .read_committed(super::super::conversation_session(&fixture.id))
-        .await
-        .unwrap()
-        .unwrap();
-    let history = &committed.snapshot().unwrap().invocations;
-    let people = fixture
-        .service
-        .person_turns(&fixture.id, &caller("inspect-provenance"), history)
-        .await
-        .unwrap();
-    fixture.service.shutdown().await.unwrap();
-    commands.shutdown().await.unwrap();
-    assert_eq!(
-        people.len(),
-        1,
-        "the real uploaded command retains its person admission"
-    );
-    assert_eq!(people[0].1, "uploaded-person");
 }
