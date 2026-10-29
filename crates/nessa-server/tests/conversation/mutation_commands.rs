@@ -1557,7 +1557,7 @@ async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
         for index in 0..30 {
             projection.injected(&format!("steering-{index}"), "running-parent");
         }
-        assert!(projection.view().truncated);
+        assert!(projection.view().earlier);
         assert!(!projection
             .view()
             .messages

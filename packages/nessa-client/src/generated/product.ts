@@ -554,6 +554,8 @@ export interface ConversationMessage {
   parts: ConversationPart[]
   /** Target event count when steering was admitted locally; does not imply provider consumption timing. */
   steeringOffset?: number
+  /** Where the first listed part starts in the whole turn, when the view begins partway through it. The person's message and the parts before it are read with conversation.readEarlier. Absent when the turn is listed from its start. */
+  startsAt?: ConversationPartPosition
 }
 /** A waiting input that may be removed before dispatch. */
 export interface ConversationPending {
@@ -739,8 +741,10 @@ export interface ConversationView {
   capabilities: ConversationCapabilities
   /** Current provider attachment lifecycle. */
   lifecycle: ConversationLifecycle
-  /** Some history, text or whole interactions were omitted to bound this response; interactionViewError explains omitted actionable units. */
+  /** Something no read gives back was omitted to bound this response: a gap between the turns listed, notes, artifacts, or whole interactions; interactionViewError explains omitted actionable units. Older turns that only come before the first one listed are earlier instead. */
   truncated: boolean
+  /** Turns, or the start of the first turn listed, came before what this view lists. They are read with conversation.readEarlier, before the first message's start. */
+  earlier: boolean
   /** Why complete pending reviews or questions cannot safely be shown; do not infer omitted choices or question fields. */
   interactionViewError?: string
   /** All currently pending execution IDs are represented, so an exact reorder may be attempted. */
@@ -823,6 +827,37 @@ export interface ConversationPeekResult {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
   executionId: string | null
+}
+/** A place in a turn: the part, counted from the turn's first, and the byte within that part's text. */
+export interface ConversationPartPosition {
+  part: number
+  byte: number
+}
+/** A place in a conversation's history: the start of a turn, before the person's message, when at is absent; otherwise a place among the turn's parts, after the person's message. */
+export interface ConversationPoint {
+  executionId: string
+  at?: ConversationPartPosition
+}
+/** Read what came before a point in the conversation's history: the turns nearest it that fit one frame. With after, only what comes after that point, to fill a gap between two points. */
+export interface ConversationReadEarlierParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  before: ConversationPoint
+  after?: ConversationPoint
+}
+/** What came before a point, oldest first, ending where the point is. The first message starts partway through its turn when it carries startsAt. */
+export interface ConversationEarlier {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  messages: ConversationMessage[]
+  /** The calls the messages made. */
+  tools: ConversationTool[]
+  /** The fork the conversation began as, with its copied turns, on the page that reaches the start; empty otherwise. */
+  handoffs: ConversationHandoff[]
+  /** Something comes before the first message's start (after the after point, when one was given). */
+  more: boolean
+  /** The page left out something no read gives back, as a view's truncated says. */
+  truncated: boolean
 }
 /** Read the current bounded projection. */
 export interface ConversationReadParams {
@@ -3483,7 +3518,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 103,
+  maxReadyMethods: 104,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3793,6 +3828,7 @@ export const ProductMethod = {
   ChannelCreate: "channel.create",
   ChannelList: "channel.list",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
+  ConversationReadEarlier: "conversation.readEarlier",
   ConversationPeek: "conversation.peek",
   ConversationSetModel: "conversation.setModel",
   ConversationSwitchAgent: "conversation.switchAgent",
@@ -3909,6 +3945,7 @@ export const productReadyMethods = [
   "channel.create",
   "channel.list",
   "conversation.subscribeEvents",
+  "conversation.readEarlier",
   "conversation.peek",
   "conversation.setModel",
   "conversation.switchAgent",
@@ -4016,6 +4053,7 @@ export const productMethodGrants = {
   "channel.create": "conversation.write",
   "channel.list": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
+  "conversation.readEarlier": "conversation.write",
   "conversation.peek": "conversation.write",
   "conversation.setModel": "conversation.write",
   "conversation.switchAgent": "conversation.write",

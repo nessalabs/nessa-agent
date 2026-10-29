@@ -28,6 +28,8 @@ import type {
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
+  ConversationEarlier,
+  ConversationPoint,
   ConversationPermission,
   ConversationQuestion,
   ConversationReceipt,
@@ -66,6 +68,7 @@ import {
   conversationMessageStatus,
   conversationObserve,
   conversationView,
+  conversationEarlier,
   conversationReceipt,
   conversationCommandReceipt,
   conversationMutation,
@@ -229,6 +232,19 @@ export type ConversationApi = {
   ) => Promise<ConversationCreateResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
+  /**
+   * Read what came before `before` in the conversation's saved history: the
+   * turns nearest it that fit one frame, oldest first, ending where `before`
+   * is. A view lists them only as `earlier`; its first message's start is
+   * where to read before. With `after`, only what comes after that point, to
+   * fill the gap between two points. A point the gateway's history does not
+   * hold is refused as invalid input. Opens nothing.
+   */
+  readEarlier: (
+    conversationId: string,
+    before: ConversationPoint,
+    after?: ConversationPoint,
+  ) => Promise<ConversationEarlier>
   /**
    * List the conversations the authenticated caller owns, most recently
    * updated first, at most 500: each with its title, the last thing said in
@@ -1001,6 +1017,15 @@ export function createConversationApi(
       conversationView(
         await session.request(ProductMethod.ConversationRead, {
           conversationId: validConversationId(id),
+        }),
+        id,
+      ),
+    readEarlier: async (id, before, after) =>
+      conversationEarlier(
+        await session.request(ProductMethod.ConversationReadEarlier, {
+          conversationId: validConversationId(id),
+          before,
+          ...(after === undefined ? {} : { after }),
         }),
         id,
       ),

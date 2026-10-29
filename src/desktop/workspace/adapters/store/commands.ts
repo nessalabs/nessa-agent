@@ -88,6 +88,7 @@ export {
   providerLoginAvailable,
   renameSession,
   forkSession,
+  loadEarlier,
   resendMessage,
   retryReview,
   sendMessage,

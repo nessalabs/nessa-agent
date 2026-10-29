@@ -358,6 +358,10 @@
       "params": "ConversationSubscribeEventsParams",
       "grant": "conversation.write"
     },
+    "conversation.readEarlier": {
+      "params": "ConversationReadEarlierParams",
+      "grant": "conversation.write"
+    },
     "conversation.peek": {
       "params": "ConversationReadParams",
       "grant": "conversation.write"

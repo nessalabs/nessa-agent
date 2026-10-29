@@ -47,4 +47,15 @@ describe("what a bounded view says about history it did not draw", () => {
       historyNotices({ omitted: true, unconfirmed: true }).map((notice) => notice.kind),
     ).toEqual(["omitted", "unconfirmed"])
   })
+
+  it("says earlier turns are not shown only where they are not read as the person scrolls back", () => {
+    const history = historyExtent({
+      transcriptState: "complete",
+      truncated: false,
+      earlier: true,
+    })
+    expect(history).toEqual({ omitted: false, unconfirmed: false, earlier: true })
+    expect(historyNotices(history, { pagesEarlier: true })).toEqual([])
+    expect(historyNotices(history).map((notice) => notice.kind)).toEqual(["omitted"])
+  })
 })

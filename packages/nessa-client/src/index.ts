@@ -317,6 +317,9 @@ export {
 export { clientDueAtMs, deadlinePendingLine } from "./protocol/deadline-pending.js"
 export type {
   ConversationView,
+  ConversationEarlier,
+  ConversationPoint,
+  ConversationPartPosition,
   ApprovalMode,
   ApprovalModeChoice,
   AgentModelOption,

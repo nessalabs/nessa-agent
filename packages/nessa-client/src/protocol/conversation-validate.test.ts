@@ -51,6 +51,7 @@ function view() {
       },
     ],
     truncated: false,
+    earlier: false,
     queueComplete: true,
     transcriptState: "complete",
     artifacts: [],

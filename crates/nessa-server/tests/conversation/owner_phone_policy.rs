@@ -283,6 +283,7 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.subscribeList",
         "conversation.subscribeEvents",
         "conversation.peek",
+        "conversation.readEarlier",
         // A card shows what a review or question asks before it is answered.
         "conversation.answer",
         "conversation.permissionReview",
