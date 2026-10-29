@@ -49,7 +49,9 @@
  * `save` then keeps every result in order, an error's `structuredContent`
  * included (a call the server refused outright is saved as
  * `{ error: "call_refused", message }`), and an error does not fail the
- * turn, so a check can count how many were refused.
+ * turn, so a check can count how many were refused. With `title`, the call
+ * is announced under that title instead of the tool's name, as a harness
+ * names a call in its own words.
  *
  * A permission offers two answers, the two the window can give: allow once
  * and deny once. A withdrawn review is the third answer, `cancelled`, not
@@ -82,7 +84,7 @@ const FIELDS = {
 }
 
 /** Fields a step may leave out. */
-const OPTIONAL = { tool: ["server", "save", "times"] }
+const OPTIONAL = { tool: ["server", "save", "times", "title"] }
 
 /** The modes, by harness, in which the harness asks for nothing. */
 export const FULL_ACCESS = { claude: "bypassPermissions", codex: "agent-full-access" }
@@ -179,6 +181,7 @@ function parseStep(step, branch) {
         ...(Object.hasOwn(step, "server") ? { server: toolName(step.server) } : {}),
         ...(Object.hasOwn(step, "save") ? { save: toolName(step.save) } : {}),
         ...(Object.hasOwn(step, "times") ? { times: timesOf(step.times) } : {}),
+        ...(Object.hasOwn(step, "title") ? { title: titleOf(step.title) } : {}),
       }
     case "pause":
       if (!Number.isInteger(step.ms) || step.ms < 0 || step.ms > MAX_PAUSE_MS)
@@ -222,7 +225,7 @@ function argumentsOf(value) {
 
 function titleOf(title) {
   if (typeof title !== "string" || title.trim() === "")
-    throw new Error("a permission needs a title")
+    throw new Error("a title is a non-empty string")
   return title
 }
 
@@ -489,7 +492,7 @@ async function callTool(step, ctx, existing) {
     const announced = permissionCall(ctx.agent, {
       id,
       tool: step.tool,
-      title: step.tool,
+      title: step.title ?? step.tool,
       arguments: args,
       server: step.server,
     })
@@ -543,7 +546,7 @@ async function callMany(step, ctx) {
       permissionCall(ctx.agent, {
         id,
         tool: step.tool,
-        title: step.tool,
+        title: step.title ?? step.tool,
         arguments: args,
         server: step.server,
       }).update,
