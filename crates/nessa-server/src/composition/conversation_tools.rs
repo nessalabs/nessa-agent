@@ -386,6 +386,7 @@ async fn run(
                         model: args.model,
                         approval_mode: None,
                         environment: args.environment,
+                        channel: None,
                     },
                 )
                 .await
@@ -470,6 +471,7 @@ async fn run(
                     source,
                     execution.clone(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: args.message,
                         ..Default::default()
                     },

@@ -16,8 +16,8 @@ use crate::{
     application::{
         authorization::AuthorizeAction,
         credential_admin::{
-            AuthRevisionSource, IssueCredentialOutcome, IssueCredentialRequest,
-            RevokeCredentialRequest,
+            AuthRevisionSource, CredentialIssuePurpose, IssueCredentialOutcome,
+            IssueCredentialRequest, RevokeCredentialRequest,
         },
         credential_registry::{CredentialRegistryFault, RegistryInvariant},
         dto::{
@@ -107,6 +107,7 @@ fn claim_fixture_as(
     let audience = AudienceId::new("gateway-1").unwrap();
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: store.as_ref(),
             access: store.as_ref(),
             clock: &Time,
@@ -562,6 +563,7 @@ fn native_key_publication_and_canonical_explicit_revoke_agree() {
     let audience = AudienceId::new("gateway-1").unwrap();
     let device = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &verifier,
             access: fixture.store.as_ref(),
             clock: &Time,
@@ -674,6 +676,7 @@ fn owner_recovery_preserves_read_only_key_binding() {
     let evidence = CredentialEvidence::new(b"native-device".to_vec()).unwrap();
     let device = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &verifier,
             access: fixture.store.as_ref(),
             clock: &Time,
@@ -943,6 +946,7 @@ fn first_key_publication_holds_current_history_admission() {
     let audience = AudienceId::new("gateway-1").unwrap();
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: store.as_ref(),
             access: store.as_ref(),
             clock: &Time,
@@ -1076,6 +1080,7 @@ fn first_key_publication_holds_current_history_admission() {
 
 fn ordinary_issue(identity: &str) -> IssueCredentialRequest {
     IssueCredentialRequest {
+        purpose: CredentialIssuePurpose::Product,
         request_id: format!("issue-{identity}"),
         issuer_principal_id: "owner".into(),
         credential_id: identity.into(),
@@ -2065,6 +2070,7 @@ fn pairing_admission_current_access_policy_revision_and_deadline_neighbors() {
     let evidence = CredentialEvidence::new(b"injected-verified-proof".to_vec()).unwrap();
     let short_session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &proof,
             access: fixture.store.as_ref(),
             clock: &Time,
@@ -2566,6 +2572,7 @@ fn alternate_store_requires_original_issuer(original_has_issuer: bool) {
     );
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &alternate,
             access: &alternate,
             clock: &Time,
@@ -2704,6 +2711,7 @@ fn equal_revision_alternate_gateway_admission_requires_current_issuer_audience()
     .unwrap();
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &alternate,
             access: &alternate,
             clock: &Time,
@@ -2884,6 +2892,7 @@ fn align_admission_revision(authority: &AdmissionAuthority, target: &AdmissionAu
     let expected = target.store.identity().unwrap().revision;
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: authority.store.as_ref(),
             access: authority.store.as_ref(),
             clock: &Time,
@@ -2934,6 +2943,7 @@ fn admission_record(owner: &str, member: &str, organization: &str, identity: u8)
 fn admit_record(authority: &AdmissionAuthority, record: &PairingRecord) -> PairingAdmission {
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: authority.store.as_ref(),
             access: authority.store.as_ref(),
             clock: &Time,
@@ -3937,3 +3947,97 @@ fn the_gateway_id_prefix_belongs_to_gateway_principals_alone() {
 
 #[path = "owner_phone_registry_tests.rs"]
 mod owner_phone_registry_tests;
+
+#[test]
+fn ordinary_pairing_expiry_and_cancellation_serialize_with_a_held_noop_writer() {
+    let fixture = enrolled_claim();
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let admission = ready(
+        AuthorizePairing {
+            access: fixture.store.as_ref(),
+            policy: &policy,
+            clock: &Time,
+        }
+        .execute(&fixture.session, fixture.record.intent(), &fixture.gateway),
+    )
+    .unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let held = Arc::new(AtomicBool::new(false));
+    let clock = HeldPairingClock {
+        entered: entered_tx,
+        release: Mutex::new(release_rx),
+        held: held.clone(),
+        expiry_ms: Time.unix_milliseconds(),
+    };
+    let id = fixture.record.id();
+    let before = fixture.store.revision().unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let (entered, started, was_held, early, holder, expiry, decision) = thread::scope(|threads| {
+        let release = ReleasePairingMutation(Some(release_tx));
+        let holder = threads.spawn(|| fixture.store.expire_pairing_if_due(id, &clock));
+        let entered = entered_rx.recv_timeout(Duration::from_secs(2));
+        let expiry = threads.spawn(|| {
+            started_tx.send("expiry").unwrap();
+            let result = fixture.store.expire_pairing_if_due(id, &Time);
+            done_tx.send(("expiry", result.clone())).unwrap();
+            result
+        });
+        let decision = threads.spawn(|| {
+            started_tx.send("decision").unwrap();
+            let result = ready(fixture.store.decide_pairing(
+                id,
+                OwnerDecision::Cancel,
+                &admission,
+                &Time,
+            ));
+            done_tx.send(("decision", result.clone())).unwrap();
+            result
+        });
+        // Both real workers are admitted. A watchdog observes an incorrect
+        // early result; there is no retry, sleep, or registry-read inference.
+        let started = [
+            started_rx.recv_timeout(Duration::from_secs(2)),
+            started_rx.recv_timeout(Duration::from_secs(2)),
+        ];
+        let early = done_rx.recv_timeout(Duration::from_secs(2));
+        eprintln!(
+            "holder=expiry-clock entered={entered:?} started={started:?} held={} early={early:?}",
+            held.load(Ordering::Acquire)
+        );
+        let was_held = held.load(Ordering::Acquire);
+        drop(release);
+        (
+            entered,
+            started,
+            was_held,
+            early,
+            holder.join().unwrap(),
+            expiry.join().unwrap(),
+            decision.join().unwrap(),
+        )
+    });
+    assert!(entered.is_ok());
+    let mut started =
+        started.map(|result| result.expect("each real worker reached its operation boundary"));
+    started.sort();
+    assert_eq!(started, ["decision", "expiry"]);
+    assert!(
+        was_held,
+        "the original writer remained held until explicit release"
+    );
+    assert!(
+        matches!(early, Err(mpsc::RecvTimeoutError::Timeout)),
+        "an ordinary writer must wait for the original writer: {early:?}"
+    );
+    assert!(holder.is_ok());
+    assert!(expiry.is_ok(), "expiry must serialize: {expiry:?}");
+    assert_eq!(decision.unwrap().phase(), PairingPhase::Terminal);
+    assert_eq!(
+        fixture.store.revision().unwrap(),
+        before + 1,
+        "only cancellation changes canonical facts"
+    );
+    eprintln!("holder=expiry-clock exited=true serialized-expiry=ok serialized-cancel=terminal");
+}

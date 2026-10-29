@@ -1,0 +1,47 @@
+Published source ac6225d7d0e3ef8be69d7cd31b2e689235324687
+Run https://github.com/nessalabs/nessa-agent/actions/runs/40249699947
+
+Ubuntu job121338743736:
+2026-10-26T00:43:52.6545932Z [nessa-server nessa_server] thread 'composition::webhooks::tests::a_non_file_outbox_refuses_instead_of_becoming_absent' (18889) panicked at crates/nessa-server/src/composition/../../tests/composition/webhooks.rs:24:14:
+2026-10-26T00:43:52.6547535Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T00:43:52.6551502Z [nessa-server nessa_server] thread 'composition::webhooks::tests::absent_seeds_and_database_have_no_webhook_file_effects' (18892) panicked at crates/nessa-server/src/composition/../../tests/composition/webhooks.rs:24:14:
+2026-10-26T00:43:52.6553063Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T00:43:52.6555292Z [nessa-server nessa_server] thread 'composition::webhooks::tests::an_outbox_symlink_refuses_without_following_it' (18893) panicked at crates/nessa-server/src/composition/../../tests/composition/webhooks.rs:24:14:
+2026-10-26T00:43:52.6556230Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T00:43:52.6558625Z [nessa-server nessa_server] thread 'composition::webhooks::tests::bounded_seed_configuration_opens_without_issuing_and_reopens_after_removal' (18896) panicked at crates/nessa-server/src/composition/../../tests/composition/webhooks.rs:24:14:
+2026-10-26T00:43:52.6559703Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T00:43:52.6562059Z [nessa-server nessa_server] thread 'composition::webhooks::tests::invalid_private_seeds_refuse_before_opening_storage' (18898) panicked at crates/nessa-server/src/composition/../../tests/composition/webhooks.rs:24:14:
+2026-10-26T00:43:52.6563018Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T00:43:52.6565676Z [nessa-server nessa_server] thread 'webhooks::infrastructure::runtime::tests::first_worker_panic_seals_before_the_response_observer_is_woken' (31000) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/runtime.rs:21:10:
+2026-10-26T00:43:52.6566783Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T00:43:52.6569352Z [nessa-server nessa_server] thread 'webhooks::infrastructure::runtime::tests::ordinary_capacity_precedes_spawn_and_control_capacity_remains_available' (31003) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/runtime.rs:21:10:
+2026-10-26T00:43:52.6570539Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+2026-10-26T00:43:52.6577269Z [nessa-server nessa_server] test result: FAILED. 4118 passed; 7 failed; 11 ignored; 0 measured; 0 filtered out; finished in 161.85s
+2026-10-26T00:43:52.6577701Z [nessa-server nessa_server] 
+
+Stress job121338743687:
+2026-10-26T00:37:12.7760387Z scripted-scenarios: 8/8 held
+2026-10-26T00:37:12.9926674Z 
+2026-10-26T00:37:12.9927225Z Verdict: pass
+2026-10-26T00:37:12.9927525Z 
+2026-10-26T00:37:12.9927784Z | Check | Chromium | WebKit |
+2026-10-26T00:37:44.8933289Z usage-limit: 16/16 held
+2026-10-26T00:37:45.0385523Z ##[group]Run node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+2026-10-26T00:37:45.0386928Z node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+2026-10-26T00:37:45.0449836Z shell: /usr/bin/bash -e {0}
+2026-10-26T00:37:45.0450099Z env:
+2026-10-26T00:41:55.5126535Z ERROR 036 webhook [chromium columns]
+2026-10-26T00:41:55.5128166Z         ! Conversation command failed · conversation_not_found · conversation_not_found
+2026-10-26T00:41:57.2713699Z ERROR 037 switch [chromium columns]
+2026-10-26T00:41:57.2771569Z         ! not run: 036 webhook did not hold
+2026-10-26T00:41:57.2797970Z ERROR 038 permission [chromium columns]
+2026-10-26T00:42:27.3063746Z conversation-stress: 39/50 held (some could not run)
+2026-10-26T00:42:27.6301375Z [ELIFECYCLE] Command failed with exit code 1.
+2026-10-26T00:42:27.6531466Z ##[error]Process completed with exit code 1.
+2026-10-26T00:42:27.6591464Z ##[group]Run set -o pipefail
+2026-10-26T00:42:27.6591804Z set -o pipefail
+2026-10-26T00:43:50.1050439Z conversation-chaos: 2/2 runs held
+2026-10-26T00:43:50.1247557Z ##[group]Run actions/upload-artifact@v4
+2026-10-26T00:43:50.1247868Z with:
+2026-10-26T00:43:50.1248099Z   name: conversation-stress-40249699947-1
+2026-10-26T00:43:50.1248493Z   path: /home/runner/work/nessa-agent/nessa-agent-stress-evidence

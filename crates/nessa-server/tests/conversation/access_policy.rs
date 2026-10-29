@@ -18,6 +18,86 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[test]
+fn paired_list_catalogue_admission_matches_its_device_and_scope() {
+    let policy = policy();
+    let org = organization("org");
+    let owner = principal("owner");
+    let resource = AccessResource::Catalogue {
+        organization: &org,
+        owner: &owner,
+    };
+    for (org, binding_owner) in PEOPLE {
+        for signed_in_as in [binding_owner, "gateway:peer"] {
+            for held in ROLES {
+                let facts = Paired {
+                    org,
+                    signed_in_as,
+                    binding_owner,
+                    held,
+                    request: RequestShape::default(),
+                };
+                assert_eq!(
+                    allowed(&paired(&policy, AccessAction::List, resource, &facts)),
+                    (org, binding_owner) == ("org", "owner") && signed_in_as == binding_owner
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn paired_list_candidates_reuse_decisions_only_for_matching_facts() {
+    struct Counted {
+        policy: CedarConversationAccessPolicy,
+        calls: AtomicUsize,
+    }
+    impl ConversationAccessPolicyEvaluator for Counted {
+        fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.policy.evaluate(ask)
+        }
+    }
+    let policy = Counted {
+        policy: policy(),
+        calls: AtomicUsize::new(0),
+    };
+    let (org, owner) = (organization("org"), principal("owner"));
+    let access = PairedAccess::new(
+        &policy,
+        PairedParty {
+            organization: &org,
+            signed_in_as: &owner,
+            binding_owner: &owner,
+            receiver: "phone",
+        },
+    );
+    let live = conversation("org", "owner", false);
+    let foreign = conversation("other", "owner", false);
+    let another_owner = conversation("org", "other", false);
+    let deleted = conversation("org", "owner", true);
+    let read = Some(Capabilities::read());
+    assert_eq!(
+        access
+            .allows_each(
+                AccessAction::Read,
+                [
+                    (&live, read),
+                    (&live, read),
+                    (&foreign, read),
+                    (&live, None),
+                    (&deleted, read),
+                    (&another_owner, read),
+                    (&live, Some(Capabilities::comment())),
+                ]
+            )
+            .unwrap(),
+        [true, true, false, false, false, false, true]
+    );
+    assert_eq!(policy.calls.load(Ordering::Relaxed), 6);
+}
 
 fn policy() -> CedarConversationAccessPolicy {
     CedarConversationAccessPolicy::new().expect("the checked-in access policy validates")
@@ -178,7 +258,14 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
     let (org, owner) = (organization("org"), principal("owner"));
     for action in AccessAction::ALL {
         let resource = match action {
-            AccessAction::List | AccessAction::Write => AccessResource::Catalogue {
+            AccessAction::List
+            | AccessAction::Write
+            | AccessAction::ChannelCreate
+            | AccessAction::ChannelList => AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
+            AccessAction::ChannelUse | AccessAction::ChannelSettings => AccessResource::Channel {
                 organization: &org,
                 owner: &owner,
             },
@@ -340,7 +427,7 @@ fn owner_read_and_artifact_read_admit_the_owner_until_deleted() {
 }
 
 #[test]
-fn owner_list_is_the_owners_own_catalogue_and_never_a_paired_readers() {
+fn owner_and_device_lists_ask_their_own_catalogue_policies() {
     let policy = policy();
     let (org, owner, other) = (organization("org"), principal("owner"), principal("other"));
     let catalogue = AccessResource::Catalogue {
@@ -365,12 +452,15 @@ fn owner_list_is_the_owners_own_catalogue_and_never_a_paired_readers() {
         Some(&["owner.list".to_owned()][..])
     );
     assert!(!allowed(&list(&other)));
-    assert!(!allowed(&paired(
-        &policy,
-        AccessAction::List,
-        catalogue,
-        &Paired::default()
-    )));
+    assert_eq!(
+        allowed_by(&paired(
+            &policy,
+            AccessAction::List,
+            catalogue,
+            &Paired::default()
+        )),
+        Some(&["grant.list".to_owned()][..])
+    );
 }
 
 #[test]
@@ -415,6 +505,79 @@ fn owner_workspace_read_is_the_owners_own_windows_and_nobody_elses() {
         },
         &Paired::default()
     )));
+}
+
+#[test]
+fn owner_channels_are_the_owners_own_and_nobody_elses() {
+    let policy = policy();
+    let (org, elsewhere, owner, other) = (
+        organization("org"),
+        organization("elsewhere"),
+        principal("owner"),
+        principal("other"),
+    );
+    let cases = [
+        (
+            AccessAction::ChannelCreate,
+            AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_create",
+        ),
+        (
+            AccessAction::ChannelList,
+            AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_list",
+        ),
+        (
+            AccessAction::ChannelUse,
+            AccessResource::Channel {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_use",
+        ),
+        (
+            AccessAction::ChannelSettings,
+            AccessResource::Channel {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_settings",
+        ),
+    ];
+    for (action, resource, id) in cases {
+        let ask = |organization: &OrganizationId, principal: &PrincipalId| {
+            policy.evaluate(&AccessAsk {
+                subject: AccessSubject::Person {
+                    organization,
+                    principal,
+                },
+                action,
+                resource,
+                held: None,
+                request: RequestShape::default(),
+                target: None,
+            })
+        };
+        assert_eq!(
+            allowed_by(&ask(&org, &owner)),
+            Some(&[id.to_owned()][..]),
+            "{id}"
+        );
+        assert!(!allowed(&ask(&org, &other)), "{id}");
+        assert!(!allowed(&ask(&elsewhere, &owner)), "{id}");
+        // A paired device makes, lists, and uses no channel: a channel can
+        // name a folder on this machine.
+        assert!(
+            !allowed(&paired(&policy, action, resource, &Paired::default())),
+            "{id}"
+        );
+    }
 }
 
 #[test]
@@ -812,7 +975,7 @@ fn owner_access_the_policy_cannot_decide_is_unavailable() {
 /// role: it reads its grantor's live conversation with any role; comments
 /// with Comment or Drive and drives with Drive, as a device and never as a
 /// peer gateway; sees a granted tombstone in its catalogue; and never writes,
-/// lists or shares.
+/// shares or takes owner write commands. A device lists its grant scope.
 #[test]
 fn paired_access_answers_its_truth_table() {
     let policy = policy();
@@ -866,8 +1029,7 @@ fn paired_access_answers_its_truth_table() {
                         )),
                         grantors && held.is_some(),
                     );
-                    // `admit_list` and the share commands refuse a paired
-                    // device by what it is.
+                    // The share commands refuse a paired device by what it is.
                     for action in [
                         AccessAction::Share,
                         AccessAction::Unshare,
@@ -1264,11 +1426,11 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
     }
 }
 
-/// A paired party lists nothing of the owner's, sends no other owner
+/// A paired party lists its granted scope, sends no other owner
 /// command and shares nothing, and an
 /// evaluator that cannot decide makes every paired question unavailable.
 #[test]
-fn paired_access_lists_and_shares_nothing_and_fails_closed() {
+fn paired_access_lists_its_scope_but_shares_nothing_and_fails_closed() {
     struct Undecided;
     impl ConversationAccessPolicyEvaluator for Undecided {
         fn evaluate(&self, _: &AccessAsk<'_>) -> AccessDecision {
@@ -1285,12 +1447,11 @@ fn paired_access_lists_and_shares_nothing_and_fails_closed() {
     };
     let record = conversation("org", "owner", false);
     let access = PairedAccess::new(&policy, party);
-    for action in [AccessAction::List, AccessAction::Write] {
-        assert_eq!(
-            access.admit_catalogue(action),
-            Err(PairedRefusal::Forbidden)
-        );
-    }
+    assert_eq!(access.admit_catalogue(AccessAction::List), Ok(()));
+    assert_eq!(
+        access.admit_catalogue(AccessAction::Write),
+        Err(PairedRefusal::Forbidden)
+    );
     for action in [
         AccessAction::Share,
         AccessAction::Unshare,

@@ -1,5 +1,5 @@
 /*
- * The source list: the sidebar's column of sections and channels. Two
+ * The source list: the sidebar's gradient wash behind sections and channels. Two
  * variants share it — `channels`, where a channel is chosen for the session
  * list beside it, and `tree`, where a channel discloses its sessions inline.
  */
@@ -16,19 +16,25 @@
 .workspace-sidebar {
   position: relative;
   display: flex;
-  width: var(--workspace-sidebar-width);
+  /* The gutter it used to stand in is now inside it: the material reaches the
+     window's edge, as a macOS sidebar does, with the same room for its rows. */
+  width: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
   flex: none;
   flex-direction: column;
-  margin: var(--desktop-gutter) 0 var(--desktop-gutter) var(--desktop-gutter);
-  /* Docked, it is the window's own ground, under the window's controls, with
-     no card's rim or corner beside them: the chat surface beside it is what
-     stands apart (`panes.css`). The corners are the peek's, below. */
-  border-radius: var(--desktop-radius);
+  /* A wash rather than a framed pane, continuous with the window's light. */
+  --sidebar-wash: radial-gradient(
+    ellipse 70% 70% at 50% 20%,
+    color-mix(in oklab, var(--desktop-light-high) 30%, transparent),
+    transparent 70%
+  );
+  padding-top: var(--desktop-titlebar-height);
+  margin: 0 0 var(--desktop-gutter) var(--desktop-gutter);
+  background: var(--sidebar-wash);
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
   transition:
-    transform var(--desktop-slow) var(--desktop-out),
+    transform var(--desktop-drawer) var(--desktop-ease),
     visibility 0s;
 }
 
@@ -37,11 +43,14 @@
   top: 0;
   bottom: 0;
   left: 0;
-  transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
+  /* Exactly as far as the column beside it travels — its own width and the
+     resize edge's gutter — so the two move as one, with no gap opening
+     between them; the workspace clips what passes its edge. */
+  transform: translateX(calc(-100% - var(--desktop-gutter)));
   visibility: hidden;
   transition:
-    transform var(--desktop-slow) var(--desktop-out),
-    visibility 0s linear var(--desktop-slow);
+    transform var(--desktop-drawer) var(--desktop-ease),
+    visibility 0s linear var(--desktop-drawer);
 }
 
 /*
@@ -50,8 +59,7 @@
  * frame widens the one pane. It stays in the row, hidden, until the boxes
  * paint, and the two changes share one layout.
  */
-.workspace[data-spare-held][data-sidebar-row="open"][data-sidebar="closed"]
-  .workspace-sidebar {
+.workspace[data-spare-held][data-folding][data-sidebar="closed"] .workspace-sidebar {
   position: relative;
   top: auto;
   right: auto;
@@ -63,7 +71,7 @@
 
 /*
  * Revealed from the window's edge while folded (`useEdgePeek`, the same
- * reveal as the classic shell and Settings): it slides in over the panes,
+ * reveal as Settings'): it slides in over the panes,
  * more opaque than when docked since there is content under it, and lifted
  * with a deeper shadow. Its opaque fill keeps text underneath out of the peek.
  */
@@ -71,27 +79,12 @@
   z-index: 30;
   visibility: visible;
   transform: translate3d(0, 0, 0);
-  background: color-mix(in oklab, var(--background) 94%, var(--foreground));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent),
-    0 24px 60px -12px rgb(0 0 0 / 60%);
+  background:
+    var(--sidebar-wash), color-mix(in oklab, var(--background) 94%, var(--foreground));
+  box-shadow: 12px 0 32px -16px rgb(0 0 0 / 40%);
   transition:
     transform 360ms var(--desktop-ease),
     visibility 0s;
-}
-
-/*
- * The sidebar's titlebar row: its own action, in the column's top corner, and
- * never under the window's controls, which stand over the sidebar — at its
- * narrowest the action is pushed past its edge and clipped, rather than drawn
- * beneath them.
- */
-.workspace-sidebar > .desktop-column-bar {
-  height: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
-  align-items: flex-start;
-  padding: var(--desktop-control-inset);
-  padding-left: calc(var(--desktop-titlebar-safe-start) - var(--desktop-gutter));
 }
 
 .workspace-sidebar-scroll {
@@ -212,8 +205,15 @@
  * its tooltip. (`data-trailing` is written by `sidebar-row.tsx` only; the tree's
  * + is a control of its own.)
  */
-.workspace-sidebar [data-trailing] + [data-slot="sidebar-menu-item-trailing"] {
+.workspace-sidebar
+  :is([data-trailing], [data-row-actions])
+  + [data-slot="sidebar-menu-item-trailing"] {
   pointer-events: none;
+}
+
+.workspace-sidebar .workspace-row-actions {
+  display: inline-flex;
+  pointer-events: auto;
 }
 
 .workspace-sidebar [data-slot="sidebar-menu-item-badge"] {
@@ -225,22 +225,34 @@
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="glyph"] {
-  padding-right: calc(16px + 10px);
+  --workspace-row-decoration-width: 10px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="count"] {
-  padding-right: calc(16px + 18px);
+  --workspace-row-decoration-width: 18px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-digits="2"] {
-  padding-right: calc(16px + 24px);
+  --workspace-row-decoration-width: 24px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-digits="3"] {
-  padding-right: calc(16px + 31px);
+  --workspace-row-decoration-width: 31px;
+  padding-right: calc(16px + var(--workspace-row-decoration-width));
+}
+
+/* The action slot is independent of the count or glyph already at the end. */
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-row-actions] {
+  padding-right: calc(
+    16px + var(--workspace-row-decoration-width, 0px) + var(--desktop-control-size)
+  );
 }
 
 .workspace-row-icon {

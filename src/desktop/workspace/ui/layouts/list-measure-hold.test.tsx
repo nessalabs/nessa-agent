@@ -37,7 +37,6 @@ it.each(["split beside", "close stacked pane"] as const)(
     const workspace = document.createElement("div")
     workspace.className = "workspace"
     workspace.dataset.sidebar = action === "split beside" ? "open" : "closed"
-    workspace.dataset.sidebarRow = workspace.dataset.sidebar
     workspace.dataset.list = "open"
     workspace.innerHTML =
       '<section class="workspace-list"><div class="workspace-list-inner"><div class="desktop-column-bar"><svg></svg><h2>desktop-app</h2></div></div></section><div class="hold-owner"></div>'
@@ -45,7 +44,9 @@ it.each(["split beside", "close stacked pane"] as const)(
     const owner = workspace.querySelector(".hold-owner")
     const bar = workspace.querySelector(".desktop-column-bar")
     const inner = workspace.querySelector(".workspace-list-inner")
-    if (!owner || !bar || !inner) throw new Error("list hold fixture is incomplete")
+    const column = workspace.querySelector(".workspace-list")
+    if (!owner || !bar || !inner || !column)
+      throw new Error("list hold fixture is incomplete")
     const root = createRoot(owner)
     const bodyPadding = getComputedStyle(inner).paddingLeft
     try {
@@ -72,7 +73,6 @@ it.each(["split beside", "close stacked pane"] as const)(
         if (action === "split beside") {
           workspace.toggleAttribute("data-spare-held", frame < 3)
           if (frame === 2) workspace.dataset.sidebar = "closed"
-          if (frame === 3) workspace.dataset.sidebarRow = "closed"
         }
         await act(async () => frames.runFrame())
         expect(workspace.hasAttribute("data-list-held")).toBe(true)
@@ -81,17 +81,17 @@ it.each(["split beside", "close stacked pane"] as const)(
         expect(getComputedStyle(inner).paddingLeft).toBe(
           action === "split beside" ? bodyPadding : "0",
         )
-        const atEdge =
-          workspace.dataset.sidebar === "closed" &&
-          !workspace.hasAttribute("data-spare-held")
-        expect(getComputedStyle(bar).paddingLeft).toBe(
-          atEdge ? "var(--desktop-titlebar-safe-start)" : "12px",
-        )
+        // The flat window reserves the controls vertically, including
+        // while the list's body measure is held. jsdom checks destinations;
+        // browser safe-area sampling owns the painted geometry.
+        expect(getComputedStyle(column).paddingTop).toBe("var(--desktop-titlebar-height)")
+        expect(getComputedStyle(inner).paddingTop).toBe("var(--desktop-titlebar-height)")
+        expect(getComputedStyle(bar).paddingLeft).toBe("12px")
       }
       await act(async () => frames.runFrame())
       expect(workspace.hasAttribute("data-list-held")).toBe(false)
       expect(getComputedStyle(inner).paddingLeft).toBe("var(--desktop-gutter)")
-      expect(getComputedStyle(bar).paddingLeft).toBe("var(--desktop-titlebar-safe-start)")
+      expect(getComputedStyle(bar).paddingLeft).toBe("12px")
     } finally {
       await act(async () => root.unmount())
       workspace.remove()

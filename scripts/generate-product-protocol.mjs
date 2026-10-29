@@ -191,6 +191,63 @@ const mcpServerRules = {}
   }
 }
 
+// A channel's bounds, owned by the gateway's channel value objects and
+// published as schema data so its prose and a client name the same numbers:
+// each value must equal the constant it names, or generation fails.
+const channelRules = {}
+{
+  const rules = schema["x-channelRules"]
+  const owners = {
+    maxChannels: "MAX_CHANNELS_PER_OWNER",
+    maxNameChars: "MAX_CHANNEL_NAME_CHARS",
+    maxNotesBytes: "MAX_CHANNEL_NOTES_BYTES",
+    maxResources: "MAX_CHANNEL_RESOURCES",
+    maxResourceBytes: "MAX_CHANNEL_RESOURCE_BYTES",
+    maxPathBytes: "MAX_CHANNEL_PATH_BYTES",
+  }
+  if (!rules || Object.keys(rules).length !== Object.keys(owners).length)
+    throw new Error("Channel rules must name exactly the gateway's bounds")
+  const source = readFileSync(
+    resolve(root, "crates/nessa-server/src/conversation/domain/value_objects/channel.rs"),
+    "utf8",
+  )
+  for (const [name, constant] of Object.entries(owners)) {
+    const owned = Number(
+      source
+        .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+        .replaceAll("_", ""),
+    )
+    if (
+      !Object.hasOwn(rules, name) ||
+      !Number.isSafeInteger(owned) ||
+      rules[name] !== owned
+    )
+      throw new Error(`x-channelRules.${name} drifted from the gateway's ${constant}`)
+    channelRules[name] = owned
+  }
+}
+
+// The domain admits finite lifetimes. Schema/client bounds are its publication,
+// checked before any generated artifact is written.
+{
+  const source = readFileSync(
+    resolve(
+      root,
+      "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+    ),
+    "utf8",
+  )
+  for (const [field, constant] of [
+    ["minimum", "MIN_SECONDS"],
+    ["maximum", "MAX_SECONDS"],
+  ]) {
+    const literal = source.match(new RegExp(`const ${constant}: u64 = ([0-9_]+);`))?.[1]
+    const owned = Number(literal?.replaceAll("_", ""))
+    if (!Number.isSafeInteger(owned) || schema.$defs.VmLifetimeSeconds?.[field] !== owned)
+      throw new Error(`VmLifetimeSeconds.${field} drifted from the domain's ${constant}`)
+  }
+}
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -311,6 +368,13 @@ for (const [name, def] of Object.entries(schema.$defs)) {
     else rs += enumRs
     continue
   }
+  // A reusable integer definition keeps request and response bounds under
+  // one schema owner, like named string definitions below.
+  if (def.type === "integer" && !def.properties) {
+    ts += `export type ${name} = ${type(def, false)}\n`
+    rs += `pub type ${name} = ${type(def, true)};\n`
+    continue
+  }
   if (def.type === "string" && !def.properties) {
     ts += `export type ${name} = string\n`
     rs += `pub type ${name} = String;\n`
@@ -333,6 +397,10 @@ for (const [name, def] of Object.entries(schema.$defs)) {
   ts += "}\n"
   if (!externalRust) rs += "}\n"
 }
+// Lifetime request/response validation consumes the same published integer
+// definition; clients do not retype the provider's representation bounds.
+ts += `export const vmLifetimeSeconds = ${JSON.stringify({ minimum: schema.$defs.VmLifetimeSeconds.minimum, maximum: schema.$defs.VmLifetimeSeconds.maximum })} as const\n`
+
 /**
  * The one value every array of `field` referring to `kind` agrees on, so a
  * bound that drifted between two commands is a generation failure rather than a
@@ -391,6 +459,10 @@ rs += `pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = ${subscripti
 rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits.listTargets};\n`
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
+const backgroundId = schema.$defs.ConversationTool.properties.backgroundTaskId
+contractRs += `pub const BACKGROUND_TASK_ID_PATTERN: &str = ${JSON.stringify(backgroundId.pattern)};\n`
+contractRs += `pub const MIN_BACKGROUND_TASK_ID_CHARACTERS: usize = ${backgroundId.minLength};\n`
+contractRs += `pub const MAX_BACKGROUND_TASK_ID_CHARACTERS: usize = ${backgroundId.maxLength};\n`
 const subscriptionId = schema.$defs.ConversationSubscriptionId
 if (
   typeof subscriptionId.pattern !== "string" ||
@@ -565,9 +637,16 @@ const bounds = {
   maxMessageImages: arrayBound("attachments", "ImageAttachment", "maxItems"),
   maxMessageImageBytes: arrayBound("attachments", "ImageAttachment", "x-maxTotalBytes"),
   maxUploadBytes: schema.$defs.AttachmentBeginParams.properties.size.maximum,
+  maxUploadedFileNameBytes:
+    schema.$defs.UploadedFileAttachment.properties.name["x-utf8MaxBytes"],
+  uploadedFileNamePattern: schema.$defs.UploadedFileAttachment.properties.name.pattern,
   maxMessageFiles: arrayBound("files", "LinkedFile", "maxItems"),
   maxFilePathBytes: linked.path["x-utf8MaxBytes"],
   filePathPattern: linked.path.pattern,
+  maxBackgroundTaskIdBytes:
+    schema.$defs.ConversationTool.properties.backgroundTaskId.maxLength,
+  backgroundTaskIdPattern:
+    schema.$defs.ConversationTool.properties.backgroundTaskId.pattern,
   conversationIdPattern: agreeing(
     "conversationId pattern",
     Object.values(schema.$defs).flatMap((def) =>
@@ -773,6 +852,9 @@ ts += `${doc(
   "The SDK's rules for a stored MCP server, as x-mcpServerRules publishes them: at most maxServers servers, the managed one included; a name of 1 to nameMaxBytes bytes; at most maxArgs arguments of at most argMaxBytes bytes each; a variable name of 1 to environmentNameMaxBytes bytes. The gateway refuses past them (mcp_servers_invalid); a client may refuse early by reading these.",
 )}export const mcpServerRules = ${JSON.stringify(mcpServerRules)} as const\n`
 ts += `${doc(
+  "A channel's bounds, as x-channelRules publishes them: at most maxChannels per person; a name of 1 to maxNameChars characters once trimmed; notes of at most maxNotesBytes bytes; at most maxResources files and folders of at most maxResourceBytes bytes of paths in all; each path at most maxPathBytes bytes. The gateway refuses past them (invalid_request, channel_limit_reached); a client may refuse early by reading these.",
+)}export const channelRules = ${JSON.stringify(channelRules)} as const\n`
+ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`
 ts += `export const eventSubscriptionBounds = ${JSON.stringify({
@@ -799,18 +881,26 @@ if (
 )
   throw new Error("Invalid event subscription filter bounds")
 const eventOptions = schema.$defs.ConversationSubscribeEventsParams
-const nonNullEventOptions = Object.entries(eventOptions.properties).flatMap(
-  ([name, node]) => {
-    if (eventOptions.required.includes(name)) return []
+function nonNullOptionalFields(definition) {
+  return Object.entries(definition.properties).flatMap(([name, node]) => {
+    if (definition.required.includes(name)) return []
     const owner = node.$ref ? schema.$defs[node.$ref.split("/").at(-1)] : node
     return owner.type === "null" ||
       (Array.isArray(owner.type) && owner.type.includes("null"))
       ? []
       : [name]
-  },
-)
+  })
+}
+const nonNullEventOptions = nonNullOptionalFields(eventOptions)
+const nonNullBoatRuntimeOptions = [
+  ...new Set([
+    ...nonNullOptionalFields(schema.$defs.BoatRuntimeReadParams),
+    ...nonNullOptionalFields(schema.$defs.BoatRuntimeSetParams),
+  ]),
+]
 rs += `/// Event filter bounds published by the product schema.\npub const MIN_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.minItems};\npub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.maxItems};\npub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = ${eventKinds.uniqueItems};\n`
 rs += `/// Optional event subscription fields whose published schema forbids explicit null.\npub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &${JSON.stringify(nonNullEventOptions)};\n`
+rs += `/// Runtime settings options whose published schema forbids explicit null.\npub const NON_NULL_BOAT_RUNTIME_OPTIONS: &[&str] = &${JSON.stringify(nonNullBoatRuntimeOptions)};\n`
 ts += `/** Kind/metadata relationships derived from ConversationEvent's JSON Schema conditionals. */\nexport const conversationEventMetadataRules = ${JSON.stringify(eventMetadataRules(schema))} as const\n`
 for (const [kind, entries] of [
   ["Method", productMethods],

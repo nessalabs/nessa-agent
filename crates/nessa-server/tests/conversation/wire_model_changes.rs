@@ -195,6 +195,7 @@ async fn wire_control_budget(
     }));
     view.messages = (0..40)
         .map(|index| ConversationMessage {
+            uploads: Vec::new(),
             authentication_required: None,
             usage_limit: None,
             required_work_failed: None,
@@ -403,6 +404,7 @@ async fn view_snapshot(first: bool, expect_enabled: bool, expect_resuming: bool)
 
 fn limit_message(execution_id: &str) -> ConversationMessage {
     ConversationMessage {
+        uploads: Vec::new(),
         authentication_required: None,
         required_work_failed: None,
         usage_limit: Some(ConversationUsageLimit {

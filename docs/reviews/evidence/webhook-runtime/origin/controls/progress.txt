@@ -1,0 +1,7 @@
+Source a3f5578e: fresh controls after explicit discard and historical-product preservation
+0: caught=True restored=True
+1: caught=True restored=True
+2: caught=True restored=True
+3: caught=True restored=True
+4: caught=True restored=True
+5: caught=True restored=True

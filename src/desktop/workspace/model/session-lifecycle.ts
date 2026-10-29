@@ -2,14 +2,15 @@
  * A new session's life before its first message. It begins as a draft: a
  * pane shows its home, and nothing lists it. Its first message starts it —
  * titled from what was said — and only then does it join the lists. A draft
- * no pane shows any more is let go, leaving no trace. A session the source
- * never began, left with nothing to begin it when its last refused message
- * is let go, goes back to its home if a pane shows it, and is let go if not.
+ * lives with its open document tab, and closing that tab lets it go. A session
+ * the source never began, left with nothing to begin it when its last refused message
+ * is let go, goes back to its home while its document tab is open and is let go
+ * otherwise.
  *
  * ```text
  *   newSession ─▶ draft ──first message──▶ session (listed, revision 0)
- *                   │  ◀──last refused message discarded──┘ (shown; else gone)
- *                   └──no pane shows it──▶ gone
+ *                   │  ◀──last refused message discarded──┘ (tab open; else gone)
+ *                   └──document tab closes──▶ gone
  * ```
  */
 import type { ModelRef, SessionSummary } from "./workspace-index"
@@ -22,15 +23,15 @@ export interface Draft {
   readonly model: ModelRef
 }
 
-/** The drafts some pane still shows; the same record when none was let go. */
-export function keepShownDrafts(
+/** The drafts retained by panes and document tabs; the same record when none was let go. */
+export function keepDrafts(
   drafts: Readonly<Record<string, Draft>>,
-  shown: ReadonlySet<string>,
+  kept: ReadonlySet<string>,
 ): Readonly<Record<string, Draft>> {
   const ids = Object.keys(drafts)
-  if (ids.every((id) => shown.has(id))) return drafts
+  if (ids.every((id) => kept.has(id))) return drafts
   return Object.fromEntries(
-    ids.filter((id) => shown.has(id)).map((id) => [id, drafts[id]]),
+    ids.filter((id) => kept.has(id)).map((id) => [id, drafts[id]]),
   )
 }
 

@@ -1,0 +1,21 @@
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-auth)
+error[E0624]: associated function `new` is private
+   --> crates/nessa-auth/tests/origin.rs:107:32
+    |
+107 |       let context = AuthContext::new(
+    |                                  ^^^ private associated function
+    |
+   ::: crates/nessa-auth/src/domain/auth_context.rs:19:5
+    |
+ 19 | /     pub(crate) fn new(
+ 20 | |         principal_id: PrincipalId,
+ 21 | |         organization_id: OrganizationId,
+ 22 | |         membership_id: MembershipId,
+ 23 | |         credential_id: CredentialId,
+ 24 | |         audience_id: AudienceId,
+ 25 | |     ) -> Self {
+    | |_____________- private associated function defined here
+
+For more information about this error, try `rustc --explain E0624`.
+error: could not compile `nessa-auth` (test "origin") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

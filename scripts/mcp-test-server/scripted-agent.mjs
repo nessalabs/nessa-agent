@@ -35,7 +35,9 @@
  * closes or its output fails, it stops every stand-in and waits for each to
  * exit (`stop`) before it exits. Its design table is on #418. It reads no
  * credential; the check starts the gateway signed out (`startLocalGateway`'s
- * `signedOut`).
+ * `signedOut`). A scenario turn that names `${credentials.githubToken}` or
+ * `${credentials.gitPassword}` is told what GitHub sign-in this process was
+ * started with (`credentialFacts`), as a fingerprint, never the token.
  *
  * Not replayed, on the recorded path: a harness's permission request for the
  * call. The recordings hold only `session/update` frames, so that path asks
@@ -51,8 +53,8 @@
  * is the one value the replay takes from the real harness's MCP side, since
  * the recordings hold only the ACP frames.
  */
-import { spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { spawn, spawnSync } from "node:child_process"
+import { createHash, randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { createInterface } from "node:readline"
 import { parseArgs } from "node:util"
@@ -295,7 +297,19 @@ async function openSession(params, sessionId) {
     for (const client of servers.values()) client.close()
     throw error
   }
-  sessions.set(sessionId, { values, servers, prompt: null, recorded: false })
+  sessions.set(sessionId, {
+    values,
+    servers,
+    prompt: null,
+    recorded: false,
+    // Where the harness was told to work, and the system prompt it was given
+    // (Claude's `_meta.systemPrompt`), for a turn to say back (`${session.*}`).
+    opened: {
+      cwd: typeof params.cwd === "string" ? params.cwd : "",
+      systemPrompt:
+        typeof params._meta?.systemPrompt === "string" ? params._meta.systemPrompt : "",
+    },
+  })
   return { sessionId, configOptions: configOptions(agent, values) }
 }
 
@@ -415,6 +429,35 @@ const PERMISSION_DEADLINE_MS = 120_000
 /** Replies the gateway owes this agent, by the request id it sent. */
 const replies = new Map()
 
+/**
+ * The GitHub sign-in this process was started with, as a check can compare
+ * it and no log can leak it: `githubToken` is the fingerprint of `GH_TOKEN`,
+ * `gitPassword` that of the password git's own credential helpers give for
+ * https://github.com from the variables alone; `none` where there is none.
+ */
+function credentialFacts(env = process.env) {
+  const print = (secret) =>
+    secret ? createHash("sha256").update(secret).digest("hex").slice(0, 16) : "none"
+  const filled = spawnSync("git", ["credential", "fill"], {
+    input: "protocol=https\nhost=github.com\n\n",
+    // Only what the gateway gave: never this machine's own helpers, such
+    // as a system-wide keychain helper.
+    env: {
+      ...env,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: "",
+      SSH_ASKPASS: "",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+    },
+    encoding: "utf8",
+    timeout: 10_000,
+  })
+  const password =
+    filled.status === 0 ? /^password=(.*)$/m.exec(filled.stdout ?? "")?.[1] : undefined
+  return { githubToken: print(env.GH_TOKEN), gitPassword: print(password) }
+}
+
 /** One prompt of the scenario: the turn `prompt` matches, or a failure when none does. */
 async function scenarioTurn({ sessionId, prompt: blocks }) {
   const session = sessionOf(sessionId)
@@ -434,8 +477,13 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
       agent,
       sessionId,
       saved: new Map([
-        ["prompt", { text }],
+        ["prompt", { text, id: randomUUID() }],
         ["configuration", { model: session.values.model }],
+        // Asked only by a turn that says them: git is not run for every turn.
+        ...(JSON.stringify(matched.steps).includes("${credentials.")
+          ? [["credentials", credentialFacts()]]
+          : []),
+        ["session", session.opened],
       ]),
       cancelled: () => state.cancelled,
       untilCancelled: () =>

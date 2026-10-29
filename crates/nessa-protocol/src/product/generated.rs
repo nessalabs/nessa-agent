@@ -541,6 +541,14 @@ pub struct ImageAttachment {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UploadedFileAttachment {
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub name: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkedFile {
     pub path: String,
 }
@@ -587,6 +595,25 @@ pub struct AttachmentBeginResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentWriteParams {
+    pub ticket: String,
+    pub offset: u64,
+    pub data: String,
+    pub last: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentWriteResult {
+    pub received: u64,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub digest: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub mime_type: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub size: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationUsageLimit {
     pub provider: String,
     pub recovery: String,
@@ -601,6 +628,8 @@ pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
     pub attachments: Vec<ImageAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
@@ -625,6 +654,8 @@ pub struct ConversationPending {
     pub execution_id: String,
     pub text: String,
     pub attachments: Vec<ImageAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
@@ -701,6 +732,8 @@ pub struct ConversationQuestionEntry {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationTool {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_task_id: Option<String>,
     pub execution_id: String,
     pub tool_id: String,
     pub title: String,
@@ -807,6 +840,8 @@ pub struct ConversationCreateParams {
     pub approval_mode: Option<ApprovalMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -843,6 +878,8 @@ pub struct ConversationSummary {
     pub updated_at_ms: u64,
     pub running: bool,
     pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -882,6 +919,8 @@ pub struct ConversationSendParams {
     pub execution_id: String,
     pub text: String,
     pub attachments: Vec<ImageAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
     pub files: Vec<LinkedFile>,
 }
 #[derive(Deserialize, Serialize)]
@@ -991,6 +1030,8 @@ pub struct ConversationReceiptParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<ImageAttachment>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<Vec<UploadedFileAttachment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<LinkedFile>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -1000,6 +1041,8 @@ pub struct ConversationReceiptParams {
     pub approval_mode: Option<ApprovalMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2266,6 +2309,8 @@ pub struct PhoneAuthorizationStatus {
 pub enum PairingEnrollee {
     #[serde(rename = "device")]
     Device,
+    #[serde(rename = "ownerPhone")]
+    OwnerPhone,
     #[serde(rename = "gateway")]
     Gateway,
     #[serde(rename = "environment")]
@@ -2275,6 +2320,7 @@ impl PairingEnrollee {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Device => "device",
+            Self::OwnerPhone => "ownerPhone",
             Self::Gateway => "gateway",
             Self::Environment => "environment",
         }
@@ -2471,6 +2517,81 @@ pub struct PairingSetLinkingResult {
     pub applies: PairingLinkingApply,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PairingTunnelMode {
+    #[serde(rename = "quick")]
+    Quick,
+    #[serde(rename = "named")]
+    Named,
+}
+impl PairingTunnelMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Quick => "quick",
+            Self::Named => "named",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingSetTunnelParams {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PairingTunnelMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingSetTunnelResult {
+    pub enabled: bool,
+    pub mode: PairingTunnelMode,
+    pub applies: PairingLinkingApply,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PairingTunnelStatus {
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "starting")]
+    Starting,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+}
+impl PairingTunnelStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingTunnelResult {
+    pub enabled: bool,
+    pub mode: PairingTunnelMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    pub has_token: bool,
+    pub ingress: String,
+    pub status: PairingTunnelStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServerReachResult {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub tunnel: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum PairingErrorCode {
     #[serde(rename = "pairing_not_configured")]
     PairingNotConfigured,
@@ -2492,6 +2613,10 @@ pub enum PairingErrorCode {
     PairingAddressInUse,
     #[serde(rename = "pairing_audit_unavailable")]
     PairingAuditUnavailable,
+    #[serde(rename = "pairing_linking_off")]
+    PairingLinkingOff,
+    #[serde(rename = "pairing_tunnel_incomplete")]
+    PairingTunnelIncomplete,
 }
 impl PairingErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -2506,6 +2631,132 @@ impl PairingErrorCode {
             Self::PairingUnavailable => "pairing_unavailable",
             Self::PairingAddressInUse => "pairing_address_in_use",
             Self::PairingAuditUnavailable => "pairing_audit_unavailable",
+            Self::PairingLinkingOff => "pairing_linking_off",
+            Self::PairingTunnelIncomplete => "pairing_tunnel_incomplete",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubAccount {
+    pub id: u64,
+    pub login: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum GithubConnectState {
+    #[serde(rename = "signed_out")]
+    SignedOut,
+    #[serde(rename = "connecting")]
+    Connecting,
+    #[serde(rename = "connected")]
+    Connected,
+}
+impl GithubConnectState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedOut => "signed_out",
+            Self::Connecting => "connecting",
+            Self::Connected => "connected",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum GithubConnectEnd {
+    #[serde(rename = "expired")]
+    Expired,
+    #[serde(rename = "denied")]
+    Denied,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "rejected")]
+    Rejected,
+    #[serde(rename = "unreachable")]
+    Unreachable,
+    #[serde(rename = "store_unavailable")]
+    StoreUnavailable,
+    #[serde(rename = "audit_unavailable")]
+    AuditUnavailable,
+}
+impl GithubConnectEnd {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+            Self::Denied => "denied",
+            Self::Cancelled => "cancelled",
+            Self::Rejected => "rejected",
+            Self::Unreachable => "unreachable",
+            Self::StoreUnavailable => "store_unavailable",
+            Self::AuditUnavailable => "audit_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubCode {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in_seconds: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubLiveEvents {
+    pub enabled: bool,
+    pub repositories: u64,
+    pub gaps: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubLiveEventsParams {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_gaps: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubConnection {
+    pub state: GithubConnectState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_events: Option<GithubLiveEvents>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<GithubAccount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<GithubCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<GithubConnectEnd>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unrecorded: Option<bool>,
+    pub install_url: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum GithubErrorCode {
+    #[serde(rename = "github_not_configured")]
+    GithubNotConfigured,
+    #[serde(rename = "github_unreachable")]
+    GithubUnreachable,
+    #[serde(rename = "github_rejected")]
+    GithubRejected,
+    #[serde(rename = "github_storage_unavailable")]
+    GithubStorageUnavailable,
+    #[serde(rename = "github_audit_unavailable")]
+    GithubAuditUnavailable,
+    #[serde(rename = "github_live_unavailable")]
+    GithubLiveUnavailable,
+    #[serde(rename = "github_live_capacity")]
+    GithubLiveCapacity,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+}
+impl GithubErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GithubNotConfigured => "github_not_configured",
+            Self::GithubUnreachable => "github_unreachable",
+            Self::GithubRejected => "github_rejected",
+            Self::GithubStorageUnavailable => "github_storage_unavailable",
+            Self::GithubAuditUnavailable => "github_audit_unavailable",
+            Self::GithubLiveUnavailable => "github_live_unavailable",
+            Self::GithubLiveCapacity => "github_live_capacity",
+            Self::VaultLocked => "vault_locked",
         }
     }
 }
@@ -3183,6 +3434,105 @@ pub struct WorkspaceWindow {
     pub widget: Option<WorkspaceWidget>,
     pub columns: Vec<WorkspaceColumn>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ChannelErrorCode {
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "forbidden")]
+    Forbidden,
+    #[serde(rename = "conversations_not_configured")]
+    ConversationsNotConfigured,
+    #[serde(rename = "channel_folder_not_found")]
+    ChannelFolderNotFound,
+    #[serde(rename = "channel_folder_not_a_directory")]
+    ChannelFolderNotADirectory,
+    #[serde(rename = "channel_folder_refused")]
+    ChannelFolderRefused,
+    #[serde(rename = "channel_resource_not_found")]
+    ChannelResourceNotFound,
+    #[serde(rename = "channel_limit_reached")]
+    ChannelLimitReached,
+    #[serde(rename = "channel_request_conflict")]
+    ChannelRequestConflict,
+    #[serde(rename = "channel_storage_unavailable")]
+    ChannelStorageUnavailable,
+    #[serde(rename = "temporarily_unavailable")]
+    TemporarilyUnavailable,
+}
+impl ChannelErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::Forbidden => "forbidden",
+            Self::ConversationsNotConfigured => "conversations_not_configured",
+            Self::ChannelFolderNotFound => "channel_folder_not_found",
+            Self::ChannelFolderNotADirectory => "channel_folder_not_a_directory",
+            Self::ChannelFolderRefused => "channel_folder_refused",
+            Self::ChannelResourceNotFound => "channel_resource_not_found",
+            Self::ChannelLimitReached => "channel_limit_reached",
+            Self::ChannelRequestConflict => "channel_request_conflict",
+            Self::ChannelStorageUnavailable => "channel_storage_unavailable",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Channel {
+    pub channel_id: String,
+    pub name: String,
+    pub folder: String,
+    pub folder_made: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub agent: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub model: Option<String>,
+    pub approval_mode: ApprovalMode,
+    pub created_at_ms: u64,
+    pub coordinator_placement: String,
+    pub thread_placement: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub coordinator_conversation_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelCreateParams {
+    pub request_id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub agent: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator_placement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_placement: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelCreateResult {
+    pub channel: Channel,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelListResult {
+    pub channels: Vec<Channel>,
+    pub complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspacePublishParams {
@@ -3196,6 +3546,232 @@ pub struct WorkspacePublishParams {
 pub struct WorkspacePublishResult {
     pub revision: u64,
     pub applied: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VaultState {
+    #[serde(rename = "unconfigured")]
+    Unconfigured,
+    #[serde(rename = "locked")]
+    Locked,
+    #[serde(rename = "unlocked")]
+    Unlocked,
+}
+impl VaultState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unconfigured => "unconfigured",
+            Self::Locked => "locked",
+            Self::Unlocked => "unlocked",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultStatus {
+    pub state: VaultState,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultPassphraseParams {
+    pub passphrase: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VaultErrorCode {
+    #[serde(rename = "vault_unavailable")]
+    VaultUnavailable,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "vault_passphrase_policy")]
+    VaultPassphrasePolicy,
+    #[serde(rename = "vault_wrong_passphrase")]
+    VaultWrongPassphrase,
+    #[serde(rename = "vault_busy")]
+    VaultBusy,
+    #[serde(rename = "vault_cooldown")]
+    VaultCooldown,
+    #[serde(rename = "vault_session_closed")]
+    VaultSessionClosed,
+    #[serde(rename = "vault_session_owned")]
+    VaultSessionOwned,
+    #[serde(rename = "vault_already_configured")]
+    VaultAlreadyConfigured,
+    #[serde(rename = "vault_capacity")]
+    VaultCapacity,
+    #[serde(rename = "vault_audit_unavailable")]
+    VaultAuditUnavailable,
+    #[serde(rename = "vault_migration_unavailable")]
+    VaultMigrationUnavailable,
+}
+impl VaultErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultUnavailable => "vault_unavailable",
+            Self::VaultLocked => "vault_locked",
+            Self::VaultPassphrasePolicy => "vault_passphrase_policy",
+            Self::VaultWrongPassphrase => "vault_wrong_passphrase",
+            Self::VaultBusy => "vault_busy",
+            Self::VaultCooldown => "vault_cooldown",
+            Self::VaultSessionClosed => "vault_session_closed",
+            Self::VaultSessionOwned => "vault_session_owned",
+            Self::VaultAlreadyConfigured => "vault_already_configured",
+            Self::VaultCapacity => "vault_capacity",
+            Self::VaultAuditUnavailable => "vault_audit_unavailable",
+            Self::VaultMigrationUnavailable => "vault_migration_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatSaveParams {
+    pub token: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum BoatErrorCode {
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "boat_not_configured")]
+    BoatNotConfigured,
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "boat_storage_unavailable")]
+    BoatStorageUnavailable,
+    #[serde(rename = "boat_resource_missing")]
+    BoatResourceMissing,
+    #[serde(rename = "boat_unreachable")]
+    BoatUnreachable,
+    #[serde(rename = "boat_worker_unavailable")]
+    BoatWorkerUnavailable,
+    #[serde(rename = "boat_environment_blocks_credentials")]
+    BoatEnvironmentBlocksCredentials,
+    #[serde(rename = "boat_provisioning_uncertain")]
+    BoatProvisioningUncertain,
+    #[serde(rename = "boat_cleanup_uncertain")]
+    BoatCleanupUncertain,
+}
+impl BoatErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultLocked => "vault_locked",
+            Self::BoatNotConfigured => "boat_not_configured",
+            Self::InvalidRequest => "invalid_request",
+            Self::BoatStorageUnavailable => "boat_storage_unavailable",
+            Self::BoatResourceMissing => "boat_resource_missing",
+            Self::BoatUnreachable => "boat_unreachable",
+            Self::BoatWorkerUnavailable => "boat_worker_unavailable",
+            Self::BoatEnvironmentBlocksCredentials => "boat_environment_blocks_credentials",
+            Self::BoatProvisioningUncertain => "boat_provisioning_uncertain",
+            Self::BoatCleanupUncertain => "boat_cleanup_uncertain",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatStatus {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VmLifetimeMode {
+    #[serde(rename = "never")]
+    Never,
+    #[serde(rename = "after")]
+    After,
+}
+impl VmLifetimeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::After => "after",
+        }
+    }
+}
+pub type VmLifetimeSeconds = u64;
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatVmLifetime {
+    pub mode: VmLifetimeMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<VmLifetimeSeconds>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum BoatRuntimeSelection {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "never")]
+    Never,
+    #[serde(rename = "after")]
+    After,
+}
+impl BoatRuntimeSelection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Never => "never",
+            Self::After => "after",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatRuntimeReadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatRuntimeSetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub mode: BoatRuntimeSelection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<VmLifetimeSeconds>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatRuntimeSettings {
+    pub default_lifetime: BoatVmLifetime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_override: Option<BoatVmLifetime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_source_head: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorResult {
+    pub scope: RecordScope,
+    pub position: String,
+    pub reset_required: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_source_head: Option<ConversationRecordsHeadResult>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetResult {
+    pub request_id: String,
+    pub receipt_id: String,
+    pub scope: RecordScope,
+    pub position: String,
+    pub applied_at_ms: u64,
 }
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
@@ -3271,10 +3847,13 @@ pub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = 5;
 pub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = true;
 /// Optional event subscription fields whose published schema forbids explicit null.
 pub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &["after", "replay", "kinds"];
+/// Runtime settings options whose published schema forbids explicit null.
+pub const NON_NULL_BOAT_RUNTIME_OPTIONS: &[&str] = &["channelId", "seconds"];
 pub mod product_method {
     pub const SESSION_AUTHENTICATE: &str = "session.authenticate";
     pub const AUTH_SESSION: &str = "auth.session";
     pub const SERVER_HEALTH: &str = "server.health";
+    pub const SERVER_REACH: &str = "server.reach";
     pub const CREDENTIAL_ISSUE: &str = "credential.issue";
     pub const CREDENTIAL_LIST: &str = "credential.list";
     pub const CREDENTIAL_REVOKE: &str = "credential.revoke";
@@ -3304,6 +3883,7 @@ pub mod product_method {
     pub const CONVERSATION_REORDER: &str = "conversation.reorder";
     pub const ARTIFACT_READ: &str = "artifact.read";
     pub const ATTACHMENT_BEGIN: &str = "attachment.begin";
+    pub const ATTACHMENT_WRITE: &str = "attachment.write";
     pub const AGENTS_LIST: &str = "agents.list";
     pub const AGENTS_SET_NATIVE_HOOKS: &str = "agents.setNativeHooks";
     pub const AGENTS_SUBSCRIBE: &str = "agents.subscribe";
@@ -3337,6 +3917,13 @@ pub mod product_method {
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
     pub const PAIRING_SET_LINKING: &str = "pairing.setLinking";
+    pub const PAIRING_SET_TUNNEL: &str = "pairing.setTunnel";
+    pub const PAIRING_TUNNEL: &str = "pairing.tunnel";
+    pub const GITHUB_LIVE_EVENTS: &str = "github.liveEvents";
+    pub const GITHUB_STATUS: &str = "github.status";
+    pub const GITHUB_CONNECT: &str = "github.connect";
+    pub const GITHUB_CANCEL: &str = "github.cancel";
+    pub const GITHUB_DISCONNECT: &str = "github.disconnect";
     pub const PEER_ENROLL: &str = "peer.enroll";
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
@@ -3350,11 +3937,24 @@ pub mod product_method {
     pub const CONVERSATION_PERMISSION_RULES: &str = "conversation.permissionRules";
     pub const CONVERSATION_REVOKE_PERMISSION_RULE: &str = "conversation.revokePermissionRule";
     pub const WORKSPACE_PUBLISH: &str = "workspace.publish";
+    pub const CHANNEL_CREATE: &str = "channel.create";
+    pub const CHANNEL_LIST: &str = "channel.list";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
     pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
     pub const CONVERSATION_SWITCH_AGENT: &str = "conversation.switchAgent";
     pub const CONVERSATION_FORK: &str = "conversation.fork";
+    pub const VAULT_STATUS: &str = "vault.status";
+    pub const VAULT_SETUP: &str = "vault.setup";
+    pub const VAULT_UNLOCK: &str = "vault.unlock";
+    pub const VAULT_LOCK: &str = "vault.lock";
+    pub const BOAT_STATUS: &str = "boat.status";
+    pub const BOAT_SAVE: &str = "boat.save";
+    pub const BOAT_DISCONNECT: &str = "boat.disconnect";
+    pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
+    pub const BOAT_SET_RUNTIME_SETTINGS: &str = "boat.setRuntimeSettings";
+    pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
+    pub const CONVERSATION_WEBHOOK_RESET: &str = "conversation.webhook.reset";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -3545,7 +4145,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 81
+                items.len() <= 103
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3572,6 +4172,7 @@ pub const PRODUCT_HANDSHAKE_METHOD: &str = "session.authenticate";
 pub const PRODUCT_READY_METHODS: &[&str] = &[
     "auth.session",
     "server.health",
+    "server.reach",
     "credential.issue",
     "credential.list",
     "credential.revoke",
@@ -3601,6 +4202,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.reorder",
     "artifact.read",
     "attachment.begin",
+    "attachment.write",
     "agents.list",
     "agents.setNativeHooks",
     "agents.subscribe",
@@ -3633,6 +4235,13 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.deny",
     "pairing.cancel",
     "pairing.setLinking",
+    "pairing.setTunnel",
+    "pairing.tunnel",
+    "github.liveEvents",
+    "github.status",
+    "github.connect",
+    "github.cancel",
+    "github.disconnect",
     "peer.enroll",
     "peer.list",
     "peer.forget",
@@ -3646,11 +4255,24 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.permissionRules",
     "conversation.revokePermissionRule",
     "workspace.publish",
+    "channel.create",
+    "channel.list",
     "conversation.subscribeEvents",
     "conversation.peek",
     "conversation.setModel",
     "conversation.switchAgent",
     "conversation.fork",
+    "vault.status",
+    "vault.setup",
+    "vault.unlock",
+    "vault.lock",
+    "boat.status",
+    "boat.save",
+    "boat.disconnect",
+    "boat.runtimeSettings",
+    "boat.setRuntimeSettings",
+    "conversation.webhook.cursor",
+    "conversation.webhook.reset",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -3664,6 +4286,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
 pub fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
         "server.health"
+        | "server.reach"
         | "agents.list"
         | "agents.subscribe"
         | "agents.unsubscribe"
@@ -3689,13 +4312,31 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "pairing.deny"
         | "pairing.cancel"
         | "pairing.setLinking"
+        | "pairing.setTunnel"
+        | "pairing.tunnel"
+        | "github.liveEvents"
+        | "github.status"
+        | "github.connect"
+        | "github.cancel"
+        | "github.disconnect"
         | "peer.enroll"
         | "peer.list"
         | "peer.forget"
         | "peer.relay"
         | "conversation.share"
         | "conversation.unshare"
-        | "conversation.shares" => Some("credential.manage"),
+        | "conversation.shares"
+        | "vault.status"
+        | "vault.setup"
+        | "vault.unlock"
+        | "vault.lock"
+        | "boat.status"
+        | "boat.save"
+        | "boat.disconnect"
+        | "boat.runtimeSettings"
+        | "boat.setRuntimeSettings"
+        | "conversation.webhook.cursor"
+        | "conversation.webhook.reset" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"
@@ -3719,6 +4360,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.delete"
         | "conversation.reorder"
         | "attachment.begin"
+        | "attachment.write"
         | "conversation.setApprovalMode"
         | "agents.install"
         | "mcp.callTool"
@@ -3732,6 +4374,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.permissionRules"
         | "conversation.revokePermissionRule"
         | "workspace.publish"
+        | "channel.create"
+        | "channel.list"
         | "conversation.subscribeEvents"
         | "conversation.peek"
         | "conversation.setModel"

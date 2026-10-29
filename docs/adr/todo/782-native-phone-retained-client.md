@@ -170,3 +170,93 @@ changes verification only, not callback production behavior.
 | --- | --- | --- |
 | Persisted non-deleted catalogue entry has malformed metadata | CacheDamaged; saved progress is unchanged and recovery requires purge/resync | public_catalogue_refuses_corrupt_metadata_without_advancing_saved_progress |
 | Cache unavailable before a write | Cache; no claim that a commit occurred | uncertain_cache_commit_is_distinct_from_a_pre_effect_failure |
+
+## Phone publication, deletion reconciliation, and held-file freshness
+
+Slices for owner reads (#783), enrollment purge (#785) and the C/Swift session (#789) are on main. This slice is the phone repository those slices left open: one publication lease over the existing enrollment, retained read and saved projection, plus held-file freshness and catalogue presence. It does not add a second fold, checkpoint, purge policy or fetch algorithm. The product iOS application is not in this repository; physical-device execution stays unverified.
+
+```mermaid
+flowchart LR
+    Phone[Phone caller] --> Lease[PhoneLease]
+    Lease --> Session[Existing native session]
+    Session --> Enrollment[Enrollment and purge]
+    Session --> Read[RetainedCache read and subscribe]
+    Session --> Saved[Saved catalogue and transcript]
+    Session --> Fetch[Existing held-file fetch]
+    Read --> Cache[(Private SQLite cache)]
+    Saved --> Cache
+    Fetch --> Gateway[Pinned gateway artifact.read]
+```
+
+### Invariants
+
+- A stamp names one lease instance, one generation, and one receiver. `accept` also requires the identity the minting lease holds. That identity is not on the public stamp. Only `bind` and `stamp` mint a stamp. A published lease id, replayed through another lease, does not accept. Session composition mints the instance and the identity from one fill of the injected entropy. A source that refuses is an enrollment entropy failure and opens no session. A generation that starts again on a different instance does not accept the earlier stamp.
+- Saved catalogue and transcript reads present that stamp. The session, its native handle, and the Swift worker have no unstamped entry point for those reads. A caller who does not hold the current stamp cannot select the issued receiver.
+- The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
+- Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
+- Catalogue presence is one stored identity, read from one snapshot of the fence, the row, and the purge receipt. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row, no fence, and no receipt is Absent. A page that does not mention a chat does not write a tombstone.
+- A saved credential whose receiver has a successful purge receipt is not bound again. Bind returns Purged and does not mint a stamp. Whether that cache file is present is an injected read: absence still binds, and a metadata failure is a cache failure that does not mint a stamp.
+- A deletion whose commit did not land leaves the previous row. Presence after that failure is the previous state, not Tombstone.
+- A withdrawn grant removes the local row and writes no fence. Presence is Absent, so the chat can return with a later grant.
+- `LocalMatch` means the output file already had the named size and digest. No range was asked. It is not a new gateway hold.
+- `GatewayConfirmed` means this run's ranges were answered and the part, read back from disk, matched the digest. A partial part, a wrong range, or a digest mismatch is a fault. `reached` on that fault is not freshness.
+- The fetch reports the monotonic elapsed time of that fetch, including a local match that never dials and, when the file is not local, the status read that selects the gateway. That duration is the session clock, not model-generation latency. Busy-range retries wait on the injected pause; production composition uses `ThreadPause`. A stop during that wait returns within one stop slice and asks no later range. A spent fetch budget ends that same wait within one stop slice, asks no later range, and is unreachable.
+- Publication of a fetched part is one state. Waiting is the busy pause, and it ends when the caller stops or the fetch budget is spent. Fetching is a range read or the part re-read; the next source read is cancelled. Linking is the part sync and then the hard link, and `stop` shares one gate with that link: the call that takes the gate first wins. Linked means the output exists; a later failure to remove the part or to sync the directory keeps that fact and names the step. Stopped means cancellation won before the link, so this keep created no output. A stop after the link does not unpublish and does not replace a cleanup failure. An integrity or file failure that settled before the link keeps its cause.
+- `conversation.subscribe` remains the live view. It still does not advance the checkpoint. Command recovery stays in the outbox.
+
+### State
+
+| State | Event | Result | Evidence |
+| --- | --- | --- | --- |
+| Unbound | `bind` receiver A | Stamp generation 1 for A | `binding_the_same_receiver_keeps_the_stamp_and_replacement_refuses_it` |
+| Bound A | `bind` A again | Same stamp | same |
+| Bound A | `bind` B | New stamp; A's stamp is Replaced and reads nothing, including the catalogue page | same, and `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
+| Bound A | successful terminal purge | Receiver released; A's stamp is Unbound/Replaced; a later `bind` B is admitted | `a_purge_releases_the_receiver_and_a_later_bind_is_admitted` |
+| Bound A | successful purge and no observation | Unbound; the credential may remain, and a later bind advances the generation | `a_successful_purge_releases_the_publication_without_an_observation` |
+| Output already the file | session fetch | LocalMatch, source not asked, elapsed is the session clock | `a_local_match_reports_the_session_clock` |
+| Bound | session close | Closed; `bind` stays closed | `close_refuses_the_stamp_and_a_later_bind` |
+| Closed session's stamp for A | a new lease binds A | Replaced, though both generations are 1 | `a_new_lease_refuses_the_same_generation_from_an_earlier_lease` |
+| Bound B after A | another lease with the same published id binds A then B | Replaced; the identity does not match | `a_replayed_lease_id_does_not_mint_the_current_stamp` |
+| Stamp or lease debug | print | The identity is absent | `a_stamp_debug_does_not_print_its_identity` |
+| Artifact gateway refusal | fetch | The fault is kept and status is asked again | `a_refused_artifact_is_an_authority_failure_and_a_transport_failure_is_not` |
+| Live row | page that omits that row | Stays Live | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
+| Live row | deletion commit aborts | Stays Live | `a_deletion_that_does_not_commit_is_not_a_tombstone` |
+| Live row | deletion fence commits | Tombstone | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
+| Live row | withdraw, no fence | Absent | same |
+| No catalogue row | presence | Absent | same |
+| Receiver purge receipt | presence, rows gone | Tombstone | same |
+| Saved credential, cache metadata unreadable | `bind` | Cache failure; lease stays unbound | `a_cache_file_that_cannot_be_stated_does_not_bind` |
+| Output already the file | fetch | LocalMatch, source not asked | `a_file_already_on_disk_is_a_local_match_and_asks_nothing` |
+| Gateway answers every range and the digest matches | fetch | GatewayConfirmed | `a_gateway_answer_is_fresh_only_when_the_digest_matches` |
+| Short answer or wrong digest | fetch | Fault, not fresh | same |
+| Stale stamp | fetch or saved read | Fenced, connector not called | `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
+| Local file, stop already set or set while it is read | fetch | Stopped, not a local match | `a_stop_does_not_publish_a_local_match` |
+| Local inspection already produced a typed fault, stop set afterwards | fetch | That fault remains | `a_settled_local_fault_survives_a_later_stop` |
+| Gateway refusal already settled, stop set afterwards | fetch | Refused remains, so status is asked again | `a_settled_refusal_survives_a_later_stop` |
+| Product handshake refuses the artifact fetch | fetch | The admission returns Refused with the recheck status; a terminal recheck releases the lease | `an_artifact_handshake_refusal_rechecks_and_releases_the_lease` |
+| Stop during the product handshake | fetch | Session stop, not a cache failure | `a_stop_during_the_artifact_handshake_is_stopped` |
+| Terminal status before the file is fetched | fetch | That status and its purge are returned; nothing is fetched; the lease is released | `a_terminal_artifact_status_keeps_its_purge` |
+| Stop during the part re-read | fetch | Stopped, output not linked | `a_stop_during_the_part_reread_does_not_keep_the_file` |
+| Waiting: stop during a busy pause | fetch | Stopped within one stop slice; no later range; output absent | `a_stop_during_a_busy_pause_returns_within_one_slice`, `a_busy_pause_that_has_ended_asks_no_further_range` |
+| Waiting: budget spent during a busy pause | fetch | Unreachable within one stop slice; no later range; output absent | `a_budget_that_ends_during_a_busy_pause_is_unreachable` |
+| Linking: stop during the part sync | fetch | Stopped; the hard link is not created | `a_stop_during_sync_does_not_link` |
+| Budget expires after the last range, or during the part sync | fetch | Unreachable; the output is not published | `a_budget_that_expires_after_the_range_does_not_publish`, `a_budget_that_expires_during_sync_does_not_link` |
+| Budget expires after the sync check and before the link starts | fetch | Unreachable; the link is not called | `a_budget_that_expires_before_the_link_starts_does_not_publish` |
+| Budget expires while the hard link holds the gate | fetch | The link finishes; the output stays published | `a_budget_that_expires_during_the_link_stays_published` |
+| Linking: stop while the hard link holds the gate | fetch | The link finishes; the output stays published | `a_stop_during_the_link_waits_until_the_link_is_published` |
+| Linked: part removal or directory sync fails | fetch | Linked, naming that step; the output bytes remain; a later stop leaves it | `a_linked_output_keeps_its_cleanup_failure`, `a_part_that_cannot_be_removed_after_the_link_leaves_the_output` |
+| Integrity already settled, stop set later | fetch | Integrity, including a part left in place | `a_settled_integrity_failure_survives_a_stop_keep_did_not_see` |
+| Digest mismatch, part removal and emptying both fail | fetch | Integrity, and both failed steps | `an_integrity_fault_keeps_a_part_that_could_not_be_removed` |
+| Bound, file not on disk | fetch | Ok admission whose initial status is the connector failure; nothing is fetched; one dial | `a_missing_file_reports_the_connector_failure` |
+
+### Alternatives that lose
+
+- A second Swift checkpoint or fold. The shared cache already owns progress, tombstones and projection. A copy will disagree.
+- Treating a missing inbox row as deleted. Owner and granted catalogues omit rows for reasons other than deletion: a partial page, a grant filter, a withdraw. The deletion fence is the tombstone. Absence is not.
+- Treating an unreadable cache path as absence. Absence has no purge receipt to consult. A metadata failure has not established that, so bind must fail closed.
+- Minting a stamp from the published lease id and the next generation. That id is observable. The identity `accept` compares is not, and another lease that copies the id does not hold it.
+- Keeping an unstamped `catalogue_page` or `transcript` next to the stamped reads. Those methods select the current issued credential, so a delayed caller reads the replacement receiver without presenting a stamp.
+- Confirming a file because a part is already complete. The existing fetch asks the last range again so a part cannot stand in for the gateway. Reporting that part as fresh would undo that rule.
+- Sleeping a busy retry in one block, and reporting a cleanup failure after the hard link as though the output was never published. A stop or a spent budget during the wait would miss its slice, and a caller would retry a file that is already there.
+- Blocking the UI thread on the fetch. The session methods stay synchronous and the existing Swift worker admits them off the UI queue. This slice does not add a second queue.
+- Rebuilding #783, #785 and #789. Those pulls are merged. This slice starts from current main.

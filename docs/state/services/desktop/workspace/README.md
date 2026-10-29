@@ -3,8 +3,9 @@ id: "desktop-workspace"
 title: "Desktop workspace"
 kind: "feature"
 status: "mixed"
-summary: "The desktop organizes sessions into panes and provides search, focus, widgets and local preferences."
+summary: "The desktop keeps conversation documents in window tabs and arranges visible ones in panes."
 parent: "desktop"
+sourceRevision: "33d918afaf8485e67bb956d37c42b8ae9559de36"
 sources:
   - "src/desktop/dependencies.ts"
   - "src/desktop/workspace/application/workspace-state.ts"
@@ -13,6 +14,8 @@ sources:
   - "src/desktop/workspace/adapters/store/index-commands.ts"
   - "src/desktop/workspace/adapters/store/pane-commands.ts"
   - "src/desktop/workspace/adapters/store/session-commands.ts"
+  - "src/desktop/workspace/application/usecases/session-tabs.ts"
+  - "src/desktop/workspace/ui/chrome/window-tabs.tsx"
   - "src/desktop/widgets/app/model/lifecycle.ts"
 diagramLinks:
   Integrations: desktop-mcp-integration-management
@@ -29,13 +32,15 @@ diagramLinks:
   F3: "desktop-workspace-open-split-resize-and-close-panes"
   F4: "desktop-workspace-drag-or-move-a-session-or-pane"
   F5: "desktop-workspace-review-agents-answer-requests-and-reply-from-the-overview"
-  F6: "desktop-workspace-open-a-widget-inline-in-a-pane-or-over-the-window"
+  F6: "desktop-workspace-open-a-widget-inline-in-the-panel-or-over-the-window"
   F7: "desktop-workspace-step-back-from-a-widget-and-return-to-its-conversation"
 ---
 
 # Desktop workspace
 
-The desktop organizes sessions into panes and provides search, focus, widgets and local preferences. Classic is its right-side conversation panel.
+The desktop keeps open conversation documents in window tabs and arranges the
+visible ones in panes. It provides search, focus, widgets and local preferences,
+with each conversation's right panel beside the panes.
 
 Layout can survive navigation in memory, but a restart does not restore every pane or draft. The connection mode determines whether actions reach the gateway or a sample source.
 
@@ -84,7 +89,7 @@ flowchart TB
     Feature --> F4
     F5["Review agents, answer requests, and reply from the overview"]
     Feature --> F5
-    F6["Open a widget inline, in a pane, or over the window"]
+    F6["Open a widget inline, in the panel, or over the window"]
     Feature --> F6
     F7["Step back from a widget and return to its conversation"]
     Feature --> F7
@@ -92,6 +97,7 @@ flowchart TB
 
 ## Browse flows
 
+- [Answer requests from the session list](answer-requests-from-the-session-list.md)
 - [Manage MCP integrations](manage-mcp-integrations.md)
 - [Configure native harness hooks](configure-native-hooks.md)
 - [Enable waiting-review notifications](enable-review-notices.md)
@@ -105,12 +111,12 @@ flowchart TB
 
 - [Discover subagents and experimental features](discover-subagents-and-experimental-features.md)
 - [Drag or move a session or pane](drag-or-move-a-session-or-pane.md)
-- [Expand and restore the Classic right panel](expand-and-restore-the-classic-right-panel.md)
+- [Open, resize, expand and restore the right panel](open-resize-expand-and-restore-the-right-panel.md)
 - [Fold, reveal, and resize side columns](fold-reveal-and-resize-side-columns.md)
 - [Follow focus and route keyboard actions](follow-focus-and-route-keyboard-actions.md)
 - [Load, browse, and resynchronize the workspace](load-browse-and-resynchronize-the-workspace.md)
 - [MCP App view lifecycle](mcp-app-view-lifecycle.md)
-- [Open a widget inline, in a pane, or over the window](open-a-widget-inline-in-a-pane-or-over-the-window.md)
+- [Open a widget inline, in the panel, or over the window](open-a-widget-inline-in-the-panel-or-over-the-window.md)
 - [Open, dismiss, and reopen the desktop window](open-dismiss-and-reopen-the-desktop-window.md)
 - [Open, search, and change desktop settings](open-search-and-change-desktop-settings.md)
 - [Open, split, resize, and close panes](open-split-resize-and-close-panes.md)

@@ -749,7 +749,7 @@ mod tests {
             sessions::{InvocationRecord, SubmissionAcknowledgement},
         },
         domain::agent_execution::{
-            executions::{GrantInitiator, Initiation, MessageChunk, MessageId},
+            executions::{ExecutionOutcome, GrantInitiator, Initiation, MessageChunk, MessageId},
             permissions::{
                 RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
                 ReviewDeclineStage,
@@ -964,7 +964,7 @@ mod tests {
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
                 execution_id: id,
-                user_message: UserMessage::new(None, vec![image], Vec::new()).unwrap(),
+                user_message: UserMessage::new(None, vec![image], Vec::new(), Vec::new()).unwrap(),
                 estimated_input_tokens: 7,
                 reserved_output_tokens: 8,
             },
@@ -1003,6 +1003,83 @@ mod tests {
                 matches!(
                     decode_one(
                         &serde_json::to_vec(&invalid).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn stored_file_input_roundtrips_without_a_placement_path_and_rejects_corrupt_names() {
+        use crate::domain::agent_execution::prompts::UploadedFileReference;
+        use crate::domain::common::value_objects::MediaType;
+        let file = UploadedFileReference::new(
+            Sha256Digest::from_bytes([4; 32]),
+            MediaType::parse("application/pdf").unwrap(),
+            12,
+            "report.pdf".into(),
+        )
+        .unwrap();
+        let record = InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Queued,
+            request: ExecutionRequest {
+                execution_id: ExecutionId::new("file-turn").unwrap(),
+                user_message: UserMessage::new(None, vec![], vec![], vec![file]).unwrap(),
+                estimated_input_tokens: 7,
+                reserved_output_tokens: 8,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            initiation: Initiation::owner(),
+            notes: vec![],
+            handoff: None,
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: vec![],
+            scheduling: vec![],
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        };
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+        assert!(
+            matches!(decode_one(&bytes, &ProviderContext::Absent).unwrap(), SessionChange::InputAccepted(next) if *next == record)
+        );
+        let mut stopped = record.clone();
+        stopped.submission = SubmissionMode::Immediate;
+        stopped.cancellation = Some(
+            crate::application::agent_execution::sessions::InvocationCancellationEvent {
+                cause: crate::domain::agent_execution::executions::SchedulingCause::TurnStopped,
+                actor: None,
+            },
+        );
+        stopped.local_outcome = Some(ExecutionOutcome::Cancelled);
+        stopped.result = Some(Ok(ExecutionOutcome::Cancelled));
+        let cancelled =
+            encode_one(&SessionChange::InputAccepted(Box::new(stopped.clone()))).unwrap();
+        assert!(
+            matches!(decode_one(&cancelled, &ProviderContext::Absent).unwrap(), SessionChange::InputAccepted(next) if *next == stopped)
+        );
+        let original: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let upload = &original["changes"][0]["InputAccepted"]["metadata"]["user_uploads"][0];
+        assert_eq!(upload["name"], "report.pdf");
+        assert!(upload.get("path").is_none());
+        for (field, invalid) in [
+            ("name", serde_json::json!("../escape")),
+            ("size", serde_json::json!(0)),
+            ("digest", serde_json::json!("sha256:00")),
+            ("media_type", serde_json::json!("PDF")),
+        ] {
+            let mut changed = original.clone();
+            changed["changes"][0]["InputAccepted"]["metadata"]["user_uploads"][0][field] = invalid;
+            assert!(
+                matches!(
+                    decode_one(
+                        &serde_json::to_vec(&changed).unwrap(),
                         &ProviderContext::Absent
                     ),
                     Err(StorageError::Corrupt(_))
@@ -1278,7 +1355,7 @@ mod tests {
         }
         // A record without either field is not of this shape: corrupt, not
         // read as the person's with nothing given (no older reader is kept).
-        for field in ["user_app", "user_app_model_context"] {
+        for field in ["user_app", "user_internal", "user_app_model_context"] {
             let mut older = valid.clone();
             older["changes"][0]["InputAccepted"]["metadata"]
                 .as_object_mut()
@@ -1295,6 +1372,23 @@ mod tests {
                 "{field}"
             );
         }
+        let mut ambiguous = valid.clone();
+        ambiguous["changes"][0]["InputAccepted"]["metadata"]["user_internal"] = true.into();
+        assert!(matches!(
+            decode_one(
+                &serde_json::to_vec(&ambiguous).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
+        let mut internal = record.clone();
+        internal.request.user_message =
+            UserMessage::text_only(PromptText::new("actual task output").unwrap())
+                .sent_by(MessageSender::Internal);
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(internal.clone()))).unwrap();
+        assert!(
+            matches!(decode_one(&bytes, &ProviderContext::Absent).unwrap(), SessionChange::InputAccepted(next) if *next == internal)
+        );
         // A person's message says so: `user_app` is null.
         let person = UserMessage::text_only(PromptText::new("mine").unwrap());
         let mut record = record;

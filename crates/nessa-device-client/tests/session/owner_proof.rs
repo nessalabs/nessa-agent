@@ -48,6 +48,7 @@ fn open(root: &PrivateFixture) -> NativeDeviceSession {
         root.path().to_str().unwrap().into(),
         "private".into(),
         "127.0.0.1:9".into(),
+        None,
     )
     .unwrap()
 }
@@ -91,7 +92,7 @@ fn public_original_proof_cold_restore_and_raw_parent_drop_preserve_exact_facts_w
     assert_eq!(replay.digest(), proof.digest());
     assert!(parent.local_enrollment().unwrap().is_none());
     assert!(matches!(
-        parent.catalogue_page(None, 1),
+        parent.bind_saved_receiver(),
         Err(NativeCallError::Session { failure }) if failure.kind() == NativeSessionFailureKind::NoCredential
     ));
     let no_credential = parent.open_product("instance".into()).err().unwrap();
@@ -337,6 +338,7 @@ fn foreign_close_observation_preserves_actual_tls_child_failure_after_release_an
         root.path().to_str().unwrap().into(),
         "private".into(),
         address.to_string(),
+        None,
     )
     .unwrap();
     let child = parent.open_product("phone-instance".into()).unwrap();

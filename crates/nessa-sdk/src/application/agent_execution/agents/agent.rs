@@ -43,7 +43,9 @@ use crate::application::agent_execution::sessions::{
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::agent_execution::traces::{GenAiSpan, LocalTraceStore};
-use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
+use crate::domain::agent_execution::executions::{
+    Initiation, Initiator, SchedulingCause, ToolChecking,
+};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,
     PermissionCancellationReason, PermissionEffect, PermissionId, PermissionOptionId,
@@ -500,16 +502,29 @@ impl Agent {
     pub fn supports_turn_cancel(&self) -> bool {
         self.inner.lifecycle.supports_turn_cancel()
     }
-    /// Cancel `id` only when it is the active execution. A different or finished
-    /// turn, or a provider that cannot cancel one turn, returns
-    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`] and
-    /// sends nothing. This does not close the attachment.
+    /// Cancel `id` only while it is active, without closing the attachment.
+    /// Before native handoff the operation-owned work permit records a local
+    /// `TurnStopped` decision and prevents dispatch; this needs no native cancel
+    /// capability. After handoff the backend must support targeted cancellation.
+    /// A different or finished turn, or unsupported native cancellation, returns
+    /// [`AgentError::Unsupported`] with [`ProviderSessionState::Usable`].
+    /// `a_targeted_stop_during_file_preparation_is_undispatched_cancelled_and_does_not_close_the_session`
+    /// covers immediate and queued preparation and subsequent session reuse.
     pub async fn cancel_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
         let waiter = CallerWaiter::TurnCancel(id.clone());
         contain_caller_wake(waiter, self.cancel_active_turn(id)).await
     }
     async fn cancel_active_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
-        if !self.turn_is_active(&id) || !self.supports_turn_cancel() {
+        if !self.turn_is_active(&id) {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("turn cancel".into()),
+                ProviderSessionState::Usable,
+            ));
+        }
+        if self.inner.lifecycle.cancel_preparing_turn(&id) {
+            return Ok(());
+        }
+        if !self.supports_turn_cancel() {
             return Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("turn cancel".into()),
                 ProviderSessionState::Usable,
@@ -1993,6 +2008,7 @@ impl Agent {
                 &self.inner.lifecycle,
                 input.execution_id.clone(),
                 self.current_provider(),
+                work,
             ) {
                 Ok(active) => active,
                 Err(error) => {
@@ -2150,7 +2166,9 @@ impl Agent {
                 _ = stop_notice.changed(), if !stop_observed => {
                     stop_observed = true;
                     if !work.execution_started() {
-                        result = Some(Err(AgentError::Closed));
+                        result = Some(if work.cancellation().is_some_and(|stop| stop.cause == SchedulingCause::TurnStopped) {
+                            Ok(ExecutionOutcome::Cancelled)
+                        } else { Err(AgentError::Closed) });
                         break;
                     }
                     // Already dispatched: keep draining confirmed provider

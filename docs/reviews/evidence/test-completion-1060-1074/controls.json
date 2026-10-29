@@ -1,0 +1,30 @@
+[
+  {
+    "probe": "terminal-readiness",
+    "exit": 101,
+    "expected": "test assertion failure",
+    "sha256": "0a931ff3ce24d4ea52ec1ad351af5b9db745f3dc1e5201cee009b7941259eed0"
+  },
+  {
+    "probe": "old-five-second-startup",
+    "exit": 101,
+    "expected": "test assertion failure",
+    "sha256": "4112597276225947f58e67e1ffce6ee8519b5628e7eb3e4d593bfbf542702c22"
+  },
+  {
+    "probe": "lost-diagnostics",
+    "exit": 101,
+    "expected": "test assertion failure",
+    "sha256": "dbcf910a5e549eda8c99a47728fd15e15a9c087e5c50683e92fd95cfd725cafb"
+  },
+  {
+    "probe": "phase-correlation",
+    "exit": 101,
+    "expected": "test assertion failure",
+    "sha256": "66be5c375a0b98f749be99918efd795c13efe55ee019c7b6a5267eacec23679d"
+  },
+  {
+    "restored": 0,
+    "sha256": "dc5387a14a041aec447778f9d6e1bb032f3a3613ae0001d07d7c596968cd7391"
+  }
+]

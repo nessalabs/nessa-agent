@@ -1,0 +1,38 @@
+[
+  {
+    "mutation": "audit_record_id",
+    "test": "audit_record_correlations",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "audit_registration",
+    "test": "audit_record_correlations",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "audit_delivery",
+    "test": "audit_record_correlations",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "audit_kind",
+    "test": "audit_record_correlations",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "source_context_time",
+    "test": "late_retry_keeps_source_refusal",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "source_context_reader",
+    "test": "late_retry_keeps_source_refusal",
+    "exitCode": 101,
+    "caught": true
+  }
+]

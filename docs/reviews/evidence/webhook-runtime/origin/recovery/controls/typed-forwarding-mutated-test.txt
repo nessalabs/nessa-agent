@@ -1,0 +1,19 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::ambiguous_historical_admin_origin_is_preserved_and_requires_recovery ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::ambiguous_historical_admin_origin_is_preserved_and_requires_recovery stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::ambiguous_historical_admin_origin_is_preserved_and_requires_recovery' (127130) panicked at /tmp/nessa-origin-recovery-controls/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_origin.rs:210:13:
+assertion `left == right` failed
+  left: Err(Auth(Unavailable))
+ right: Err(OriginRecoveryRequired)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::origin_tests::ambiguous_historical_admin_origin_is_preserved_and_requires_recovery
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 99 filtered out; finished in 0.01s

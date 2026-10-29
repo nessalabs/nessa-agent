@@ -13,11 +13,14 @@ import { handoffLine } from "../../model/handoff"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import {
   groupSteps,
+  runSettled,
   terminalLabel,
   type Message as MessageValue,
   type MessageApp,
   type TurnTerminal,
 } from "../../model/transcript"
+import { reportVerb, threadReportOf } from "../../model/thread-report"
+import { ChatPill } from "./chat-pill"
 import { AgentProse, RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
@@ -94,6 +97,23 @@ export const Message = memo(function Message({
     )
   }
   if (message.role === "user") {
+    // A thread's report reaches the agent whole; here it is one line: the
+    // thread, and what it did (`model/thread-report.ts`).
+    const first = message.parts[0]
+    const report = first?.kind === "text" ? threadReportOf(first.text) : null
+    if (report)
+      return (
+        <div
+          className="workspace-message"
+          data-role="thread-report"
+          data-new={isNew || undefined}
+        >
+          <p className="workspace-thread-report" data-outcome={report.outcome}>
+            <ChatPill sessionId={report.thread} />
+            <span>{reportVerb(report.outcome)}</span>
+          </p>
+        </div>
+      )
     return (
       <div
         className="workspace-message"
@@ -144,16 +164,11 @@ export const Message = memo(function Message({
               <ToolSteps
                 key={index}
                 steps={group}
-                // A run is over once its turn is, or once the agent has
-                // written past it with none of its calls still at work — a
-                // call can run on in the background while the agent writes.
-                settled={
-                  message.working !== true ||
-                  (index < groups.length - 1 &&
-                    group.every(
-                      (step) => step.status !== "pending" && step.status !== "running",
-                    ))
-                }
+                settled={runSettled(
+                  group,
+                  index === groups.length - 1,
+                  message.working === true,
+                )}
               />
             )
           // What the agent said is Markdown, whitespace and all: its line

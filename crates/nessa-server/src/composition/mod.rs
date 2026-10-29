@@ -45,6 +45,9 @@ mod env_dial_command;
 mod env_grant_command;
 #[cfg(unix)]
 mod env_serve_command;
+#[cfg(unix)]
+mod github;
+mod github_relay;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;
@@ -57,10 +60,14 @@ mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
 mod relay_command;
+#[cfg(unix)]
+mod tunnel;
 
 mod runtime_config;
 
 mod agent;
+#[cfg(test)]
+pub(crate) use agent::REVIEW_WAIT;
 
 // Where its consumers are: the provider's agent budgets and the conversation
 // service's deletion budgets are both built only with Unix process supervision.
@@ -71,6 +78,8 @@ mod attachments;
 
 mod desktop;
 
+#[cfg(unix)]
+mod background_tools;
 #[cfg(unix)]
 pub(crate) mod conversation_tools;
 #[cfg(unix)]
@@ -95,3 +104,11 @@ mod peer_reading_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
+
+mod webhooks;
+
+#[cfg(test)]
+pub(crate) use root::cleanup_product;
+mod vault;
+
+mod vault_session;

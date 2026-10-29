@@ -97,6 +97,7 @@ impl AgentError {
                 | Self::MultipleOperationFailures { .. }
                 | Self::OperationAndCleanupFailure { .. }
                 | Self::Scheduling(_)
+                | Self::UserFile(_)
                 | Self::UserImage(_)
                 | Self::ImageInputRefused(_)
                 | Self::UnknownApp(_)

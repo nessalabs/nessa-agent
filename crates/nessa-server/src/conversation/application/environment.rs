@@ -509,6 +509,11 @@ struct FenceState {
 /// kept to be recorded (row L9). Which turn an accepted event belongs to is
 /// still the Agent's to check; the fence decides only which lease it is under.
 pub(crate) struct LeaseFence {
+    input_files: Arc<
+        std::sync::OnceLock<
+            Arc<dyn nessa_sdk::application::agent_execution::providers::InputFileResolver>,
+        >,
+    >,
     lease: LeaseId,
     inner: Arc<dyn AgentProvider>,
     state: Arc<Mutex<FenceState>>,
@@ -529,6 +534,7 @@ impl LeaseFence {
             lease,
             inner,
             context,
+            input_files: Arc::default(),
             not_live: tokio::sync::watch::Sender::new(phase != FencePhase::Live),
             state: Arc::new(Mutex::new(FenceState {
                 phase,
@@ -547,8 +553,21 @@ impl LeaseFence {
             inner,
             state: self.state.clone(),
             not_live: self.not_live.clone(),
+            input_files: self.input_files.clone(),
             context: self.context.clone(),
         })
+    }
+    pub(crate) fn set_input_files(
+        &self,
+        source: Arc<dyn nessa_sdk::application::agent_execution::providers::InputFileResolver>,
+    ) {
+        assert!(
+            self.input_files.set(source).is_ok(),
+            "one input resolver per lease"
+        );
+    }
+    pub(crate) fn input_stop(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.not_live.subscribe()
     }
     fn state(&self) -> std::sync::MutexGuard<'_, FenceState> {
         self.state
@@ -613,11 +632,11 @@ impl AgentProvider for LeaseFence {
     }
     /// A worker of the pool restores only a context it opened itself: one
     /// saved on another worker is not there.
-    fn restores_saved_context(&self, saved: &ExecutionSessionId) -> bool {
-        self.context.as_ref().map_or_else(
-            || self.inner.restores_saved_context(saved),
-            |context| context.holds(saved),
-        )
+    fn restores_saved_context(&self, saved: &ExecutionSessionId, has_invocations: bool) -> bool {
+        self.context
+            .as_ref()
+            .is_none_or(|context| context.holds(saved))
+            && self.inner.restores_saved_context(saved, has_invocations)
     }
     fn model_change_context(&self) -> Option<String> {
         self.inner
@@ -672,6 +691,7 @@ impl AgentProvider for LeaseFence {
         }
         let state = self.state.clone();
         let context = self.context.clone();
+        let input_files = self.input_files.get().cloned();
         let opening = self.inner.open(request);
         async move {
             let opened = opening.await;
@@ -679,7 +699,10 @@ impl AgentProvider for LeaseFence {
                 context.opened(opened.session.id()).await;
             }
             opened.map(|opened| OpenedProviderSession {
-                session: opened.session,
+                session: match input_files {
+                    Some(source) => opened.session.with_input_files(source),
+                    None => opened.session,
+                },
                 events: Box::new(FencedEvents {
                     inner: opened.events,
                     state,

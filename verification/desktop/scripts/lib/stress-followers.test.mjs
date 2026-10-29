@@ -1,6 +1,98 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { Follower } from "./stress-followers.mjs"
+import { Follower, replayEvents } from "./stress-followers.mjs"
+
+function fixture({ room = 0, open } = {}) {
+  const follower = new Follower({
+    n: 0,
+    limits: { conversationTargets: 2 + room },
+    mainId: "main",
+  })
+  const held = { subscription: {}, lost: false }
+  follower.events.set("event", held)
+  follower.list.subscription = {}
+  follower.view.subscription = {}
+  follower.list.conversations = ["main", "first", "second", "third"]
+  const closed = []
+  const observers = []
+  follower.client = {
+    connectionState: { status: "connected" },
+    subscriptions: {
+      async view(id, observer) {
+        observers.push(observer)
+        const result = await open?.({ follower, held, observers, id })
+        if (result === "refused") throw { code: "subscription_capacity" }
+        return {
+          async close() {
+            closed.push(id)
+          },
+        }
+      },
+    },
+  }
+  return { follower, closed }
+}
+
+test("a stable full connection proves its capacity", async () => {
+  const { follower } = fixture({ open: () => "refused" })
+  await follower.probe()
+  assert.equal(follower.counts.refusedAsExpected, 1)
+  assert.deepEqual(follower.failures, [])
+})
+
+test("a stable connection accepting an extra view fails", async () => {
+  const { follower, closed } = fixture()
+  await follower.probe()
+  assert.equal(follower.failures.length, 1)
+  assert.match(follower.failures[0], /past 2 was accepted/)
+  assert.deepEqual(closed, ["first"])
+})
+
+for (const [name, change] of [
+  [
+    "an original event ending",
+    ({ held }) => {
+      held.lost = true
+    },
+  ],
+  [
+    "replacing an original event",
+    ({ held }) => {
+      held.subscription = {}
+    },
+  ],
+  ["removing an original event", ({ follower }) => follower.events.delete("event")],
+  [
+    "the original main view ending",
+    ({ follower }) => {
+      follower.view.lost = true
+    },
+  ],
+]) {
+  test(`${name} invalidates the probe`, async () => {
+    const { follower, closed } = fixture({ open: change })
+    await follower.probe()
+    assert.deepEqual(follower.failures, [])
+    assert.equal(follower.counts.refusedAsExpected, 0)
+    assert.deepEqual(closed, ["first"])
+  })
+}
+
+test("an acquired view ending invalidates the probe", async () => {
+  const { follower, closed } = fixture({
+    room: 1,
+    open({ observers }) {
+      if (observers.length === 2) {
+        observers[0].ended({ reason: "disconnected" })
+        return "refused"
+      }
+    },
+  })
+  await follower.probe()
+  assert.deepEqual(follower.failures, [])
+  assert.equal(follower.counts.refusedAsExpected, 0)
+  assert.deepEqual(closed, ["first"])
+})
 
 function follower() {
   const closed = []
@@ -16,6 +108,7 @@ function follower() {
   subject.view.subscription = { id: "main", async close() {} }
   subject.list.conversations = ["main", "first", "deleting", "extra"]
   subject.client = {
+    connectionState: { status: "connected" },
     subscriptions: {
       async view(id) {
         opened.push(id)
@@ -407,11 +500,246 @@ for (const kind of ["view", "list", "events"]) {
   })
 }
 
+async function flushed() {
+  for (let turn = 0; turn < 20; turn++) await Promise.resolve()
+}
+
+function replayFixture(
+  t,
+  { capture = true, heads = ["head"], delayedOpen = false, stalledClose = -1 } = {},
+) {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const calls = []
+  let release,
+    lastHead = "head"
+  const client = {
+    subscriptions: {
+      async events(id, handlers, options) {
+        const call = { id, handlers, options, closed: 0 }
+        calls.push(call)
+        let closing
+        const subscription = {
+          close() {
+            if (!closing) {
+              call.closed++
+              closing =
+                calls.indexOf(call) === stalledClose
+                  ? new Promise(() => {})
+                  : Promise.resolve()
+            }
+            return closing
+          },
+        }
+        if (!options.replay && options.after === undefined && capture) {
+          lastHead = heads.shift() ?? lastHead
+          handlers.batch({ cursor: lastHead, events: [] })
+        }
+        if (calls.length === 1 && delayedOpen)
+          return new Promise((resolve) => {
+            release = () => resolve(subscription)
+          })
+        return subscription
+      },
+    },
+  }
+  const pending = replayEvents(client, "conversation")
+  return { calls, pending, release: () => release() }
+}
+
+const batch = (call, cursor, ids = []) =>
+  call.handlers.batch({ cursor, events: ids.map((id) => ({ id })) })
+
+async function advanced(t, ms = 100) {
+  t.mock.timers.tick(ms)
+  await flushed()
+}
+
+test("reference replay waits through quiet and every page until fresh-head convergence", async (t) => {
+  const { calls, pending } = replayFixture(t)
+  let completed = false
+  void pending.then(() => {
+    completed = true
+  })
+  await flushed()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].options.replay, true)
+  const first = Array.from({ length: 31 }, (_, index) => `event-${index}`)
+  batch(calls[0], "first-page", first)
+  await advanced(t, 2000)
+  assert.equal(completed, false, "silence after a prefix is not completion")
+  const last = Array.from({ length: 24 }, (_, index) => `event-${index + 31}`)
+  batch(calls[0], "last-event", last)
+  await advanced(t)
+  assert.equal(completed, false, "event count is not the outer-save head")
+  batch(calls[0], "head")
+  await advanced(t)
+  assert.deepEqual(await pending, [...first, ...last])
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].closed, 1)
+  assert.equal(calls[1].options.replay, undefined)
+  assert.equal(calls[1].closed, 1)
+})
+
+test("an intermediate empty checkpoint resumes instead of claiming completion", async (t) => {
+  const { calls, pending } = replayFixture(t)
+  let completed = false
+  void pending.then(
+    () => {
+      completed = true
+    },
+    () => {},
+  )
+  await flushed()
+  batch(calls[0], "intermediate", ["first"])
+  batch(calls[0], "intermediate")
+  await advanced(t)
+  assert.equal(completed, false)
+  assert.equal(calls[2].options.after, "intermediate")
+  assert.equal(calls[2].options.replay, undefined)
+  const failed = assert.rejects(
+    pending,
+    /did not complete replay to checkpoint within 60000 ms/,
+  )
+  t.mock.timers.tick(59_900)
+  await failed
+  assert.equal(calls[2].options.signal.aborted, true)
+  assert.equal(calls[2].closed, 1)
+})
+
+test("head growth resumes after the applied candidate without duplicating late callbacks", async (t) => {
+  const { calls, pending } = replayFixture(t, { heads: ["new-head", "new-head"] })
+  await flushed()
+  batch(calls[0], "last-old-event", ["one", "two"])
+  batch(calls[0], "old-head")
+  batch(calls[0], "late-frame", ["three"])
+  await advanced(t)
+  assert.equal(calls.length, 3)
+  assert.equal(calls[2].options.after, "old-head")
+  assert.equal(calls[2].options.replay, undefined)
+  assert.equal(calls[1].closed, 1, "capture releases before resumed replay")
+  batch(calls[0], "retired-frame", ["three"])
+  batch(calls[2], "new-event", ["three"])
+  batch(calls[2], "new-head")
+  await advanced(t)
+  assert.deepEqual(await pending, ["one", "two", "three"])
+  assert.ok(calls.every((call) => call.closed === 1))
+})
+
+test("a stalled prefix fails at the existing overall deadline", async (t) => {
+  const { calls, pending } = replayFixture(t)
+  const failed = assert.rejects(
+    pending,
+    /did not complete replay to checkpoint within 60000 ms/,
+  )
+  await flushed()
+  batch(calls[0], "prefix", ["first"])
+  await advanced(t, 59_999)
+  assert.equal(calls[0].closed, 0)
+  t.mock.timers.tick(1)
+  await failed
+  assert.equal(calls[0].closed, 1)
+})
+
+test("empty history still requires matching fresh-head authority", async (t) => {
+  const { calls, pending } = replayFixture(t)
+  await flushed()
+  batch(calls[0], "head")
+  await advanced(t)
+  assert.deepEqual(await pending, [])
+  assert.equal(calls.length, 2)
+})
+
+test("capture and growing-head resumes share the original deadline", async (t) => {
+  const { calls, pending } = replayFixture(t, { capture: false })
+  const failed = assert.rejects(
+    pending,
+    /did not complete replay to checkpoint within 60000 ms/,
+  )
+  await flushed()
+  await advanced(t, 59_000)
+  batch(calls[0], "old-head", ["one"])
+  batch(calls[0], "old-head")
+  await advanced(t)
+  assert.equal(calls.length, 2)
+  batch(calls[1], "new-head")
+  await advanced(t)
+  assert.equal(calls.length, 3)
+  assert.equal(calls[2].options.after, "old-head")
+  t.mock.timers.tick(800)
+  await failed
+  assert.equal(calls[2].closed, 1)
+})
+
+test("a missing head capture fails rather than accepting an empty candidate", async (t) => {
+  const { calls, pending } = replayFixture(t, { capture: false })
+  const failed = assert.rejects(pending, /did not complete head capture within 60000 ms/)
+  await flushed()
+  batch(calls[0], "candidate")
+  await advanced(t)
+  t.mock.timers.tick(59_900)
+  await failed
+  assert.equal(calls[1].closed, 1)
+})
+
+test("a late opening after deadline releases its source without starting a capture", async (t) => {
+  const { calls, pending, release } = replayFixture(t, { delayedOpen: true })
+  const failed = assert.rejects(
+    pending,
+    /did not complete replay to checkpoint within 60000 ms/,
+  )
+  t.mock.timers.tick(60_000)
+  await failed
+  release()
+  await flushed()
+  assert.equal(calls[0].closed, 1)
+  assert.equal(calls.length, 1)
+})
+
+for (const target of ["replay", "head capture"]) {
+  test(`a terminal ${target} refusal stays a failure`, async (t) => {
+    const { calls, pending } = replayFixture(t, { capture: false })
+    const failed = assert.rejects(pending, /ended refused/)
+    await flushed()
+    if (target === "head capture") {
+      batch(calls[0], "candidate")
+      await advanced(t)
+    }
+    calls.at(-1).handlers.ended({ reason: "refused", code: "audit_unavailable" })
+    t.mock.timers.tick(100)
+    await failed
+    assert.ok(calls.every((call) => call.closed === 1))
+  })
+}
+
+for (const [stalledClose, phase] of [
+  [0, "replay cleanup"],
+  [1, "head capture cleanup"],
+]) {
+  test(`a stalled ${phase} fails without misreporting convergence`, async (t) => {
+    const { calls, pending } = replayFixture(t, { stalledClose })
+    const failed = assert.rejects(
+      pending,
+      new RegExp(`did not complete ${phase} within 60000 ms`),
+    )
+    await flushed()
+    batch(calls[0], "head")
+    await advanced(t)
+    t.mock.timers.tick(59_900)
+    await failed
+    assert.equal(calls[stalledClose].closed, 1)
+    assert.equal(calls[stalledClose].options.signal.aborted, true)
+    if (stalledClose === 0) assert.equal(calls.length, 1)
+  })
+}
 function probing(open) {
   const followed = follower().subject
   followed.limits = { conversationTargets: 8 }
   followed.list.conversations = Array.from({ length: 8 }, (_, n) => `other-${n}`)
-  followed.client = { subscriptions: { view: open } }
+  followed.view.subscription = {}
+  followed.client = {
+    connectionState: { status: "connected" },
+    subscriptions: { view: open },
+  }
   return followed
 }
 

@@ -1,3 +1,4 @@
+import { BoatRow } from "./boat-row"
 import { useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
@@ -49,6 +50,7 @@ import {
   Toggle,
   usePrototype,
 } from "./settings-controls"
+import { GithubRow } from "./github-row"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
@@ -276,13 +278,8 @@ function MotionTab() {
 /** A small drawing of each layout, so the choice is seen rather than read. */
 function LayoutSketch({ id }: { id: WorkspaceLayoutId }) {
   // Three columns: sidebar, session list, chat. Sessions in sidebar: a wider
-  // sidebar holding the sessions, then chat. Classic: sidebar, home, panel.
-  const columns =
-    id === "columns"
-      ? ["side", "list", "main"]
-      : id === "sidebar"
-        ? ["tree", "main"]
-        : ["side", "main", "panel"]
+  // sidebar holding the sessions, then chat.
+  const columns = id === "columns" ? ["side", "list", "main"] : ["tree", "main"]
   return (
     <span className="settings-choice-art settings-sketch" aria-hidden="true">
       {columns.map((kind, index) => (
@@ -489,12 +486,8 @@ function AgentsTab() {
 function AccountsTab() {
   return (
     <Group>
-      <Row id="nessa-account">
-        <PendingAction>Sign in…</PendingAction>
-      </Row>
-      <Row id="github">
-        <PendingAction>Connect…</PendingAction>
-      </Row>
+      <GithubRow />
+      <BoatRow />
     </Group>
   )
 }

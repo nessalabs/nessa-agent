@@ -101,6 +101,7 @@ impl Durable {
         let summaries = Arc::new(MemorySummaries::default());
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: access_policy(),
                 agents: only(Arc::new(Provider::new(self.provider.clone()))),
                 storage: self.storage.clone(),
@@ -189,6 +190,7 @@ async fn running_turn(
             caller("work"),
             "work".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Refactor the parser".into(),
                 ..SubmittedMessage::default()
             },
@@ -318,6 +320,7 @@ async fn a_turn_that_cannot_be_marked_is_never_given_to_the_agent() {
             caller("work"),
             "work".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Refactor the parser".into(),
                 ..SubmittedMessage::default()
             },
@@ -441,6 +444,7 @@ async fn failed_turn(
             caller("work"),
             "work".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Refactor the parser".into(),
                 ..SubmittedMessage::default()
             },

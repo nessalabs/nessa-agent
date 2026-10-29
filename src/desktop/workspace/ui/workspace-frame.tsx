@@ -12,6 +12,7 @@ import type { EdgePeekControls } from "../../adapters/use-edge-peek"
 export type ShortcutCommand =
   | "toggleSidebar"
   | "toggleSessionList"
+  | "togglePanel"
   | "newSession"
   | "newSessionBeside"
   | "splitRight"

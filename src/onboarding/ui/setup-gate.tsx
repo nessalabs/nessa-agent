@@ -1,15 +1,18 @@
 import type { AgentInstallations } from "../application/agent-installations"
 import * as React from "react"
-import { AgentBloom } from "./agent-bloom"
-import { Onboarding, SETUP_HEADING_ID } from "./onboarding"
+import { BloomField } from "@nessa-ui/react/bloom-field"
+import { AgentShowcase, Onboarding, SETUP_HEADING_ID, showsPicker } from "./onboarding"
 import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
 import { useRuntimeCopy } from "./use-runtime-copy"
 import { useSetupHandoff } from "./use-setup-handoff"
+import { useOpening } from "./use-opening"
+import { useSetupFlight } from "./use-setup-flight"
 import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
 import type { SetupRecovery } from "../application/setup-recovery"
-import { isOnboardingCompleted } from "../model/onboarding"
+import { isOnboardingCompleted, type OnboardingState } from "../model/onboarding"
+import { FIELD_GROUND, coverScale, setupField } from "../model/opening"
 
 /** The buttons on the handoff-failure screen, which are the whole point of it:
  * a window with nothing in it but a sentence is a window someone has to kill. */
@@ -66,7 +69,7 @@ export function HandoffFailed({
         // Focusable only as the container of this alert, not as a stop on the
         // way through it.
         tabIndex={-1}
-        className="nessa-setup-window nessa-setup-light flex flex-col items-center justify-center gap-4 overflow-y-auto bg-background p-8 text-center text-foreground outline-none"
+        className="nessa-setup-alert nessa-setup-light flex flex-col items-center justify-center gap-4 overflow-y-auto bg-background p-8 text-center text-foreground outline-none"
       >
         <h1 id={SETUP_HEADING_ID} className="nessa-text-6 font-semibold">
           {recovery.heading}
@@ -105,11 +108,13 @@ export function HandoffFailed({
 /**
  * The setup surface: first run in its own window.
  *
- * The desktop host opens this in a small centred window of its own, so setup
- * never borrows the panel's frame, tabs or composer, and the panel is not
- * mounted behind it. Finishing or skipping shows the panel and closes this
- * window. In a plain browser there is no second window, so the same component
- * hands over to `children` in place.
+ * The desktop host opens this as a transparent sheet over the whole screen, so
+ * setup never borrows the panel's frame, tabs or composer, and the panel is not
+ * mounted behind it. The window is drawn here: a glow on the desktop that
+ * becomes it (`model/opening.ts`), a light pane on the left with the step, and
+ * the light itself on the right. Finishing flies it into the menu bar, then
+ * shows the panel and closes this window. In a plain browser there is no
+ * second window, so the same component hands over to `children` in place.
  *
  * Which is why `children` is optional, and why the setup window passes none.
  * Rendering the panel tree there mounted a second full application — its own
@@ -151,12 +156,17 @@ export function SetupGate({
   // Kept out here so everything below is a function of what it reports, and
   // after the sound so the effect order is the one this surface always had.
   const completed = isOnboardingCompleted(onboarding.state)
+  // A finish flies the window into the menu bar first, and setup is not over
+  // for anything below until it has landed.
+  const shell = React.useRef<HTMLDivElement>(null)
+  const { flying } = useSetupFlight(completed, shell)
+  const onScreen = onboarding.active || flying
   // The agent travels with the finish, and only with a finish: a choice made on
   // the way out of setup is not a decision, and `completeOnboarding` is what
   // keeps it. The panel reads it back from the host, because this window is
   // gone by the time it asks.
   const finishedOn = completed ? onboarding.state.agent : undefined
-  const handoff = useSetupHandoff(onboarding.active, completed, finishedOn)
+  const handoff = useSetupHandoff(onScreen, completed, finishedOn)
 
   // And told in place to a surface that has no host to write it to. Only on a
   // finish, which is the same rule the handoff applies: a choice made on the
@@ -171,11 +181,22 @@ export function SetupGate({
   // effect is the only thing the window costs, and that is the same window a
   // conversation created mid-setup already lives in.
   React.useEffect(() => {
-    if (onboarding.active || finishedOn === undefined) return
+    if (onScreen || finishedOn === undefined) return
     onHandOver?.(finishedOn)
-  }, [onboarding.active, finishedOn, onHandOver])
+  }, [onScreen, finishedOn, onHandOver])
 
-  if (!onboarding.active) {
+  // The last step that was on screen, which is what the window still shows
+  // while it gathers up and flies: the pane lets go of it as it leaves.
+  const lastShown = React.useRef<OnboardingState>(onboarding.state)
+  if (onboarding.active) lastShown.current = onboarding.state
+  const shown = lastShown.current
+
+  const beat = useOpening()
+  const cover = useCoverScale(shell)
+  const picking = showsPicker(shown, onboarding.gatewayStartup)
+  const field = setupField(beat)
+
+  if (!onScreen) {
     // A surface that becomes the panel in place does so now.
     if (children !== undefined) return <>{children}</>
     // The window is closing. The one thing it must not do is go quiet over a
@@ -198,17 +219,13 @@ export function SetupGate({
   return (
     <div className="nessa-setup-sheet">
       {/*
-        What is behind setup dims first, so the box arrives into a settled
-        screen rather than competing with the desktop.
-
-        It takes no click. It used to leave setup, but the dim has faded out by
-        the time anyone is choosing an agent, so the click that ended setup was
-        a click on what looked like the desktop — and the window vanished for
-        good with nothing on screen to say why or how to bring it back. Leaving
-        is something a person does on purpose: the close button and Escape.
+        Nothing dims the desktop. Setup is a window, and a room darkened to
+        read it leaves a grey cast over everything the person is about to go
+        back to. Leaving is something a person does on purpose: the close
+        button and Escape.
       */}
-      <div aria-hidden="true" className="nessa-setup-dim" />
       <div
+        ref={shell}
         // Setup covers the whole screen, menu bar included, so it is a modal
         // dialog in fact whether or not it says so. Saying so is what puts a
         // screen reader inside it and names it with the step's own heading.
@@ -216,21 +233,31 @@ export function SetupGate({
         aria-modal="true"
         aria-labelledby={SETUP_HEADING_ID}
         className="nessa-setup-window"
-        data-step={onboarding.state.step}
+        data-step={shown.step}
+        data-beat={beat}
+        data-leaving={flying ? "" : undefined}
+        // In flight the window is on its way out: nothing in it takes focus
+        // or is read out, as the step it shows is already over.
+        inert={flying}
+        style={{ "--nessa-setup-cover": cover } as React.CSSProperties}
       >
-        {/* The light setup arrives as, inside the panel it will fill. It lives
-          in here — clipped by the panel's own bounds — because a form that
-          grows until it *is* the window reads as the window being drawn, and
-          what should be felt is the window being filled. */}
-        <AgentBloom />
-        {/* Above the wash rather than inside it, so the way out does not wait
-          out the opening's choreography with it. */}
+        <BloomField
+          aria-hidden="true"
+          className="nessa-setup-field"
+          ground={FIELD_GROUND}
+          spread={field.spread}
+          clear={field.clear}
+          x={field.x}
+        />
+        {/* Above the light rather than inside the pane, so the way out does
+          not move with the steps. */}
         <SetupChrome
-          onBack={onboarding.canGoBack ? onboarding.back : undefined}
-          onClose={onboarding.dismiss}
+          onBack={onboarding.canGoBack && !flying ? onboarding.back : undefined}
+          onClose={flying ? undefined : onboarding.dismiss}
         />
         <Onboarding
-          state={onboarding.state}
+          state={shown}
+          open={beat === "open" && !flying}
           apiKeys={apiKeys}
           installations={installations}
           accelerator={onboarding.accelerator}
@@ -247,7 +274,42 @@ export function SetupGate({
           platform={onboarding.platform}
           runtimeCopy={runtimeCopy}
         />
+        {/* The picture beside the pane. The agent being chosen stands on it on
+          its card; the card is built once the window is open, so Three.js
+          loads after the opening rather than during it, and stays built
+          across steps so the picker never waits on it. */}
+        <div
+          aria-hidden="true"
+          className="nessa-setup-art"
+          data-showing={picking ? "" : undefined}
+        >
+          {beat === "open" ? <AgentShowcase chosen={shown.agent} /> : null}
+        </div>
       </div>
     </div>
   )
+}
+
+/**
+ * How much larger than itself the window is drawn while it is still a glow,
+ * kept to the screen it is on (`coverScale`). Measured from the window's own
+ * box, which a transform does not change.
+ */
+function useCoverScale(shell: React.RefObject<HTMLElement | null>): number {
+  const [cover, setCover] = React.useState(3)
+  React.useLayoutEffect(() => {
+    const element = shell.current
+    if (!element) return
+    const measure = () =>
+      setCover(
+        coverScale(
+          { width: innerWidth, height: innerHeight },
+          { width: element.offsetWidth, height: element.offsetHeight },
+        ),
+      )
+    measure()
+    addEventListener("resize", measure)
+    return () => removeEventListener("resize", measure)
+  }, [shell])
+  return cover
 }

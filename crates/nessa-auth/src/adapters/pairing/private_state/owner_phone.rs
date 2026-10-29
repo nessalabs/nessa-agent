@@ -131,6 +131,9 @@ impl OwnerPhoneOriginalStore for FilePairingState {
         self.reconcile(ORIGINAL_FILE, &bytes)?;
         Ok(Some(saved))
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        FilePairingState::enrollment_signed(self)
+    }
 }
 fn encode(
     reservation: &OwnerPhoneReservation,

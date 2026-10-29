@@ -35,6 +35,7 @@ async fn reordered_view_matches_real_dispatch_and_stale_order_cannot_resubmit() 
             caller("a"),
             "a".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "first".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -56,6 +57,7 @@ async fn reordered_view_matches_real_dispatch_and_stale_order_cannot_resubmit() 
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: execution.into(),
                     images: Vec::new(),
                     files: Vec::new(),

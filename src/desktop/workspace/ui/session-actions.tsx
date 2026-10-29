@@ -1,6 +1,6 @@
 /**
- * What a session row offers, wherever the row is — the session list, a
- * channel's pinned sessions, a channel's branch in the sidebar: open it,
+ * What a session row offers, wherever the row is — the session list (its
+ * pinned ones first), a channel's branch in the sidebar: open it,
  * open it beside the focused pane (⌘-click), and its context menu.
  */
 import { shallowEqual } from "react-redux"
@@ -23,6 +23,7 @@ import {
   selectShareable,
 } from "../adapters/store/selectors"
 import { useBesidePreference } from "../../adapters/window-preferences"
+import { DesktopIcon } from "../../ui/icons"
 import { MenuItem, MenuSeparator, MenuShortcut } from "../../ui/menu"
 import { isMac } from "../../adapters/platform"
 import { commandKey, commandLabel } from "../../model/keyboard"
@@ -99,11 +100,13 @@ export function SessionMenuItems({
       {navigation ? (
         <>
           <MenuItem onSelect={() => open(sessionId)}>
+            <DesktopIcon name="open" />
             Open
             <MenuShortcut>↩</MenuShortcut>
           </MenuItem>
           {/* As ⌘-click does: beside when there is room, in the focused pane's place when not. */}
           <MenuItem onSelect={() => beside(sessionId)}>
+            <DesktopIcon name="openBeside" />
             Open Beside
             {besideKey.on ? (
               <MenuShortcut>{commandLabel(isMac)}Click</MenuShortcut>
@@ -113,7 +116,10 @@ export function SessionMenuItems({
               session away, never putting a new session's home in its place, which
               closing the last pane does (`canClosePane`). */}
           {shown && count > 1 ? (
-            <MenuItem onSelect={() => dispatch(closePane({ pane }))}>Close Pane</MenuItem>
+            <MenuItem onSelect={() => dispatch(closePane({ pane }))}>
+              <DesktopIcon name="closePane" />
+              Close Pane
+            </MenuItem>
           ) : null}
           <MenuSeparator />
         </>
@@ -121,22 +127,26 @@ export function SessionMenuItems({
       {/* A title is the source's, as a pin is: none to change before it has spoken. */}
       {onRename ? (
         <MenuItem disabled={!begun} onSelect={onRename}>
+          <DesktopIcon name="rename" />
           Rename
         </MenuItem>
       ) : null}
       <MenuItem
+        data-close-immediately=""
         disabled={!begun}
         onSelect={() =>
           void dispatch(pinSession({ sessionId, pinned: !pinned, initiator: "person" }))
         }
       >
-        {pinned ? "Unpin from Sidebar" : "Pin to Sidebar"}
+        <DesktopIcon name={pinned ? "unpin" : "pin"} />
+        {pinned ? "Unpin" : "Pin"}
       </MenuItem>
       {/* A copy of what was said, so none before it has spoken. */}
       <MenuItem
         disabled={!begun}
         onSelect={() => void dispatch(forkSession({ sessionId, initiator: "person" }))}
       >
+        <DesktopIcon name="fork" />
         Fork
       </MenuItem>
       {/* Sharing is the gateway's: a window without one offers none, and a
@@ -146,18 +156,22 @@ export function SessionMenuItems({
           disabled={!begun}
           onSelect={() => void dispatch(openShare({ sessionId }))}
         >
+          <DesktopIcon name="share" />
           Share…
         </MenuItem>
       ) : null}
       <MenuSeparator />
       <MenuItem
+        data-close-immediately=""
         disabled={!begun}
         onSelect={() => void dispatch(archiveSession({ sessionId, initiator: "person" }))}
       >
+        <DesktopIcon name="archive" />
         Archive
       </MenuItem>
       {onDelete ? (
         <MenuItem disabled={!begun} onSelect={onDelete}>
+          <DesktopIcon name="delete" />
           Delete…
         </MenuItem>
       ) : null}

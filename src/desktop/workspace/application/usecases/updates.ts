@@ -35,7 +35,7 @@ import {
   withTranscript,
   type WorkspaceState,
 } from "../workspace-state"
-import { createDraft } from "./panes"
+import { createDraft, openSession } from "./panes"
 
 /** Whether the session was removed at or after this revision of it: it stays out. */
 function removedSince(state: WorkspaceState, session: SessionSummary): boolean {
@@ -93,8 +93,8 @@ function summaryHeard(state: WorkspaceState, session: SessionSummary): Workspace
 /**
  * Takes a session out of the lists, with everything the window held of it —
  * listed again, it is read afresh. A pane showing it closes; the last pane
- * turns into a new session's home in the same channel, under `draftId`, so
- * no pane is left showing a session that is not there.
+ * turns into a new session's home under `draftId` when one can start; with
+ * no valid home, it clears. No pane is left showing a session that is gone.
  */
 function removeSession(
   state: WorkspaceState,
@@ -114,8 +114,18 @@ function removeSession(
     model: modelForNextTurn(state, sessionId) ?? session.model,
     target: showing.key,
   })
+  const hidden = removed.sessionTabs.find((id) => id !== sessionId)
+  const reopened = hidden
+    ? openSession(removed, { sessionId: hidden, pane: showing.key })
+    : removed
+  const next =
+    restarted !== removed
+      ? restarted
+      : reopened !== removed
+        ? reopened
+        : withPanes(removed, null)
   // Nobody asked for a new session here: what the person was looking at stays.
-  return { ...restarted, view: state.view }
+  return { ...next, view: state.view }
 }
 
 /**
@@ -316,7 +326,7 @@ export function updateReceived(
  * The source removed a session, at this revision of its summary (the port
  * counts a removal with the summary, not the conversation). The pane showing
  * it closes; the last pane starts over as a new session's home under
- * `draftId`. A removal older than the summary held says nothing about it
+ * `draftId` when one can start. A removal older than the summary held says nothing about it
  * now; one of a session not held is remembered, in case an older read lists
  * it.
  */
@@ -390,8 +400,8 @@ function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
 }
 
 /**
- * The sessions on screen — in a pane, or in the open overview, bounded
- * (`shownIds`) — whose conversations are the source's to give: listed, and
+ * The sessions on screen — in a pane, in the open overview, or asked about
+ * by the session list's cards, each bounded (`shownIds`) — whose conversations are the source's to give: listed, and
  * spoken of by the source — a session whose first message is still on its
  * way has nothing to read yet. What the window reads, and reads again on a
  * resync (`effects.ts`).

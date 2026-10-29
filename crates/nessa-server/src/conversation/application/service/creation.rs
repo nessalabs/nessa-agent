@@ -316,6 +316,7 @@ impl ConversationService {
                 model: requested.model.clone(),
                 approval_mode: requested.approval_mode,
                 environment: None,
+                channel: None,
             },
         )
         .await
@@ -430,19 +431,35 @@ fn binding(
     // request naming another environment is another request. Named only
     // when one is, so a request that names none keeps the fingerprint it
     // always had; the array's length tells the two forms apart.
-    let canonical = match requested.environment.as_deref() {
-        None => serde_json::to_vec(&(
+    // Its channel is part of what was asked too, the same way: named only
+    // when it is a stored one, so the default channel keeps the fingerprint
+    // a request that names none always had.
+    let channel = requested
+        .channel
+        .as_ref()
+        .filter(|channel| !channel.is_default())
+        .map(|channel| channel.as_str());
+    let canonical = match (requested.environment.as_deref(), channel) {
+        (None, None) => serde_json::to_vec(&(
             caller.organization_id.as_str(),
             agent,
             requested.model.as_deref(),
             requested.approval_mode.map(|mode| mode.as_str()),
         )),
-        Some(environment) => serde_json::to_vec(&(
+        (Some(environment), None) => serde_json::to_vec(&(
             caller.organization_id.as_str(),
             agent,
             requested.model.as_deref(),
             requested.approval_mode.map(|mode| mode.as_str()),
             environment,
+        )),
+        (environment, Some(channel)) => serde_json::to_vec(&(
+            caller.organization_id.as_str(),
+            agent,
+            requested.model.as_deref(),
+            requested.approval_mode.map(|mode| mode.as_str()),
+            environment,
+            channel,
         )),
     }
     .map_err(|_| ConversationError::InvalidInput)?;

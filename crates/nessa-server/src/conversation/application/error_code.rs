@@ -47,6 +47,7 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::UnavailableAfterSave => ConversationErrorCode::UnavailableAfterSave,
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
+        ConversationError::ChannelNotFound => ConversationErrorCode::ChannelNotFound,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
             ConversationErrorCode::SandboxUnavailable
@@ -164,7 +165,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
                 ImageInputRefusal::MediaType(_) | ImageInputRefusal::ImageTooLarge { .. },
             )
             | AgentError::MessageTooLarge { .. } => ConversationErrorCode::InvalidRequest,
-            AgentError::UserImage(_) => ConversationErrorCode::AttachmentUnavailable,
+            AgentError::UserImage(_) | AgentError::UserFile(_) => {
+                ConversationErrorCode::AttachmentUnavailable
+            }
             AgentError::AuditFailure => ConversationErrorCode::AuditUnavailable,
             // Startup never reaches the provider with input. This code carries
             // no claim that a later attachment attempt will succeed.
@@ -203,6 +206,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
     // Every field named, so a new one cannot be left out of this decision
     // without failing to compile.
     let DeletionFailures {
+        background_tasks,
         stop,
         history,
         history_leased_elsewhere,
@@ -216,7 +220,8 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         interrupted,
         another_attempt,
     } = failures;
-    let evidence_only = stop.is_none()
+    let evidence_only = background_tasks.is_none()
+        && stop.is_none()
         && history.is_none()
         && !history_leased_elsewhere
         && provider.is_none()

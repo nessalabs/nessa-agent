@@ -156,7 +156,9 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
   )
   for (const checkout of [workflow, workflow.replace(/\r?\n/g, "\r\n")]) {
     const blocks = jobBlocks(checkout)
-    const local = blocks.find((block) => block.id === "local-auth").text
+    const local = blocks
+      .find((block) => block.id === "local-auth")
+      .text.replace(/\r\n/g, "\n")
     const server = blocks.find((block) => block.id === "windows-server-tests").text
     const command =
       /run: node scripts\/cargo-test-parallel\.mjs --concurrency (\d+) --partition (.+?) -- (.+)\r?$/m
@@ -167,20 +169,32 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     assert.equal(localCommand[1], "2")
     assert.equal(serverCommand[1], "2")
     assert.equal(localCommand[2], "${{ matrix.partition }}")
-    assert.equal(serverCommand[2], "server-lib")
+    assert.equal(serverCommand[2], "${{ matrix.partition }}")
+    assert.match(server, /partition: \[server-conversation, server-other\]/)
+    assert.match(server, /fail-fast: false/)
+    assert.match(
+      server,
+      /name: Windows server library tests \(\$\{\{ matrix\.partition \}\}\)/,
+    )
     assert.equal(localCommand[3], serverCommand[3])
     assert.equal(
       localCommand[3],
-      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk",
+      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault",
     )
     assert.match(local, /fail-fast: false/)
-    assert.match(local, /os: \[windows-latest, ubuntu-latest, macos-latest\]/)
-    for (const [os, partition] of [
-      ["windows", "remaining"],
-      ["ubuntu", "all"],
-      ["macos", "all"],
-    ])
-      assert.match(local, new RegExp(`- os: ${os}-latest\\s+partition: ${partition}`))
+    // The desktop CI harness owns the Linux release-baseline agreement. This
+    // check owns partition coverage for every runner the matrix declares.
+    const matrix = local.match(/matrix:\s+os: \[([^\]]+)\]/)
+    assert.ok(matrix)
+    const runners = matrix[1].split(",").map((runner) => runner.trim())
+    assert.equal(runners.length, 3)
+    assert.match(runners[0], /^windows-latest$/)
+    assert.match(runners[1], /^ubuntu-\d{2}\.\d{2}$/)
+    assert.match(runners[2], /^macos-latest$/)
+    for (const [index, runner] of runners.entries()) {
+      const partition = index === 0 ? "remaining" : "all"
+      assert.ok(local.includes(`- os: ${runner}\n            partition: ${partition}`))
+    }
     assert.match(server, /runs-on: windows-latest/)
     for (const block of [local, server]) {
       assert.match(block, /needs: changes/)
@@ -222,7 +236,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
   }
 })
 
-test("either Windows partition failure or unexpected skip fails the aggregate", () => {
+test("any Windows job failure or unexpected skip fails the aggregate", () => {
   for (const job of ["windows-server-tests", "local-auth"]) {
     for (const result of ["failure", "cancelled", "skipped"]) {
       const evaluated = evaluateChecks(needs("true", { ...compileJobs, [job]: result }))

@@ -67,6 +67,7 @@ async fn prepared_empty_history_is_complete_before_provider_attachment_in_both_s
         *provider.open_gate.lock().unwrap() = Some(gate);
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: only(Arc::new(Provider::new(provider))),
                 storage,
@@ -153,6 +154,7 @@ async fn gateway_record_view_waits_for_message_commit() {
     let repository = Arc::new(MemoryRepository::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
@@ -189,6 +191,7 @@ async fn gateway_record_view_waits_for_message_commit() {
             caller("send-record-view"),
             "request".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "question".into(),
                 ..SubmittedMessage::default()
             },
@@ -393,6 +396,7 @@ async fn assert_terminal_failure_round_trip(
             caller("send"),
             "execution".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
                 files: Vec::new(),
@@ -472,6 +476,7 @@ async fn assert_terminal_failure_round_trip(
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
@@ -572,6 +577,7 @@ async fn a_message_after_the_agent_ended_its_own_session_opens_it_again() {
         .await
         .unwrap();
     let message = |text: &str| SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         images: Vec::new(),
         files: Vec::new(),
@@ -817,6 +823,7 @@ fn service_with_cached_tool_uis(
 ) -> ConversationService {
     ConversationService::with_tool_uis(
         ConversationDependencies {
+            input_files: None,
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
@@ -888,6 +895,7 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
             caller("send-ui"),
             "ui-request".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "show".into(),
                 ..SubmittedMessage::default()
             },

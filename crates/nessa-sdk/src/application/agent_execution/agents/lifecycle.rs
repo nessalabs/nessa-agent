@@ -166,6 +166,7 @@ struct OwnedWork {
 }
 #[derive(Clone)]
 pub(super) struct ActiveExecution {
+    work: u64,
     work_generation: WorkGeneration,
     pub(super) id: ExecutionId,
     pub(super) configured: Arc<dyn AgentProvider>,
@@ -1297,6 +1298,7 @@ impl SessionLifecycle {
         &self,
         id: ExecutionId,
         configured: Arc<dyn AgentProvider>,
+        work: &WorkPermit,
     ) -> Result<WorkGeneration, AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
         if !matches!(state.work_status, WorkStatus::Open) {
@@ -1304,11 +1306,34 @@ impl SessionLifecycle {
         }
         let work_generation = state.work_generation;
         state.active = Some(ActiveExecution {
+            work: work.id,
             work_generation,
             id,
             configured,
         });
         Ok(work_generation)
+    }
+    /// The work owner arbitrates Stop against native_handoff under one lock.
+    pub(super) fn cancel_preparing_turn(&self, id: &ExecutionId) -> bool {
+        let mut state = self.state.lock().expect("session lifecycle");
+        let Some(active) = state.active.as_ref().filter(|active| &active.id == id) else {
+            return false;
+        };
+        let work_id = active.work;
+        let Some(work) = state.work.get_mut(&work_id) else {
+            return false;
+        };
+        if !matches!(work.phase, WorkPhase::Active) {
+            return false;
+        }
+        if work.cancellation.borrow().is_none() {
+            work.cancellation
+                .send_replace(Some(InvocationCancellationEvent {
+                    cause: SchedulingCause::TurnStopped,
+                    actor: None,
+                }));
+        }
+        true
     }
     pub(super) fn finish_execution(&self, work_generation: WorkGeneration) {
         let mut state = self.state.lock().expect("session lifecycle");

@@ -14,7 +14,14 @@ test("every required step appears as often as its number says", () => {
   const knobs = knobsFrom({ rounds: "40", seed: "9" }, {})
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
+  assert.equal(count("background"), knobs.backgroundTasks)
+  assert.equal(count("inputFiles"), knobs.inputFiles)
   assert.equal(count("model"), knobs.modelSwitches)
+  assert.equal(count("pairedCatalogue"), 1)
+  assert.equal(
+    steps.find((step) => step.kind === "pairedCatalogue").cycles,
+    knobs.pairedCatalogues,
+  )
   assert.equal(count("stop"), knobs.stops)
   assert.equal(count("parent-stop"), knobs.parentstops)
   assert.equal(count("fail"), knobs.fails)
@@ -32,14 +39,22 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("window"), knobs.windows)
   assert.equal(count("linking"), knobs.linkings)
   assert.equal(count("rail"), knobs.rails)
+  assert.equal(count("panel"), knobs.panels)
+  assert.equal(count("menuPanel"), knobs.menuPanels)
+  assert.equal(count("menu"), knobs.menus)
+  assert.equal(count("listAnswer"), knobs.listAnswers)
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
   assert.equal(count("trace"), knobs.traces)
   assert.equal(count("notice"), knobs.notices)
   assert.equal(count("pool"), knobs.pools)
+  assert.equal(count("tunnel"), knobs.tunnels)
   assert.equal(count("drift"), knobs.drifts)
   assert.equal(count("upgrade"), knobs.upgrades)
   assert.equal(count("launch"), knobs.launches)
+  assert.equal(count("github"), knobs.githubs)
+  assert.equal(count("channel"), knobs.channels)
+  assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -60,7 +75,9 @@ test("a failure is always followed by a reply, and a switch never picks the mode
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
         assert.ok(
-          ["permission", "reviews", "large", "model"].includes(steps[index + 1]?.kind),
+          ["permission", "reviews", "large", "listAnswer", "model"].includes(
+            steps[index + 1]?.kind,
+          ),
         )
         assert.equal(steps[index + 1]?.mode, step.to)
       }
@@ -135,17 +152,27 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       {
         parentstops: "0",
         handoffs: "0",
+        inputFiles: "0",
+        backgroundTasks: "0",
         windows: "0",
         linkings: "0",
         rails: "0",
+        panels: "0",
+        listAnswers: "0",
         onboardings: "0",
         tables: "0",
         traces: "0",
         notices: "0",
         pools: "0",
+        tunnels: "0",
         drifts: "0",
         upgrades: "0",
         launches: "0",
+        menuPanels: "0",
+        menus: "0",
+        githubs: "0",
+        channels: "0",
+        webhooks: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",
@@ -160,6 +187,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
   const original = steps.filter(
     (step, index) =>
       step.kind !== "model" &&
+      step.kind !== "pairedCatalogue" &&
       !(step.kind === "switch" && steps[index + 1]?.after !== "switch"),
   )
   assert.deepEqual(
@@ -186,4 +214,13 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       "aside",
     ],
   )
+})
+
+test("webhook capture/no-send runs once by default and three times at the raised count", () => {
+  const count = (options) =>
+    plan(knobsFrom(options, {})).filter((step) => step.kind === "webhook").length
+  assert.equal(count({}), 1)
+  assert.equal(count({ webhooks: "3" }), 3)
+  assert.equal(count({ webhooks: "0" }), 0)
+  assert.equal(knobsFrom({}, { NESSA_STRESS_WEBHOOKS: "3" }).webhooks, 3)
 })

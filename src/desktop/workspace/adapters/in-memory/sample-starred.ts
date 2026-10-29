@@ -6,7 +6,6 @@ import {
   ran,
   read,
   sampleApprovalOptions,
-  searched,
   text,
   type SampleSession,
 } from "./sample-content"
@@ -38,9 +37,35 @@ export const starredSamples: readonly SampleSession[] = [
         "agent",
         18,
         [
-          read("src/desktop/ui/desktop-app.tsx"),
-          read("split-view/split-view-math.ts"),
-          searched("SplitView · 6 results"),
+          // Times, so this run is the waterfall the gateway sends: a bar on the
+          // header and each call on a shared axis. A step with no start is the
+          // same trace with the axis left out (`ToolTrace`). Written as steps,
+          // not a spread of `Part`, so the added times stay on that variant.
+          {
+            kind: "step",
+            step: "read",
+            label: "Read",
+            detail: "src/desktop/workspace/ui/layouts/workspace-layout.tsx",
+            startedAtMs: Date.UTC(2026, 9, 27, 18, 0, 0),
+            endedAtMs: Date.UTC(2026, 9, 27, 18, 0, 4),
+          },
+          {
+            kind: "step",
+            step: "read",
+            label: "Read",
+            detail: "split-view/split-view-math.ts",
+            startedAtMs: Date.UTC(2026, 9, 27, 18, 0, 6),
+            endedAtMs: Date.UTC(2026, 9, 27, 18, 0, 14),
+          },
+          {
+            kind: "step",
+            step: "search",
+            label: "Searched for",
+            detail: "SplitView · 6 results",
+            status: "failed",
+            startedAtMs: Date.UTC(2026, 9, 27, 18, 0, 16),
+            endedAtMs: Date.UTC(2026, 9, 27, 18, 0, 30),
+          },
           text(
             "The shell already owns one `SplitView` for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a **fraction** of the chat area rather than a pixel width, which means:",
           ),
@@ -84,7 +109,9 @@ export const starredSamples: readonly SampleSession[] = [
     unread: true,
     approval: {
       id: "signing-import",
-      command: "security import build/nessa-dev.p12 -k release.keychain",
+      // One long word: a card that may allow it must draw it whole, wrapped.
+      command:
+        "security import build/certificates/nessa-developer-id-application-2026-10.p12 -k release.keychain",
       reason: "Imports a signing certificate into the release keychain.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,

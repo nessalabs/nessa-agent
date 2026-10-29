@@ -3,7 +3,9 @@
 //! `LocalConversationStore` keeps ownership records, tombstones and summaries
 //! with approval-mode requests in one private SQLite database (`schema.sql`, opened by
 //! `nessa-local-database`), and is the repository, the summaries and the
-//! listing and the owner-scoped catalogue at once. `export_facts` reads that
+//! listing and the reader-scoped catalogue at once. Paired lists acquire
+//! their bounded rows and scoped head in one transaction (L9 in
+//! `docs/design/record-subscriptions.md`). `export_facts` reads that
 //! database for the export cut: live grants, and grants whose latest journal
 //! row is a revoke.
 //!
@@ -49,6 +51,8 @@
 //! `DurableExecutionAudit` serializes admitted physical writes through the shared
 //! local-storage Worker; its injected `ExecutionAuditFileWriter` owns private-file
 //! commit/sync. Observer loss retains the physical slot through input cleanup.
+//! `audit_diagnostics` preserves phase, I/O kind and raw OS error in the existing
+//! stderr log without audit contents, path strings or error Display text.
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
@@ -114,11 +118,19 @@ mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is
 // built, tests included, where both ends exist.
+mod background_tasks;
+mod channels;
 mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
+#[cfg(test)]
+pub(crate) use store::GrantWritePause;
 mod thread_reports;
+pub use background_tasks::LocalBackgroundTasks;
+#[cfg(unix)]
+pub use background_tasks::ShepherdBackgroundTasks;
+pub use channels::{LocalChannelFolders, LocalChannelStore};
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
     ReceiverSnapshot, ReceiverSnapshotError,
@@ -182,6 +194,7 @@ mod review_notice_audit;
 pub use review_notice_audit::{DurableReviewNoticeAudit, MonotonicReviewNoticeClock};
 
 mod audit;
+mod audit_diagnostics;
 mod audit_mapping;
 pub use audit::{DurableExecutionAudit, ExecutionAuditFileWriter};
 
@@ -201,3 +214,15 @@ pub use agent_tool_audit::DurableAgentToolAudit;
 
 mod ownership_audit;
 pub use ownership_audit::DurableOwnershipAudit;
+#[cfg(unix)]
+mod workspaces;
+#[cfg(unix)]
+pub(crate) use workspaces::ThreadWorkspaces;
+
+mod workspace_runtime_config;
+pub(crate) use workspace_runtime_config::BoatRuntimeConfig;
+
+#[cfg(any(unix, test))]
+mod input_files;
+#[cfg(any(unix, test))]
+pub(crate) use input_files::LocalInputFiles;

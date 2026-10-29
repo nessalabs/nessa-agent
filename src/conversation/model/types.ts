@@ -57,7 +57,7 @@ export type ConversationLease = {
   revision?: number
   /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
    * `peer` a paired machine that dials the gateway. */
-  environment?: "here" | "ssh" | "peer"
+  environment?: "here" | "ssh" | "peer" | "boat"
   /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
    * `environment` is `ssh` or `peer`. */
   host?: string
@@ -110,7 +110,7 @@ export type ConversationSelection = {
  */
 export function linksFilesHere(conversation: {
   selection?: ConversationSelection
-  remote?: { lease?: { environment?: "here" | "ssh" | "peer" } }
+  remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
 }): boolean {
   const environment = conversation.remote?.lease?.environment
   return (
@@ -170,6 +170,8 @@ export type CommandFailure =
   | "approval-request-conflict"
   | "turn-running"
   | "conversations-not-configured"
+  /** The channel a new conversation named is not one of the person's. */
+  | "channel-not-found"
   | "agent-startup-deadline"
   /** No lease was granted: the sandbox the agent runs in could not be given. */
   | "sandbox-unavailable"

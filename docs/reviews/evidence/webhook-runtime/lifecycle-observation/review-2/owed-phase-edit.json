@@ -1,0 +1,8 @@
+{
+  "name": "owed-phase",
+  "path": "/tmp/nessa-expiry-context-final-review/crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs",
+  "before": "bd744a0e4ccf5ef39a90108265a20db980066ad38071388a706c29b319887ed2",
+  "after": "9310b167c0e4d49c9ca503e09728229b6a11bef5f8a3e9678b8ddfc849839343",
+  "removed": "                    if owed\n                        && !matches!(&live, Some(live) if live.lifecycle.phase() == RegistrationPhase::ExpiryObserved)\n                    {\n                        return Err(OutboxError::Invalid);\n                    }\n",
+  "replacement": ""
+}

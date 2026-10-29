@@ -264,6 +264,7 @@ fn person_sending(
                 caller,
                 execution,
                 SubmittedMessage {
+                    uploads: Vec::new(),
                     text: "and now?".into(),
                     ..SubmittedMessage::default()
                 },
@@ -1624,6 +1625,7 @@ async fn m10_a_release_after_a_turn_running_refusal_keeps_turn_running() {
                         caller,
                         "app-refused-while-running".into(),
                         SubmittedMessage {
+                            uploads: Vec::new(),
                             text: "me too".into(),
                             ..SubmittedMessage::default()
                         },
@@ -1863,6 +1865,7 @@ async fn a_person_resending_an_apps_turn_as_theirs_is_a_conflict() {
             fixture.caller(&execution),
             execution.clone(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "first".into(),
                 ..SubmittedMessage::default()
             },
@@ -2072,6 +2075,7 @@ async fn c9_a_newer_update_given_during_the_admission_is_held_afterwards() {
                     caller,
                     "next".into(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text: "and now?".into(),
                         ..SubmittedMessage::default()
                     },
@@ -2329,6 +2333,7 @@ async fn c10_a_message_steered_into_a_turn_carries_no_context() {
             fixture.caller("steered"),
             "steered".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "and also".into(),
                 ..SubmittedMessage::default()
             },
@@ -2368,6 +2373,7 @@ async fn c11_a_refused_submission_drops_what_it_took_on_record() {
             fixture.caller("refused"),
             "refused".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -2402,6 +2408,7 @@ async fn c11_a_refused_submission_drops_what_it_took_on_record() {
             fixture.caller("with-image"),
             "with-image".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "look".into(),
                 images: vec![SubmittedImage {
                     digest: format!("sha256:{}", "0".repeat(64)),
@@ -2437,6 +2444,7 @@ async fn offered_again(fixture: &Fixture, execution: &str, carried: Carried) {
         fixture.caller(execution),
         execution.into(),
         SubmittedMessage {
+            uploads: Vec::new(),
             text: "And now?".into(),
             ..SubmittedMessage::default()
         },
@@ -2701,6 +2709,7 @@ async fn c13_a_saved_steer_refused_after_save_does_not_drop_the_contexts_it_carr
             fixture.caller("driven"),
             "driven".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },
@@ -2761,6 +2770,7 @@ async fn c13_a_saved_steer_unavailable_after_save_does_not_drop_the_contexts_it_
             fixture.caller("driven"),
             "driven".into(),
             SubmittedMessage {
+                uploads: Vec::new(),
                 text: "hello".into(),
                 ..SubmittedMessage::default()
             },

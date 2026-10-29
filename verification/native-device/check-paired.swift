@@ -31,7 +31,9 @@ import Foundation
                 })
                 precondition(count > 0)
             } else {
-                let progress = try await worker.transcript(
+                let stamp = try await worker.bindSavedReceiver()
+                let progress = try await worker.publishedTranscript(
+                    stamp: stamp,
                     conversation: arguments[4], revision: "00000000-0000-4000-8000-000000000001",
                     capture: { snapshot in
                         precondition(!Thread.isMainThread)
@@ -94,7 +96,7 @@ import Foundation
             precondition(recovered.observedAtMs() == purge.observedAtMs())
             precondition(recovered.records() == purge.records())
             do {
-                _ = try native.transcript(conversation: conversation, revision: revision)
+                _ = try native.bindSavedReceiver()
                 fatalError("Removed issued receiver was used as saved-read authority")
             } catch NativeCallError.Session(let failure) {
                 precondition(failure.kind() == .noCredential)
@@ -136,7 +138,8 @@ import Foundation
             }
             if mode == "resumed" { precondition(read.moved() == false) }
         }
-        let page = try native.cataloguePage(after: nil, maximum: 16)!
+        let stamp = try native.bindSavedReceiver()
+        let page = try native.publishedCataloguePage(stamp: stamp, after: nil, maximum: 16)!
         let local = try native.localEnrollment()!
         precondition(local.deviceKey() == expectedDeviceKey())
         precondition(local.issued()?.receiver() == receiver)
@@ -144,7 +147,7 @@ import Foundation
         precondition(local.gatewayPin().count == 44)
         precondition(local.publicIntent().consentClassName() == expectedConsentClassName())
         do {
-            _ = try native.cataloguePage(after: nil, maximum: UInt32.max)
+            _ = try native.publishedCataloguePage(stamp: stamp, after: nil, maximum: UInt32.max)
             fatalError("Core catalogue bound was bypassed")
         } catch NativeCallError.Session(let failure) {
             precondition(failure.kind() == .cache && failure.cache() == .cache)
@@ -156,9 +159,9 @@ import Foundation
         let key = page.entries().first!.key()
         let restored = try NativeEntryKey(creation: key.creation(), id: key.id())
         precondition(restored.creation() == key.creation() && restored.id() == key.id())
-        let following = try native.cataloguePage(after: restored, maximum: 16)!
+        let following = try native.publishedCataloguePage(stamp: stamp, after: restored, maximum: 16)!
         precondition(!following.entries().contains { $0.key().id() == key.id() })
-        let snapshot = try native.transcript(conversation: conversation, revision: revision)
+        let snapshot = try native.publishedTranscript(stamp: stamp, conversation: conversation, revision: revision)
         precondition(snapshot.state() == .retained)
         precondition(snapshot.downloaded()! > 0 && snapshot.generation()! > 0)
         if mode == "epoch" {
@@ -178,14 +181,15 @@ import Foundation
         precondition(afterClose == original)
         precondition(snapshot.downloaded()! > 0 && page.generation() > 0)
         do {
-            _ = try native.cataloguePage(after: nil, maximum: 16)
+            _ = try native.publishedCataloguePage(stamp: stamp, after: nil, maximum: 16)
             fatalError("Closed session admitted another read")
         } catch NativeCallError.Session(let failure) {
             precondition(failure.kind() == .closed)
             precondition(failure.cache() == nil && failure.enrollment() == nil)
         }
         let reopened = try NativeDeviceSession.open(root: root, directory: directory, address: address)
-        let next = try reopened.transcript(conversation: conversation, revision: revision)
+        let rebound = try reopened.bindSavedReceiver()
+        let next = try reopened.publishedTranscript(stamp: rebound, conversation: conversation, revision: revision)
         precondition(next.downloaded() == snapshot.downloaded() && next.applied() == snapshot.applied())
         let reopenedView = try next.viewJson()
         if mode == "epoch" {

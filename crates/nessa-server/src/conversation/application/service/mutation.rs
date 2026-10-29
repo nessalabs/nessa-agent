@@ -755,7 +755,7 @@ pub(super) fn submission_fingerprint(
     message: &SubmittedMessage,
     mode: SubmissionMode,
 ) -> Result<[u8; 32], ConversationError> {
-    let canonical = serde_json::to_vec(&(
+    let mut canonical = serde_json::to_value(&(
         execution_id,
         match mode {
             SubmissionMode::Queue => "queue",
@@ -774,6 +774,28 @@ pub(super) fn submission_fingerprint(
             .collect::<Vec<_>>(),
     ))
     .map_err(|_| ConversationError::InvalidInput)?;
+    if !message.uploads.is_empty() {
+        let uploads = serde_json::to_value(
+            message
+                .uploads
+                .iter()
+                .map(|file| {
+                    (
+                        file.digest.as_str(),
+                        file.media_type.as_str(),
+                        file.size,
+                        file.name.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| ConversationError::InvalidInput)?;
+        canonical
+            .as_array_mut()
+            .ok_or(ConversationError::InvalidInput)?
+            .push(uploads);
+    }
+    let canonical = serde_json::to_vec(&canonical).map_err(|_| ConversationError::InvalidInput)?;
     let mut digest = Sha256::new();
     digest.update(b"nessa.conversation.submit\0");
     digest.update(canonical);

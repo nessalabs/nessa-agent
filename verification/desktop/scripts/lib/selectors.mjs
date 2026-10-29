@@ -19,6 +19,9 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  boatRuntimeSettings: "[data-boat-runtime-settings]",
+  channelSettingsOpen: "[data-channel-settings-open]",
+  channelSettingsDialog: "[data-channel-settings]",
   localLifetimes: "[data-local-lifetimes]",
   // Committed conversation production-component fixture
   historyTabConsumer: "[data-history-tab-consumer]",
@@ -76,6 +79,13 @@ export const css = {
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
+  channelAdd: ".workspace-section-add", // class: a sidebar section's +, which opens the "New channel" flow
+  newChannel: ".new-channel", // class: the "New channel" flow over the content region
+  newChannelField: ".new-channel-field", // class: the flow's composer field, for the name and the notes; data-step
+  newChannelAsked: ".new-channel-asked", // class: the question being asked; data-step
+  newChannelAnswered: ".new-channel-answered", // class: an answered question's ✓ line; data-step
+  newChannelResource: ".new-channel-resources li", // a file or folder attached to the channel being made
+  newChannelDrop: ".new-channel-drop", // the drop target, while files are dragged over the flow
   homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
@@ -94,8 +104,11 @@ export const css = {
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
-  widgetPane: "[data-widget-pane]", // a pane showing a widget
-  widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
+  panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
+  chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
+  panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body
+  panelWidgetHead: ".workspace-panel-widget-head", // class: that tab's trail and Open in Window
+  widgetBody: "[data-widget-body]", // a widget's body in the panel or the window, where its caret lands
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
@@ -118,7 +131,6 @@ export const css = {
   subagentDetail: "[data-subagent-detail]", // the open child's conversation
   subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
-  subagentSummary: "[data-subagent-summary]", // the list's counts
   subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its pane header
   avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
   avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show
@@ -152,6 +164,17 @@ export const css = {
   codeBlock: ".workspace-code", // class: a code block in a transcript
   allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
 
+  // The menu-bar panel (index.html)
+  panelTabs: '.nessa-chrome [data-slot="chat-tabs"]', // the panel's tab strip; data-variant="dots"
+  panelCurrent: '.nessa-chrome [data-slot="chat-tabs-current"]', // the selected tab's name, leading the strip
+  panelDot: '.nessa-chrome [data-slot="chat-tab-dot"]', // one page dot per tab; its [data-active] tab is the bar
+  panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
+  panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
+  panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor
+  sentBubble: '[data-slot="chat-bubble"][data-tone="sent"]', // a message the person sent, drawn in the chat accent
+  undoCard: '[data-slot="undo-card"]', // the row card an archive leaves, with Undo
+  randomAvatar: '[data-slot="random-avatar"]', // a conversation's painted avatar
+
   // Side columns
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
@@ -162,7 +185,7 @@ export const css = {
   titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
-  studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
+  studio: '.desktop-identity-button[aria-label="nessa Studio Settings"]', // "nessa Studio", which opens Settings, in every layout
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
@@ -173,6 +196,10 @@ export const css = {
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
   // Approval card (arranged by its own width)
+  approvalCopy: ".workspace-approval-copy",
+  approvalCommandBlock: ".workspace-approval-command-block",
+  approvalDeny: ".workspace-approval-deny",
+  approvalAlways: 'button[data-answer="always"]',
   approvalCard: ".workspace-approval", // class
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
@@ -281,15 +308,27 @@ export const css = {
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  githubLive: "[data-github-live]",
+  githubLiveHelp: "[data-github-live] button[popovertarget]",
+  github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
+  githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
+  githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus
+  githubActions: ".settings-github-actions", // Choose repositories and Disconnect; opacity 0 at rest
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
+  linkingSwitch: "[data-linking-switch] [role='switch']", // the Native linking switch
+  tunnel: "[data-tunnel]", // the Web tunnel group: data-tunnel-enabled, data-tunnel-status
+  tunnelSwitch: "[data-tunnel] [role='switch']",
+  tunnelAddress: "[data-tunnel-address]", // the ready tunnel's public address
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',
   linkedPending: '[data-linked="pending"]',
   linkedNotice: "[data-linked-notice]",
+  pairingDialog: '[data-slot="dialog"]:has([data-linked-pairing])', // the modal Pair a device opens: the code and one orb
+  pairingRow: "[data-pairing-row]", // the tab's one Pair a device row
   pairingCode: '[data-slot="pairing-code"]',
   signalOrb: '[data-slot="signal-orb"]',
-  qrOrb: '[data-slot="qr-orb"]',
+  qrOrb: '[data-slot="qr-orb"]', // never drawn: the modal carries the signal orb alone
   fingerprint: '[data-slot="key-fingerprint"]',
 
   // The owner's share dialog (src/desktop/workspace/ui/share/share-dialog.tsx)
@@ -364,7 +403,7 @@ export const selectorFor = {
   /** A row in the open Settings tab, by its catalogue id. */
   settingRow: (id) => `#settings-panel [data-setting="${id}"]`,
   railItem: (id) => `[data-rail-item="${id}"]`, // a place on the side rail: agents, notes, …
-  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
+  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, panel, window
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
   fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode, message, context
@@ -399,6 +438,10 @@ export const selectorFor = {
  */
 export const safeAreaExempt = [
   ".workspace-titlebar",
+  // A header's picture runs up behind the window's controls, to the window's
+  // edge: the night scene or a chosen picture, not one being placed.
+  ".desktop-header-image:not([data-adjusting])",
+  ".desktop-night-scene",
   ".settings-titlebar",
   "[data-slot='app-shell-titlebar']",
   ".desktop-tooltip",
@@ -437,6 +480,17 @@ export const storage = {
   pictureInConversations: "nessa.desktop.picture-in-conversations",
   greeting: "nessa.desktop.greeting",
   sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
+  overviewFilter: "nessa.desktop.workspace.overview-filter", // the Agents overview's filter, as JSON (`remembered-filter.ts`)
+}
+
+/** The number each overview filter choice shows and answers to (`choiceKey`). */
+export const overviewFilterKeys = {
+  ongoing: "1",
+  all: "2",
+  any: "3",
+  today: "4",
+  week: "5",
+  month: "6",
 }
 
 /** The same-window event a stored preference announces a change on. */
@@ -488,6 +542,7 @@ export const keys = {
   toggleSessionList: "Meta+Alt+KeyS",
   newSession: "Meta+KeyN",
   newSessionBeside: "Meta+Shift+KeyN",
+  splitRight: "Meta+KeyD",
   closePane: "Meta+KeyW",
   openBeside: "Meta+Backslash",
   splitDown: "Meta+Shift+Backslash",
@@ -542,11 +597,16 @@ export const names = {
   connections: "Connections",
   integrations: "Integrations",
   linkedDevices: "Linked devices",
+  /** Settings › Connections' tab holding the GitHub sign-in, and its row's buttons. */
+  accounts: "Accounts",
+  githubConnect: "Connect…",
+  githubDisconnect: "Disconnect",
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",
   /** Settings › Advanced's tab holding first-run setup, and its row's button. */
   setupTab: "Setup",
+  setupBrowserHint: "Setup can be replayed in the Nessa app.",
   replayOnboarding: "Replay",
   /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
   setup: {
@@ -555,6 +615,16 @@ export const names = {
     chooseAgent: "Choose an agent",
     back: "Back",
     close: "Close setup",
+    continue: "Continue",
+    /** The agents setup lists, by their rows' names; Local AI is coming. */
+    agents: ["Claude", "Codex"],
+    localAi: "Local AI, coming soon",
+    /** Codex not installed: its download card, and the button on it at the
+     * stress installer's 45 MB. */
+    codexCard: "Download Codex",
+    codexDownload: "Download Codex · 45 MB",
+    /** The summon step's ways on: the second until its lesson is done. */
+    finish: ["Start using Nessa", "Skip this step"],
   },
   /** A session's menu item that opens the share dialog. */
   share: "Share…",

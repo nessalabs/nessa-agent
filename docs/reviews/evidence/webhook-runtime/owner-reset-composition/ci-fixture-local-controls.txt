@@ -1,0 +1,35 @@
+Correction source: 4be5703a83f742ef4c48d6e4e2d8a589fb047d0c
+Process-local umask022; production private-storage checks unchanged.
+
+/tmp/nessa-896-ci-private-fixture-restored.log
+test composition::webhooks::tests::a_non_file_outbox_refuses_instead_of_becoming_absent ... ok
+test composition::webhooks::tests::absent_seeds_and_database_have_no_webhook_file_effects ... ok
+test composition::webhooks::tests::an_outbox_symlink_refuses_without_following_it ... ok
+test composition::webhooks::tests::configuration_debug_redacts_url_and_mac_and_unknown_fields_refuse ... ok
+test composition::webhooks::tests::invalid_private_seeds_refuse_before_opening_storage ... ok
+test composition::webhooks::tests::bounded_seed_configuration_opens_without_issuing_and_reopens_after_removal ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 4130 filtered out; finished in 0.01s
+
+/tmp/nessa-896-ci-webhooks-umask022.log
+test webhooks::infrastructure::outbox::store::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+test webhooks::infrastructure::runtime::tests::first_worker_panic_seals_before_the_response_observer_is_woken ... ok
+test webhooks::infrastructure::runtime::tests::ordinary_capacity_precedes_spawn_and_control_capacity_remains_available ... ok
+test result: ok. 295 passed; 0 failed; 0 ignored; 0 measured; 3841 filtered out; finished in 18.96s
+
+Seven-package all-target Clippy -D warnings, exit0:
+    Checking nessa-server v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-server)
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 01s
+
+Stress helper controls:
+✔ webhook capture/no-send runs once by default and three times at the raised count (0.22654ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 139.065674

@@ -86,6 +86,9 @@ pub enum ConversationError {
     /// Kept apart from an invalid request because the request was valid and the
     /// answer is about this installation, which is something setup can fix.
     AgentNotConfigured,
+    /// A creation named a channel the caller has no channel under, or one
+    /// the policy does not let them use. Nothing was created.
+    ChannelNotFound,
     /// The conversation on disk names an agent this build has no adapter for.
     ///
     /// Apart from [`Self::Metadata`] because the record was read perfectly well
@@ -209,6 +212,8 @@ pub enum StopFailure {
 /// Otherwise each store was tried and each field says what remains in it.
 #[derive(Clone, Debug, Default)]
 pub struct DeletionFailures {
+    /// Background command cleanup or its durable evidence remains unresolved.
+    pub background_tasks: Option<super::background_tasks::BackgroundTaskError>,
     /// The conversation's agent could not be confirmed stopped.
     pub stop: Option<StopFailure>,
     /// The saved history could not be read or erased: storage failed, or
@@ -258,6 +263,7 @@ impl DeletionFailures {
     /// Whether every part finished.
     pub fn is_empty(&self) -> bool {
         self.stop.is_none()
+            && self.background_tasks.is_none()
             && self.history.is_none()
             && !self.history_leased_elsewhere
             && self.provider.is_none()

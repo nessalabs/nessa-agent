@@ -1,0 +1,11 @@
+missing-fact 101
+sequence-order 101
+revision-order 101
+Traceback (most recent call last):
+  File "/tmp/nessa-revocation-controls.py", line 34, in <module>
+    try: code=run(label)
+              ^^^^^^^^^^
+  File "/tmp/nessa-revocation-controls.py", line 12, in run
+    if p.returncode: raise RuntimeError(f'{label} {name} failed')
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: snapshot-revision auth failed

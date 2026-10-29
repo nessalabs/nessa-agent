@@ -957,7 +957,7 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
       page: () => ({ styles: {}, timeZone: "UTC", platform: "desktop" }),
     }
     const bridge = createAppBridge({
-      place: "pane",
+      place: "panel",
       server: "weather",
       call: {
         ...fixtureCall(conversationId),

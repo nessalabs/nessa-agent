@@ -8,7 +8,7 @@ use crate::conversation::{
         ConversationCatalogue, ConversationCreationDisposition, ConversationError,
         ConversationListing, ConversationModeApplication, ConversationModeRequest,
         ConversationModeRequestState, ConversationRepository, ConversationSummaries, Reader,
-        WatchCatalogue,
+        ShareGrantTransition, ShareGrants, WatchCatalogue,
     },
     domain::{
         Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
@@ -326,7 +326,7 @@ async fn listed(
     archived: bool,
     limit: usize,
 ) -> (Vec<ConversationId>, usize) {
-    let listed = ConversationListing::list(store, &org(), owner, archived, limit)
+    let listed = ConversationListing::list(store, &org(), owner, archived, limit, &Reader::Owner)
         .await
         .unwrap();
     (
@@ -933,9 +933,16 @@ async fn the_list_asks_whose_a_conversation_is_as_the_domain_answers_it() {
         let organization = OrganizationId::new(organization).unwrap();
         for owner in owners {
             let owner = PrincipalId::new(owner).unwrap();
-            let listed = ConversationListing::list(&store, &organization, &owner, false, 100)
-                .await
-                .unwrap();
+            let listed = ConversationListing::list(
+                &store,
+                &organization,
+                &owner,
+                false,
+                100,
+                &Reader::Owner,
+            )
+            .await
+            .unwrap();
             let mut listed: Vec<String> = listed
                 .conversations
                 .iter()
@@ -1134,7 +1141,7 @@ async fn a_failed_list_query_is_not_reported_as_row_damage() {
         .execute("DROP TABLE summaries", [])
         .unwrap();
     assert!(matches!(
-        ConversationListing::list(&opened.store, &org(), &alice(), false, 10).await,
+        ConversationListing::list(&opened.store, &org(), &alice(), false, 10, &Reader::Owner).await,
         Err(ConversationError::Metadata)
     ));
 }
@@ -1193,7 +1200,9 @@ fn list_cost(path: &Path, owner: &str, limit: i64) -> (usize, i32, i32) {
     let raw = raw(path);
     let mut statement = raw.prepare(&list_query()).unwrap();
     let rows = statement
-        .query_map(params!["org", owner, false, limit], |_| Ok(()))
+        .query_map(params!["org", owner, false, limit, None::<String>], |_| {
+            Ok(())
+        })
         .unwrap()
         .count();
     (
@@ -3070,6 +3079,60 @@ async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
     assert_eq!(listed[0].principal_id, principal);
     assert_eq!(listed[0].receiver_id, None);
 
+    let epoch = stored.policy_revision.unwrap();
+    let hold = opened
+        .store
+        .hold_principal_revision(&id, &principal, epoch)
+        .await
+        .unwrap();
+    let mut revoke = opened.store.change(ShareGrantChange {
+        transition: ShareGrantTransition::Revoke,
+        conversation_id: id.clone(),
+        principal_id: Some(principal.clone()),
+        receiver_id: None,
+        credential_id: CredentialId::new("webhook-credential").unwrap(),
+        expected_policy_revision: None,
+        initiator: caller("revoke-webhook"),
+        at_ms: 8,
+    });
+    assert!(matches!(
+        revoke
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    drop(hold);
+    assert!(revoke.await.unwrap().applied);
+    assert!(matches!(
+        opened
+            .store
+            .hold_principal_revision(&id, &principal, epoch)
+            .await,
+        Err(ConversationError::Revoked)
+    ));
+    let renewed = opened
+        .store
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(ShareAccess::read()),
+            conversation_id: id.clone(),
+            principal_id: Some(principal.clone()),
+            receiver_id: None,
+            credential_id: CredentialId::new("webhook-credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: caller("renew-webhook"),
+            at_ms: 9,
+        })
+        .await
+        .unwrap();
+    assert!(renewed.policy_revision.unwrap() > epoch);
+    assert!(matches!(
+        opened
+            .store
+            .hold_principal_revision(&id, &principal, epoch)
+            .await,
+        Err(ConversationError::Revoked)
+    ));
+
     assert!(grant(&opened.store, &id, "phone").await);
     assert!(opened
         .store
@@ -3898,6 +3961,218 @@ async fn a_receiver_switch_is_applied_and_moves_the_catalogue() {
     assert_eq!(journal.len(), 2);
     assert_eq!(journal[1].0, "read");
     assert_eq!(journal[1].1, "read");
+}
+
+/// L9: an external connection commits after the head and before the rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_paired_list_reads_its_head_and_rows_from_one_snapshot() {
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let writer = LocalConversationStore::open(&path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
+    raw(&path)
+        .execute_batch("PRAGMA journal_mode = WAL;")
+        .unwrap();
+    let store = Arc::new(store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    store
+        .record(&id, ConversationSummary::new(None, None, 1, false).unwrap())
+        .await
+        .unwrap();
+    assert!(grant(&store, &id, "phone").await);
+    let before = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    store.pause_list_snapshot(entered.clone(), resume.clone());
+    let reading = store.clone();
+    let pending = tokio::spawn(async move {
+        ConversationListing::list(
+            reading.as_ref(),
+            &org(),
+            &alice(),
+            false,
+            10,
+            &device("phone"),
+        )
+        .await
+    });
+    tokio::task::spawn_blocking(move || entered.wait())
+        .await
+        .unwrap();
+    let written = writer
+        .record(&id, ConversationSummary::new(None, None, 2, false).unwrap())
+        .await;
+    tokio::task::spawn_blocking(move || resume.wait())
+        .await
+        .unwrap();
+    written.unwrap();
+    let first = pending.await.unwrap().unwrap();
+    assert_eq!(first.head, Some(before.clone()));
+    assert_eq!(first.conversations[0].summary.updated_at_ms(), 1);
+    let next = ConversationListing::list(
+        store.as_ref(),
+        &org(),
+        &alice(),
+        false,
+        10,
+        &device("phone"),
+    )
+    .await
+    .unwrap();
+    assert!(next.head.unwrap().revision > before.revision);
+    assert_eq!(next.conversations[0].summary.updated_at_ms(), 2);
+}
+
+/// Once a receiver loses a grant, subsequent replacements for that principal
+/// do not reveal later catalogue activity to it (row J35).
+#[tokio::test]
+async fn a_replaced_receivers_head_stops_at_its_own_replacement() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    assert!(store.change(share("phone", "first")).await.unwrap().applied);
+    assert!(
+        store
+            .change(share("tablet", "second"))
+            .await
+            .unwrap()
+            .applied
+    );
+    let lost = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    // An intervening request with no effects is still a journal row for tablet.
+    assert!(
+        !store
+            .change(share("tablet", "unchanged"))
+            .await
+            .unwrap()
+            .applied
+    );
+    assert!(
+        store
+            .change(share("laptop", "third"))
+            .await
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        store
+            .head(&org(), &alice(), &device("phone"))
+            .await
+            .unwrap()
+            .revision,
+        lost,
+        "phone must not learn about tablet's later replacement"
+    );
+    let latest = owner_head(store).await;
+    assert!(latest > lost);
+    for receiver in ["tablet", "laptop"] {
+        assert_eq!(
+            store
+                .head(&org(), &alice(), &device(receiver))
+                .await
+                .unwrap()
+                .revision,
+            latest,
+            "the departing and arriving receivers see their replacement"
+        );
+    }
+    assert!(device_pass(store, device("phone"), lost).await.is_empty());
+    assert!(device_pass(store, device("tablet"), lost).await.is_empty());
+    assert_eq!(
+        device_pass(store, device("laptop"), lost).await,
+        vec![(id, latest)]
+    );
+}
+
+/// A revoke terminates the receiver's visibility even if the same principal is
+/// granted the resource again through another receiver (row J35).
+#[tokio::test]
+async fn a_revoked_receivers_head_does_not_follow_a_later_grant() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    assert!(store.change(share("phone", "first")).await.unwrap().applied);
+    assert!(revoke(store, &id, "phone").await);
+    let revoked = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    assert!(
+        store
+            .change(share("tablet", "second"))
+            .await
+            .unwrap()
+            .applied
+    );
+    assert!(owner_head(store).await > revoked);
+    assert_eq!(
+        store
+            .head(&org(), &alice(), &device("phone"))
+            .await
+            .unwrap()
+            .revision,
+        revoked
+    );
+    assert!(device_pass(store, device("phone"), revoked)
+        .await
+        .is_empty());
+    // Returning to phone is new visibility and must move its head again.
+    assert!(
+        store
+            .change(share("phone", "return"))
+            .await
+            .unwrap()
+            .applied
+    );
+    let returned = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    assert!(returned > revoked);
+    assert_eq!(
+        device_pass(store, device("phone"), revoked).await,
+        vec![(id, returned)]
+    );
 }
 
 /// A change that names a principal resolves that principal's row only. Naming

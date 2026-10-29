@@ -12,6 +12,18 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  backgroundTasks: {
+    default: 1,
+    what: "background commands outliving their calling turn and settling the original tool row",
+  },
+  inputFiles: {
+    default: 1,
+    what: "PDF, ZIP and text inputs uploaded by another surface, retained and drawn in the conversation",
+  },
+  pairedCatalogues: {
+    default: 1,
+    what: "real native paired catalogue cycles through the protected product child",
+  },
   modelSwitches: {
     default: 1,
     what: "same-provider model choices through the actual composer picker, applied by the next send",
@@ -95,7 +107,15 @@ export const KNOBS = {
   },
   rails: {
     default: 1,
-    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off",
+    what: 'times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving; "nessa Studio" stays while a column holds the corner and goes over the panes alone',
+  },
+  listAnswers: {
+    default: 1,
+    what: "reviews answered from the session list's Needs you card: it reads the transcript card's command, and its answer settles the turn",
+  },
+  panels: {
+    default: 1,
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its widget tabs or note, with conversation documents in the window toolbar; ⌘N docks it and the new session opens in sight), left with Escape, then closed",
   },
   onboardings: {
     default: 1,
@@ -103,7 +123,7 @@ export const KNOBS = {
   },
   linkings: {
     default: 1,
-    what: "times native linking is turned on and off again from Settings, each restarting the gateway",
+    what: "times native linking is turned on and off again from Settings, each restarting the gateway, with a code opened by Pair a device while it is on",
   },
   tables: {
     default: 1,
@@ -121,6 +141,10 @@ export const KNOBS = {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
   },
+  tunnels: {
+    default: 1,
+    what: "times the web tunnel is turned on in Settings, kept across a gateway restart, dialed through by a paired worker, and turned off",
+  },
   drifts: {
     default: 1,
     what: "gateway restarts with a changed agent PATH and TMPDIR, then a send to the existing conversation completes",
@@ -129,9 +153,29 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
   },
+  menus: {
+    default: 1,
+    what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
+  },
+  menuPanels: {
+    default: 1,
+    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
+  },
+  githubs: {
+    default: 1,
+    what: "times GitHub is connected from Settings through a fake GitHub, an agent started after it holds the sign-in, then disconnected",
+  },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
+  },
+  webhooks: {
+    default: 1,
+    what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
+  },
+  channels: {
+    default: 1,
+    what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session",
   },
   long: {
     default: 30,
@@ -191,10 +235,12 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
+  add(knobs.backgroundTasks, () => ({ kind: "background" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
+  add(knobs.inputFiles, () => ({ kind: "inputFiles" }))
   add(knobs.modelSwitches, () => ({ kind: "model" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
@@ -205,15 +251,23 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.rails, () => ({ kind: "rail" }))
+  add(knobs.panels, () => ({ kind: "panel" }))
+  add(knobs.listAnswers, () => ({ kind: "listAnswer" }))
   add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
+  add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
+  add(knobs.menus, () => ({ kind: "menu" }))
+  add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.channels, () => ({ kind: "channel" }))
+  add(knobs.webhooks, () => ({ kind: "webhook" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
@@ -223,6 +277,8 @@ export function plan(knobs, accessScenario = "full") {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
   }
+  if (knobs.pairedCatalogues > 0)
+    steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes follow
   // that work, using Ask before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older
@@ -248,6 +304,7 @@ export function plan(knobs, accessScenario = "full") {
     } else if (
       step.kind === "reviews" ||
       step.kind === "large" ||
+      step.kind === "listAnswer" ||
       step.kind === "model"
     ) {
       // These are about cards being shown, so they run where the agent asks.

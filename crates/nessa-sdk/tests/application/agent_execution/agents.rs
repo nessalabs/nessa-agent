@@ -4,6 +4,7 @@ mod conformance;
 mod effort;
 mod handoffs;
 mod initialization;
+mod input_files;
 mod lifecycle;
 mod messages;
 mod models;
@@ -558,10 +559,14 @@ impl ProviderSessionBackend for TestBackend {
     }
     fn execute(
         &self,
-        input: ExecutionRequest,
+        input: ProviderInputFuture,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            let input = match input.await {
+                Ok(input) => input,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }

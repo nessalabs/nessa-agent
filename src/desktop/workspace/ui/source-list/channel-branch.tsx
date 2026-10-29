@@ -1,3 +1,4 @@
+import { ChannelSettingsButton } from "../channel-settings/channel-settings"
 import { memo } from "react"
 import { SidebarMenuItem } from "@nessa-ui/react/sidebar"
 import { shallowEqual } from "react-redux"
@@ -106,12 +107,15 @@ export const ChannelBranch = memo(function ChannelBranch({
         ) : undefined
       }
       trailing={
-        <IconButton
-          icon="add"
-          label={label}
-          tabIndex={-1}
-          onClick={() => dispatch(newSession({ channelId: channel.id }))}
-        />
+        <>
+          <ChannelSettingsButton channelId={channel.id} name={channel.name} />
+          <IconButton
+            icon="add"
+            label={label}
+            tabIndex={-1}
+            onClick={() => dispatch(newSession({ channelId: channel.id }))}
+          />
+        </>
       }
       showTrailingOnHover
       submenu={expanded ? <BranchSessions channelId={channel.id} /> : undefined}
@@ -131,12 +135,7 @@ function BranchSessions({ channelId }: { channelId: string }) {
   return (
     <ul className="workspace-branch-sessions workspace-rise">
       {branch.ids.map((sessionId) => (
-        <ThreadRow
-          key={sessionId}
-          sessionId={sessionId}
-          channelId={channelId}
-          kind="branch"
-        />
+        <ThreadRow key={sessionId} sessionId={sessionId} channelId={channelId} />
       ))}
       {branch.hidden > 0 || (showAll && branch.total > branchCap) ? (
         <SidebarMenuItem

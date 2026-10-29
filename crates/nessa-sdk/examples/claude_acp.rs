@@ -244,6 +244,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             environment,
             runtime_environment,
             credential_environment,
+            open_credentials: Default::default(),
             workspace: workspace.clone(),
             tools_enabled: mode.ends_with("write"),
             mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),

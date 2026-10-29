@@ -675,6 +675,7 @@ impl LeaseConnector for Connector {
         ));
         let (from_environment, to_environment) = split(gateway);
         Ok(LeaseConnection {
+            mcp_relay: None,
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
@@ -686,8 +687,8 @@ impl LeaseConnector for Connector {
 /// An SSH connection whose artifact channels never open: these tests
 /// carry no file.
 struct NoChannels;
-impl super::connector::ArtifactChannels for NoChannels {
-    fn open(&self) -> io::Result<super::connector::ArtifactChannel> {
+impl crate::conversation::application::ArtifactChannels for NoChannels {
+    fn open(&self) -> io::Result<crate::conversation::application::ArtifactChannel> {
         Err(io::Error::other("no artifact channels"))
     }
 }
@@ -4297,5 +4298,52 @@ async fn confirmed_lease_end_remains_the_harness_cleanup_receipt_after_disconnec
         connector.stopped.load(Ordering::SeqCst),
         1,
         "joining End does not clean the native scope again"
+    );
+}
+
+/// The startup table is consumed on both sides of the wire. A client waiting
+/// less than this actual connection bound abandoned a live Boat allocation.
+#[tokio::test(start_paused = true)]
+async fn workspace_connection_deadline_matches_the_published_client_budget() {
+    struct PendingConnector(Arc<tokio::sync::Notify>);
+    impl super::connector::WorkspaceConnector for PendingConnector {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                self.0.notify_one();
+                std::future::pending().await
+            })
+        }
+    }
+    let budgets: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../protocol/defaults/agent-startup-budgets.json"
+    ))
+    .unwrap();
+    let duration = Duration::from_millis(budgets["workspace"]["connectMs"].as_u64().unwrap());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let environment = SshEnvironment::workspace(
+        Arc::new(PendingConnector(entered.clone())),
+        Arc::new(Audit::default()),
+    );
+    let opening = tokio::spawn(async move {
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+    });
+    entered.notified().await;
+    tokio::time::advance(duration - Duration::from_millis(1)).await;
+    assert!(
+        !opening.is_finished(),
+        "workspace timed out before its published bound"
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(
+        opening.await.unwrap().err(),
+        Some(LeaseRefusal::EnvironmentUnreachable)
     );
 }

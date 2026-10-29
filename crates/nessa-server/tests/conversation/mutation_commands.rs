@@ -45,12 +45,14 @@ fn id() -> ConversationId {
 }
 fn message(text: &str) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: text.into(),
         ..SubmittedMessage::default()
     }
 }
 fn image_message(media_type: &str, size: u64) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: Vec::new(),
         text: "hello".into(),
         images: vec![crate::conversation::application::SubmittedImage {
             digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -134,6 +136,7 @@ fn fixture_with_sessions(
     );
     let service = ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: policy,
             agents: only(Arc::new(Provider::new(provider))),
             storage: storage.clone(),
@@ -1884,3 +1887,6 @@ async fn a_stop_whose_cancel_meets_the_turn_ending_is_answered_by_its_end() {
     drop(live);
     retire(service, storage, metadata).await;
 }
+
+#[path = "background_tasks.rs"]
+mod background_tasks;

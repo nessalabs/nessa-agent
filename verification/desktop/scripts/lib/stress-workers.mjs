@@ -11,6 +11,10 @@
  * claimed its invitation, so a binding that names a worker says which process
  * it is. Every worker started is stopped and its directory removed by
  * `close()`, whatever happened before.
+ *
+ * With `tunnel`, a worker enrolls directly as any does, and once granted
+ * dials only through the gateway's web tunnel: its direct address is one
+ * that refuses (`tunnel` step).
  */
 import { spawn, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -38,10 +42,19 @@ const hex = (bytes) => bytes.map((byte) => byte.toString(16).padStart(2, "0")).j
  * paired by `owner` (a client signed in as the gateway's owner), running
  * `agent` as `launch` (`scriptedLaunch`) says. `label` names it in its
  * messages; `connected(name)` resolves whether the gateway came to list the
- * worker named `name` as connected. Resolves once it is approved, granted,
- * and connected.
+ * worker named `name` as connected. `tunnel`, `{ address, origin }`, is the
+ * direct address and tunnel origin it dials once granted. Resolves once it
+ * is approved, granted, and connected.
  */
-export async function startWorker({ owner, address, agent, launch, label, connected }) {
+export async function startWorker({
+  owner,
+  address,
+  agent,
+  launch,
+  label,
+  connected,
+  tunnel,
+}) {
   const directory = mkdtempSync(join(tmpdir(), `nessa-stress-worker-${label}-`))
   const output = []
   let child = null
@@ -106,18 +119,28 @@ export async function startWorker({ owner, address, agent, launch, label, connec
     writeFileSync(codeFile, code, { mode: 0o600 })
     // The same command on every start, as a container runs it: the first
     // enrolls with the code, a later one finds the pairing and dials.
-    const dial = () => {
+    const dial = (route) => {
       child = spawn(
         nessa(),
-        [
-          "env",
-          "dial",
-          address,
-          "--enroll-code-file",
-          codeFile,
-          "--drain-deadline",
-          DRAIN_DEADLINE,
-        ],
+        route
+          ? [
+              "env",
+              "dial",
+              route.address,
+              "--tunnel",
+              route.origin,
+              "--drain-deadline",
+              DRAIN_DEADLINE,
+            ]
+          : [
+              "env",
+              "dial",
+              address,
+              "--enroll-code-file",
+              codeFile,
+              "--drain-deadline",
+              DRAIN_DEADLINE,
+            ],
         { env, stdio: ["ignore", "pipe", "pipe"] },
       )
       for (const stream of [child.stdout, child.stderr])
@@ -156,7 +179,7 @@ export async function startWorker({ owner, address, agent, launch, label, connec
     })
     if (grant.status !== 0)
       throw new Error(`env grant on worker ${label} failed: ${grant.stderr.trim()}`)
-    dial()
+    dial(tunnel)
     if (!(await connected(worker.name)))
       throw new Error(`worker ${label} never dialed in again once granted`)
     return worker

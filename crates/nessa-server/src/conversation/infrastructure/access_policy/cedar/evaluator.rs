@@ -250,10 +250,23 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
             receiver,
             [("receiver", string(receiver))],
         ),
+        AccessSubject::WebhookReader {
+            organization,
+            principal,
+            registration_owner,
+        } => entity(
+            "NessaConversation::WebhookReader",
+            principal.as_str(),
+            [
+                ("organization", string(organization.as_str())),
+                ("registrationOwner", string(registration_owner.as_str())),
+            ],
+        ),
     }
 }
 
-/// What is asked about, as the schema's `Conversation`, `Catalogue` or `Workspace`.
+/// What is asked about, as the schema's `Conversation`, `Catalogue`, `Workspace`
+/// or `Channel`.
 fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
     match *resource {
         AccessResource::Conversation {
@@ -286,6 +299,17 @@ fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
         } => entity(
             "NessaConversation::Workspace",
             "workspace",
+            [
+                ("organization", string(organization.as_str())),
+                ("owner", string(owner.as_str())),
+            ],
+        ),
+        AccessResource::Channel {
+            organization,
+            owner,
+        } => entity(
+            "NessaConversation::Channel",
+            "channel",
             [
                 ("organization", string(organization.as_str())),
                 ("owner", string(owner.as_str())),

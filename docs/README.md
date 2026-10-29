@@ -17,10 +17,12 @@ instead of creating a competing copy.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. Read this first. |
 | [codebase-structure.md](codebase-structure.md) | The general structural rules applied to Nessa specifically — the target shape, the Nessa absences, the host/shell seam, and what the core must never learn. |
 | [Pane frame budget](design/pane-frame-budget.md) | Where a pane insert, a subagents open, and a pane drop spend their frame, and the rule that keeps each at or under 50 ms. |
+| [Tool disclosure scroll](design/transcript-tool-disclosure-scroll.md) | Opening a tool keeps the clicked header still and opens downward; the end of the transcript still follows while the reader is there. |
 | [Agent SDK](../crates/nessa-sdk/docs/agent_execution/README.md) | Current Agent API, session storage, hooks, queueing, steering, and retry contracts. |
 | [Runtime architecture](design/runtime-architecture.md) | Read this to learn how Nessa runs agents on one machine and then on many: the words, the picture, seven situations (laptop, phone, home server, SSH host, someone else's machine, build on the Mac mini and run it here, share one conversation with a friend), leases, the mesh, sandboxes, sharing, directional sync, artifacts, build order and what was borrowed from Tailscale, Syncthing, VS Code and Codex; companion to ADR 252. |
 | [Agent execution design](design/agent_execution/README.md) | Ownership review and separately labeled future gateway/conversation proposals. |
 | [Authentication](design/auth/README.md) | Design references; [local usage](guides/local-auth.md) and [gateway review](reviews/local-auth-gateway.md). |
+| [Application framework](design/application-framework.md) | Proposal for one package as a plugin or a standalone app: gateway authentication, MCP App mounts, the access grant, and the implementation slices. Nothing in it is built. |
 | [Backup verification](design/backup-verification.md) | Read-only export-format and integrity checking; remaining restore contracts. |
 | [Offline restore planning](design/offline-restore-planning.md) | Verified-cut inspection and unresolved import/quarantine prerequisites; no activation. |
 | [Quarantined restore](design/quarantined-restore.md) | Stage into quarantine, accept onto an empty live path, and fetch one deferred conversation on open. |

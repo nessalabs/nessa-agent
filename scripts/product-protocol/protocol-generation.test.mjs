@@ -77,6 +77,8 @@ function fixture(run) {
       "crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs",
       "crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs",
       "crates/nessa-sdk/src/infrastructure/mcp/servers.rs",
+      "crates/nessa-server/src/conversation/domain/value_objects/channel.rs",
+      "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
       "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
       "crates/nessa-protocol/src/protocol/encode.rs",
@@ -332,6 +334,94 @@ for (const [rule, file, constant] of [
       assert.match(result.stderr, new RegExp(`x-mcpServerRules.${rule} drifted`))
     }))
 }
+for (const [field, constant, old, replacement] of [
+  ["minimum", "MIN_SECONDS", "1", "2"],
+  ["maximum", "MAX_SECONDS", "4_294_967_295", "4_294_967_294"],
+]) {
+  test(`VM lifetime ${field} changed in its domain owner refuses stale publication`, () =>
+    fixture((path) => {
+      const source = join(
+        path,
+        "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs",
+      )
+      const before = readFileSync(source, "utf8")
+      const after = before.replace(
+        `const ${constant}: u64 = ${old};`,
+        `const ${constant}: u64 = ${replacement};`,
+      )
+      assert.notEqual(after, before)
+      writeFileSync(source, after)
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`VmLifetimeSeconds.${field} drifted`))
+    }))
+  test(`VM lifetime ${field} retyped in the schema refuses before writes`, () =>
+    fixture((path) => {
+      edit(path, "protocol/product/v1.json", (schema) => {
+        schema.$defs.VmLifetimeSeconds[field] -= 1
+      })
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, new RegExp(`VmLifetimeSeconds.${field} drifted`))
+    }))
+}
+
+test("channel rules publish the gateway's bounds to the client", () =>
+  fixture((path) => {
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const ts = readFileSync(
+      join(path, "packages/nessa-client/src/generated/product.ts"),
+      "utf8",
+    )
+    const published = ts.slice(ts.indexOf("export const channelRules"))
+    for (const [name, value] of [
+      ["maxChannels", 1000],
+      ["maxNameChars", 80],
+      ["maxNotesBytes", 8192],
+      ["maxResources", 32],
+      ["maxResourceBytes", 16384],
+      ["maxPathBytes", 4096],
+    ])
+      assert.match(published, new RegExp(`${name}: ${value},`))
+  }))
+
+// Changed in the gateway, or retyped in the schema: nothing is published.
+test("a channel rule changed in the gateway alone refuses to publish", () =>
+  fixture((path) => {
+    const source = join(
+      path,
+      "crates/nessa-server/src/conversation/domain/value_objects/channel.rs",
+    )
+    const before = readFileSync(source, "utf8")
+    const after = before.replace(
+      "pub const MAX_CHANNEL_NAME_CHARS: usize = 80;",
+      "pub const MAX_CHANNEL_NAME_CHARS: usize = 81;",
+    )
+    assert.notEqual(after, before)
+    writeFileSync(source, after)
+    const result = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(result.stderr, /x-channelRules.maxNameChars drifted/)
+  }))
+test("a channel rule retyped in the schema alone refuses to publish", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema["x-channelRules"].maxResources += 1
+    })
+    const result = unchanged(path, ["protocol/product/v1.json", ...productOutputs], () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(result.stderr, /x-channelRules.maxResources drifted/)
+  }))
+
 test("MCP server rules with an unknown field refuse to publish", () =>
   fixture((path) => {
     edit(path, "protocol/product/v1.json", (schema) => {

@@ -40,16 +40,35 @@ fn request_values() -> (AuthContext, Action, Resource, AccessSnapshot) {
         credential_id,
         audience_id,
     );
-    (
-        context,
-        action,
-        resource,
+    (context, action, resource, {
+        let revision = 1;
+        // This fixture explicitly creates its own original product issuance.
+        let original = crate::domain::CredentialTransition::new(
+            credential.id().clone(),
+            None,
+            crate::domain::CredentialLifecycle {
+                issued_at: credential.issued_at(),
+                expires_at: credential.expires_at(),
+                revoked_at: None,
+            },
+            crate::domain::TransitionCause::Issued(crate::domain::IssuanceCause::AdminIssue),
+            crate::domain::Initiator::LocalOperator,
+            credential.issued_at(),
+        )
+        .unwrap();
+        let origin = crate::application::origin::CredentialOrigin::restore(
+            crate::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            &credential,
+        )
+        .unwrap();
         AccessSnapshot {
+            revocation: None,
             credential,
             membership,
-            revision: 1,
-        },
-    )
+            revision,
+            origin,
+        }
+    })
 }
 
 #[test]
@@ -215,24 +234,25 @@ fn which_grants_each_kind_may_hold() {
     }
 }
 
-const PATHS: [IssuePath; 5] = [
+const PATHS: [IssuePath; 6] = [
     IssuePath::Bootstrap,
     IssuePath::ProductIssue,
+    IssuePath::WebhookIssue,
     IssuePath::SurfaceProvision,
     IssuePath::OwnerRecovery,
     IssuePath::StoredOnLoad,
 ];
 
 /// `hold.administration`: administration is refused only on the product
-/// path; every other path, and an ordinary grant on any path, is the kind's
-/// own answer.
+/// path. Webhook issuance further restricts the principal and read grant;
+/// other paths retain the kind's own answer.
 #[test]
-fn administration_is_held_on_every_path_but_a_product_issue() {
+fn administration_and_server_read_respect_product_and_webhook_paths() {
     let evaluator = CedarPolicyEvaluator::new().unwrap();
     let manage = gateway_grant("credential.manage");
     let read = gateway_grant("server.read");
     for path in PATHS {
-        let expected = if path == IssuePath::ProductIssue {
+        let expected = if matches!(path, IssuePath::ProductIssue | IssuePath::WebhookIssue) {
             Decision::Deny
         } else {
             Decision::Allow
@@ -244,15 +264,19 @@ fn administration_is_held_on_every_path_but_a_product_issue() {
         );
         assert_eq!(
             evaluator.may_hold(PrincipalKind::Human, &read, path),
-            Ok(Decision::Allow),
+            Ok(if path == IssuePath::WebhookIssue {
+                Decision::Deny
+            } else {
+                Decision::Allow
+            }),
             "{path:?}"
         );
     }
 }
 
 /// `issue.member` and `issue.admin`: a member may be issued a credential on
-/// any path, an admin only by bootstrap or surface provisioning, and a peer
-/// gateway never, since only pairing enrolls one.
+/// ordinary paths; the webhook path requires an integration member. An admin
+/// requires bootstrap, provisioning or recovery; only pairing enrolls a peer.
 #[test]
 fn who_may_be_issued_a_credential_on_each_path() {
     let evaluator = CedarPolicyEvaluator::new().unwrap();
@@ -266,7 +290,13 @@ fn who_may_be_issued_a_credential_on_each_path() {
         ] {
             assert_eq!(
                 issue(kind, MembershipRole::Member, path),
-                Ok(Decision::Allow),
+                Ok(
+                    if path == IssuePath::WebhookIssue && kind != PrincipalKind::Integration {
+                        Decision::Deny
+                    } else {
+                        Decision::Allow
+                    }
+                ),
                 "{kind:?} member {path:?}"
             );
             let admin = if matches!(
@@ -364,5 +394,99 @@ fn another_identitys_snapshot_is_denied() {
     assert_eq!(
         evaluator.evaluate(&context, &action, &resource, &snapshot),
         Ok(Decision::Deny)
+    );
+}
+
+#[test]
+fn webhook_path_holds_only_an_integration_conversation_read_grant() {
+    let evaluator = CedarPolicyEvaluator::new().unwrap();
+    for kind in [
+        PrincipalKind::Human,
+        PrincipalKind::Agent,
+        PrincipalKind::Integration,
+        PrincipalKind::Gateway,
+    ] {
+        for action in [
+            "conversation.read",
+            "conversation.write",
+            "credential.manage",
+            "server.read",
+            "environment.serve",
+            "anything.else",
+        ] {
+            let expected = if kind == PrincipalKind::Integration && action == "conversation.read" {
+                Decision::Allow
+            } else {
+                Decision::Deny
+            };
+            assert_eq!(
+                evaluator.may_hold(kind, &gateway_grant(action), IssuePath::WebhookIssue),
+                Ok(expected),
+                "{kind:?} {action}"
+            );
+        }
+    }
+}
+
+#[test]
+fn session_entry_uses_original_issuance_and_current_identity() {
+    use crate::{
+        application::{dto::CredentialTransitionDto, origin::CredentialOrigin},
+        domain::{Initiator, IssuanceCause},
+    };
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let (context, _, resource, mut snapshot) = request_values();
+    let action = Action::new("session.enter").unwrap();
+    for cause in [
+        IssuanceCause::Bootstrap,
+        IssuanceCause::AdminIssue,
+        IssuanceCause::WebhookIssue,
+        IssuanceCause::DevicePairing,
+        IssuanceCause::SurfaceProvision,
+        IssuanceCause::OwnerRecovery,
+    ] {
+        let issued = snapshot
+            .credential
+            .issued(
+                cause,
+                Initiator::Principal(PrincipalId::new("owner").unwrap()),
+            )
+            .unwrap();
+        snapshot.origin = CredentialOrigin::restore(
+            CredentialTransitionDto::record(&issued, 1, 1, Some("request".into())),
+            &snapshot.credential,
+        )
+        .unwrap();
+        assert_eq!(
+            policy
+                .evaluate(&context, &action, &resource, &snapshot)
+                .unwrap(),
+            if cause == IssuanceCause::WebhookIssue {
+                Decision::Deny
+            } else {
+                Decision::Allow
+            }
+        );
+    }
+    snapshot.revision = 0;
+    assert_eq!(
+        policy
+            .evaluate(&context, &action, &resource, &snapshot)
+            .unwrap(),
+        Decision::Deny
+    );
+    snapshot.revision = 1;
+    snapshot.membership = Membership::new(
+        snapshot.membership.id().clone(),
+        snapshot.membership.principal_id().clone(),
+        snapshot.membership.organization_id().clone(),
+        MembershipRole::Member,
+        MembershipStatus::Disabled,
+    );
+    assert_eq!(
+        policy
+            .evaluate(&context, &action, &resource, &snapshot)
+            .unwrap(),
+        Decision::Deny
     );
 }

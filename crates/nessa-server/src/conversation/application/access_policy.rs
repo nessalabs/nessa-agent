@@ -79,6 +79,13 @@ pub enum AccessSubject<'a> {
     /// The holder of a share grant, by its receiver, with no session: a note
     /// it left being delivered later.
     GrantHolder { receiver: &'a str },
+    /// Outbound-only registered principal. Registration ownership is an
+    /// authoritative fact; there is no receiver and no owner fallback.
+    WebhookReader {
+        organization: &'a OrganizationId,
+        principal: &'a PrincipalId,
+        registration_owner: &'a PrincipalId,
+    },
 }
 
 /// What the subject asks to do. Each is one Cedar action of the same name
@@ -123,11 +130,19 @@ pub enum AccessAction {
     ReviewNotice,
     /// Read what the owner's desktop windows show, on their workspace.
     WorkspaceRead,
+    /// Make a channel, on the owner's catalogue.
+    ChannelCreate,
+    /// List the owner's channels, on their catalogue.
+    ChannelList,
+    /// Create a conversation in a channel.
+    ChannelUse,
+    /// Read or edit a channel's runtime settings.
+    ChannelSettings,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 21] = [
         Self::AgentTools,
         Self::Locate,
         Self::Act,
@@ -145,6 +160,10 @@ impl AccessAction {
         Self::NoteDeliver,
         Self::ReviewNotice,
         Self::WorkspaceRead,
+        Self::ChannelCreate,
+        Self::ChannelList,
+        Self::ChannelUse,
+        Self::ChannelSettings,
     ];
 
     /// The action's name, as the policy spells it.
@@ -167,6 +186,10 @@ impl AccessAction {
             Self::NoteDeliver => "note.deliver",
             Self::ReviewNotice => "review.notice",
             Self::WorkspaceRead => "workspace.read",
+            Self::ChannelCreate => "channel.create",
+            Self::ChannelList => "channel.list",
+            Self::ChannelUse => "channel.use",
+            Self::ChannelSettings => "channel.settings",
         }
     }
 }
@@ -188,6 +211,11 @@ pub enum AccessResource<'a> {
     },
     /// One owner's workspace: what their desktop windows show.
     Workspace {
+        organization: &'a OrganizationId,
+        owner: &'a PrincipalId,
+    },
+    /// One of an owner's channels.
+    Channel {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
     },
@@ -576,6 +604,32 @@ impl<'a> PairedAccess<'a> {
             Answer::Refused => Ok(false),
             Answer::Unavailable => Err(PairedRefusal::Unavailable),
         }
+    }
+
+    /// Admit candidates in order through [`Self::allows`], sharing a decision
+    /// only when the resource facts and held capabilities are identical.
+    /// The action and paired party are fixed for this call.
+    ///
+    /// # Errors
+    /// `Unavailable` when any candidate's policy decision is unavailable.
+    pub fn allows_each<'c>(
+        &self,
+        action: AccessAction,
+        candidates: impl IntoIterator<Item = (&'c Conversation, Option<Capabilities>)>,
+    ) -> Result<Vec<bool>, PairedRefusal> {
+        let mut decided = HashMap::new();
+        candidates
+            .into_iter()
+            .map(|(conversation, held)| {
+                let key = (AccessResource::of(conversation), held);
+                if let Some(admitted) = decided.get(&key) {
+                    return Ok(*admitted);
+                }
+                let admitted = self.allows(action, conversation, held)?;
+                decided.insert(key, admitted);
+                Ok(admitted)
+            })
+            .collect()
     }
 
     /// Whether the party may take `action` on the owner's catalogue its

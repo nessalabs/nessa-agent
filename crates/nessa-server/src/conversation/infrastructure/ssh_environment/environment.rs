@@ -125,6 +125,9 @@ struct Inner {
 
 /// How a host's connection is had.
 enum Reach {
+    Workspace {
+        connector: Arc<dyn super::connector::WorkspaceConnector>,
+    },
     /// This gateway runs `ssh` to it.
     Ssh {
         host: SshDestination,
@@ -176,6 +179,12 @@ fn served(serving: &std::sync::Mutex<Option<Served>>) -> Option<Served> {
 }
 
 impl SshEnvironment {
+    /// No opening call, command or lease retains this environment's inner owner.
+    /// The retaining workspace cache also checks that nobody borrows its wrapper.
+    pub(crate) fn unowned(&self) -> bool {
+        Arc::strong_count(&self.inner) == 1
+    }
+
     pub(crate) fn new(
         host: SshDestination,
         connector: Arc<dyn LeaseConnector>,
@@ -191,6 +200,20 @@ impl SshEnvironment {
             },
             audit,
             timings,
+        )
+    }
+
+    pub(crate) fn workspace(
+        connector: Arc<dyn super::connector::WorkspaceConnector>,
+        audit: Arc<dyn EnvironmentAudit>,
+    ) -> Self {
+        Self::reached(
+            Reach::Workspace { connector },
+            audit,
+            SshTimings {
+                connect: Duration::from_secs(120),
+                ..SshTimings::default()
+            },
         )
     }
 
@@ -352,6 +375,7 @@ impl Inner {
     fn environment(&self) -> EnvironmentRef {
         match &self.reach {
             Reach::Ssh { host, .. } => EnvironmentRef::Ssh(host.clone()),
+            Reach::Workspace { .. } => EnvironmentRef::Boat,
             Reach::Peer { peer, .. } => EnvironmentRef::Peer(*peer),
         }
     }
@@ -392,7 +416,34 @@ impl Inner {
     }
 
     async fn link(&self, install: Install<'_>) -> Result<Arc<HostLink>, LeaseRefusal> {
+        if let Reach::Workspace { connector } = &self.reach {
+            let mut held = self.link.lock().await;
+            if let Some(link) = held.as_ref().filter(|link| link.is_open()) {
+                return Ok(link.clone());
+            }
+            let connection = tokio::time::timeout(
+                self.timings.connect,
+                connector.connect(install != Install::Never),
+            )
+            .await
+            .map_err(|_| LeaseRefusal::EnvironmentUnreachable)??;
+            let link = HostLink::over(
+                &self.name(),
+                connection,
+                self.audit.clone(),
+                self.timings.connect,
+                self.liveness(),
+            )
+            .await
+            .map_err(|error| match error {
+                Opening::Refused(reason) => reason,
+                Opening::NotServed => LeaseRefusal::EnvironmentUnreachable,
+            })?;
+            *held = Some(link.clone());
+            return Ok(link);
+        }
         let (host, connector, installer) = match &self.reach {
+            Reach::Workspace { .. } => unreachable!("workspace connection handled above"),
             Reach::Ssh {
                 host,
                 connector,
@@ -1025,6 +1076,12 @@ struct LeaseHost {
 }
 
 impl HarnessHost for LeaseHost {
+    fn mcp_relay(
+        &self,
+    ) -> Option<&dyn nessa_sdk::application::agent_execution::providers::HarnessMcpRelay> {
+        self.link.mcp_relay()
+    }
+
     fn workspace(&self) -> &Path {
         self.link.workspace()
     }

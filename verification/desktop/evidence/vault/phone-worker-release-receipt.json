@@ -1,0 +1,73 @@
+{
+  "sourceRevision": "a79f324f39c9cd58c2082206b531b438d794d438",
+  "leaseProtocol": "b6e4f48aa694ce08",
+  "nessaSha256": "4594f98d379ccdb129b31302e43f1d4e119d821c5b96a2f3787d6cfd37d49a50",
+  "nessaBytes": 138010664,
+  "workspaceSdkRevision": "33b8382d72657d176baca19797d8d146803f3d89",
+  "supervisorSha256": "afe8510ce3f9fce707a14b221d28ea68a0a8298c983443eee1dbe14a77cd90d6",
+  "buildProfile": "dev, dependency opt-level=0, debug=0, incremental=0, stripped",
+  "target": "x86_64-unknown-linux-gnu",
+  "image": "bsh_1WtCS3oK4SWwNbdpOnBXzFPq_PwIT1aGCwnJSQHWakU",
+  "snapshot": "nessa-worker-b6e4f48a-a79f324-linux-x64",
+  "cleanClone": {
+    "protocolMatched": true,
+    "checksumMatched": true,
+    "buildSourceAbsent": true,
+    "knownPersonalCredentialPathsAbsent": true
+  },
+  "ownedVMsDeleted": [
+    {
+      "id": "bx_b8h78ftd",
+      "confirmedAbsent": true,
+      "queryExit": 1
+    },
+    {
+      "id": "bx_pyr2jvg2",
+      "confirmedAbsent": true,
+      "queryExit": 1
+    },
+    {
+      "id": "bx_8xfphvyp",
+      "confirmedAbsent": true,
+      "queryExit": 1
+    }
+  ],
+  "deletionOperations": [
+    {
+      "attemptCount": 1,
+      "completedAt": "2026-10-27T22:48:23.211Z",
+      "expectedBy": null,
+      "id": "bdop_b127c0ae316f4980871e4f922100b3a4",
+      "kind": "sandbox",
+      "reason": "explicit",
+      "requestedAt": "2026-10-27T22:48:17.904Z",
+      "stage": "completed",
+      "status": "completed",
+      "targetId": "bx_b8h78ftd"
+    },
+    {
+      "attemptCount": 1,
+      "completedAt": "2026-10-27T22:49:01.908Z",
+      "expectedBy": null,
+      "id": "bdop_4507f5db08954ac280178077a2d21cc6",
+      "kind": "sandbox",
+      "reason": "explicit",
+      "requestedAt": "2026-10-27T22:48:58.077Z",
+      "stage": "completed",
+      "status": "completed",
+      "targetId": "bx_pyr2jvg2"
+    },
+    {
+      "attemptCount": 1,
+      "completedAt": "2026-10-27T22:49:01.992Z",
+      "expectedBy": null,
+      "id": "bdop_87420c5cde864e8fabfcb02b6739ebeb",
+      "kind": "sandbox",
+      "reason": "explicit",
+      "requestedAt": "2026-10-27T22:48:58.674Z",
+      "stage": "completed",
+      "status": "completed",
+      "targetId": "bx_8xfphvyp"
+    }
+  ]
+}

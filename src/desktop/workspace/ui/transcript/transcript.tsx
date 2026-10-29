@@ -32,6 +32,7 @@ import { type Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
 import { readFailureCopy } from "../failure-copy"
+import { followTranscriptEnd, watchToolDisclosure } from "./tool-disclosure"
 
 const noMessages: readonly MessageValue[] = []
 
@@ -89,7 +90,8 @@ const distanceFromEnd = (scroller: HTMLElement) =>
  *
  * Opening lands on the latest message. While the reader is at the end, a
  * growing reply, a new message, or a pane resized by a split keeps them
- * there; scrolled up to read, they stay put.
+ * there; scrolled up to read, they stay put. A tool they open or close keeps
+ * the clicked header where it is and opens downward (`tool-disclosure.ts`).
  */
 export const Transcript = memo(function Transcript({
   sessionId,
@@ -158,9 +160,15 @@ export const Transcript = memo(function Transcript({
     const onScroll = () => {
       pinned.current = measure() < pinnedWithin
     }
+    // A tool disclosure holds the end still for its own motion, then the
+    // distance decides whether a later growth follows (`tool-disclosure.ts`).
+    const stopWatchingDisclosure = watchToolDisclosure(scroller, () => {
+      if (!active) return
+      pinned.current = measure() < pinnedWithin
+    })
     const observer = new ResizeObserver(() => {
       if (!active) return
-      if (pinned.current) scroller.scrollTop = scroller.scrollHeight
+      followTranscriptEnd(scroller, pinned.current)
       measure()
     })
     observer.observe(scroller)
@@ -168,6 +176,7 @@ export const Transcript = memo(function Transcript({
     scroller.addEventListener("scroll", onScroll, { passive: true })
     return () => {
       active = false
+      stopWatchingDisclosure()
       observer.disconnect()
       scroller.removeEventListener("scroll", onScroll)
     }
@@ -330,7 +339,7 @@ export const Transcript = memo(function Transcript({
               {transcript.interactionNotice}
             </p>
           ) : null}
-          {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
+          <LiveRow activity={transcript?.activity ?? null} after={messages} />
           {(transcript?.questions ?? []).map((question) => (
             <QuestionCard
               key={JSON.stringify([

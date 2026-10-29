@@ -9,7 +9,7 @@
 import { attempt } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys } from "./lib/selectors.mjs"
+import { content, css, keys, names } from "./lib/selectors.mjs"
 import { settingsTabFailures } from "./lib/settings-tabs.mjs"
 import {
   contentIs,
@@ -193,6 +193,23 @@ await main(meta, async ({ options, rep, url }) => {
         if (advanced.offered.join() !== "true,false")
           failures.push(
             `Experimental's switches are ${JSON.stringify(advanced.offered)}, expected subagents on, the side rail off`,
+          )
+        await page.locator(css.settingsTab, { hasText: names.setupTab }).click()
+        const replay = page.getByRole("button", {
+          name: names.replayOnboarding,
+          exact: true,
+        })
+        // This fixture is a browser, with no native setup window. Native Replay
+        // and its pending/refusal states are held by setup-tab.test.tsx.
+        advanced.replayOffered = (await replay.count()) !== 0
+        advanced.setupHint = await page
+          .getByText(names.setupBrowserHint, { exact: true })
+          .waitFor({ state: "visible", timeout: 3000 })
+          .then(() => true)
+          .catch(() => false)
+        if (advanced.replayOffered || !advanced.setupHint)
+          failures.push(
+            "Advanced › Setup does not show its browser-only fallback without Replay",
           )
         await leaveSettings(page)
         const gone = await page

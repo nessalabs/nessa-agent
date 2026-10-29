@@ -1,0 +1,3 @@
+FROM deliveries INDEXED BY ready_deliveries WHERE
+=>
+FROM deliveries NOT INDEXED WHERE

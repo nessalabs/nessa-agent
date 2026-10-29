@@ -9,6 +9,7 @@ import {
   canNudge,
   canOpenBeside,
   closePane,
+  closeSessionTab,
   dropSession,
   fitPanes,
   loadWorkspace,
@@ -39,7 +40,7 @@ describe("new sessions and closing", () => {
     expect(store.getState().workspace.drafts[draftId]).toBeDefined()
     store.dispatch(closePane())
     expect(shown(store)).toEqual(["a"])
-    expect(store.getState().workspace.drafts).toEqual({})
+    expect(store.getState().workspace.drafts[draftId]).toBeDefined()
   })
 
   it("opens a channel with no sessions on a new session's home", async () => {
@@ -185,7 +186,7 @@ describe("a widget over the panes is left as the overview is, but for ⌘W", () 
     "a channel from the tree": openChannel({ channelId: "gateway" }),
     "a new session": newSession(),
     "another pane": focusPane({ pane: 1 }),
-    "a widget in a pane": openWidget({ widget: run, place: "pane", origin: "a" }),
+    "a widget in the panel": openWidget({ widget: run, place: "panel", origin: "a" }),
     "closing a pane": closePane(),
     "closing what is in front (⌘W)": closeInFront(),
     "moving a pane": nudgePane({ pane: 1, direction: "right" }),
@@ -272,20 +273,41 @@ describe("a widget over the panes is left as the overview is, but for ⌘W", () 
   })
 })
 
-describe("a widget in a pane, as a person or an agent opens one", () => {
+describe("a widget in its chat's panel, as a person or an agent opens one", () => {
   const run = { plugin: "experiments", id: "run" }
+  const other = { plugin: "subagents", id: "a" }
+  const panelOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
+    store.getState().workspace.panels[sessionId]
 
-  it("opens beside its origin's pane, in the room the page measures", async () => {
+  it("opens as a tab of its origin's panel, never a pane, and asks for the panel", async () => {
     const { store } = await ready()
-    store.dispatch(openWidget({ widget: run, place: "pane", origin: "a" }))
-    expect(shown(store)).toEqual(["a", "widget experiments/run"])
+    const asked = store.getState().workspace.panelAsked
+    store.dispatch(openWidget({ widget: run, place: "panel", origin: "a" }))
+    expect(shown(store)).toEqual(["a"])
+    expect(panelOf(store, "a")).toEqual({ tabs: [run], front: run })
+    expect(store.getState().workspace.panelAsked).toBe(asked + 1)
   })
 
-  it("is in a pane and over the panes at once", async () => {
+  it("brings its chat to the front first: focused where it is, else in the focused pane", async () => {
     const { store } = await ready()
-    store.dispatch(openWidget({ widget: run, place: "pane", origin: "a" }))
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    store.dispatch(openWidget({ widget: run, place: "panel", origin: "a" }))
+    expect(shown(store)).toEqual(["a", "c"])
+    const { panes } = store.getState().workspace
+    expect(panesOf(panes!).find((pane) => pane.key === panes!.focused)?.item).toBe(
+      paneItemKey(sessionItem("a")),
+    )
+    store.dispatch(openWidget({ widget: other, place: "panel", origin: "d" }))
+    expect(shown(store)).toEqual(["d", "c"])
+    expect(panelOf(store, "d")).toEqual({ tabs: [other], front: other })
+    expect(panelOf(store, "a")).toEqual({ tabs: [run], front: run })
+  })
+
+  it("is in the panel and over the panes at once", async () => {
+    const { store } = await ready()
+    store.dispatch(openWidget({ widget: run, place: "panel", origin: "a" }))
     store.dispatch(openWidget({ widget: run, place: "window" }))
-    expect(shown(store)).toEqual(["a", "widget experiments/run"])
+    expect(panelOf(store, "a")?.tabs).toEqual([run])
     expect(store.getState().workspace.content).toEqual({ widget: run })
   })
 })
@@ -331,4 +353,24 @@ describe("what a drag carries into the grid", () => {
     )
     expect(shown(store)).toEqual(["d"])
   })
+})
+
+it("closing a visible document tab leaves the Agents view selected", async () => {
+  const { store } = await ready()
+  store.dispatch(openSession({ sessionId: "c" }))
+  store.dispatch(showContent({ content: "agents" }))
+  store.dispatch(closeSessionTab({ sessionId: "c" }))
+  expect(store.getState().workspace.content).toBe("agents")
+  expect(store.getState().workspace.sessionTabs).not.toContain("c")
+})
+
+it("closing a hidden document tab leaves the Agents view and panes in place", async () => {
+  const { store } = await ready()
+  store.dispatch(openSession({ sessionId: "c" }))
+  store.dispatch(showContent({ content: "agents" }))
+  const panes = store.getState().workspace.panes
+  store.dispatch(closeSessionTab({ sessionId: "a" }))
+  expect(store.getState().workspace.content).toBe("agents")
+  expect(store.getState().workspace.panes).toBe(panes)
+  expect(store.getState().workspace.sessionTabs).not.toContain("a")
 })

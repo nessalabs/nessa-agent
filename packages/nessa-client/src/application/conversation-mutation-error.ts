@@ -49,7 +49,7 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
   environment_not_configured:
     'This conversation runs on an SSH host the gateway\'s config.json does not name under "sshHosts", so nothing was sent.',
   environment_unavailable:
-    "The SSH host this conversation runs on could not be reached, is serving another gateway, or cannot run its agent, so nothing was sent. Retry once the host is reachable.",
+    "The remote workspace could not be opened or cannot run its agent, so nothing was sent. Check its connection, unlock Nessa if needed, and retry once it is available.",
   environment_version_mismatch:
     "The copy of Nessa on the SSH host this conversation runs on is not the one this gateway installs there, so nothing was sent to it.",
   environment_platform_unsupported:
@@ -122,6 +122,7 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.InvalidRequest:
     case ConversationErrorCode.AgentStartupDeadline:
     case ConversationErrorCode.ConversationNotFound:
+    case ConversationErrorCode.ChannelNotFound:
     case ConversationErrorCode.ConversationCapacity:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.AttachmentNotFound:
@@ -217,6 +218,10 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AttachmentCapacity:
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
+    case ConversationErrorCode.UploadTicketInvalid:
+    case ConversationErrorCode.UploadFailed:
+    case ConversationErrorCode.UnsupportedImage:
+    case ConversationErrorCode.ImageTooLarge:
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:

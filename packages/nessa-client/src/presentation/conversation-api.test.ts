@@ -112,6 +112,17 @@ it("passes the SSH host a conversation runs on only when one is named", async ()
   ])
 })
 
+it("passes the channel a conversation is in only when one is named", async () => {
+  const request = vi.fn().mockResolvedValue({ conversationId })
+  const api = createConversationApi({ request }, () => "generated")
+  await api.create({ conversationId, requestId: "create-default" })
+  await api.create({ conversationId, requestId: "create-in", channelId: "ch_aaaaaaaaaa" })
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    { conversationId, requestId: "create-default" },
+    { conversationId, requestId: "create-in", channelId: "ch_aaaaaaaaaa" },
+  ])
+})
+
 it("correlates an acknowledged mode change and rejects a mismatched reply", async () => {
   const request = vi.fn().mockResolvedValue({ requestId: "mode-1", mode: "auto" })
   const api = createConversationApi({ request }, () => "generated")
@@ -1571,6 +1582,29 @@ it("refuses a list row outside the schema, or one conversation listed twice", as
   }
 })
 
+it("keeps the channel a listed conversation is in, and refuses one the schema cannot name", async () => {
+  const inChannel = { ...summary, channelId: "ch_abcdefgh27" }
+  const api = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({ conversations: [inChannel], complete: true }),
+    },
+    () => "id",
+  )
+  expect((await api.list()).conversations).toEqual([inChannel])
+  for (const channelId of ["default", "ch_bad", 7]) {
+    const refused = createConversationApi(
+      {
+        request: vi.fn().mockResolvedValue({
+          conversations: [{ ...summary, channelId }],
+          complete: true,
+        }),
+      },
+      () => "id",
+    )
+    await expect(refused.list(), String(channelId)).rejects.toThrow(/channelId/)
+  }
+})
+
 const observeCursor = {
   incarnation: "a".repeat(32),
   boundary: "9",
@@ -2354,4 +2388,219 @@ it.each([
     requestId: "original-model-control",
     model: "selected-model",
   })
+})
+
+const webhookScope = {
+  receiver: "00000000-0000-4000-8000-000000000010",
+  origin: "synthetic-origin",
+  stream: conversationId,
+  incarnation: "synthetic-incarnation",
+  schema: "records-v1",
+  accessEpoch: "epoch-1",
+}
+const frozenWebhookRequest = "00000000-0000-4000-8000-000000000011"
+const resetWebhookReceipt = {
+  requestId: frozenWebhookRequest,
+  receiptId: "00000000-0000-4000-8000-000000000012",
+  scope: webhookScope,
+  position: "0",
+  appliedAtMs: 1000,
+}
+it("reads the public owner webhook checkpoint and keeps its frozen reset identity", async () => {
+  const following = {
+    scope: webhookScope,
+    position: "2",
+    resetRequired: false,
+    requestId: null,
+  }
+  const frozen = { ...following, resetRequired: true, requestId: frozenWebhookRequest }
+  const request = vi.fn().mockResolvedValueOnce(following).mockResolvedValueOnce(frozen)
+  const api = createConversationApi({ request }, () => {
+    throw new Error("read must not mint an action identity")
+  })
+  expect(await api.webhookCursor(conversationId, "synthetic-hook")).toEqual(following)
+  expect(await api.webhookCursor(conversationId, "synthetic-hook")).toEqual(frozen)
+  expect(request).toHaveBeenLastCalledWith("conversation.webhook.cursor", {
+    conversationId,
+    credentialId: "synthetic-hook",
+  })
+})
+it("refuses contradictory or foreign webhook cursor responses", async () => {
+  const valid = {
+    scope: webhookScope,
+    position: "2",
+    resetRequired: false,
+    requestId: null,
+  }
+  for (const response of [
+    {
+      ...valid,
+      scope: { ...webhookScope, stream: "00000000-0000-4000-8000-000000000099" },
+    },
+    { ...valid, resetRequired: true },
+    { ...valid, requestId: frozenWebhookRequest },
+    { ...valid, position: "01" },
+    { ...valid, position: "18446744073709551616" },
+  ]) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue(response) },
+      () => "unused",
+    )
+    await expect(api.webhookCursor(conversationId, "synthetic-hook")).rejects.toThrow(
+      TypeError,
+    )
+  }
+})
+it("retries an uncertain webhook reset only explicitly and with the original server identity", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("lost response"))
+    .mockResolvedValueOnce(resetWebhookReceipt)
+  const api = createConversationApi({ request }, () => {
+    throw new Error("reset identity belongs to server capture")
+  })
+  const failure = await api
+    .resetWebhookCursor(conversationId, "synthetic-hook", frozenWebhookRequest)
+    .catch((error) => error)
+  expect(failure).toBeInstanceOf(NessaConversationMutationError)
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(await failure.retry()).toEqual(resetWebhookReceipt)
+  expect(request).toHaveBeenCalledTimes(2)
+  for (const [, params] of request.mock.calls)
+    expect(params).toEqual({
+      conversationId,
+      credentialId: "synthetic-hook",
+      requestId: frozenWebhookRequest,
+    })
+})
+it("refuses reset receipts for another request or checkpoint and never invents reset identities", async () => {
+  for (const response of [
+    { ...resetWebhookReceipt, requestId: "00000000-0000-4000-8000-000000000099" },
+    { ...resetWebhookReceipt, position: "1" },
+    { ...resetWebhookReceipt, receiptId: frozenWebhookRequest },
+    {
+      ...resetWebhookReceipt,
+      scope: { ...webhookScope, stream: "00000000-0000-4000-8000-000000000099" },
+    },
+  ]) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue(response) },
+      () => "unused",
+    )
+    await expect(
+      api.resetWebhookCursor(conversationId, "synthetic-hook", frozenWebhookRequest),
+    ).rejects.toBeInstanceOf(NessaConversationMutationError)
+  }
+  const request = vi.fn()
+  const api = createConversationApi({ request }, () => "unused")
+  expect(() =>
+    api.resetWebhookCursor(conversationId, "synthetic-hook", "client-generated-text"),
+  ).toThrow(TypeError)
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("requests one separate owner source Head with the passive read deadline", async () => {
+  const value = {
+    scope: webhookScope,
+    position: "2",
+    resetRequired: false,
+    requestId: null,
+    observedSourceHead: {
+      scope: { ...webhookScope, incarnation: "replacement" },
+      head: "1",
+    },
+  }
+  const request = vi.fn().mockResolvedValue(value)
+  const api = createConversationApi({ request }, () => "unused")
+  expect(
+    await api.webhookCursor(conversationId, "synthetic-hook", {
+      includeSourceHead: true,
+    }),
+  ).toEqual(value)
+  expect(request.mock.calls[0][1]).toEqual({
+    conversationId,
+    credentialId: "synthetic-hook",
+    includeSourceHead: true,
+  })
+  expect(request.mock.calls[0][2].atLeastMs).toBeGreaterThan(0)
+})
+it("requires an explicit valid requested Head and refuses unsolicited Head fields", async () => {
+  const base = {
+    scope: webhookScope,
+    position: "2",
+    resetRequired: false,
+    requestId: null,
+  }
+  for (const observedSourceHead of [
+    undefined,
+    { scope: webhookScope, head: "01" },
+    { scope: { ...webhookScope, receiver: "foreign" }, head: "2" },
+  ]) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue({ ...base, observedSourceHead }) },
+      () => "unused",
+    )
+    await expect(
+      api.webhookCursor(conversationId, "synthetic-hook", { includeSourceHead: true }),
+    ).rejects.toThrow(TypeError)
+  }
+  const request = vi.fn().mockResolvedValue({
+    ...base,
+    observedSourceHead: { scope: webhookScope, head: "2" },
+  })
+  const api = createConversationApi({ request }, () => "unused")
+  await expect(
+    api.webhookCursor(conversationId, "synthetic-hook", { includeSourceHead: false }),
+  ).rejects.toThrow(TypeError)
+  expect(request).toHaveBeenCalledWith("conversation.webhook.cursor", {
+    conversationId,
+    credentialId: "synthetic-hook",
+    includeSourceHead: false,
+  })
+})
+it("keeps a channel create pending through cloud preparation without replaying it", async () => {
+  const { conversationWorkspaceCreateTimeoutMs } =
+    await import("../application/agent-budgets.js")
+  const request = vi.fn(
+    async (_method: string, _params: unknown, _deadline?: unknown) => ({
+      conversationId,
+    }),
+  )
+  const api = createConversationApi({ request }, () => "cloud-create")
+  await api.create({ conversationId, channelId: "ch_aaaaaaaaaa" })
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(request.mock.calls[0]?.[2]).toEqual({
+    atLeastMs: conversationWorkspaceCreateTimeoutMs,
+  })
+})
+
+it("captures file-only uploads immutably and includes them in the admitted request", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ executionId: "execution", disposition: "queued" })
+  const api = createConversationApi({ request }, () => "request")
+  const upload = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "application/pdf",
+    size: 12,
+    name: "report.pdf",
+  }
+  const prepared = api.prepare(conversationId, "", [], [], {
+    executionId: "execution",
+    uploads: [upload],
+  })
+  upload.name = "changed.pdf"
+  expect(prepared.uploads[0]?.name).toBe("report.pdf")
+  expect(Object.isFrozen(prepared.uploads[0])).toBe(true)
+  await api.submit(prepared)
+  expect(request.mock.calls[0]?.[1]).toMatchObject({
+    uploads: [{ name: "report.pdf" }],
+    attachments: [],
+    files: [],
+  })
+  expect(() =>
+    api.prepare(conversationId, "", [], [], {
+      uploads: [{ ...upload, name: "../escape" }],
+    }),
+  ).toThrow("filename")
 })

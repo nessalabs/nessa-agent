@@ -34,37 +34,97 @@ const isRefusal = (error) =>
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Each event of `conversationId` from the start, read until nothing comes for `quietMs`. */
-export async function replayEvents(client, conversationId, quietMs = 1_500) {
+/** Replay until its applied checkpoint equals a freshly captured committed head. */
+export async function replayEvents(client, conversationId) {
   const ids = []
-  let last = Date.now()
+  const controller = new AbortController()
+  const { signal } = controller
+  const opened = new Set()
   let ended = null
-  const subscription = await client.subscriptions.events(
-    conversationId,
-    {
-      batch(batch) {
-        for (const event of batch.events) ids.push(event.id)
-        last = Date.now()
-      },
-      ended(end) {
-        ended = end
-      },
-    },
-    { replay: true },
-  )
-  const deadline = Date.now() + 60_000
-  // Quiet counts from the first batch: a replay of a long history can
-  // take longer than the quiet window to start, and nothing read then is
-  // not the same as nothing there.
-  while (
-    !ended &&
-    (ids.length === 0 ? Date.now() - last < 15_000 : Date.now() - last < quietMs) &&
-    Date.now() < deadline
-  )
-    await sleep(100)
-  await subscription.close().catch(() => {})
-  if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
-  return ids
+  let phase = "replay to checkpoint"
+  let timer
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const failure = new Error(
+        `a replay of ${conversationId} did not complete ${phase} within 60000 ms`,
+      )
+      controller.abort(failure)
+      reject(failure)
+    }, 60_000)
+  })
+  const open = async (handlers, options = {}) => {
+    const subscription = await client.subscriptions.events(conversationId, handlers, {
+      ...options,
+      signal,
+    })
+    if (signal.aborted) {
+      void subscription.close().catch(() => {})
+      signal.throwIfAborted()
+    }
+    opened.add(subscription)
+    return subscription
+  }
+  const wait = async (complete) => {
+    while (!complete() && !ended && !signal.aborted) await sleep(100)
+    signal.throwIfAborted()
+    if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
+  }
+  const replay = async () => {
+    let after
+    while (true) {
+      signal.throwIfAborted()
+      phase = "replay to checkpoint"
+      let candidate
+      const subscription = await open(
+        {
+          batch(batch) {
+            if (signal.aborted || candidate !== undefined) return
+            for (const event of batch.events) ids.push(event.id)
+            // Empty is only a candidate, not proof of reaching the current head.
+            if (batch.events.length === 0) candidate = batch.cursor
+          },
+          ended(end) {
+            ended = end
+          },
+        },
+        after === undefined ? { replay: true } : { after },
+      )
+      await wait(() => candidate !== undefined)
+      phase = "replay cleanup"
+      await subscription.close()
+      opened.delete(subscription)
+      signal.throwIfAborted()
+      phase = "head capture"
+      let head
+      // Default Now emits the certified outer-save head. Capture it after the
+      // candidate: idle parking can write even after all turns are at rest.
+      const capture = await open({
+        batch(batch) {
+          head ??= batch.cursor
+        },
+        ended(end) {
+          ended = end
+        },
+      })
+      await wait(() => head !== undefined)
+      phase = "head capture cleanup"
+      await capture.close()
+      opened.delete(capture)
+      if (candidate === head) return ids
+      // Freeze callbacks at the applied candidate and resume strictly after it.
+      // A growing head shares the same overall deadline, never a fresh budget.
+      after = candidate
+    }
+  }
+  try {
+    return await Promise.race([replay(), deadline])
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+    // The client's abort gate owns late opens and their physical close ACKs.
+    // Do not let a stalled unsubscribe extend this verifier's overall deadline.
+    for (const subscription of opened) void subscription.close().catch(() => {})
+  }
 }
 
 export class Follower {
@@ -275,50 +335,72 @@ export class Follower {
   async probe() {
     // Only with every stream it keeps room for held, so the room it asks
     // past is the connection's real one.
-    const streams = () => [this.list, this.view, ...this.events.values()]
-    const baseline = streams().map((each) => each.subscription)
-    if (baseline.some((each) => !each)) return
-    let probeEnded = false
-    const stable = () => {
-      const now = streams()
-      return (
-        !probeEnded &&
-        now.length === baseline.length &&
-        now.every((each, index) => each.subscription === baseline[index])
-      )
-    }
+    if (
+      this.list.lost ||
+      !this.list.subscription ||
+      this.view.lost ||
+      !this.view.subscription ||
+      [...this.events.values()].some((each) => each.lost || !each.subscription)
+    )
+      return
     const others = this.list.conversations.filter((id) => id !== this.mainId)
     const room = this.limits.conversationTargets - this.held()
     if (room < 0 || others.length < room + 1) return
+    const client = this.client
+    const originalList = this.list.subscription
+    const originalView = this.view.subscription
+    const originals = [...this.events].map(([id, held]) => ({
+      id,
+      held,
+      subscription: held.subscription,
+    }))
     const opened = []
+    let ended = false
+    // Capacity is measured only while the original physical follows and all
+    // views acquired by this probe remain live. Their loss frees real room.
+    const live = () =>
+      !ended &&
+      this.client === client &&
+      client.connectionState.status === "connected" &&
+      !this.list.lost &&
+      this.list.subscription === originalList &&
+      !this.view.lost &&
+      this.view.subscription === originalView &&
+      this.events.size === originals.length &&
+      originals.every(
+        ({ id, held, subscription }) =>
+          !this.deleted.has(id) &&
+          this.events.get(id) === held &&
+          !held.lost &&
+          held.subscription === subscription,
+      )
     try {
       for (let n = 0; n <= room; n += 1) {
-        if (!stable()) return
+        if (!live()) return
         try {
           opened.push(
-            await this.client.subscriptions.view(others[n], {
+            await client.subscriptions.view(others[n], {
               view() {},
               ended() {
-                probeEnded = true
+                ended = true
               },
             }),
           )
-          if (!stable()) return
+          if (!live()) return
           if (n === room)
             this.fail(
               `a subscription past ${this.limits.conversationTargets} was accepted`,
             )
         } catch (error) {
-          if (!stable()) return
-          // A list snapshot can name the exact conversation the run deletes
-          // while this admission waits. It cannot measure capacity this round.
+          if (!live()) return
+          // The gateway restarting, this connection dropping, or a
+          // conversation the list still names being deleted or its agent
+          // being retired, ends the probe: it asks again on a later round,
+          // against the list then. A stopping owner refuses current reads
+          // as conversation_closed until cleanup is confirmed; the pool
+          // step independently requires that conversation to reopen.
           if (error?.code === "conversation_deleted" && this.deleted.has(others[n]))
             return
-          // The gateway restarting, or this connection dropping, ends the
-          // probe: it asks again on a later round.
-          // A retiring owner admits no new read until its release is
-          // acknowledged. This interrupted probe claims no capacity proof;
-          // the next stable probe and pool reopen must still succeed.
           if (
             error?.code === "temporarily_unavailable" ||
             error?.code === "conversation_closed" ||

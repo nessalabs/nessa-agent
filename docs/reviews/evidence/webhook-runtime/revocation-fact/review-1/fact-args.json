@@ -1,0 +1,16 @@
+[
+  "/tmp/nessa-cargo/bin/rustc",
+  "--edition=2021",
+  "--test",
+  "/tmp/nessa-revocation-independent-review/auth/tests/revocation.rs",
+  "-L",
+  "dependency=/tmp/nessa-retention-dependency-snapshot",
+  "--extern",
+  "nessa_auth=/tmp/nessa-revocation-independent-review/libnessa_auth.rlib",
+  "--extern",
+  "serde_json=/tmp/nessa-retention-dependency-snapshot/libserde_json-004624a94ad74dab.rlib",
+  "--extern",
+  "tempfile=/tmp/nessa-retention-dependency-snapshot/libtempfile-91dda1363cb9b4ae.rlib",
+  "-o",
+  "/tmp/nessa-revocation-independent-review/fact-tests"
+]

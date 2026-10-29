@@ -20,8 +20,8 @@ use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nessa_auth::application::authorization::AuthorizeAction;
 use nessa_auth::application::credential_admin::{
-    CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
-    RevokeCredentialOutcome, RevokeCredentialRequest,
+    CredentialAdminError, CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
+    ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
 };
 use nessa_auth::application::dto::{CredentialGrantDto, MembershipStateDto, ResourceDto};
 use nessa_auth::application::ports::{
@@ -371,6 +371,7 @@ where
             now: state.clock.unix_seconds(),
         };
         let identity = (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -402,6 +403,7 @@ where
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
     let verifier = proof.verifier(socket, state);
     let session = AuthenticateSession {
+        policy: state.policy.as_ref(),
         verifier: verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
@@ -427,6 +429,7 @@ where
 fn credential_admin_code(error: CredentialAdminError) -> &'static str {
     match error {
         CredentialAdminError::Conflict => "credential_conflict",
+        CredentialAdminError::OriginRecoveryRequired => "credential_conflict",
         CredentialAdminError::Capacity => "credential_capacity",
         CredentialAdminError::NotFound => "credential_not_found",
         CredentialAdminError::Unavailable => "credential_store_unavailable",
@@ -911,10 +914,15 @@ type RefreshCheck<'a> = Pin<
     >,
 >;
 
-async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
-where
+async fn run_authenticated<S>(
+    socket: S,
+    mut state: ProductRouteState,
+    session: AuthenticatedSession,
+) where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
+    // This guard belongs to the connection loop, never a cloned request state.
+    let mut vault_session = super::vault::ConnectionVault::attach(&mut state, &session);
     let (sink, mut incoming) = socket.split();
     // The socket's one event numbering, continued by its subscription frames
     // and its review notices in the order the writer sends them.
@@ -1402,6 +1410,9 @@ where
             app_calls.push(task.abort_handle());
         }
         requests.push(task);
+    }
+    if let Some(owner) = vault_session.as_mut() {
+        owner.close();
     }
     // Dropping the slot unsent lets the writer finish once the lanes drain.
     match close {
@@ -1949,12 +1960,17 @@ async fn dispatch_authorized(
         "agents.installOptions" | "agents.install" => {
             super::agent_install::dispatch(state, session, frame).await
         }
+        "conversation.webhook.cursor" | "conversation.webhook.reset" => {
+            super::webhook_reset::dispatch(state, session, frame).await
+        }
         "conversation.share" | "conversation.unshare" | "conversation.shares" => {
             super::read_access::dispatch_share(state, session, frame).await
         }
+        "channel.create" | "channel.list" => super::channel::dispatch(state, session, frame).await,
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
+        "attachment.write" => super::attachment::dispatch_write(state, frame).await,
         method if method.starts_with("attachment.") => {
             super::attachment::dispatch(state, session, frame).await
         }
@@ -1965,7 +1981,14 @@ async fn dispatch_authorized(
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
+        method if method.starts_with("boat.") => super::boat::dispatch(state, session, frame).await,
+        method if method.starts_with("vault.") => super::vault::dispatch(state, frame).await,
+        method if method.starts_with("github.") => {
+            super::github::dispatch(state, session, frame).await
+        }
         "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
+        "pairing.setTunnel" => super::pairing::set_tunnel(state, session, frame).await,
+        "pairing.tunnel" => super::pairing::tunnel(state, frame).await,
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }
@@ -1974,12 +1997,28 @@ async fn dispatch_authorized(
         method if method.starts_with("peer.") => {
             super::peers::dispatch(state, session, frame).await
         }
+        "server.reach" => {
+            if frame.params != json!({}) {
+                return failure(&frame.id, "invalid_request");
+            }
+            let tunnel = state.tunnel.as_ref().and_then(|tunnel| tunnel.address());
+            success(
+                &frame.id,
+                &nessa_protocol::product::generated::ServerReachResult {
+                    tunnel: tunnel.map(String::from),
+                },
+            )
+        }
         "server.health" => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            health_check_message(&frame.id, state.uptime_clock.elapsed_ms())
-                .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
+            health_check_message(
+                &frame.id,
+                state.uptime_clock.elapsed_ms(),
+                state.webhooks.as_ref().map(|runtime| runtime.status()),
+            )
+            .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
         }
         "credential.issue" => {
             let Some(admin) = state.admin.as_ref() else {
@@ -2010,6 +2049,7 @@ async fn dispatch_authorized(
             let credential_id = format!("credential-{}", Uuid::new_v4());
             let outcome = admin
                 .issue(IssueCredentialRequest {
+                    purpose: CredentialIssuePurpose::Product,
                     request_id: params.request_id,
                     issuer_principal_id: context.principal_id().as_str().to_owned(),
                     credential_id,
@@ -2233,6 +2273,7 @@ async fn current_identity_inner(
             now: state.clock.unix_seconds(),
         };
         match (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -2707,6 +2748,9 @@ mod tests {
     }
     mod review_notice_audit {
         include!("../../tests/product/socket/review_notice_audit.rs");
+    }
+    mod vault_tests {
+        include!("../../tests/product/socket/vault.rs");
     }
     pub(super) mod host_fixture {
         include!("../../tests/product/socket/host_fixture.rs");
@@ -3909,7 +3953,11 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .clone();
-            assert_eq!(asked, vec![grant.to_owned()], "{method}");
+            assert_eq!(
+                asked,
+                vec!["session.enter".to_owned(), grant.to_owned()],
+                "{method}"
+            );
         }
     }
 
@@ -4111,6 +4159,23 @@ mod tests {
         }
     }
 
+    /// Original issuance of a newly constructed synthetic product credential.
+    fn test_product_origin(
+        credential: &Credential,
+    ) -> nessa_auth::application::origin::CredentialOrigin {
+        let original = credential
+            .issued(
+                nessa_auth::domain::IssuanceCause::AdminIssue,
+                nessa_auth::domain::Initiator::LocalOperator,
+            )
+            .unwrap();
+        nessa_auth::application::origin::CredentialOrigin::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            credential,
+        )
+        .unwrap()
+    }
+
     fn snapshot(role: MembershipRole, status: MembershipStatus) -> AccessSnapshot {
         snapshot_with(role, status, &["server.read", "credential.manage"])
     }
@@ -4125,8 +4190,8 @@ mod tests {
             organization.clone(),
             ResourceId::new("gateway-resource").unwrap(),
         );
-        AccessSnapshot {
-            credential: Credential::new(
+        {
+            let credential = Credential::new(
                 CredentialId::new("credential").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization.clone(),
@@ -4138,15 +4203,23 @@ mod tests {
                     .map(|action| Grant::new(Action::new(*action).unwrap(), resource.clone()))
                     .collect(),
             )
-            .unwrap(),
-            membership: Membership::new(
+            .unwrap();
+            let membership = Membership::new(
                 MembershipId::new("membership").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization,
                 role,
                 status,
-            ),
-            revision: 1,
+            );
+            let revision = 1;
+            let origin = test_product_origin(&credential);
+            AccessSnapshot {
+                revocation: None,
+                credential,
+                membership,
+                revision,
+                origin,
+            }
         }
     }
 
@@ -4199,6 +4272,7 @@ mod tests {
 
     async fn authenticate(state: &ProductRouteState) -> AuthenticatedSession {
         AuthenticateSession {
+            policy: state.policy.as_ref(),
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -4257,6 +4331,10 @@ mod tests {
     async fn administration_reports_typed_rejections_from_a_substitute_adapter() {
         for (error, code) in [
             (CredentialAdminError::Conflict, "credential_conflict"),
+            (
+                CredentialAdminError::OriginRecoveryRequired,
+                "credential_conflict",
+            ),
             (CredentialAdminError::Capacity, "credential_capacity"),
             (CredentialAdminError::NotFound, "credential_not_found"),
             (
@@ -4519,6 +4597,44 @@ mod tests {
         source.shutdown().await.unwrap();
         drop(writer);
         storage.shutdown().await.unwrap();
+    }
+
+    /// Tunnel row T9: `server.reach` names the tunnel's address only while
+    /// it is ready, under `server.read`.
+    #[tokio::test]
+    async fn reach_names_the_tunnel_only_while_it_is_ready() {
+        use crate::tunnel::application::TunnelView;
+        use crate::tunnel::application::{TunnelFailure, TunnelStatus};
+        let (state, _authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let reach = |state: &ProductRouteState| {
+            let state = state.clone();
+            let session = session.clone();
+            async move {
+                let OutgoingMessage::Response(answer) =
+                    dispatch(&state, &session, request("1", "server.reach")).await
+                else {
+                    panic!("response expected")
+                };
+                assert!(answer.ok);
+                answer.payload.unwrap()
+            }
+        };
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+        let (status, watching) = watch::channel(TunnelStatus::Starting);
+        let state = state.with_tunnel(TunnelView { status: watching });
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+        let address = nessa_protocol::tunnel::TunnelAddress::try_from(
+            "https://a-b.trycloudflare.com".to_owned(),
+        )
+        .unwrap();
+        status.send_replace(TunnelStatus::Ready(address));
+        assert_eq!(
+            reach(&state).await,
+            json!({ "tunnel": "https://a-b.trycloudflare.com" })
+        );
+        status.send_replace(TunnelStatus::Failed(TunnelFailure::NotReady));
+        assert_eq!(reach(&state).await, json!({ "tunnel": null }));
     }
 
     #[tokio::test]
@@ -5427,15 +5543,18 @@ mod tests {
     impl PolicyEvaluator for RecordingGrantPolicy {
         fn evaluate(
             &self,
-            _: &AuthContext,
+            context: &AuthContext,
             action: &Action,
-            _: &Resource,
-            _: &AccessSnapshot,
+            resource: &Resource,
+            snapshot: &AccessSnapshot,
         ) -> Result<Decision, AccessError> {
             self.asked
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(action.as_str().to_owned());
+            if action.as_str() == "session.enter" {
+                return CedarPolicyEvaluator::new()?.evaluate(context, action, resource, snapshot);
+            }
             Ok(Decision::Deny)
         }
     }

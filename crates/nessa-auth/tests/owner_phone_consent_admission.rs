@@ -123,6 +123,7 @@ impl Fixture {
     ) -> Result<AuthenticatedSession, AccessError> {
         ready(
             AuthenticateSession {
+                policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 verifier: &self.verifier,
                 access: &self.store,
                 clock: &self.clock,
@@ -178,8 +179,8 @@ fn grant(action: &str, id: &str) -> Grant {
 }
 
 fn snapshot(role: MembershipRole, status: MembershipStatus, grants: Vec<Grant>) -> AccessSnapshot {
-    AccessSnapshot {
-        credential: Credential::new(
+    {
+        let credential = Credential::new(
             credential_id(),
             principal_id(),
             organization_id(),
@@ -188,15 +189,43 @@ fn snapshot(role: MembershipRole, status: MembershipStatus, grants: Vec<Grant>) 
             EXPIRES_AT,
             grants,
         )
-        .unwrap(),
-        membership: Membership::new(
+        .unwrap();
+        let membership = Membership::new(
             membership_id(),
             principal_id(),
             organization_id(),
             role,
             status,
-        ),
-        revision: 1,
+        );
+        let revision = 1;
+        // This fixture explicitly creates its own original product issuance.
+        let original = nessa_auth::domain::CredentialTransition::new(
+            credential.id().clone(),
+            None,
+            nessa_auth::domain::CredentialLifecycle {
+                issued_at: credential.issued_at(),
+                expires_at: credential.expires_at(),
+                revoked_at: None,
+            },
+            nessa_auth::domain::TransitionCause::Issued(
+                nessa_auth::domain::IssuanceCause::AdminIssue,
+            ),
+            nessa_auth::domain::Initiator::LocalOperator,
+            credential.issued_at(),
+        )
+        .unwrap();
+        let origin = nessa_auth::application::origin::CredentialOrigin::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            &credential,
+        )
+        .unwrap();
+        AccessSnapshot {
+            revocation: None,
+            credential,
+            membership,
+            revision,
+            origin,
+        }
     }
 }
 
@@ -331,16 +360,20 @@ fn current_revision_deadline_membership_and_original_identity_still_fence_consen
         Err(AccessError::CredentialExpired)
     ));
 }
+/// Every class, the owner phone's whole capability set included, can be
+/// redeemed by code; such a record is not a signed one.
 #[test]
-fn owner_phone_capabilities_cannot_create_a_manual_pake_record() {
+fn owner_phone_capabilities_can_be_redeemed_by_code() {
     use nessa_auth::domain::pairing::{InvitationId, PairingPolicy, PairingRecord};
-    assert!(PairingRecord::new(
+    let phone = PairingRecord::new(
         InvitationId::new([1; 16]),
         owner_phone_intent(),
         0,
-        PairingPolicy::initial()
+        PairingPolicy::initial(),
     )
-    .is_err());
+    .unwrap();
+    assert!(!phone.signed_original());
+    assert_eq!(phone.intent().grants().count(), 3);
     for class in [
         ConsentClass::DeviceRead,
         ConsentClass::PeerRead,

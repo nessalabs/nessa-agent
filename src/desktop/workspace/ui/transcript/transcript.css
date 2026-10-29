@@ -22,6 +22,15 @@
   );
 }
 
+/*
+ * A tool the reader opens or closes. Anchoring would keep the text below the
+ * tool and slide the clicked header up; the hold turns it off for that motion
+ * (`tool-disclosure.ts`).
+ */
+[data-disclosure-hold] {
+  overflow-anchor: none;
+}
+
 .workspace-transcript-inner {
   display: flex;
   max-width: 700px;
@@ -260,6 +269,11 @@
   background: color-mix(in oklab, var(--foreground) 7%, transparent);
   font-family: var(--nessa-font-mono);
   font-size: 0.86em;
+  /* Wrapped, each line keeps the chip's padding and corners, and a long
+     command breaks where it must rather than running past its column. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  overflow-wrap: anywhere;
 }
 
 .workspace-message strong {
@@ -319,6 +333,16 @@
   user-select: none;
   animation: workspace-message-in var(--desktop-slow) var(--desktop-out)
     var(--desktop-fast) both;
+}
+
+/* Said to a screen reader where a live tool run already shows it. */
+.workspace-live-spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .workspace-shimmer {

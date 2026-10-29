@@ -5,7 +5,10 @@ The gateway offers `nessa-agents` beside configured MCP servers and the optional
 provider-open token. Agent tools do not require SSH command configuration.
 
 A thread is a conversation. `create_thread` creates an empty thread using the
-configured default agent/model and normal Ask approval mode. `send_message`
+ordinary creation defaults. A same-channel child keeps the channel start owner's
+placement and current preset; agent/model choices stay with ordinary creation.
+Outside a channel it starts in Ask.
+`send_message`
 accepts plain text with `mode`: `queued` (the default) queues a turn;
 `steering` uses existing steering delivery and fallback semantics; `passive`
 records a RecordOnly note without starting or steering a model turn. Active
@@ -235,6 +238,21 @@ A create/send/stop already admitted by the command coordinator retains its
 supervised receipt/audit lifecycle even when its answer is lost. Cancellation
 is not a claim that an external effect was rolled back.
 
+## Channel placement during owned preparation
+
+Owned creation asks the existing channel start owner for placement and the
+initial preset while holding thread admission and after verifying the exact
+running source. Those choices travel in the coordinator's existing preparation
+description into ordinary child creation. A caller cannot supply either choice;
+permission answers are not copied. A source outside a channel, or an explicitly
+remote environment, retains the ordinary channel start owner's no-channel choice.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Same-channel source starts an owned child | The child and its SDK spawn-policy binding retain the source channel's current preset, including a person's Ask override of the channel's Auto default | `owned_threads_use_channel_start_without_accepting_caller_overrides` |
+| Agent supplies a preset or channel override | Refuse invalid input before child preparation, provider open or child metadata | same regression |
+| A prepared child is restored | The existing preparation description supplies its retained channel and preset to ordinary creation; omitted optional choices denote ordinary default placement | existing owned recovery tests and the channel regression |
+
 ## Service admission order
 
 Commands that serialize owned-thread work acquire the existing thread-admission
@@ -247,7 +265,7 @@ wait for a thread owner whose reader is queued behind an export writer.
 | --- | --- | --- |
 | Recovery reader, export writer and scheduled delivery compete | Recovery queues for thread admission before requesting its reader; all three owners settle within the existing five-second test bound | `recovery_export_and_scheduled_delivery_share_one_admission_order` |
 | An ordinary command waits for thread admission before supervised Stop, then export queues | Stop waits for thread admission before requesting its reader; submission and export settle, and Stop retains its exact receipt and single cancellation | `owned_stop_export_and_submission_share_one_admission_order` |
-| The outer Stop caller disconnects while its supervisor waits for thread admission | The original supervisor reaches provider cancellation before any replacement command; retry joins its actor and receipt without cancelling twice | `owned_stop_export_and_submission_share_one_admission_order`, lost-caller case |
+| The outer Stop caller disconnects while its supervisor waits for thread admission | The original supervisor reaches provider cancellation before any replacement command; the existing export admission drain then joins its physical command completion before retry reads the actor and receipt without cancelling twice | `owned_stop_export_and_submission_share_one_admission_order`, lost-caller case |
 
 The guards retain their existing lifetimes. Recovery keeps its weak live handle
 while waiting and rechecks the slot after admission. Stop releases thread

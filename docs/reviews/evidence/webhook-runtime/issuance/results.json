@@ -1,0 +1,38 @@
+[
+  {
+    "probe": "hold_kind",
+    "mutation": "caught",
+    "restored": "passed",
+    "byte_identical": true
+  },
+  {
+    "probe": "hold_action",
+    "mutation": "caught",
+    "restored": "passed",
+    "byte_identical": true
+  },
+  {
+    "probe": "issue_kind",
+    "mutation": "caught",
+    "restored": "passed",
+    "byte_identical": true
+  },
+  {
+    "probe": "path_mapping",
+    "mutation": "caught",
+    "restored": "passed",
+    "byte_identical": true
+  },
+  {
+    "probe": "path_use",
+    "mutation": "caught",
+    "restored": "passed",
+    "byte_identical": true
+  },
+  {
+    "probe": "receipt_purpose",
+    "mutation": "caught",
+    "restored": "passed",
+    "byte_identical": true
+  }
+]

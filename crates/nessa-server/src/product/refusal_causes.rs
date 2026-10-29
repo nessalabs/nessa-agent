@@ -94,6 +94,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
             return group.end();
         }
         E::NotFound => "not-found",
+        E::ChannelNotFound => "channel-not-found",
         E::Deleted => "deleted",
         E::ShareTargetNotPaired => "share-target-not-paired",
         E::CapabilitiesRefused { .. } => "capabilities-refused",
@@ -172,6 +173,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
 
 fn deletion(out: &mut String, failures: &DeletionFailures) {
     let DeletionFailures {
+        background_tasks,
         stop,
         history,
         history_leased_elsewhere,
@@ -186,6 +188,9 @@ fn deletion(out: &mut String, failures: &DeletionFailures) {
         another_attempt,
     } = failures;
     let mut group = Group::new(out, "deletion-incomplete");
+    if let Some(error) = background_tasks {
+        group.cause("background-tasks").push_str(error.code());
+    }
     match stop {
         Some(StopFailure::OverBudget) => group.cause("stop").push_str("over-budget"),
         Some(StopFailure::Failed(error)) => agent(group.cause("stop"), error),
@@ -289,6 +294,7 @@ fn agent(out: &mut String, error: &AgentError) {
         A::RefusedAfterSave => "refused-after-save",
         A::AfterSaveUnavailable => "after-save-unavailable",
         A::UnknownApp(error) => return typed(out, "unknown-app", error),
+        A::UserFile(error) => return typed(out, "user-file", error),
         A::UserImage(error) => return typed(out, "user-image", error),
         A::ImageInputRefused(refusal) => return typed(out, "image-input-refused", refusal),
         A::MessageTooLarge {

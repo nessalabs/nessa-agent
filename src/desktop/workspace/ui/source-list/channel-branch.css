@@ -8,7 +8,7 @@
 /* The kit's row (`channel-branch.tsx`); its base and states are the sidebar's (`source-list.css`). */
 .workspace-sidebar .workspace-branch [data-row="channel"] {
   gap: 6px;
-  padding: 0 32px 0 2px;
+  padding: 0 60px 0 2px;
   color: var(--desktop-muted);
 }
 

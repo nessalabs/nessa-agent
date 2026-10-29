@@ -12,6 +12,7 @@ use nessa_protocol::product::generated::{
 /// `conversation.send` params from the saved intent. `files` is empty.
 pub fn send_params(intent: &PhoneIntent) -> ConversationSendParams {
     ConversationSendParams {
+        uploads: None,
         conversation_id: intent.conversation().to_string(),
         request_id: intent.command().as_str().to_owned(),
         execution_id: intent.turn().as_str().to_owned(),
@@ -24,6 +25,7 @@ pub fn send_params(intent: &PhoneIntent) -> ConversationSendParams {
 /// `conversation.receipt` params. `operation` is `submit`. The bytes match the send.
 pub fn receipt_params(intent: &PhoneIntent) -> ConversationReceiptParams {
     ConversationReceiptParams {
+        uploads: None,
         conversation_id: intent.conversation().to_string(),
         request_id: intent.command().as_str().to_owned(),
         operation: ConversationCommandOperation::Submit,
@@ -35,6 +37,7 @@ pub fn receipt_params(intent: &PhoneIntent) -> ConversationReceiptParams {
         model: None,
         approval_mode: None,
         environment: None,
+        channel_id: None,
     }
 }
 

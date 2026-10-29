@@ -254,9 +254,11 @@ pub use artifacts::{
 pub(crate) use artifacts::{
     ArtifactBudget, ArtifactCollector, FetchRequests, FetchTaken, PublishRequests,
 };
+// Input resolution holds a lease on every host, independently of composition.
+pub(crate) use environment::LeaseHold;
 #[cfg(any(unix, test))]
 pub(crate) use environment::{
-    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseHold, LeaseRelease,
+    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseRelease,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
@@ -311,24 +313,26 @@ pub use ports::{
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
-    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
-    UnfinishedMark, UnfinishedTurns,
+    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload,
+    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
 pub use record_read::{
-    ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
-    RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
+    PrincipalRecordReadSource, PrincipalRecordScope, ReadRecords, RecordHead, RecordReadError,
+    RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
+    RecordReadValue,
 };
 pub use service::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
     ThreadEvent,
 };
 pub use service::{
-    AwaitedTurn, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
-    ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
-    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, HistoryGeneration,
+    AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
+    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
+    ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
+    ConversationService, DeletionsLeft, FailureBackoff, FolderRefusal, HistoryGeneration,
     McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
     PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
     PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference,
@@ -389,3 +393,19 @@ mod local_golden_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
+
+#[cfg(unix)]
+pub(crate) use placement::ThreadEnvironments;
+pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
+
+#[cfg(unix)]
+mod artifact_channels;
+#[cfg(unix)]
+pub(crate) use artifact_channels::{ArtifactChannel, ArtifactChannels};
+
+mod input_files;
+pub(crate) use input_files::{ConversationInputFiles, InputFileDelivery};
+pub use input_files::{InputFileAudit, InputFileStage};
+#[cfg(any(unix, test))]
+pub(crate) use input_files::{LocalInputFile, LocalInputFilePlacement};
+pub mod background_tasks;

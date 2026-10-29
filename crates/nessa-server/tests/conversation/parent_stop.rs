@@ -4081,6 +4081,14 @@ fn owned_stop_export_and_submission_share_one_admission_order() {
                 })
                 .await
                 .expect("the original supervisor cancels without a replacement command");
+                // Provider cancellation begins before the command lease is
+                // released. Join the actual admitted owner, rather than race
+                // its final save with a retry that correctly reports Busy.
+                let completed = tokio::time::timeout(bound, service.hold_for_export())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                drop(completed);
                 tokio::time::timeout(
                     bound,
                     service.stop_command(

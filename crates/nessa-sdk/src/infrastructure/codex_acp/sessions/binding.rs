@@ -354,7 +354,9 @@ impl AgentProvider for CodexAcpProvider {
         &self.capabilities
     }
     fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
-        let config = self.config.on_host(host.workspace().to_path_buf());
+        let config = self
+            .config
+            .on_host(host.workspace().to_path_buf(), host.mcp_relay());
         config.validate()?;
         Ok(Arc::new(Self {
             config,
@@ -367,12 +369,17 @@ impl AgentProvider for CodexAcpProvider {
         // and the process factory share that cell, so they cannot diverge.
         let launch = Arc::new(AtomicBool::new(false));
         let profile = self.launch_profile(launch.clone());
-        let process = self.process_factory_following(launch);
+        // This open's credentials, read once for every start of its process.
+        let opened = Self {
+            config: self.config.with_open_credentials(),
+            ..self.clone()
+        };
+        let process = opened.process_factory_following(launch);
         let traces = self.traces.clone();
         Box::pin(async move {
             acp_binding::open(
                 process,
-                self.config.clone(),
+                opened.config.clone(),
                 self.capabilities.clone(),
                 profile,
                 self.audit.clone(),

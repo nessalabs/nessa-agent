@@ -12,8 +12,11 @@ work. Issue [#329](https://github.com/nessalabs/nessa-agent/issues/329), trackin
 The gateway now composes the existing SDK ownership coordinator and SQLite graph.
 `create_thread` prepares an ordinary empty child through that coordinator without
 a placeholder model turn. Report watches and sends do not create ownership edges.
-Ordinary creation keeps Ask approval and the existing Cedar checks still decide
-source and each target access.
+Ordinary creation keeps Ask approval outside channels. Same-channel creation uses
+the existing channel start owner's placement and current preset, including a
+person's Ask override of the channel default. Agent callers cannot provide a
+channel or approval override. Existing Cedar checks still decide source and each
+target access; permission answers are not copied.
 
 ### Settings
 

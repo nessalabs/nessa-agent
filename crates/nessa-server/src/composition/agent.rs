@@ -50,6 +50,9 @@ use crate::mcp_servers::{domain::StoredMcpServer, infrastructure::stored_servers
 use nessa_auth::application::ports::Clock;
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
+use nessa_sdk::domain::agent_execution::permissions::{
+    PermissionDeadlinePolicy, MAX_PERMISSION_DEADLINE,
+};
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, UserImageSource},
@@ -66,7 +69,7 @@ use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 #[cfg(unix)]
 use std::{collections::BTreeMap, ffi::OsString, fs::File, path::Path, sync::Arc};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -94,6 +97,13 @@ pub(super) struct AgentsConfig {
     #[cfg(unix)]
     #[serde(skip)]
     pub stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions,
+    /// What each provider open's sign-ins outside the agent's own vendor are
+    /// read from: the GitHub connection once it is composed
+    /// ([`super::github`]), none before. Never configured. Unix only, as
+    /// launching an agent is.
+    #[cfg(unix)]
+    #[serde(skip)]
+    pub open_credentials: nessa_sdk::infrastructure::acp::sessions::OpenCredentials,
     /// The agent a conversation runs on when nothing else names one.
     ///
     /// Left out where only one agent is configured, because there is nothing to
@@ -108,6 +118,49 @@ pub(super) struct AgentsConfig {
     /// survives parsing and can be reported as the name the operator typed.
     #[serde(default)]
     pub runtimes: HashMap<String, AgentRuntime>,
+    /// What an agent started for a conversation in a stored channel is told
+    /// about that channel (`Channel::instructions`), after Nessa's own
+    /// instructions; `None` outside one. Set only on the copy of this
+    /// configuration a channel's agent is built from, with [`Self::workspace`]
+    /// set to the channel's folder. Never configured.
+    #[serde(skip)]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub channel_instructions: Option<String>,
+    /// When an unanswered review settles (ADR 141): a read inside the
+    /// workspace is allowed after eight seconds, and any other review is
+    /// denied after `agents.reviewWaitSeconds`, [`REVIEW_WAIT`] when left out.
+    #[serde(
+        default = "review_deadlines",
+        rename = "reviewWaitSeconds",
+        deserialize_with = "review_wait"
+    )]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub review_deadlines: PermissionDeadlinePolicy,
+}
+
+/// How long a review other than a confined read waits for a person before
+/// the deadline denies it, unless `agents.reviewWaitSeconds` says otherwise.
+/// Long enough to take the phone out and answer there; the SDK's own thirty
+/// seconds is for a person at the desk.
+pub(crate) const REVIEW_WAIT: Duration = Duration::from_secs(5 * 60);
+
+pub(super) fn review_deadlines() -> PermissionDeadlinePolicy {
+    PermissionDeadlinePolicy::standard_waiting(REVIEW_WAIT).expect("the default review wait")
+}
+
+/// `agents.reviewWaitSeconds`, refused as the deadline refuses it: zero, or
+/// longer than a day.
+fn review_wait<'de, D>(deserializer: D) -> Result<PermissionDeadlinePolicy, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    PermissionDeadlinePolicy::standard_waiting(Duration::from_secs(seconds)).map_err(|_| {
+        serde::de::Error::custom(format!(
+            "reviewWaitSeconds must be from 1 to {}",
+            MAX_PERMISSION_DEADLINE.as_secs()
+        ))
+    })
 }
 
 /// How one agent is started, within the shared configuration above.
@@ -212,6 +265,13 @@ where
 }
 
 impl AgentsConfig {
+    /// How long a review other than a confined read waits for a person.
+    pub(super) fn review_wait(&self) -> Duration {
+        self.review_deadlines
+            .for_class(nessa_sdk::domain::agent_execution::permissions::PermissionToolClass::Other)
+            .wait()
+    }
+
     /// Each configured agent, in the order [`AgentId::ALL`] lists them.
     ///
     /// Silent about a name no adapter exists for; [`Self::unknown`] is what
@@ -706,6 +766,7 @@ pub(super) fn providers(
         // advertised `promptCapabilities.image`, so an agent that takes none is
         // offered none without this having to know which those are.
         let build::ProviderComposition {
+            workspace,
             provider,
             execution_audit,
             sandbox,
@@ -750,6 +811,7 @@ pub(super) fn providers(
         providers.insert(
             agent,
             ConversationAgent {
+                workspace,
                 provider,
                 execution_audit,
                 reserved_output_tokens: runtime.output_tokens,
@@ -781,6 +843,7 @@ pub(super) fn provider_for(
     policy: &ValidatedOpenCodePolicy,
 ) -> Result<ConversationAgent, RunError> {
     let build::ProviderComposition {
+        workspace,
         provider,
         execution_audit,
         sandbox,
@@ -795,6 +858,7 @@ pub(super) fn provider_for(
         Some(policy),
     )?;
     Ok(ConversationAgent {
+        workspace,
         provider,
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
@@ -824,6 +888,7 @@ pub(super) fn provider_for_fixed(
         ..configured.clone()
     };
     let build::ProviderComposition {
+        workspace,
         provider,
         execution_audit,
         sandbox,
@@ -838,6 +903,7 @@ pub(super) fn provider_for_fixed(
         None,
     )?;
     Ok(ConversationAgent {
+        workspace,
         provider,
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
@@ -1014,6 +1080,7 @@ pub(super) mod build {
     use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc};
 
     pub(in crate::composition) struct ProviderComposition {
+        pub(in crate::composition) workspace: Option<String>,
         pub(in crate::composition) provider: Arc<dyn AgentProvider>,
         pub(in crate::composition) execution_audit: Arc<dyn ExecutionAudit>,
         /// The sandbox profiles the binding declares it can set up.
@@ -1102,15 +1169,22 @@ pub(super) mod build {
     ///
     /// The same text for either agent: it describes what Nessa is and how its
     /// tools are reached, and none of that changes with the harness underneath.
-    fn system_prompt() -> Result<SystemPrompt, RunError> {
-        SystemPromptBuilder::new()
+    fn system_prompt(config: &AgentsConfig) -> Result<SystemPrompt, RunError> {
+        let builder = SystemPromptBuilder::new()
             .text(
                 PromptSource::new(PromptSourceKind::Core, "nessa/gateway")
                     .map_err(|e| RunError::Agent(e.to_string()))?,
                 "You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP. For shell commands use the Nessa MCP shell tool, which tracks execution through Shepherd; never substitute an unmanaged shell path. Report tool failures accurately.",
-            )
-            .build()
-            .map_err(|e| RunError::Agent(e.to_string()))
+            );
+        let builder = match &config.channel_instructions {
+            Some(channel) => builder.text(
+                PromptSource::new(PromptSourceKind::User, "nessa/channel")
+                    .map_err(|e| RunError::Agent(e.to_string()))?,
+                format!("\n\n{channel}"),
+            ),
+            None => builder,
+        };
+        builder.build().map_err(|e| RunError::Agent(e.to_string()))
     }
 
     /// Whether everything this agent would launch is on the machine now.
@@ -1182,6 +1256,7 @@ pub(super) mod build {
             environment,
             runtime_environment,
             credential_environment,
+            open_credentials: config.open_credentials.clone(),
             workspace,
             tools_enabled: runtime.tools_enabled,
             // MCP servers are tools: a runtime with tools off is given none,
@@ -1200,7 +1275,7 @@ pub(super) mod build {
             },
             permissions: PermissionOfferPolicy::once_only(),
             refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
-            permission_deadlines: nessa_sdk::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
+            permission_deadlines: config.review_deadlines.clone(),
             // All four from protocol/defaults/agent-startup-budgets.json,
             // which the client compiles in too: a client that gives up before
             // the gateway has finished failing never sees the typed answer.
@@ -1283,6 +1358,7 @@ pub(super) mod build {
             )
             .map_err(invalid)?,
         );
+        let published_workspace = workspace.to_str().map(str::to_owned);
         let mut acp = launch_configuration(
             config,
             runtime,
@@ -1294,7 +1370,7 @@ pub(super) mod build {
         let (permission_rules, review_notices) = super::remembered_rules(agent, dependencies);
         acp.permission_rules = permission_rules;
         acp.review_notices = review_notices;
-        let prompt = system_prompt()?;
+        let prompt = system_prompt(config)?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         // One entry per agent: its provider, and the same binding as the way
         // it deletes its own record of a session.
@@ -1358,6 +1434,7 @@ pub(super) mod build {
             }
         };
         Ok(ProviderComposition {
+            workspace: published_workspace,
             provider,
             execution_audit: audit,
             sandbox,

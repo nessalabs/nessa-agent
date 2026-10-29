@@ -148,23 +148,40 @@ const listed = [
 const archivedIds = new Set<string>()
 const deletedIds = new Set<string>()
 
+/** One half of the list, as the gateway would send it. */
+const listPage = (archived: boolean) => ({
+  conversations: listed
+    .filter((row) => !deletedIds.has(row.conversationId))
+    .filter((row) => archivedIds.has(row.conversationId) === archived)
+    .map((row) => ({ ...row, archived })),
+  complete: true,
+})
+/** The list follows open, each sent its half again after any change. */
+const following = new Set<() => void>()
+const changed = () => following.forEach((send) => send())
+
 const previewStore = makeStore({
   conversation: {
-    list: async (archived: boolean) => ({
-      conversations: listed
-        .filter((row) => !deletedIds.has(row.conversationId))
-        .filter((row) => archivedIds.has(row.conversationId) === archived)
-        .map((row) => ({ ...row, archived })),
-      complete: true,
-    }),
+    list: async (archived: boolean) => listPage(archived),
+    followList: (
+      archived: boolean,
+      sink: { list: (page: ReturnType<typeof listPage>) => void },
+    ) => {
+      const send = () => queueMicrotask(() => sink.list(listPage(archived)))
+      following.add(send)
+      send()
+      return () => following.delete(send)
+    },
     archive: async (id: string, archived: boolean) => {
-      const changed = archivedIds.has(id) !== archived
+      const moved = archivedIds.has(id) !== archived
       if (archived) archivedIds.add(id)
       else archivedIds.delete(id)
-      return changed
+      changed()
+      return moved
     },
     delete: async (id: string) => {
       deletedIds.add(id)
+      changed()
     },
   } as unknown as StoreDependencies["conversation"],
   attachments: { retain: () => {} } as unknown as StoreDependencies["attachments"],
@@ -239,6 +256,7 @@ function Panel() {
       >
         <div className="nessa-chrome shrink-0 px-2 pt-2 pb-1">
           <ChatTabs
+            variant="dots"
             label="Conversations"
             tabs={tabs}
             value={messages === "viewing" ? MESSAGES : active.id}

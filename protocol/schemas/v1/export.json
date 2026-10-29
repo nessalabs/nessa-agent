@@ -53,6 +53,18 @@
     },
     "ClientPlatform": {
       "$ref": "common.json#/$defs/ClientPlatform"
+    },
+    "WebhookStatus": {
+      "$ref": "server.json#/$defs/WebhookStatus"
+    },
+    "WebhookPendingOutcome": {
+      "$ref": "server.json#/$defs/WebhookPendingOutcome"
+    },
+    "WebhookNativeMutations": {
+      "$ref": "server.json#/$defs/WebhookNativeMutations"
+    },
+    "WebhookRefusal": {
+      "$ref": "server.json#/$defs/WebhookRefusal"
     }
   }
 }

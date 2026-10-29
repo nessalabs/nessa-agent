@@ -206,9 +206,16 @@ async function hovered(page, selector) {
  * words and its row, against the corner controls' scale. In the page.
  */
 function measureIdentity([selector, sel]) {
-  const button = [...document.querySelectorAll(selector)].find(
-    (candidate) => candidate.getClientRects().length > 0 && candidate.checkVisibility(),
-  )
+  // On screen: a folded sidebar waits off it, for its edge reveal.
+  const button = [...document.querySelectorAll(selector)].find((candidate) => {
+    const box = candidate.getBoundingClientRect()
+    return (
+      candidate.getClientRects().length > 0 &&
+      candidate.checkVisibility() &&
+      box.right > 0 &&
+      box.left < innerWidth
+    )
+  })
   if (!button) return null
   const probe = document.createElement("div")
   document.querySelector("[data-surface]").append(probe)
@@ -237,10 +244,27 @@ function measureIdentity([selector, sel]) {
     failures.push(`its product word is not --desktop-muted at rest`)
   if (!button.getAttribute("aria-label")) failures.push("it has no accessible name")
   const row = button.closest(sel.identityRow)?.getBoundingClientRect() ?? null
+  // The words, and what stands in the mark's slot: Studio's square, the way
+  // back's chevron, or the side rail's toggle laid over the slot.
+  const words = button.querySelector(".desktop-identity-words").getBoundingClientRect()
+  const square = button.closest(sel.identityRow)?.querySelector(".desktop-mark")
+  const shown = (e) =>
+    e &&
+    getComputedStyle(e).visibility !== "hidden" &&
+    e.getBoundingClientRect().width > 0
+  const markBox = shown(square)
+    ? square.getBoundingClientRect()
+    : (button.querySelector(".desktop-identity-back")?.getBoundingClientRect() ?? null)
+  const centre = (r) => r.top + r.height / 2
+  if (markBox && Math.abs(centre(markBox) - centre(words)) > 1)
+    failures.push(`its mark's centre is ${centre(markBox)}, its words' ${centre(words)}`)
   return {
     failures,
     text: button.textContent.trim(),
     box: { x: box.x, y: box.y, height: box.height },
+    words: { x: words.left, y: centre(words) },
+    square: Boolean(shown(square)),
+    chevron: button.querySelector(".desktop-identity-back") !== null,
     row: row && { x: row.x, y: row.y, height: row.height },
   }
 }
@@ -414,7 +438,8 @@ function measureCardRims(selectors) {
 const rowKinds = {
   columns: {
     "sidebar row": `${css.sidebar} ${css.kitRow}`,
-    "pinned session": `${css.sidebar} [data-row='session']`,
+    // Pinned sessions lead the list in three columns, never the sidebar.
+    "pinned session": `[data-list-group="pinned"] [data-session-row]`,
     "session list row": css.sessionListRow,
   },
   sidebar: {
@@ -424,7 +449,7 @@ const rowKinds = {
 }
 
 const checks = {
-  identity: async (page, { open }) => {
+  identity: async (page) => {
     const scale = await page.evaluate(windowScale)
     const failures = []
     const inWindow = await page.evaluate(measureIdentity, [css.studio, css])
@@ -453,7 +478,18 @@ const checks = {
           await identityHover(page, scale, `${css.settings} ${css.identityButton}`)
         ).map((f) => `"${inSettings.text}": ${f}`),
       )
-      // Where "nessa Studio" opened Settings, the way back stands in the same row.
+      // Where "nessa Studio" opened Settings, the way back stands in the same
+      // row: "nessa" starts where it did and sits on the same line, so the
+      // switch moves nothing; its mark is the destination's — Studio's square
+      // there, the chevron back here, never the square.
+      for (const side of ["x", "y"])
+        if (Math.abs(inSettings.words[side] - inWindow.words[side]) > 0.5)
+          failures.push(
+            `Settings' "nessa" is at ${side} ${inSettings.words[side]}, the window's at ${inWindow.words[side]}`,
+          )
+      if (!inSettings.chevron || inSettings.square)
+        failures.push("the way back is not its chevron alone in the mark's slot")
+      if (inWindow.chevron) failures.push('"nessa Studio" leads with a chevron')
       if (!inSettings.row || !inWindow.row) failures.push("an identity outside its row")
       else
         for (const side of ["y", "height"])
@@ -462,28 +498,7 @@ const checks = {
               `Settings' row is at ${side} ${inSettings.row[side]}, the window's at ${inWindow.row[side]}`,
             )
     }
-    const classic = await open("classic")
-    let inClassic
-    try {
-      inClassic = await classic.evaluate(measureIdentity, [css.identityButton, css])
-      if (!inClassic) failures.push("no identity in the classic shell")
-      else {
-        failures.push(
-          ...inClassic.failures.map((f) => `classic "${inClassic.text}": ${f}`),
-        )
-        failures.push(
-          ...(await identityHover(classic, scale, css.identityButton)).map(
-            (f) => `classic: ${f}`,
-          ),
-        )
-      }
-    } finally {
-      await classic
-        .context()
-        .close()
-        .catch(() => {})
-    }
-    return { failures, measured: { inWindow, inSettings, inClassic } }
+    return { failures, measured: { inWindow, inSettings } }
   },
   badges: async (page, { layout }) => {
     const failures = []
@@ -590,7 +605,7 @@ const checks = {
       if (!seen[kind]) failures.push(`no ${kind} was shown to measure`)
     return { failures, measured: seen }
   },
-  empty: async (page, { layout, open }) => {
+  empty: async (page, { layout }) => {
     const failures = []
     let inList = { seen: [] }
     // The session list is a column of its own only in the three-column layout.
@@ -605,20 +620,15 @@ const checks = {
       if (inList.seen.length === 0) failures.push("no kit EmptyState in the session list")
       failures.push(...(await emptyListPill(page)))
     }
-    const classic = await open("classic")
-    let inClassic
-    try {
-      inClassic = await classic.evaluate(measureEmptyStates, css)
-      failures.push(...inClassic.failures.map((f) => `classic ${f}`))
-      if (inClassic.seen.length < 2)
-        failures.push("the classic shell's two notes are not shown")
-    } finally {
-      await classic
-        .context()
-        .close()
-        .catch(() => {})
-    }
-    return { failures, measured: { inList: inList.seen, inClassic: inClassic?.seen } }
+    // The right panel's "Nothing open", in either layout.
+    await page.getByRole("button", { name: "Show Panel" }).click()
+    await need(page, "#workspace-panel [data-slot='empty-state']", "the panel's note")
+    const inPanel = await page.evaluate(measureEmptyStates, css)
+    failures.push(...inPanel.failures.map((f) => `panel ${f}`))
+    if (!inPanel.seen.some((each) => /Nothing open/.test(JSON.stringify(each))))
+      failures.push('the right panel\'s "Nothing open" is not shown')
+    await page.getByRole("button", { name: "Hide Panel" }).click()
+    return { failures, measured: { inList: inList.seen, inPanel: inPanel.seen } }
   },
   keys: async (page) => {
     await need(page, `${css.keyCap}:visible`, "a key cap")
@@ -650,7 +660,7 @@ const checks = {
     for (const kind of ["count", "glyph"]) {
       const beside = page
         .locator(
-          `${css.sidebar} [data-trailing="${kind}"] + [data-slot="sidebar-menu-item-trailing"] :is(${css.countBadge}, .workspace-status)`,
+          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${kind === "count" ? css.countBadge : ".workspace-status"}`,
         )
         .first()
       if (!(await beside.count())) {
@@ -672,6 +682,50 @@ const checks = {
           (failure) => `kit row under its ${kind}: ${failure}`,
         ),
       )
+      if (layout === "columns") {
+        const through = await beside.evaluate((element, sel) => {
+          const frame = element.closest(sel.kitRowFrame)
+          const control = frame.querySelector(sel.kitRow)
+          const box = element.getBoundingClientRect()
+          const hit = document.elementFromPoint(
+            box.x + box.width / 2,
+            box.y + box.height / 2,
+          )
+          return hit === control || control.contains(hit)
+        }, css)
+        if (!through) failures.push(`the row's decorative ${kind} intercepts its click`)
+      }
+      await page.mouse.move(1, 1)
+    }
+    if (layout === "columns") {
+      const actions = await page
+        .locator(`${css.sidebar} ${css.channelSettingsOpen}`)
+        .evaluateAll(
+          (buttons, sel) =>
+            buttons.map((button) => {
+              const frame = button.closest(sel.kitRowFrame)
+              const label = frame.querySelector(sel.rowLabel)
+              const band = button.closest('[data-slot="sidebar-menu-item-trailing"]')
+              const box = button.getBoundingClientRect()
+              const hit = document.elementFromPoint(
+                box.x + box.width / 2,
+                box.y + box.height / 2,
+              )
+              return {
+                labelClear:
+                  label.getBoundingClientRect().right <=
+                  band.getBoundingClientRect().left,
+                reachable: hit === button || button.contains(hit),
+              }
+            }),
+          css,
+        )
+      if (!actions.length) failures.push("no channel settings action beside the row")
+      if (actions.some((action) => !action.labelClear || !action.reachable))
+        failures.push(
+          "a channel settings action overlaps its label or cannot receive its click",
+        )
+      measured.actions = actions
     }
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
       const sample = await hovered(page, selector)
@@ -806,10 +860,10 @@ function measureAdopted(root) {
   else {
     if (
       group.getAttribute("aria-hidden") !== "true" ||
-      !group.closest("[role=group]")?.getAttribute("aria-label")
+      !group.closest("[data-list-group]")?.getAttribute("aria-label")
     )
       failures.push(
-        "session list caption is exposed in the listbox instead of naming its group",
+        "session list caption is exposed in the list instead of naming its group",
       )
     const label = group.querySelector("[data-slot=group-header-label]")
     const style = label ? getComputedStyle(label) : null
@@ -824,8 +878,17 @@ function measureAdopted(root) {
   for (const row of rows) {
     if (!row.classList.contains("desktop-list-row"))
       failures.push("a session row is not ListRow")
-    if (row.getAttribute("role") !== "option")
-      failures.push("a session row is not an option")
+    // A row is its group's option; a request card's head is a button (`list-request.tsx`).
+    const role = row.closest(".workspace-request-card") ? "button" : "option"
+    if (row.getAttribute("role") !== role)
+      failures.push(
+        `a session row is not ${role === "option" ? "an option" : "a button"}`,
+      )
+    if (
+      role === "option" &&
+      row.closest("[data-list-group]")?.getAttribute("role") !== "listbox"
+    )
+      failures.push("a session row's group is not a listbox")
     if (!row.getAttribute("data-drag-item"))
       failures.push("a session row cannot be carried")
   }
@@ -862,16 +925,16 @@ Checks, per engine and layout (--only badges,empty,identity,keys,list,rims,rows,
              least 18 wide, no border, the needs light for what waits); every
              lit point — unread, needs you, the overview's heading included —
              is StatusGlyph's 6px point in its light. On load and in the overview.
-  empty      every empty state — the session list's with no match, the classic
-             shell's notes — is the kit's EmptyState in the window's type: a
+  empty      every empty state — the session list's with no match, the right
+             panel's "Nothing open" — is the kit's EmptyState in the window's type: a
              quiet one faint footnote, a titled one at reading size, 600.
              Columns: the writing channel's one session is archived, and New
              Session is the kit's tinted pill (28px, fully round,
              --desktop-selected, press scale 0.97). A missing button, the old
              button, another corner, another fill, or a press that does not
              scale fails.
-  identity   "nessa Studio" at the sidebar's foot, "‹ nessa Agent" at Settings'
-             and the classic shell's are one control (ui/identity.tsx): a pill
+  identity   "nessa Studio" at the sidebar's foot and "‹ nessa Agent" at
+             Settings' are one control (ui/identity.tsx): a pill
              the corner controls' size and radius, "nessa" and a word in
              --desktop-muted, named, filled with --desktop-hover under the
              pointer; Settings' row stands where the window's does.

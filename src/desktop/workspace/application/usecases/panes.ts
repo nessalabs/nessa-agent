@@ -16,6 +16,7 @@ import {
   paneByKey,
   paneCount,
   removePane,
+  singlePane,
   showInPane,
   splitPane,
   equalizePanes as equalizeLayout,
@@ -38,19 +39,17 @@ import {
   paneItemKey,
   roomProbeKey,
   sessionItem,
-  widgetItem,
   type PaneItem,
   type PaneItemKey,
 } from "../../model/pane-item"
-import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
   channelOf,
   draftOf,
+  keptDraftIn,
   focusedChannel,
   itemIn,
   modelForNextTurn,
   paneShowingItem,
-  paneShowingSession,
   sessionOf,
   toggled,
   withPanes,
@@ -59,11 +58,11 @@ import {
 
 /**
  * Whether a pane can show an item: a session the window has, listed or a
- * draft; any widget, which the widgets' host draws as it can — ready, not
- * read yet, gone, or not to be shown (ADR 326).
+ * draft. Never a widget: widgets open in their chat's panel, or the window
+ * (ADR 326).
  */
 function showable(state: WorkspaceState, item: PaneItem): boolean {
-  if (item.kind === "widget") return true
+  if (item.kind === "widget") return false
   return (
     sessionOf(state, item.sessionId) !== undefined ||
     draftOf(state, item.sessionId) !== undefined
@@ -123,7 +122,8 @@ function openItem(
   { item, pane }: { item: PaneItem; pane?: PaneKey },
 ): WorkspaceState {
   const panes = state.panes
-  if (!panes || !showable(state, item)) return state
+  if (!showable(state, item)) return state
+  if (!panes) return withPanes(opened(state, item), singlePane(paneItemKey(item)))
   const next = showInPane(panes, pane ?? panes.focused, paneItemKey(item))
   if (next === panes && !paneShowingItem(panes, item)) return state
   return withPanes(opened(state, item), next)
@@ -131,7 +131,9 @@ function openItem(
 
 /**
  * Opens a session: shows it in `pane` — the focused pane when none is named
- * — or, shown already, focuses the pane showing it.
+ * — or, shown already, focuses the pane showing it. A session in no pane
+ * takes the focused pane's place, as a browser's address bar does. Side by
+ * side is asked for on purpose: a drop, Open Beside or ⌘D.
  */
 export function openSession(
   state: WorkspaceState,
@@ -221,30 +223,6 @@ export function openBeside(
 }
 
 /**
- * Opens a widget in a pane of its own (ADR 326's `pane` place): beside the
- * pane showing `origin` — the session the caller says the widget belongs
- * to — by `openBeside`'s rules, or in the focused pane's place when no pane
- * shows it or there is none. A widget on screen already is focused where it
- * is.
- */
-export function openWidget(
-  state: WorkspaceState,
-  {
-    widget,
-    origin,
-    room,
-  }: { widget: WidgetRef; origin?: string; room: PaneRoom | undefined },
-): WorkspaceState {
-  const panes = state.panes
-  if (!panes) return state
-  const item = widgetItem(widget)
-  const beside = origin === undefined ? undefined : paneShowingSession(panes, origin)
-  return beside
-    ? openItemBeside(state, { item, target: beside.key, room })
-    : openItem(state, { item })
-}
-
-/**
  * Whether a session could open beside `target` without taking its place: on
  * `side`, or on either when none is named. What the menus and the switcher
  * ask before they offer it, so they never promise what will not happen.
@@ -291,6 +269,9 @@ export function dropSession(
  * Starts a new session as a draft: in `target` (the focused pane), or beside
  * it when `beside` names a side. A split asked for when the workspace is full
  * does nothing, rather than putting a blank session over a conversation.
+ * With `restore` — the person asking for a new session, with nothing of their
+ * own to put in it — a draft left in that channel with something typed in it
+ * (`keptDraftIn`) comes back there instead of a blank one.
  */
 export function createDraft(
   state: WorkspaceState,
@@ -301,6 +282,7 @@ export function createDraft(
     beside,
     target,
     room,
+    restore = false,
   }: {
     draftId: string
     channelId?: string
@@ -308,12 +290,18 @@ export function createDraft(
     beside?: Side
     target?: PaneKey
     room?: PaneRoom
+    restore?: boolean
   },
 ): WorkspaceState {
   const panes = state.panes
   if (!panes || showable(state, sessionItem(draftId))) return state
   const home = draftHome(state, { channelId, model })
   if (!home) return state
+  const kept = restore ? keptDraftIn(state, home.channelId) : undefined
+  if (kept)
+    return beside
+      ? openBeside(state, { sessionId: kept, target, side: beside, room, replace: false })
+      : openSession(state, { sessionId: kept, pane: target })
   const drafted: WorkspaceState = {
     ...state,
     drafts: {
@@ -337,36 +325,39 @@ export function createDraft(
 /** The channel a new session starts in: the one being looked at, else the focused session's. */
 function draftChannel(state: WorkspaceState): string | undefined {
   if (channelOf(state, state.view.channelId)) return state.view.channelId
-  return focusedChannel(state) ?? state.channels[0]?.id
+  const focused = focusedChannel(state)
+  return (
+    (focused && channelOf(state, focused) ? focused : undefined) ?? state.channels[0]?.id
+  )
 }
 
 /**
  * Where a new session starts and on what: `channelId` if the window has it,
- * else where a new session goes (`draftChannel`); `model`, else the default.
+ * else where a new session goes (`draftChannel`); `model`, else the channel's
+ * own default, else the window's.
  * None when there is no channel or no model to start on — a new session
  * runs on a model, and with none, none starts.
  */
-function draftHome(
+export function draftHome(
   state: WorkspaceState,
   { channelId, model }: { channelId?: string; model?: ModelRef },
 ): { channelId: string; model: ModelRef } | undefined {
   const home = channelId && channelOf(state, channelId) ? channelId : draftChannel(state)
-  const startsOn = model ?? defaultModel()
+  const startsOn =
+    model ?? (home && channelOf(state, home)?.defaults?.model) ?? defaultModel()
   return home && startsOn ? { channelId: home, model: startsOn } : undefined
 }
 
 /**
  * Where the last pane goes back to when it closes: a new session's home in
  * the channel of the listed session it shows, on the model its next message
- * would take; showing a widget, where a new session goes, on the default
- * model. None for a home already, or where no new session can start.
+ * would take. None for a home already, or where no new session can start.
  */
 function homeAfterLast(
   state: WorkspaceState,
   item: PaneItem | null,
 ): { channelId: string; model: ModelRef } | undefined {
-  if (item?.kind === "widget") return draftHome(state, {})
-  const session = item ? sessionOf(state, item.sessionId) : undefined
+  const session = item?.kind === "session" ? sessionOf(state, item.sessionId) : undefined
   if (!session) return undefined
   return draftHome(state, {
     channelId: session.channelId,
@@ -388,11 +379,11 @@ export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
 }
 
 /**
- * Closes a pane; its neighbour takes the room. The last pane cannot close:
- * it goes back to a new session's home under `draftId` (`homeAfterLast`) —
- * showing a conversation, in its channel; showing a widget, where a new
- * session goes (the channel being looked at, else the first), on the
- * default model. Showing a home already, nothing changes (`canClosePane`).
+ * Closes a pane; its neighbour takes the room. A draft in the closed pane
+ * remains in its document tab until that tab is closed. The last pane cannot
+ * close: it goes back to a new session's home under `draftId`
+ * (`homeAfterLast`), in its conversation's channel. Showing a home already,
+ * nothing changes (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,

@@ -82,6 +82,30 @@ impl ConversationFileLinkAudit for DurableConversationFileLinkAudit {
             },
             "observedAtMs": record.observed_at_ms,
         });
+        self.commit(id, value)
+    }
+    fn record_input(
+        &self,
+        record: crate::conversation::application::InputFileAudit,
+    ) -> ConversationFuture<'_, ()> {
+        let id = format!(
+            "input-file-{}-{}-{:?}",
+            record.conversation,
+            digest_of(record.attempt.as_bytes()),
+            record.stage
+        );
+        let value = json!({
+            "recordId": id, "kind": "conversation_input_file", "conversationId": record.conversation.to_string(), "organizationId": record.organization.as_str(), "executionId": record.execution, "leaseId": record.lease, "attempt": record.attempt,
+            "file": { "digest": record.file.digest().to_string(), "mimeType": record.file.media_type().as_str(), "size": record.file.size(), "name": record.file.name() },
+            "stage": format!("{:?}", record.stage), "destination": record.destination, "delivered": record.delivered, "failure": record.failure.map(|failure| format!("{failure:?}")),
+            "initiator": record.initiator.map(|(principal, surface)| json!({ "principalId": principal.as_str(), "surfaceId": surface })),
+            "cause": if record.stage == crate::conversation::application::InputFileStage::Submitted { "caller_submitted" } else { "automatic_input_delivery" }, "observedAtMs": record.observed_at_ms,
+        });
+        self.commit(id, value)
+    }
+}
+impl DurableConversationFileLinkAudit {
+    fn commit(&self, id: String, value: Value) -> ConversationFuture<'_, ()> {
         let directory = self.directory.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {

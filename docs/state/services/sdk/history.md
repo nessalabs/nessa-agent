@@ -5,6 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Nessa shows live output while saving conversation records in small batches."
 parent: "sdk"
+sourceRevision: "5ae45faa95fd88ae96c5f213e0e3fcd811284a91"
 sources:
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -47,6 +48,15 @@ stateDiagram-v2
     Resume --> Attached: Verified supported restoration
     Resume --> Refused: Missing or unsupported context
 ```
+
+## Internal completion input
+
+Committed history retains whether an input came from a person, an app, or an
+internal completion. Restoration keeps that provenance; a record cannot describe
+both an app sender and an internal sender. The gateway can therefore resume the
+same provider session with tool output while omitting that input from user bubbles.
+The save and restoration states above stay the same. This review covers the new
+sender fact and its snapshot agreement, not a new provider restoration protocol.
 
 ## Further reading
 

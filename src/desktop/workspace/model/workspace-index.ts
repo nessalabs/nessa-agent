@@ -4,6 +4,7 @@
  * workspace shows; the source that supplies them owns them.
  */
 import { agentChoice, type AgentId } from "../../../onboarding/model/onboarding"
+import type { AccessMode } from "./access"
 import {
   agentForProvider,
   composerModels,
@@ -22,6 +23,17 @@ export interface Channel {
   /** Only its members see it; drawn with a lock. */
   readonly private: boolean
   readonly topic: string
+  /** The channel’s current main chat, replaced after confirmed erasure. */
+  readonly coordinatorConversationId?: string
+  readonly coordinatorPlacement?: "local" | "boat"
+  readonly threadPlacement?: "local" | "boat"
+  /** The local folder its agents work in, where the source says. */
+  readonly folder?: string
+  /**
+   * What a new session in it starts with, where the channel says; absent,
+   * a new session starts on the window's default model and access.
+   */
+  readonly defaults?: { readonly model: ModelRef; readonly access: AccessMode }
 }
 
 /**

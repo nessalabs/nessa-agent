@@ -121,6 +121,21 @@ After verified KE3 and immutable claim commit, the gateway sends a TLS-protected
 
 After owner approval and staged activation, send the ActivationReceipt with credential/receiver identities and current canonical receiver epoch, retaining the same consent-intent identity/generation. No permanent private device key, server key, PAKE key or reusable bearer secret is transferred. Receipt IDs are lookup handles only; receipt/status resume requires fresh raw-key TLS possession on pinned gateway and exact expected device binding, restricted to status/cleanup when revoked. A copy of a public receipt cannot authenticate. TLS authenticates receipt delivery; this minimal design does not claim an independently verifiable offline signed receipt.
 
+### The owner's phone by code
+
+An owner can make the code enroll their own phone with full access:
+`pairing.create {"enrollee": "ownerPhone"}` gives the invitation the class
+`gateway-owner-conversation-read-write`, whose disclosure carries its three
+grants (`conversation.read`, `conversation.write`, `server.read`). Everything
+above holds as written: the class is public and bound into the transcript,
+the claim receipt discloses the full grant set, and the owner approves the
+exact claimed key after comparing fingerprints. A device client accepts this
+class as well as `gateway-conversation-read` (`ConsentClass::accepts`); a
+peer client takes only its own. The issued credential is read as the owner
+phone purpose ([ADR 811](../../adr/todo/811-owner-phone-authorization.md),
+"Pairing by code"), so it reads and writes every owned conversation with no
+share. The desktop's Pair a device makes this kind of code.
+
 ## Client persistence before KE3 and exact recovery order
 
 The tagged [TripleDh.generate_ke3 implementation](https://github.com/facebook/opaque-ke/blob/v4.0.1/src/key_exchange/tripledh.rs) checks the server MAC before returning; ClientLogin.finish propagates that failure. Therefore successful client finish is sufficient to save the authenticated gateway pin. It does **not** establish delivery/acceptance of KE3, a claim, owner approval or activation. Distinguish those meanings rather than add independently writable `gateway_verified`/`ke3_sent` flags.
@@ -1857,7 +1872,7 @@ code never reaches a log or audit record (the route formats no
 ### Configuration
 
 `config.json` gains an optional `native` section:
-`{"native": {"listenAddress": "127.0.0.1:47650"}}`. `listenAddress` is a
+`{"native": {"listenAddress": "0.0.0.0:47650"}}`. `listenAddress` is a
 numeric `SocketAddr` parsed by serde's standard parser: no hostname lookup.
 Absent or `null` means native pairing is off, and that is the default. A
 nonloopback address is accepted, as the design above approves for the fixed
@@ -2207,8 +2222,45 @@ is off. The switch turns it on or off with `pairing.setLinking`
 saves the choice in `config.json` and, when the running gateway does not
 match it, drains and replaces itself with the same executable (`execve`, so
 the process id and its supervisor stay). On keeps a `native.listenAddress`
-already there or names `127.0.0.1:47650`, after checking it can be bound,
+already there or names `0.0.0.0:47650`, after checking it can be bound,
 because a saved address that cannot be bound stops the next startup (S10).
+`127.0.0.1:47650`, which Settings named before linking listened on the
+network, is replaced by `0.0.0.0:47650` when linking is turned on: no phone
+could reach it. That applies by starting again even when the run already
+serves at the old address, and the outcome record names both addresses
+(`listenMoved`). That move skips the bind check, since the run holds the
+old address and that blocks a test bind of the new one; if something else
+holds the port on another interface, the next start fails as S10 says. Any
+other saved address is kept; the local-auth guide's
+loopback example names another port for that reason.
+
+While the listener serves on a network address and a configured (not
+ephemeral) port, the gateway announces it with multicast DNS-SD as
+`_nessa-link._tcp`: the machine's name as the instance, the listener's port,
+and the gateway's public id in TXT `gw` (`device_pairing::infrastructure::announcer`,
+behind the `LinkingAnnouncer` port). Only addresses the listener answers on
+are announced: `0.0.0.0` names each interface's IPv4 addresses, `[::]` both
+families, a single address only itself, and loopback never. The host record
+is the gateway's own (`nessa-<id>.local.`), never the machine's `.local`
+name, which the operating system's responder owns. On macOS the gateway
+does not send the announcement itself: it registers it with the system's
+Bonjour responder (`announcer_macos`, `DNSServiceRegister`). The gateway runs
+as a background launch agent, and Local Network privacy silently drops a
+process's own multicast unless that exact signed binary was allowed, which a
+background process cannot ask for; the responder sends it with no
+permission. There the instance is the computer's name, the host is the
+machine's own `.local` name, and an unspecified listener is announced on
+every interface (the phone resolves IPv4). The desktop's code and its orb carry only the
+eight symbols, so this is how a phone that scanned them finds the gateway.
+It says nothing the listener does not already answer to anyone who connects,
+and grants nothing: the code and the owner's approval still decide. It is
+withdrawn first when native pairing stops. A loopback listener is not
+announced. An announcement that cannot be made is logged and pairing by
+address still works. On the network default anyone on the local network
+reaches the listener: guessing is bounded (an invitation takes at most five
+attempts), but a stranger can spend those attempts and end that code, and
+the owner then makes a new one. macOS may ask once whether to accept
+incoming connections.
 Off writes `"enabled": false` and keeps the addresses. Each change is
 audited in `conversations/audit/native-linking` (requested, then outcome,
 then how a restart ended, naming the caller). The switch holds its new value until a read after the
@@ -2254,9 +2306,9 @@ already saved either way.
 | L2 | Read answers linking off | Switch off and enabled, no config hint, no pair | `linked-devices.test.ts`; `linked-devices-gateway.test.ts`; `linked-devices.mjs` `off` |
 | L3 | Read answers refused | Recover-owner sentence, no devices, no pair | `linked-devices.test.ts`; `linked-devices.mjs` `refused` |
 | L4 | Linking on, nothing open | Pair a device | `linked-devices.test.ts` |
-| L5 | Create answers with a code | Code once, both orbs, Cancel focused once it can be used | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
+| L5 | Create answers with a code | The code opens in a modal inside Settings: the code once, one live signal orb (no QR orb), New code and Cancel; the page's row no longer offers Pair a device and draws no code | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
 | L6 | Create answers slot occupied | No new code; the open one can be cancelled | `linked-devices.test.ts` |
-| L7 | Cancel answers | Code cleared | `linked-devices.test.ts`; `linked-devices.mjs` `pair` |
+| L7 | Cancel answers | Code cleared; the modal closes and focus goes to Pair a device once it can be used (on the row while the read is out) | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
 | L8 | Refresh | Cancel then create; a failed cancel does not create; a failed create clears the code | `linked-devices.test.ts`; `linked-devices-gateway.test.ts` |
 | L9 | Create is not answered, then an available invitation is read | No code; the open invitation says the code was not shown | `linked-devices.test.ts` |
 | L10 | A device has claimed | Fingerprint, Approve, Deny | `linked-devices.test.ts` |
@@ -2275,3 +2327,6 @@ already saved either way.
 | L23 | The switch is flipped and `pairing.setLinking` answers restarting | The switch holds the new value, polls stop, and the "cannot reach" sentence is not shown, until a read after the connection drops says where linking stands | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `toggle`; `conversation-stress.mjs` `linking` |
 | L24 | The answer is lost to the restart, or the gateway is not back within the switch's wait | A lost answer holds the switch as restarting does; past the wait the switch shows the gateway's last state and says the change is saved (or, for a lost answer, only that the gateway has not answered), until the gateway answers again. A wait ending while the returned gateway's read is out leaves that read to answer | `linked-devices.test.ts`; `linked-devices-tab.test.tsx` |
 | L25 | `pairing.setLinking` is refused (address in use, busy, unavailable, audit) or answers unchanged | A refusal is said under the switch; either way the switch shows the gateway's state, read again | `linked-devices.test.ts` |
+| L26 | The modal is closed (Escape or its close button) with the code still open | The code stays open; the row says so and offers Show code, which takes focus and reopens the same code. Closing is view state only and sends nothing | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair`; `conversation-stress.mjs` `linking` |
+| L27 | The window's injected clock passes an open code's deadline, or a code is shown already past it | No orb is drawn; the code says expired | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `expired` |
+| L28 | A device uses the code while the modal is up | Its fingerprint, Approve and Deny are in the modal, not again on the page; a notice is said in the modal while it is up | `linked-devices-tab.test.tsx` |

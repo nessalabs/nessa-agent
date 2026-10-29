@@ -125,16 +125,43 @@ describe("an agent that cannot be picked", () => {
   })
 })
 
-describe("an agent the icon set ships no mark for", () => {
-  it("stands in a monogram rather than a drawing of somebody else's logo", () => {
+describe("the agent picker's rows", () => {
+  it("shows each agent's real mark, and Local AI as coming rather than OpenCode", () => {
     // Every agent ready, so no readiness mark adds paths of its own.
     const markup = picker(
       recordReadiness(asking, { claude: "ready", codex: "ready", opencode: "ready" }),
     )
-    // The name is there, and so is the entry's tile — with a letter in it. A
-    // fourth path element would mean a logo had been invented for it.
-    expect(markup).toContain("OpenCode")
-    expect(markup).toContain(">O</span>")
-    expect(markup.match(/<path /g)).toHaveLength(2)
+    // Claude's and Codex's marks, and nothing drawn for anyone else.
+    expect(markup.match(/<path /g)?.length).toBeGreaterThanOrEqual(2)
+    expect(markup).not.toContain("OpenCode")
+    expect(markup).toContain('aria-label="Local AI, coming soon"')
+    expect(markup).toContain('aria-disabled="true"')
+  })
+})
+
+describe("the welcome", () => {
+  it("shows its whole line at once", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(Onboarding, {
+        state: beginOnboarding(),
+        gatewayStartup: { revision: 0, state: "unmanaged" },
+        platform: "apple" as const,
+        onBegin: () => {},
+        onChoose: () => {},
+        onConfirm: () => {},
+        onFinish: () => {},
+        onRecheck: () => {},
+        onRetryGateway: () => {},
+      }),
+    )
+    // The whole line is there from the first frame, the name painted still
+    // rather than typed in letter by letter.
+    expect(markup).toMatch(
+      /<h1[^>]*>Welcome to <span data-slot="gradient-text"[^>]*>Nessa<\/span><\/h1>/,
+    )
+    expect(markup).toContain("Your personal sidekick")
+    // The way on is there from the start, so the step never lacks one.
+    expect(markup).toContain("Get started")
+    expect(markup).toContain('aria-label="Step 1 of 3"')
   })
 })

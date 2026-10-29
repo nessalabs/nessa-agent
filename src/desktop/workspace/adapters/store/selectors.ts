@@ -8,6 +8,7 @@
  * No view selects the workspace as a whole; that would render the whole
  * window for every change.
  */
+import type { ChatPanel } from "../../model/chat-panel"
 import { canChange, formHeld, waitingOn } from "../../application/usecases/sharing"
 import { createSelector } from "@reduxjs/toolkit"
 import {
@@ -53,7 +54,6 @@ import {
   focusedChannel,
   paneIds,
   sessionIn,
-  widgetIn,
   windowWidget,
   contentKind,
   answerOf,
@@ -83,6 +83,7 @@ export const selectSessionListChosen = (state: Root) =>
 /** How many columns of panes there are; the side columns are fitted around them. */
 export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
+export const selectSessionTabs = (state: Root) => state.workspace.sessionTabs
 /** Which pane is where, ignoring sizes: motion's shape, painted with the boxes. */
 export const selectPaneShape = (state: Root): string => {
   const layout = state.workspace.panes
@@ -112,6 +113,12 @@ export const selectReady = (state: Root) => state.workspace.status === "ready"
 export const selectShareable = (state: Root) => state.workspace.shareable
 /** The share dialog, while it is open; its own slice of state, nothing else. */
 export const selectShareDialog = (state: Root) => state.workspace.share
+/** Whether channels can be made from this window, and their paths picked. */
+export const selectChannelMaking = (state: Root) => state.workspace.channelMaking
+/** The "New channel" flow, while it is open. */
+export const selectChannelCreation = (state: Root) => state.workspace.channelCreation
+/** Every channel the index lists, for the flow to say which share a folder. */
+export const selectAllChannels = (state: Root) => state.workspace.channels
 
 /** What is typed into a session's title while it is being renamed, or `null`. */
 export const selectRenameDraft = (state: Root, sessionId: string) =>
@@ -252,6 +259,13 @@ export const selectPaneCount = (state: Root) =>
 export const selectFocusedPaneKey = (state: Root): PaneKey | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).key : null
 
+/**
+ * The chat in front: the focused pane's item. It changes only when what the
+ * workspace shows in front does.
+ */
+export const selectInFront = (state: Root): string =>
+  state.workspace.panes ? focusedPane(state.workspace.panes).item : ""
+
 /** The session in the focused pane; none while it shows a widget. */
 export const selectFocusedSessionId = (state: Root): string | null => {
   const panes = state.workspace.panes
@@ -264,11 +278,12 @@ export const selectPaneSession = (state: Root, pane: PaneKey): string | null => 
   return (shown && sessionIn(shown)) ?? null
 }
 
-/** The widget a pane shows; none when it shows a session. Compare with `shallowEqual`. */
-export const selectPaneWidget = (state: Root, pane: PaneKey): WidgetRef | null => {
-  const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
-  return (shown && widgetIn(shown)) ?? null
-}
+/** Chat `sessionId`'s right panel: its widgets as tabs; none while it has none. */
+export const selectChatPanel = (state: Root, sessionId: string): ChatPanel | null =>
+  entry(state.workspace.panels, sessionId) ?? null
+
+/** How many times something asked the window to show the right panel. */
+export const selectPanelAsked = (state: Root): number => state.workspace.panelAsked
 
 /** Whether a pane closes (`canClosePane`): what its close button and menu item offer. */
 export const selectPaneClosable = (state: Root, pane: PaneKey): boolean =>
@@ -301,12 +316,6 @@ const channelSessions = (state: Root, channelId: string) =>
 /** What a channel's row shows about its sessions; compare with `shallowEqual`. */
 export const selectChannelActivity = (state: Root, channelId: string): ChannelActivity =>
   channelActivity(channelSessions(state, channelId))
-
-/** The pinned sessions a channel hangs beneath it, as ids; compare with `shallowEqual`. */
-export const selectPinnedIds = (state: Root, channelId: string): string[] =>
-  channelSessions(state, channelId)
-    .filter((session) => session.pinned)
-    .map((session) => session.id)
 
 /** The sessions a channel's branch discloses, as ids, and how many it holds back. */
 export function selectBranch(

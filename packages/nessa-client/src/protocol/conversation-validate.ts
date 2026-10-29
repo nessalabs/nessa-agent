@@ -43,6 +43,7 @@ import {
 import {
   imageAttachments,
   linkedFiles,
+  uploadedFiles,
   MAX_UPLOAD_BYTES,
   validDigest,
   validMediaType,
@@ -525,6 +526,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageTexts = new Map<string, string>()
   const messageImages = new Map<string, string>()
   const messageFiles = new Map<string, string>()
+  const messageUploads = new Map<string, string>()
   const messageApps = new Map<string, string>()
   const toolPartIds = new Set<string>()
   const noticePartIds = new Set<string>()
@@ -533,6 +535,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "executionId",
       "userText",
       "attachments",
+      "uploads",
       "files",
       "app",
       "status",
@@ -687,12 +690,30 @@ export function conversationView(value: unknown, expected: string): Conversation
       executionId,
       imagesKey(imageAttachments(message.attachments, "message attachments")),
     )
-    messageFiles.set(executionId, filesKey(linkedFiles(message.files, "message files")))
+    const linked = linkedFiles(message.files, "message files")
+    const uploaded = uploadedFiles(message.uploads, "message uploads")
+    if (linked.length + uploaded.length > bounds.maxMessageFiles)
+      throw new Error("Too many message files")
+    messageUploads.set(
+      executionId,
+      JSON.stringify(
+        uploaded.map((file) => [file.digest, file.mimeType, file.size, file.name]),
+      ),
+    )
+    messageFiles.set(executionId, filesKey(linked))
     messageApps.set(executionId, messageAppKey(message.app, "message app"))
   }
   const pendingIds = new Set<string>()
   for (const pending of items(item, "pending", 128)) {
-    exact(pending, ["executionId", "text", "attachments", "files", "app", "mode"])
+    exact(pending, [
+      "executionId",
+      "text",
+      "attachments",
+      "files",
+      "uploads",
+      "app",
+      "mode",
+    ])
     const executionId = identity(pending, "executionId")
     if (pendingIds.has(executionId))
       throw new Error("Conversation response repeats a pending execution")
@@ -707,6 +728,15 @@ export function conversationView(value: unknown, expected: string): Conversation
       imageAttachments(pending.attachments, "pending attachments"),
     )
     const pendingFiles = filesKey(linkedFiles(pending.files, "pending files"))
+    const uploaded = uploadedFiles(pending.uploads, "pending uploads")
+    if (
+      linkedFiles(pending.files, "pending files").length + uploaded.length >
+      bounds.maxMessageFiles
+    )
+      throw new Error("Too many pending files")
+    const pendingUploads = JSON.stringify(
+      uploaded.map((file) => [file.digest, file.mimeType, file.size, file.name]),
+    )
     const pendingApp = messageAppKey(pending.app, "pending app")
     oneOf(text(pending, "mode"), ["queued", "steering"])
     // The waiting input and its queued message are one submission seen twice;
@@ -717,7 +747,8 @@ export function conversationView(value: unknown, expected: string): Conversation
       (messageTexts.get(executionId) !== pendingText ||
         messageImages.get(executionId) !== pendingImages ||
         messageFiles.get(executionId) !== pendingFiles ||
-        messageApps.get(executionId) !== pendingApp)
+        messageApps.get(executionId) !== pendingApp ||
+        messageUploads.get(executionId) !== pendingUploads)
     )
       throw new Error("Pending execution contradicts its queued message")
   }
@@ -758,6 +789,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "input",
       "mcp",
       "structuredContent",
+      "backgroundTaskId",
       "nativeHooks",
       "startedAtMs",
       "endedAtMs",
@@ -815,6 +847,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       // a review and an app's own call. Absent when it could not match them.
       if (mcp.argumentsJson !== undefined)
         text(mcp, "argumentsJson", bounds.maxMcpArgumentsBytes)
+    }
+    if (Object.hasOwn(tool, "backgroundTaskId")) {
+      const task = text(tool, "backgroundTaskId", bounds.maxBackgroundTaskIdBytes, false)
+      if (!new RegExp(bounds.backgroundTaskIdPattern).test(task))
+        throw new Error("Invalid background task identity")
     }
     if (tool.structuredContent !== undefined)
       text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)
@@ -970,7 +1007,7 @@ const leaseValues = {
     refused: true,
     unreadable: true,
   } satisfies Record<ConversationLease["state"], true>,
-  environment: { here: true, ssh: true, peer: true } satisfies Record<
+  environment: { here: true, ssh: true, peer: true, boat: true } satisfies Record<
     NonNullable<ConversationLease["environment"]>,
     true
   >,
@@ -1347,6 +1384,7 @@ function summaryRow(
     "updatedAtMs",
     "running",
     "archived",
+    "channelId",
   ])
   const conversationId = identity(row, "conversationId")
   if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
@@ -1355,6 +1393,13 @@ function summaryRow(
   flag(row, "running")
   flag(row, "archived")
   if (row.archived !== archived) throw new Error(filter)
+  // A conversation in the default channel carries no channelId; one in a made
+  // channel names it, and naming "default" would be a second way to say none.
+  if (
+    Object.hasOwn(row, "channelId") &&
+    (typeof row.channelId !== "string" || !madeChannelIdPattern.test(row.channelId))
+  )
+    throw new Error("Invalid conversation channelId")
   return {
     conversationId,
     title: optionalText(row, "title", bounds.maxConversationTitleBytes),
@@ -1363,8 +1408,11 @@ function summaryRow(
     updatedAtMs: time(row, "updatedAtMs"),
     running: row.running as boolean,
     archived: row.archived as boolean,
+    ...(Object.hasOwn(row, "channelId") ? { channelId: row.channelId as string } : {}),
   }
 }
+
+const madeChannelIdPattern = /^ch_[a-z2-7]{10}$/
 
 /**
  * The caller's conversations as the gateway listed them. Each row is checked

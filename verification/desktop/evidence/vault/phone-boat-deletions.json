@@ -1,0 +1,50 @@
+[
+  {
+    "attemptCount": 1,
+    "completedAt": "2026-10-27T22:54:49.150Z",
+    "expectedBy": null,
+    "id": "bdop_15a9631f576b4f3e927659297dbfc552",
+    "kind": "sandbox",
+    "reason": "explicit",
+    "requestedAt": "2026-10-27T22:54:45.301Z",
+    "stage": "completed",
+    "status": "completed",
+    "targetId": "bx_khg56dje"
+  },
+  {
+    "attemptCount": 1,
+    "completedAt": "2026-10-27T22:54:28.922Z",
+    "expectedBy": null,
+    "id": "bdop_375577b667044da49d44c88b45fc50d3",
+    "kind": "sandbox",
+    "reason": "explicit",
+    "requestedAt": "2026-10-27T22:54:24.952Z",
+    "stage": "completed",
+    "status": "completed",
+    "targetId": "bx_f78gtsn2"
+  },
+  {
+    "attemptCount": 1,
+    "completedAt": "2026-10-27T22:54:51.888Z",
+    "expectedBy": null,
+    "id": "bdop_8a426244242645f59475e74177151d83",
+    "kind": "sandbox",
+    "reason": "explicit",
+    "requestedAt": "2026-10-27T22:54:46.402Z",
+    "stage": "completed",
+    "status": "completed",
+    "targetId": "bx_xf43zck9"
+  },
+  {
+    "attemptCount": 1,
+    "completedAt": "2026-10-27T22:54:49.597Z",
+    "expectedBy": null,
+    "id": "bdop_2cc867f82f55423c82cc67e35f6e0a9c",
+    "kind": "sandbox",
+    "reason": "explicit",
+    "requestedAt": "2026-10-27T22:54:46.792Z",
+    "stage": "completed",
+    "status": "completed",
+    "targetId": "bx_v9kvmcrd"
+  }
+]

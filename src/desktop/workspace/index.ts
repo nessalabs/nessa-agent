@@ -42,7 +42,7 @@
  * panes' room and keys — as hooks and adapters beside the
  * tree, never as state; `adapters/storage/` keeps the overview's filter
  * between launches. Widgets (ADR 326) are drawn by `../widgets`' hosts —
- * a card in a message, a widget's pane (`ui/panes/widget-pane.tsx`), the
+ * a card in a message, a tab in the chat's right panel (`ui/chrome/panel-content.tsx`), the
  * window over the panes (`ui/panes/widget-window.tsx`) — in the workspace's
  * chrome, their callbacks carried out by its commands
  * (`adapters/store/widget-hosts.ts`), and Escape for the one in front by
@@ -89,6 +89,11 @@ export {
   type GatewaySource,
 } from "./adapters/gateway/gateway-source"
 export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
+export { channelGateway } from "./adapters/gateway/channel-gateway"
+export {
+  inMemoryChannels,
+  type InMemoryChannels,
+} from "./adapters/in-memory/in-memory-channels"
 export {
   windowPublisher,
   type WindowPublishClient,
@@ -116,6 +121,7 @@ export {
 } from "./application/question-flights"
 export type {
   OutgoingMessage,
+  PathPicker,
   RememberedFilter,
   WorkspaceDependencies,
   WorkspaceSource,

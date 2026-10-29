@@ -8,12 +8,34 @@
 .desktop-identity {
   display: flex;
   min-width: 200px;
-  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
   align-items: center;
-  padding: 0 10px 0 var(--desktop-control-inset);
+  /* One place in every sidebar, from its content edge: the mark's slot 6px
+     in, the pill's foot 13px above the edge, the row 52px tall with it. */
+  /* The mark's slot is a corner control wide, so the side rail's toggle can
+     take it (`side-rail.css`). */
+  --desktop-identity-mark: var(--desktop-control-size);
+  padding: 11px 10px 13px 6px;
   font-size: var(--desktop-text-body);
   letter-spacing: -0.01em;
+}
+
+.desktop-identity-mark {
+  display: flex;
+  width: var(--desktop-identity-mark);
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * The way back takes the mark's slot with its chevron: the pill starts where
+ * the slot does, so "nessa" stands exactly where it does beside the mark.
+ */
+.desktop-identity-button[data-back] {
+  margin-left: calc(-1 * var(--desktop-identity-mark));
+  /* The chevron (18px) and its 2px gap end where the slot and the pill's 8px do. */
+  padding-left: calc(var(--desktop-identity-mark) - 12px);
 }
 
 .desktop-identity-button {
@@ -62,12 +84,8 @@
 }
 
 /* "‹ nessa Agent": the chevron leads, and steps back under the pointer. */
-.desktop-identity-button[data-back] {
-  padding-left: 4px;
-}
-
 .desktop-identity-back {
-  width: 16px;
+  width: 18px;
   height: 16px;
   flex: none;
   color: var(--desktop-muted);

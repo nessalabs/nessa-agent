@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::cleanup_tests::queued_lifecycle_selection_refuses_excess_distinct_registration_work' (149202) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/cleanup.rs:273:5:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::cleanup_tests::queued_lifecycle_selection_refuses_excess_distinct_registration_work ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::cleanup_tests::queued_lifecycle_selection_refuses_excess_distinct_registration_work
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 116 filtered out; finished in 0.02s

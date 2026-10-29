@@ -168,6 +168,7 @@ fn observing_service(
     );
     ConversationService::new(
         ConversationDependencies {
+            input_files: None,
             access_policy: support::access_policy(),
             agents: support::only(Arc::new(Provider::new(provider))),
             storage,

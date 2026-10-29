@@ -146,6 +146,18 @@ function insideGrid(frames) {
   return out.length ? [`${out.length} pane-frames outside the grid, e.g. ${out[0]}`] : []
 }
 
+/** Every frame's drop outline starts below the titlebar row, never up under its tabs. */
+function belowBar(frames) {
+  const under = frames.filter(
+    (f) => f.placeholder && f.barBottom !== null && f.placeholder.y < f.barBottom - 0.5,
+  )
+  return under.length
+    ? [
+        `${under.length} frames drew the drop outline under the titlebar, e.g. top ${Math.round(under[0].placeholder.y)} above ${Math.round(under[0].barBottom)}`,
+      ]
+    : []
+}
+
 function insideWindow(frames) {
   const out = []
   for (const f of frames)
@@ -363,7 +375,8 @@ async function changeMidDrag(page, layout, name, act, expectAfter) {
 }
 
 /** Stationary chats remain live through an actual layout change, frame by frame. */
-async function stationaryThrough(page, { focus, count, change }) {
+async function stationaryThrough(page, layout, { focus, count, change }) {
+  await hideColumns(page, layout)
   await openPanes(page, 4)
   await page.locator(css.pane).nth(focus).locator(css.field).focus()
   await settled(page)
@@ -435,14 +448,16 @@ async function stationaryThrough(page, { focus, count, change }) {
   )
     failures.push("the action changed no pane geometry")
   if (samples.length < 2) failures.push("no layout change frames were sampled")
-  if (samples.some((sample) => sample.flight))
-    failures.push("workspace bounds started a FLIP")
+  // Panes that move travel to their new boxes (`--desktop-flight`); one that
+  // keeps its box is never flown, hidden or held (below).
   for (const sample of samples) {
     if (sample.measuring) failures.push("the temporary measurement hold reached paint")
     for (const pane of sample.panes) {
       if (!stationary.includes(pane.key)) continue
       if (pane.quiet === "hidden" || pane.flying || pane.restoring)
-        failures.push(`stationary pane ${pane.key} was suppressed`)
+        failures.push(
+          `stationary pane ${pane.key} was suppressed (${pane.quiet === "hidden" ? "hidden" : pane.flying ? "flying" : "restoring"})`,
+        )
       if (pane.fill !== colors.find((old) => old.key === pane.key)?.fill)
         failures.push(`stationary pane ${pane.key} changed its material`)
     }
@@ -521,6 +536,7 @@ const checks = {
         ...followsPointer(during, liftedAt, glideMs).map((f) => `follows-pointer: ${f}`),
         ...insideGrid(during).map((f) => `inside-grid: ${f}`),
         ...insideWindow(during).map((f) => `inside-window: ${f}`),
+        ...belowBar(during).map((f) => `below-bar: ${f}`),
         ...oneWay(during).map((f) => `one-way: ${f}`),
         ...(during.some((f) => f.selection)
           ? [
@@ -538,7 +554,14 @@ const checks = {
       await lift(page, 2)
       await page.mouse.move(middle.x + middle.w + 30, middle.y + dy, { steps: 10 })
       const zones = await recordZones(page)
-      await page.mouse.move(middle.x + middle.w * 0.45, middle.y + dy, { steps: 30 })
+      // Move once per painted frame: a burst of synthetic moves can share one
+      // WebKit timestamp, making the heading read as rest during the sweep.
+      const from = middle.x + middle.w + 30
+      const to = middle.x + middle.w * 0.45
+      for (let step = 1; step <= 16; step++) {
+        await page.mouse.move(from + ((to - from) * step) / 16, middle.y + dy)
+        await frames(page, 1)
+      }
       await frames(page, 2)
       const recorded = await zones.take()
       const evidence = sweepZoneEvidence(recorded, restAfter, zoneSaid.vertical)
@@ -1250,7 +1273,12 @@ Object.assign(checks, {
         try {
           await lift(page, 0)
           const next = list[1]
-          await page.mouse.move(next.x + next.w / 2, next.y + next.h / 2, { steps: 20 })
+          // Approach from the left: stay inside Swap, not on the midpoint
+          // where fractional DOM rounding can leave a settling pointer in Left.
+          // The unchanged zonesAt model holds this input in compact-glass.test.mjs.
+          await page.mouse.move(next.x + next.w / 2 + 1, next.y + next.h / 2, {
+            steps: 20,
+          })
           if (!(await zoneSays(page, zoneSaid.swap)))
             throw new CannotRun("no swap was offered for compact glass release")
           if (end === "cancel") await page.keyboard.press(keys.escape)
@@ -1403,14 +1431,14 @@ Object.assign(checks, {
     await shapes.stop()
     return { before, during, highlight: box, failures }
   },
-  "stationary-layout-flight": (page) =>
-    stationaryThrough(page, {
+  "stationary-layout-flight": (page, layout) =>
+    stationaryThrough(page, layout, {
       focus: 3,
       count: 3,
       change: (p) => p.keyboard.press(keys.closePane),
     }),
-  "stationary-drop-commit": (page) =>
-    stationaryThrough(page, {
+  "stationary-drop-commit": (page, layout) =>
+    stationaryThrough(page, layout, {
       focus: 0,
       count: 4,
       change: async (p, before) => {
@@ -1471,7 +1499,7 @@ Usage: node verification/desktop/scripts/drag.mjs [options]
   --reduced-motion Every check with the system's reduced motion on.
   --shots <dir>    Screenshots from compact-drag-card go there.
 
-sweep-across-zones covers follows-pointer, inside-grid, inside-window, one-way
+sweep-across-zones covers follows-pointer, inside-grid, inside-window, below-bar, one-way
 and no-selection in one recorded drag. Side columns are hidden first so the
 panes have the room. A check made for one layout runs only there.
 boundary-jitter reads the model's edgeReach from the dev server; under

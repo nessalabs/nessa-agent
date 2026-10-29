@@ -1,0 +1,4 @@
+            self.observe_expiry(credential.clone(), observed_by.clone(), at_ms)
+                .await?;
+=>
+            let _ = observed_by;

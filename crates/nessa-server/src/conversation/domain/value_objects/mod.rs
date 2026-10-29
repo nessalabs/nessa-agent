@@ -3,11 +3,21 @@
 //! identity, its model and approval choice, and what a list says about it
 //! are `nessa_protocol::conversation::domain`, shared with the device. What a
 //! person's desktop window shows, which their agents may read, is a
-//! [`WorkspaceWindow`].
+//! [`WorkspaceWindow`]. A named place conversations live in, with the folder
+//! their agents work in, is a [`Channel`].
+mod channel;
 mod conversation_deletion;
 mod share_access;
 mod tool_call;
+mod vm_lifetime;
 mod workspace_window;
+pub use channel::{
+    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources,
+    WorkspacePlacement, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
+    MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES,
+    MAX_CHANNEL_RESOURCE_BYTES,
+};
 pub use conversation_deletion::{
     ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
 };
@@ -20,3 +30,5 @@ pub use workspace_window::{
     PaneContent, PanePlace, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,
     WindowShowing, WorkspaceWindow,
 };
+
+pub use vm_lifetime::{VmLifetime, VmLifetimeScope, VmLifetimeSettings};

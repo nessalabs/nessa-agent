@@ -1,0 +1,19 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::unavailable_or_substituted_current_authority_cannot_install_or_erase_intent ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::unavailable_or_substituted_current_authority_cannot_install_or_erase_intent stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::unavailable_or_substituted_current_authority_cannot_install_or_erase_intent' (81996) panicked at /tmp/nessa-registration-probes/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_failures.rs:304:9:
+assertion failed: matches!(command.execute(f.proposed()).await, Err(failure) if failure == if
+    inactive {RegistrationFailure::Stopped} else
+    {RegistrationFailure::Inconsistent})
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::unavailable_or_substituted_current_authority_cannot_install_or_erase_intent
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.03s

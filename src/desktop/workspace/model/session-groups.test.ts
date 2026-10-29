@@ -7,7 +7,6 @@ import {
   groupByStatus,
   inView,
   matchesSearch,
-  mostPressing,
   statusCounts,
 } from "./session-groups"
 
@@ -51,6 +50,22 @@ describe("grouping by status", () => {
     expect(groupByStatus([session("a", 1)]).map((group) => group.id)).toEqual(["idle"])
   })
 
+  it("lists pinned sessions first, under Pinned, and each there only", () => {
+    const groups = groupByStatus([
+      session("old", 1),
+      session("pin-wait", 4, "needs-you", { pinned: true }),
+      session("pin-old", 2, "idle", { pinned: true }),
+      session("wait", 3, "needs-you"),
+    ])
+    expect(groups.map((group) => [group.label, group.sessions.map((s) => s.id)])).toEqual(
+      [
+        ["Pinned", ["pin-wait", "pin-old"]],
+        ["Needs you", ["wait"]],
+        ["Earlier", ["old"]],
+      ],
+    )
+  })
+
   it("lists running sessions with the rest, newest first, when they are not kept at the top", () => {
     const groups = groupByStatus(
       [session("old", 1), session("run", 3, "running"), session("wait", 2, "needs-you")],
@@ -84,23 +99,6 @@ describe("views and search", () => {
     expect(matchesSearch(a, "opus")).toBe(true)
     expect(matchesSearch(a, "claude")).toBe(true)
     expect(matchesSearch(a, "codex")).toBe(false)
-  })
-})
-
-describe("the most pressing session", () => {
-  it("is one waiting, then one running, then the newest", () => {
-    expect(
-      mostPressing([
-        session("new", 9),
-        session("run", 2, "running"),
-        session("wait", 1, "needs-you"),
-      ])?.id,
-    ).toBe("wait")
-    expect(mostPressing([session("new", 9), session("run", 2, "running")])?.id).toBe(
-      "run",
-    )
-    expect(mostPressing([session("old", 1), session("new", 9)])?.id).toBe("new")
-    expect(mostPressing([])).toBeUndefined()
   })
 })
 

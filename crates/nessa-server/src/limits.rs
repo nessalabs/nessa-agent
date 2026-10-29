@@ -116,6 +116,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one",
         },
         Limit {
+            id: "agent.review_wait_seconds",
+            tier: "configured",
+            owner: "config.json agents.reviewWaitSeconds",
+            meaning: "a tool review nobody answers in this many seconds is denied and the agent goes on without the tool; a read inside the workspace is allowed after 8 seconds instead (ADR 141)",
+        },
+        Limit {
             id: "organization.leases",
             tier: "configured",
             owner: "config.json limits.organizationLeases",
@@ -356,6 +362,18 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the most bytes one artifact.read answers with; its base64 fits the socket's ordinary frame",
         },
         Limit {
+            id: "attachment.write_piece_bytes",
+            tier: "fixed",
+            owner: "attachments socket::MAX_PIECE_BYTES, the schema's AttachmentWriteParams data",
+            meaning: "the most bytes one attachment.write piece carries; its base64 fits the socket's ordinary frame",
+        },
+        Limit {
+            id: "server.socket_uploads",
+            tier: "fixed",
+            owner: "attachments socket::MAX_SOCKET_UPLOADS",
+            meaning: "uploads attachment.write receives in pieces at once across the gateway; past this a first piece is refused temporarily_unavailable and nothing starts",
+        },
+        Limit {
             id: "artifact.read_busy_wait",
             tier: "fixed",
             owner: "attachments HeldReads::BUSY_WAIT",
@@ -525,6 +543,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
         },
         Limit {
+            id: "boat.retained_environments",
+            tier: "fixed",
+            owner: "MAX_RETAINED_ENVIRONMENTS in crates/nessa-server/src/conversation/application/placement.rs",
+            meaning: "when full, release only environments with no opening caller, command or lease owner; if all are retained, refuse new opens as unavailable rather than grow or evict active work",
+        },
+        Limit {
             id: "agent_tools.source_admissions",
             tier: "fixed",
             owner: "MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-server/src/conversation/application/agent_tools.rs",
@@ -551,6 +575,7 @@ fn count(value: usize) -> u64 {
 pub(crate) fn effective_json(
     limits: &OperationalLimits,
     session: &SessionSettings,
+    review_wait: Duration,
 ) -> serde_json::Value {
     let mut values = BTreeMap::new();
     let mut put = |id: &str, value: u64| {
@@ -582,6 +607,7 @@ pub(crate) fn effective_json(
         "server.agent_idle_seconds",
         limits.agent_idle().map_or(0, |idle| idle.as_secs()),
     );
+    put("agent.review_wait_seconds", review_wait.as_secs());
     put(
         "organization.leases",
         limits.organization_leases().map_or(0, count),
@@ -683,6 +709,14 @@ pub(crate) fn effective_json(
         "artifact.read_range_bytes",
         count(HeldReads::MAX_RANGE_BYTES),
     );
+    put(
+        "attachment.write_piece_bytes",
+        count(crate::attachments::entrypoint::socket::MAX_PIECE_BYTES),
+    );
+    put(
+        "server.socket_uploads",
+        count(crate::attachments::entrypoint::socket::MAX_SOCKET_UPLOADS),
+    );
     put("artifact.read_busy_wait", millis(HeldReads::BUSY_WAIT));
     put("server.artifact_reads", count(HeldReads::CONCURRENT_READS));
     put(
@@ -727,6 +761,10 @@ pub(crate) fn effective_json(
     put("mcp.built_in_line_bytes", count(MAX_BUILT_IN_LINE_BYTES));
     put("agent_tools.waiting_reads", count(MAX_EVENT_READERS));
     put(
+        "boat.retained_environments",
+        count(crate::conversation::application::MAX_RETAINED_ENVIRONMENTS),
+    );
+    put(
         "agent_tools.source_admissions",
         count(MAX_AGENT_TOOL_ADMISSIONS),
     );
@@ -745,7 +783,7 @@ fn value_of(id: &str, values: &serde_json::Map<String, serde_json::Value>) -> St
 /// The catalogue rendered as the committed `docs/limits.md`.
 #[cfg(test)]
 fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
-    let values = match effective_json(limits, session) {
+    let values = match effective_json(limits, session, crate::composition::REVIEW_WAIT) {
         serde_json::Value::Object(values) => values,
         _ => serde_json::Map::new(),
     };
@@ -848,7 +886,7 @@ mod tests {
     fn effective_values_follow_the_owners() {
         let limits = OperationalLimits::default();
         let session = SessionSettings::default();
-        let document = effective_json(&limits, &session);
+        let document = effective_json(&limits, &session, crate::composition::REVIEW_WAIT);
         let values = document.as_object().expect("object");
         assert_eq!(
             values.get("server.requests").and_then(|v| v.as_u64()),

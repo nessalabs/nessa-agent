@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::issuance_work_proof_uses_registration_keys_at_retained_capacity' (161342) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:251:9:
+assertion `left == right` failed
+  left: 1023
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::issuance_work_proof_uses_registration_keys_at_retained_capacity ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::issuance_work_proof_uses_registration_keys_at_retained_capacity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 121 filtered out; finished in 0.04s

@@ -16,9 +16,7 @@
 //! a paired connection is never asked to fetch one.
 use super::{
     audit::{EnvironmentAudit, EnvironmentEvent},
-    connector::{
-        ArtifactChannel, ArtifactChannels, ArtifactTransport, LeaseConnection, LeaseConnector,
-    },
+    connector::{ArtifactTransport, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
     install::{Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture},
     sftp::tests::scripted::{ScriptedSftp, SftpScript},
@@ -27,9 +25,9 @@ use crate::attachments::application::{AttachmentAuditRecord, AttachmentLimits};
 use crate::attachments::infrastructure::ConversationHolds;
 use crate::attachments_test_support::{self as attachments, Fixture, CONVERSATION};
 use crate::conversation::application::{
-    ArtifactKept, ArtifactOffer, ConversationAttachments, Environment, EnvironmentFuture,
-    EnvironmentLease, FetchAsk, FetchFailure, FetchPlaced, HeldSource, HeldSourceFailure,
-    PublishAsk, PublishFailure, PublishedArtifact,
+    ArtifactChannel, ArtifactChannels, ArtifactKept, ArtifactOffer, ConversationAttachments,
+    Environment, EnvironmentFuture, EnvironmentLease, FetchAsk, FetchFailure, FetchPlaced,
+    HeldSource, HeldSourceFailure, PublishAsk, PublishFailure, PublishedArtifact,
 };
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
@@ -407,6 +405,7 @@ impl LeaseConnector for Connector {
             .extend([toward_gateway, toward_host]);
         let (from_environment, to_environment) = split(gateway);
         Ok(LeaseConnection {
+            mcp_relay: None,
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
@@ -1638,4 +1637,90 @@ async fn a_staged_copy_cut_short_mid_read_on_a_paired_connection_is_a_mismatch()
     assert!(fixture.store.held().is_empty());
     assert_eq!(fixture.store.pending(), 0);
     assert_eq!(staged(&host), 0);
+}
+
+/// Original phone references enter the actual SSH lease/fetch loop and SFTP
+/// writer, then correlate confirmed paths before the shared ACP dispatch seam.
+#[tokio::test]
+async fn uploaded_phone_files_resolve_through_the_ssh_lease_before_dispatch() {
+    use crate::conversation::application::{ConversationInputFiles, InputFileStage};
+    use nessa_sdk::{
+        application::agent_execution::providers::InputFileResolver,
+        domain::agent_execution::{executions::ExecutionId, prompts::UploadedFileReference},
+    };
+    let host = Host::new();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let leased = leased(&host, &fixture).await;
+    let audit = Arc::new(crate::conversation_test_support::RecordingFileLinkAudit::default());
+    let (_alive, stopped) = watch::channel(false);
+    let resolver = ConversationInputFiles::new(
+        Arc::new(ConversationHolds::new(
+            fixture.service.clone(),
+            fixture.reads(),
+        )),
+        audit.clone(),
+        Arc::new(crate::conversation_test_support::TestClock),
+        attachments::organization("org"),
+        attachments::principal("owner"),
+        attachments::conversation(CONVERSATION),
+        leased.lease.clone(),
+        leased.held.hold.clone(),
+        host.workspace.to_str().unwrap().into(),
+        None,
+        stopped,
+        Arc::new(tokio::sync::Semaphore::new(16)),
+        Arc::new(TokioTimer::new()),
+    );
+    for (index, (name, media)) in [
+        ("report.pdf", "application/pdf"),
+        ("archive.zip", "application/zip"),
+        ("notes.txt", "text/plain"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bytes = pattern(72 * 1024 + index, index as u8);
+        let stored = fixture.upload(CONVERSATION, &bytes, media).await;
+        // The fixture's upload store and range-reader port are independent.
+        fixture.held.hold("org", CONVERSATION, &bytes, media);
+        let reference = UploadedFileReference::new(
+            stored.digest(),
+            nessa_sdk::domain::common::value_objects::MediaType::parse(
+                stored.media_type().as_str(),
+            )
+            .unwrap(),
+            stored.size(),
+            name.into(),
+        )
+        .unwrap();
+        let execution = ExecutionId::new(format!("phone-file-{index}")).unwrap();
+        let prepared = resolver
+            .resolve(execution.clone(), vec![reference.clone()])
+            .await
+            .unwrap();
+        assert_eq!(prepared[0].reference(), &reference);
+        assert_eq!(
+            std::fs::read(host.workspace.join(reference.destination_name())).unwrap(),
+            bytes
+        );
+        let opened = host.channels.opens.load(Ordering::SeqCst);
+        resolver.resolve(execution, vec![reference]).await.unwrap();
+        assert_eq!(
+            host.channels.opens.load(Ordering::SeqCst),
+            opened,
+            "verified existing bytes need no new transfer"
+        );
+    }
+    let records = audit.input_records.lock().unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.stage == InputFileStage::Confirmed)
+            .count(),
+        6
+    );
+    assert!(records
+        .iter()
+        .all(|record| record.lease.as_deref() == Some(leased.lease.as_str())));
+    assert_eq!(parts(&host), 0);
 }

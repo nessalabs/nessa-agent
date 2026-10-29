@@ -11,16 +11,16 @@ const styles = paths
   .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
   .join("\n")
 
-for (const row of ["open", "closed"])
+for (const folding of [false, true])
   for (const held of [false, true])
     for (const listHeld of [false, true])
-      it(`retains the painted ${row} sidebar row: spare=${held}, list=${listHeld}`, () => {
+      it(`retains only the folding sidebar row: folding=${folding}, spare=${held}, list=${listHeld}`, () => {
         const sheet = document.createElement("style")
         sheet.textContent = styles
         const workspace = document.createElement("main")
         workspace.className = "workspace"
         workspace.dataset.sidebar = "closed"
-        workspace.dataset.sidebarRow = row
+        workspace.toggleAttribute("data-folding", folding)
         workspace.dataset.list = "open"
         workspace.toggleAttribute("data-spare-held", held)
         workspace.toggleAttribute("data-list-held", listHeld)
@@ -38,16 +38,14 @@ for (const row of ["open", "closed"])
           // These are actual stylesheet destinations; jsdom supplies no
           // animated geometry. The marker's real frame order is exercised
           // by layouts.test.tsx, and browser geometry is a separate gate.
-          const retained = held && row === "open"
+          const retained = held && folding
           expect(element(".workspace-sidebar").position).toBe(
             retained ? "relative" : "absolute",
           )
-          expect(element(".desktop-column-bar").paddingLeft).toBe(
-            retained ? "12px" : "var(--desktop-titlebar-safe-start)",
-          )
+          expect(element(".desktop-column-bar").paddingLeft).toBe("12px")
           expect(element(".workspace-overview-layer").left).toBe(
             retained
-              ? "calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width))"
+              ? "calc(var(--desktop-gutter) + var(--workspace-sidebar-width))"
               : "0px",
           )
           expect(element(".workspace-list-inner").paddingLeft).toBe(

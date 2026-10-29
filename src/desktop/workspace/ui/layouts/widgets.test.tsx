@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
  * Widgets in the workspace (ADR 326), through the whole shell and the sample
- * plugin: a card in a message opening a pane beside its conversation, the
- * widget pane's chrome, the window over the panes and the ways it is left,
- * Escape's order, and where focus lands.
+ * plugin: a card in a message opening a tab in its chat's right panel, the
+ * panel's tabs and chrome, the window over the panes and the ways it is
+ * left, Escape's order, and where focus lands.
  */
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -22,7 +22,6 @@ import {
 } from "../../../widgets"
 import { ClockProvider } from "../../../../clock"
 import {
-  closePane,
   focusPane,
   loadWorkspace,
   openBeside,
@@ -161,89 +160,148 @@ const button = (scope: ParentNode | null | undefined, name: string) =>
     (each) =>
       each.textContent === name || each.getAttribute("aria-label")?.startsWith(name),
   )
-const paneOf = (widget: WidgetRef) =>
+const panel = () => present(host.querySelector<HTMLElement>("#workspace-panel"), "panel")
+/** The panel's tab in front: its widget's part of the panel. */
+const inFront = () =>
   present(
-    [...host.querySelectorAll<HTMLElement>("[data-widget-pane]")].find((pane) =>
-      pane.querySelector(`[data-sample-view="${widget.id}"]`),
-    ),
-    `pane of ${widget.id}`,
+    panel().querySelector<HTMLElement>("[data-panel-widget]"),
+    "panel's tab in front",
   )
+const tabTitles = () =>
+  [...panel().querySelectorAll('.workspace-panel-tabs [role="tab"]')].map((tab) =>
+    tab.getAttribute("title"),
+  )
+const panelOf = (store: Store, sessionId: string) =>
+  store.getState().workspace.panels[sessionId]
 const bodyOf = (scope: Element | null | undefined) =>
   scope?.querySelector<HTMLElement>("[data-widget-body]") ?? null
 
-async function openTrailBeside(store: Store) {
+async function openTrail(store: Store) {
   await click(button(host.querySelector("[data-sample-card]"), "Open"))
-  expect(shown(store)).toEqual(["a", "widget sample/trail"])
-  return paneOf(sampleWidgets.trail)
+  expect(shown(store)).toEqual(["a"])
+  expect(panelOf(store, "a")?.front).toEqual(sampleWidgets.trail)
+  return inFront()
 }
 
 describe("a card in a message", () => {
-  it("opens its widget in a pane beside the conversation, and the caret goes into its body", async () => {
+  it("opens its widget as a tab in its chat's panel, never a pane, and the caret goes into its body", async () => {
     const store = await render()
-    const pane = await openTrailBeside(store)
-    expect(pane.querySelector("nav")?.textContent).toBe("Session aSample trail")
-    expect(caret()).toBe(bodyOf(pane))
+    const shownPanel = await openTrail(store)
+    expect(panel().hasAttribute("inert")).toBe(false)
+    expect(tabTitles()).toEqual(["Sample trail"])
+    expect(shownPanel.querySelector("[data-sample-view]")).not.toBeNull()
+    // Its chat is the one the panel is for: no way back to it is drawn.
+    expect(shownPanel.querySelector("nav")?.textContent).toBe("Sample trail")
+    expect(caret()).toBe(bodyOf(shownPanel))
+    // The panel's widget tabs are distinct from the window's conversation tabs.
+    expect(
+      [...host.querySelectorAll('[role="tablist"]')].filter(
+        (list) => !list.closest("#workspace-panel"),
+      ),
+    ).toHaveLength(1)
   })
 })
 
-describe("the widget pane", () => {
-  it("opens a pane whose body is the widget", async () => {
+describe("the chat's panel", () => {
+  it("holds each widget opened for the chat as a tab, the last in front, each once", async () => {
     const store = await render()
-    await act(async () => {
-      void store.dispatch(
-        openWidget({ widget: sampleWidgets.trail, place: "pane", origin: "a" }),
-      )
-    })
-    // The grid paints the new pane with the third frame.
-    await frames()
-    const pane = host.querySelector("[data-widget-pane]")
-    expect(pane?.querySelector("nav")?.textContent).toBe("Session aSample trail")
-    expect(pane?.querySelector("[data-widget-body]")).not.toBeNull()
+    await openTrail(store)
+    await click(host.querySelector("[data-sample-accessory]"))
+    expect(tabTitles()).toEqual(["Sample trail", "Sample notes"])
+    expect(inFront().querySelector('[data-sample-view="notes"]')).not.toBeNull()
+    await click(button(host.querySelector("[data-sample-card]"), "Open"))
+    expect(tabTitles()).toEqual(["Sample trail", "Sample notes"])
+    expect(inFront().querySelector('[data-sample-view="trail"]')).not.toBeNull()
   })
 
-  it("goes back to its conversation: focusing the pane showing it, or opening it beside", async () => {
+  it("brings a tab to the front when it is clicked, drawn afresh: no step back of the last one's", async () => {
     const store = await render()
-    const pane = await openTrailBeside(store)
-    await click(button(pane.querySelector("nav"), "Session a"))
-    expect(shown(store)).toEqual(["a", "widget sample/trail"])
-    expect(firstPane(store)).toBe(layout(store).focused)
-    // With the conversation gone from the panes, it opens beside.
-    store.dispatch(
-      openSession({
-        sessionId: "b",
-        pane: firstPane(store),
-      }),
+    await openTrail(store)
+    await click(inFront().querySelector('[data-sample-step="2"]'))
+    await click(host.querySelector("[data-sample-accessory]"))
+    const tab = (title: string) =>
+      present(
+        panel().querySelector<HTMLElement>(
+          `.workspace-panel-tabs [role="tab"][title="${title}"]`,
+        ),
+        `tab ${title}`,
+      )
+    await click(tab("Sample trail"))
+    expect(panelOf(store, "a")?.front).toEqual(sampleWidgets.trail)
+    expect(inFront().querySelector("[data-sample-detail]")).toBeNull()
+  })
+
+  it("closes a tab by its close, the next coming to the front, and says so once none is left", async () => {
+    const store = await render()
+    await openTrail(store)
+    await click(host.querySelector("[data-sample-accessory]"))
+    await click(
+      panel().querySelector(
+        '[aria-label^="Close Sample notes"], [title^="Close Sample notes"]',
+      ),
+    )
+    expect(tabTitles()).toEqual(["Sample trail"])
+    await click(panel().querySelector('[title^="Close Sample trail"]'))
+    expect(panelOf(store, "a")).toBeUndefined()
+    expect(panel().textContent).toBe("Nothing open")
+    // The panel stays open, as the person left it.
+    expect(panel().hasAttribute("inert")).toBe(false)
+  })
+
+  it("keeps the caret in the panel as a tab closes, and gives it to the chat once none is left", async () => {
+    const store = await render()
+    await openTrail(store)
+    await click(host.querySelector("[data-sample-accessory]"))
+    const closeOf = (title: string) =>
+      present(
+        panel().querySelector<HTMLElement>(`[title^="Close ${title}"]`),
+        `close of ${title}`,
+      )
+    // Focus on a tab's close falls away with it: into the tab now in front.
+    await act(async () => closeOf("Sample notes").focus())
+    await click(closeOf("Sample notes"))
+    expect(caret()).toBe(bodyOf(inFront()))
+    // The last one gone, into the focused chat's composer.
+    await act(async () => closeOf("Sample trail").focus())
+    await click(closeOf("Sample trail"))
+    expect(caret()).toBe(host.querySelector(".desktop-composer textarea"))
+  })
+
+  it("is each chat's own: another chat in front shows its panel, and the first one's comes back with it", async () => {
+    const store = await render()
+    await openTrail(store)
+    await act(async () => void store.dispatch(openSession({ sessionId: "b" })))
+    await frames()
+    expect(panel().textContent).toBe("Nothing open")
+    await act(async () => void store.dispatch(openSession({ sessionId: "a" })))
+    await frames()
+    expect(tabTitles()).toEqual(["Sample trail"])
+  })
+
+  it("opens for the chat a widget belongs to, bringing that chat to the front", async () => {
+    const store = await render()
+    await act(async () => void store.dispatch(openBeside({ sessionId: "b" })))
+    await frames()
+    await act(
+      async () =>
+        void store.dispatch(
+          openWidget({ widget: sampleWidgets.notes, place: "panel", origin: "a" }),
+        ),
     )
     await frames()
-    await click(button(paneOf(sampleWidgets.trail).querySelector("nav"), "Session a"))
-    expect(shown(store)).toContain("a")
-    expect(shown(store)).toContain("widget sample/trail")
-  })
-
-  it("closes as a pane does, the caret going to the pane that takes focus", async () => {
-    const store = await render()
-    const pane = await openTrailBeside(store)
-    await click(button(pane, "Close Pane"))
-    expect(shown(store)).toEqual(["a"])
-    expect(caret()?.tagName).toBe("TEXTAREA")
-  })
-
-  it("puts the caret in its body when ⌘1–4 or ⌘W lands on it", async () => {
-    const store = await render()
-    await openTrailBeside(store)
-    await act(async () => press("focusPane1"))
+    expect(layout(store).focused).toBe(firstPane(store))
+    expect(tabTitles()).toEqual(["Sample notes"])
+    // Opened for a chat no pane shows, it takes the focused pane's place.
+    await act(
+      async () =>
+        void store.dispatch(
+          openWidget({ widget: sampleWidgets.trail, place: "panel", origin: "c" }),
+        ),
+    )
     await frames()
-    expect(caret()?.tagName).toBe("TEXTAREA")
-    await act(async () => press("focusPane2"))
-    await frames()
-    expect(caret()).toBe(bodyOf(paneOf(sampleWidgets.trail)))
-    // ⌘W on a, the other pane: focus lands on the widget pane, in its body.
-    await act(async () => press("focusPane1"))
-    await frames()
-    await act(async () => press("closePane"))
-    await frames()
-    expect(shown(store)).toEqual(["widget sample/trail"])
-    expect(caret()).toBe(bodyOf(paneOf(sampleWidgets.trail)))
+    expect(shown(store)).toEqual(["c", "b"])
+    expect(tabTitles()).toEqual(["Sample trail"])
+    expect(inFront().querySelector("nav")?.textContent).toBe("Session aSample trail")
   })
 
   it("draws a line with close for a widget it cannot show", async () => {
@@ -254,47 +312,46 @@ describe("the widget pane", () => {
     ] as const) {
       await act(
         async () =>
-          void store.dispatch(openWidget({ widget, place: "pane", origin: "a" })),
+          void store.dispatch(openWidget({ widget, place: "panel", origin: "a" })),
       )
       await frames()
-      const pane = [...host.querySelectorAll("[data-widget-pane]")].find((each) =>
-        each.textContent?.includes(said),
-      )
-      expect(pane, said).toBeDefined()
-      expect(pane?.querySelector("nav")?.textContent).toBe("Sample")
-      await click(button(present(pane, said).querySelector(".widget-body"), "Close"))
-      expect(shown(store)).toEqual(["a"])
+      expect(inFront().textContent).toContain(said)
+      expect(inFront().querySelector("nav")?.textContent).toBe("Sample")
+      await click(button(inFront().querySelector(".widget-body"), "Close"))
+      expect(panelOf(store, "a")).toBeUndefined()
     }
   })
 
-  it("keeps a pane's Escape to the view's steps back while focus is inside it, and never closes it", async () => {
+  it("keeps Escape to the view's steps back while focus is inside it, and never closes the tab", async () => {
     const store = await render()
-    const pane = await openTrailBeside(store)
-    await click(pane.querySelector('[data-sample-step="1"]'))
-    expect(pane.querySelector("[data-sample-detail]")).not.toBeNull()
+    const shownPanel = await openTrail(store)
+    await click(shownPanel.querySelector('[data-sample-step="1"]'))
+    expect(shownPanel.querySelector("[data-sample-detail]")).not.toBeNull()
     expect(caret()?.hasAttribute("data-sample-back")).toBe(true)
     await escape()
-    expect(pane.querySelector("[data-sample-detail]")).toBeNull()
+    expect(shownPanel.querySelector("[data-sample-detail]")).toBeNull()
     // The detail's Back held the caret; gone, the caret falls back to the widget's body.
-    expect(caret()).toBe(bodyOf(pane))
+    expect(caret()).toBe(bodyOf(shownPanel))
     await escape()
-    expect(shown(store)).toEqual(["a", "widget sample/trail"])
-    // With focus outside the pane, its steps back are not Escape's.
-    await click(pane.querySelector('[data-sample-step="0"]'))
+    expect(panelOf(store, "a")?.tabs).toEqual([sampleWidgets.trail])
+    // With focus outside the panel, its steps back are not Escape's.
+    await click(shownPanel.querySelector('[data-sample-step="0"]'))
     await act(async () => store.dispatch(focusPane({ pane: firstPane(store) })))
+    host.querySelector<HTMLElement>(".desktop-composer textarea")?.focus()
     await frames()
     await escape()
-    expect(pane.querySelector("[data-sample-detail]")).not.toBeNull()
+    expect(shownPanel.querySelector("[data-sample-detail]")).not.toBeNull()
   })
 })
 
 describe("the session's header", () => {
-  it("draws each plugin's accessory for its session, which opens beside that session", async () => {
+  it("draws each plugin's accessory for its session, which opens in that session's panel", async () => {
     const store = await render()
     const accessory = host.querySelector("[data-sample-accessory]")
     expect(accessory?.textContent).toBe("Notes")
     await click(accessory)
-    expect(shown(store)).toEqual(["a", "widget sample/notes"])
+    expect(shown(store)).toEqual(["a"])
+    expect(panelOf(store, "a")?.tabs).toEqual([sampleWidgets.notes])
   })
 
   it("adds nothing to the header of a session a plugin has nothing for", async () => {
@@ -321,12 +378,11 @@ describe("the window", () => {
   })
 
   async function openWindow(store: Store) {
-    const pane = await openTrailBeside(store)
-    await click(button(pane, "Open in Window"))
+    const shownPanel = await openTrail(store)
+    await click(button(shownPanel, "Open in Window"))
     expect(content(store)).toEqual({ widget: sampleWidgets.trail })
     expect(host.querySelector(".workspace")?.getAttribute("data-content")).toBe("widget")
     expect(caret()).toBe(bodyOf(windowShown()))
-    return pane
   }
 
   it("is left by Escape and by its close, back to the panes as they were, the caret in the focused pane", async () => {
@@ -335,9 +391,9 @@ describe("the window", () => {
     await escape()
     expect(content(store)).toBe("panes")
     expect(windowShown()).toBeNull()
-    expect(shown(store)).toEqual(["a", "widget sample/trail"])
-    expect(caret()).toBe(bodyOf(paneOf(sampleWidgets.trail)))
-    await click(button(paneOf(sampleWidgets.trail), "Open in Window"))
+    expect(shown(store)).toEqual(["a"])
+    expect(caret()?.tagName).toBe("TEXTAREA")
+    await click(button(inFront(), "Open in Window"))
     await click(button(theWindow(), "Close"))
     expect(content(store)).toBe("panes")
   })
@@ -348,15 +404,21 @@ describe("the window", () => {
     await act(async () => press("closePane"))
     await frames()
     expect(content(store)).toBe("panes")
-    expect(shown(store)).toEqual(["a", "widget sample/trail"])
-    await click(button(paneOf(sampleWidgets.trail), "Open in Window"))
+    expect(shown(store)).toEqual(["a"])
+    await click(button(inFront(), "Open in Window"))
     await act(async () => void store.dispatch(openBeside({ sessionId: "b" })))
     await frames()
     expect(content(store)).toBe("panes")
-    await click(button(paneOf(sampleWidgets.trail), "Open in Window"))
+    await act(async () => void store.dispatch(focusPane({ pane: firstPane(store) })))
+    await frames()
+    await click(button(inFront(), "Open in Window"))
     await act(async () => press("showOverview"))
     await frames()
     expect(content(store)).toBe("agents")
+    // ⌘1 on the pane already focused goes back to the panes all the same.
+    await act(async () => press("focusPane1"))
+    await frames()
+    expect(content(store)).toBe("panes")
   })
 
   it("goes back to its conversation by its trail, focusing the pane showing it", async () => {
@@ -388,7 +450,7 @@ describe("the window", () => {
     present(row, "row").focus()
     await escape(row)
     expect(content(store)).toBe("panes")
-    await click(button(paneOf(sampleWidgets.trail), "Open in Window"))
+    await click(button(inFront(), "Open in Window"))
     const search = present(
       host.querySelector<HTMLInputElement>(".workspace-search input"),
       "search",
@@ -440,39 +502,5 @@ describe("the window", () => {
     // No step back left over: the first Escape is the host's.
     await escape()
     expect(content(store)).toBe("panes")
-  })
-})
-
-describe("a widget pane showing another widget in its place", () => {
-  it("draws it afresh: no view state, no step back of the last one's", async () => {
-    const store = await render()
-    await openTrailBeside(store)
-    // The conversation closed, the trail's pane is the focused pane's place.
-    await act(async () => void store.dispatch(closePane({ pane: firstPane(store) })))
-    await frames()
-    expect(shown(store)).toEqual(["widget sample/trail"])
-    const pane = paneOf(sampleWidgets.trail)
-    await click(pane.querySelector('[data-sample-step="2"]'))
-    const show = async (widget: WidgetRef) => {
-      await act(
-        async () =>
-          void store.dispatch(openWidget({ widget, place: "pane", origin: "a" })),
-      )
-      await frames()
-    }
-    await show(sampleWidgets.notes)
-    expect(shown(store)).toEqual(["widget sample/notes"])
-    // Escape in the notes is no one's: the trail's step back went with it.
-    const body = bodyOf(paneOf(sampleWidgets.notes))
-    body?.focus()
-    const event = new KeyboardEvent("keydown", {
-      key: "Escape",
-      bubbles: true,
-      cancelable: true,
-    })
-    await act(async () => void body?.dispatchEvent(event))
-    expect(event.defaultPrevented).toBe(false)
-    await show(sampleWidgets.trail)
-    expect(paneOf(sampleWidgets.trail).querySelector("[data-sample-detail]")).toBeNull()
   })
 })

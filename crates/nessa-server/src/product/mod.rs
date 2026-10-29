@@ -40,6 +40,7 @@ mod refusal_causes;
 mod socket;
 mod state;
 mod subscription;
+mod webhook_reset;
 pub(crate) mod wire;
 mod workspace;
 
@@ -50,13 +51,17 @@ pub(crate) use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 pub(crate) use state::ConnectedEnvironments;
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
+mod boat;
+mod channel;
 mod conversation;
+mod github;
 mod mcp_apps;
 pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
 mod peers;
 
+pub use github::GithubRoutes;
 pub use native::{DeviceCredentials, NativeSessions};
 
 mod agent_install;
@@ -66,3 +71,6 @@ pub(crate) use conversation::dispatch as dispatch_conversation;
 
 #[cfg(test)]
 pub(crate) use socket::HostProductFixture;
+
+mod vault;
+pub use vault::VaultRoutes;

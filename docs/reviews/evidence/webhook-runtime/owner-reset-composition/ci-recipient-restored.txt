@@ -1,0 +1,19 @@
+Source c59640811a937821cb82d42d69402fa52bd23947; process-local umask022
+test webhooks::infrastructure::outbox::store::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+test webhooks::infrastructure::product_tests::delivery::public_grant_delivers_only_its_chat_with_real_tls_signature_and_stable_retry ... ok
+test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+test webhooks::infrastructure::product_tests::delivery::public_unshare_refuses_actual_due_retries_before_another_post ... ok
+test webhooks::infrastructure::runtime::tests::first_worker_panic_seals_before_the_response_observer_is_woken ... ok
+test webhooks::infrastructure::runtime::tests::ordinary_capacity_precedes_spawn_and_control_capacity_remains_available ... ok
+test webhooks::infrastructure::product_tests::delivery::public_revoke_expiry_and_regrant_refuse_the_old_due_epoch_without_post ... ok
+test result: ok. 295 passed; 0 failed; 0 ignored; 0 measured; 3841 filtered out; finished in 18.92s
+
+Independent accepted-mode emulation (not Mac/TLS qualification):
+old-mode control: expected read outcome, client joined, listener remains nonblocking
+corrected: expected read outcome, client joined, listener remains nonblocking
+
+Seven-package all-target Clippy -D warnings, exit0:
+    Checking nessa-server v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-server)
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 01s

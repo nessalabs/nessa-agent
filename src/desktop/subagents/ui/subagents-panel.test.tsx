@@ -167,14 +167,29 @@ async function renderPanel(
 describe("the subagents panel", () => {
   it("lists the sample in activity order, and opens a conversation with no composer", async () => {
     const source = sampleSubagentSource({ now: () => 1_000_000, after: () => () => {} })
-    await renderPanel(retryBudgetSession, source, widgetHost())
+    const crumbs: ({ label: string } | null)[] = []
+    await renderPanel(retryBudgetSession, source, {
+      ...widgetHost(),
+      crumb: (step) => crumbs.push(step),
+    })
     const rows = [...host.querySelectorAll("[data-subagent-row]")].map((row) =>
       row.getAttribute("data-subagent-name"),
     )
     expect(rows).toEqual(["Mara", "Idris", "Nia", "Sol"])
-    expect(host.querySelector("[data-subagent-summary]")?.textContent).toBe(
-      "1 working · 1 planning · 1 stuck · 1 closed",
-    )
+    // Sections, as the session list groups its rows: no avatars, no summary line.
+    expect(
+      [...host.querySelectorAll("[data-subagent-group]")].map((group) => [
+        group.getAttribute("data-subagent-group"),
+        [...group.querySelectorAll("[data-subagent-row]")].map((row) =>
+          row.getAttribute("data-subagent-name"),
+        ),
+      ]),
+    ).toEqual([
+      ["ongoing", ["Mara", "Idris", "Nia"]],
+      ["ended", ["Sol"]],
+    ])
+    expect(host.querySelector("[data-subagent-summary]")).toBeNull()
+    expect(host.querySelector('[data-slot="avatar-stack"]')).toBeNull()
     expect(host.textContent).toContain("claude-sonnet-5")
     expect(host.textContent).toContain("Closed")
     expect(host.querySelector("textarea")).toBeNull()
@@ -184,6 +199,9 @@ describe("the subagents panel", () => {
       "Three of the five cases hold.",
     )
     expect(host.querySelector("[data-subagent-detail] textarea")).toBeNull()
+    // One breadcrumb, the widget's: the panel names the child through its host.
+    expect(host.querySelector('[data-slot="breadcrumb"]')).toBeNull()
+    expect(crumbs.at(-1)?.label).toBe("Mara")
     expect(document.activeElement?.closest("[data-subagent-detail]")).not.toBeNull()
     source.dispose()
   })
@@ -264,7 +282,7 @@ describe("useOpenSubagent", () => {
   it("chooses the joined id and asks the host to open the panel", async () => {
     const widget = widgetHost()
     function Opener() {
-      const [place] = useState<OpenPlace>("pane")
+      const [place] = useState<OpenPlace>("panel")
       const open = useOpenSubagent(widget, place)
       return (
         <button
@@ -278,7 +296,7 @@ describe("useOpenSubagent", () => {
     await act(async () => root.render(<Opener />))
     await act(async () => host.querySelector("button")?.click())
     expect(selectedSubagent("a")).toBe(joinedSubagentId("sample", "mara"))
-    expect(widget.opened).toEqual([[{ plugin: subagentsPluginId, id: "a" }, "pane"]])
+    expect(widget.opened).toEqual([[{ plugin: subagentsPluginId, id: "a" }, "panel"]])
   })
 })
 

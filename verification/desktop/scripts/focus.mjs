@@ -354,17 +354,18 @@ async function answerOnceInOverview(page) {
 }
 
 /**
- * One press answers one request on a pane's card: Allow Once by a held ↩,
- * with words typed and not sent, which the held key must not send; Deny and
- * Always Allow each by a double click.
+ * One press answers one request on a pane's card: a once choice by a held ↩,
+ * with words typed and not sent, which the held key must not send; deny and
+ * always choices each by a double click. Sample cards use different labels,
+ * so the choices are identified by their published data-answer attribute.
  */
 async function answerOnceOnCard(page) {
   const failures = []
   const trail = []
-  for (const [name, answer] of [
-    ["Allow Once, held ↩", "held"],
-    [names.denyOnce, "double"],
-    [names.alwaysAllow, "double"],
+  for (const [name, answer, choice] of [
+    ["Allow Once, held ↩", "held", "once"],
+    [names.denyOnce, "double", "deny"],
+    [names.alwaysAllow, "double", "always"],
   ]) {
     const before = await requestsNow(page)
     let card = null
@@ -384,18 +385,20 @@ async function answerOnceOnCard(page) {
       // it, then put the keyboard on Allow Once, and hold ↩ only once it is there.
       await settled(page)
       await frames(page, 3)
-      const allow = card.getByRole("button", { name: names.allowOnce })
+      const allow = card.locator('button[data-answer="once"]').first()
       await allow.focus()
       const onAllow = await until(
         page,
-        (name) => document.activeElement?.textContent?.trim() === name,
-        names.allowOnce,
+        (expected) => document.activeElement?.getAttribute("data-answer") === expected,
+        choice,
         1000,
       )
       if (!onAllow) throw new CannotRun("the keyboard would not stay on Allow Once")
       for (let i = 0; i < 5; i++) await page.keyboard.down(keys.enter)
       await page.keyboard.up(keys.enter)
-    } else await card.getByRole("button", { name, exact: true }).dblclick()
+    } else {
+      await card.locator(`button[data-answer="${choice}"]:visible`).first().dblclick()
+    }
     // Counted in the overview once the answer has had its effect, and for a
     // while after, in case a second one was taken.
     await page.keyboard.press(keys.overview)
@@ -408,7 +411,7 @@ async function answerOnceOnCard(page) {
     await page.keyboard.press(keys.escape)
     await contentIs(page, content.panes)
     const typed = await composer.inputValue().catch(() => "")
-    trail.push({ step: name, before, after, typed })
+    trail.push({ step: name, choice, before, after, typed })
     if (!once)
       failures.push(`${name} on a pane's card answered ${before - after} requests, not 1`)
     if (answer === "held" && typed !== "keep these words")
@@ -946,9 +949,17 @@ async function firstMessageHandoff(page, reduced = false) {
 /** A retired workspace cannot start a new focus search from its held frame. */
 async function retiredLayout(page, layout) {
   await openPanes(page, 2)
+  // Opening the split can still be handing the caret to its new pane.
+  // Establish that entry point before asking the first pane to take focus.
+  await focusComposer(page)
   await page.keyboard.press(keys.focusPane(1))
-  await settled(page)
-  await frames(page, 4)
+  const initialKeys = await order(page)
+  const initial = await paneFocusSettled(page, {
+    keys: initialKeys,
+    target: initialKeys[0],
+  })
+  if (!initial.converged)
+    throw new CannotRun("the first pane did not take focus before holding its movement")
   const clock = await page.evaluateHandle((workspace) => {
     const previous = document.querySelector(workspace)
     const request = window.requestAnimationFrame
@@ -1199,6 +1210,44 @@ async function boundKeys(page) {
   }
 }
 
+/** A document shortcut takes the caret from the old tab into its new pane. */
+async function tabShortcutFocus(page, layout) {
+  await need(page, css.composer, "a composer")
+  await hideColumns(page, layout)
+  const tabs = page.getByRole("tablist", { name: "Open views" })
+  const selected = () => tabs.locator('[role="tab"][aria-selected="true"]')
+  const trail = []
+  const failures = []
+  for (const [name, key] of [
+    ["New Session", keys.newSession],
+    ["Split Right", keys.newSessionBeside],
+  ]) {
+    const old = selected()
+    await old.focus()
+    const oldTab = await old.locator("..").getAttribute("data-session-tab")
+    const expected = expectedPaneFocus(
+      { keys: await order(page), ...(await state(page)) },
+      name === "Split Right" ? "new" : "same",
+    )
+    await page.keyboard.press(key)
+    const settlement = await paneFocusSettled(page, expected, 5_000)
+    const now = await state(page)
+    const problem = inComposer(now)
+    const oldSelected =
+      (await tabs
+        .locator(`[data-session-tab="${oldTab}"] [role="tab"]`)
+        .getAttribute("aria-selected")) === "true"
+    trail.push({ step: name, oldTab, oldSelected, settlement, ...now })
+    if (problem || oldSelected || !settlement.converged) {
+      const active = await page.evaluate(() =>
+        document.activeElement?.outerHTML.slice(0, 400),
+      )
+      failures.push(`${name}: ${problem ?? "focus did not settle"}; ${active}`)
+    }
+  }
+  return { trail, failures }
+}
+
 await main(meta, async ({ options, rep, url }) => {
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts) {
@@ -1308,6 +1357,14 @@ await main(meta, async ({ options, rep, url }) => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
           return await boundKeys(fresh.page)
+        } finally {
+          await fresh.close()
+        }
+      })
+      await attempt(rep, { name: "focus-tab-shortcuts", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          return await tabShortcutFocus(fresh.page, layout)
         } finally {
           await fresh.close()
         }

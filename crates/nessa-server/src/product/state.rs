@@ -4,7 +4,7 @@ use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::{
     application::{AttachmentService, HeldReads},
-    entrypoint::http::UploadRoute,
+    entrypoint::{http::UploadRoute, socket::SocketUploads},
 };
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
@@ -20,6 +20,7 @@ use crate::mcp_servers::{
     infrastructure::ResourceTicketStore,
 };
 use crate::peer_gateways::infrastructure::PeerCommands;
+use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -152,12 +153,16 @@ pub struct ProductRouteState {
     pub(crate) attachments: Option<AttachmentService>,
     /// Where `artifact.read` reads a held file back, over the same store.
     pub(crate) held_reads: Option<HeldReads>,
+    /// Uploads `attachment.write` is receiving in pieces, gateway-wide, so a
+    /// piece is taken whichever connection it arrives on.
+    pub(crate) socket_uploads: SocketUploads,
     /// The MCP App resources held behind tickets: issued by the conversation
     /// service, redeemed at `GET /mcp-resources`, which records each
     /// redemption in the audit beside it before serving. `None` when no MCP server is
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    pub(crate) webhooks: Option<Arc<WebhookRuntime>>,
     /// Reconciles the deletion inventory after `conversation.unshare`.
     /// Absent, the grant is still revoked.
     pub(crate) fence_capture: Option<Arc<dyn FenceCapture>>,
@@ -179,6 +184,17 @@ pub struct ProductRouteState {
     /// whether or not it is on now. `None` — not Unix — answers
     /// `pairing_unavailable`.
     pub(crate) native_linking: Option<Arc<dyn NativeLinking>>,
+    /// The web tunnel this run serves (`pairing.tunnel`, `server.reach`).
+    /// `None` when it runs none.
+    pub(crate) tunnel: Option<crate::tunnel::application::TunnelView>,
+    /// The GitHub sign-in (`github.*`). `None` — no agents run here —
+    /// answers `github_not_configured`.
+    pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// Shared vault; each socket attaches a distinct non-owning lease.
+    pub(crate) vault: Option<Arc<super::VaultRoutes>>,
+    #[cfg(unix)]
+    pub(crate) workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
+    pub(crate) vault_lease: Option<nessa_vault::application::Lease>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -309,11 +325,18 @@ impl ProductRouteState {
             owner_phone_policy: dependencies.owner_phone_policy,
             owner_phone_receivers: dependencies.owner_phone_receivers,
             admin: None,
+            webhooks: None,
             fence_capture: None,
             mcp_server_settings: None,
             mcp_authorization: None,
             pairing: None,
             native_linking: None,
+            tunnel: None,
+            github: None,
+            vault: None,
+            vault_lease: None,
+            #[cfg(unix)]
+            workspaces: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -331,6 +354,7 @@ impl ProductRouteState {
             installs: Arc::new(Semaphore::new(1)),
             attachments: None,
             held_reads: None,
+            socket_uploads: SocketUploads::default(),
             resource_tickets: None,
             uptime_clock: dependencies.uptime_clock,
             view_clock: Arc::new(ProcessTimeline),
@@ -360,6 +384,13 @@ impl ProductRouteState {
         self.upload_begins = Arc::new(Semaphore::new(limits.upload_begins()));
         self.deletions = Arc::new(Semaphore::new(limits.deletions()));
         self.limits = limits;
+        self
+    }
+
+    /// Bind the concrete retained webhook/ordinary credential command owner.
+    pub fn with_webhooks(mut self, runtime: Arc<WebhookRuntime>) -> Self {
+        self.admin = Some(runtime.clone());
+        self.webhooks = Some(runtime);
         self
     }
 
@@ -403,6 +434,34 @@ impl ProductRouteState {
     /// Register what turns native linking on or off from Settings.
     pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
         self.native_linking = Some(linking);
+        self
+    }
+
+    /// Register channel workspace allocation.
+    #[cfg(unix)]
+    pub(crate) fn with_workspaces(
+        mut self,
+        workspaces: Arc<crate::workspaces::application::Workspaces>,
+    ) -> Self {
+        self.workspaces = Some(workspaces);
+        self
+    }
+    /// Register the reusable vault independently of provider configuration.
+    pub fn with_vault(mut self, vault: Arc<super::VaultRoutes>) -> Self {
+        self.vault = Some(vault);
+        self
+    }
+
+    /// Register the web tunnel this run serves (Unix only).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn with_tunnel(mut self, tunnel: crate::tunnel::application::TunnelView) -> Self {
+        self.tunnel = Some(tunnel);
+        self
+    }
+
+    /// Register the GitHub sign-in the github methods answer for.
+    pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
+        self.github = Some(github);
         self
     }
 

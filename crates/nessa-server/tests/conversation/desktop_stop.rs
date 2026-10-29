@@ -133,6 +133,7 @@ impl Fixture {
         }
         let service = ConversationService::new(
             ConversationDependencies {
+                input_files: None,
                 access_policy: crate::conversation_test_support::access_policy(),
                 // Each approval mode resolves, so a conversation can be in
                 // one other than Ask.
@@ -201,6 +202,7 @@ impl Fixture {
                     caller(&action),
                     action.clone(),
                     SubmittedMessage {
+                        uploads: Vec::new(),
                         text,
                         images: Vec::new(),
                         files: if file {
@@ -764,6 +766,7 @@ async fn desktop_stop_after_reopening(attachment_waits: bool) {
         caller("reopens"),
         "reopens".into(),
         SubmittedMessage {
+            uploads: Vec::new(),
             text: "Reopens".into(),
             images: Vec::new(),
             files: vec![SubmittedFile {

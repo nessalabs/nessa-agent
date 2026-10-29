@@ -1,0 +1,45 @@
+Exact source 0d0b12f32ceface5bf2f556c85d67fe3ff7cf06c
+Run https://github.com/nessalabs/nessa-agent/actions/runs/40252725334
+Terminal:10 substantive jobs passed; stress failed; required-check aggregate failed. No cancellation or rerun.
+
+Ubuntu https://github.com/nessalabs/nessa-agent/actions/runs/40252725334/job/121348333987
+2026-10-26T01:17:53.5986742Z [nessa-sdk nessa_sdk] test infrastructure::claude_acp::tools::wire::tests::provider_name_retention_is_bounded_by_name_identity_and_entry_limits ... ok
+2026-10-26T01:21:00.3964384Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::registration_tests::cancellation_tests::complete_retired_history_and_duplicate_lifecycle_facts_are_checked_before_cold_restore ... ok
+2026-10-26T01:21:00.4921994Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::registration_tests::cancellation_tests::complete_retired_history_and_duplicate_lifecycle_facts_are_checked_before_live_publication ... ok
+2026-10-26T01:21:03.4990593Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+2026-10-26T01:21:09.5244211Z [nessa-server nessa_server] test webhooks::infrastructure::product_tests::delivery::actual_response_survives_failed_publication_without_repeating_the_post ... ok
+2026-10-26T01:21:13.6729655Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+2026-10-26T01:21:13.8785131Z [nessa-server nessa_server] test webhooks::infrastructure::product_tests::delivery::public_grant_delivers_only_its_chat_with_real_tls_signature_and_stable_retry ... ok
+2026-10-26T01:21:17.3275723Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+2026-10-26T01:21:21.9143975Z [nessa-server nessa_server] test result: ok. 4125 passed; 0 failed; 11 ignored; 0 measured; 0 filtered out; finished in 143.67s
+2026-10-26T01:46:07.9757184Z native-window smoke passed and cleaned up (gateway=39255, driver=39275, app=39278, provider=39393)
+
+Mac https://github.com/nessalabs/nessa-agent/actions/runs/40252725334/job/121348334010
+2026-10-26T01:35:51.3362880Z [nessa-sdk nessa_sdk] test infrastructure::claude_acp::tools::wire::tests::provider_name_retention_is_bounded_by_name_identity_and_entry_limits ... ok
+2026-10-26T01:40:47.3068650Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+2026-10-26T01:40:48.0883560Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::registration_tests::cancellation_tests::complete_retired_history_and_duplicate_lifecycle_facts_are_checked_before_cold_restore ... ok
+2026-10-26T01:40:48.5851520Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::registration_tests::cancellation_tests::complete_retired_history_and_duplicate_lifecycle_facts_are_checked_before_live_publication ... ok
+2026-10-26T01:41:10.1547990Z [nessa-server nessa_server] test webhooks::infrastructure::product_tests::delivery::actual_response_survives_failed_publication_without_repeating_the_post ... ok
+2026-10-26T01:41:15.1905400Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+2026-10-26T01:41:19.0769180Z [nessa-server nessa_server] test webhooks::infrastructure::product_tests::delivery::public_grant_delivers_only_its_chat_with_real_tls_signature_and_stable_retry ... ok
+2026-10-26T01:41:22.6926010Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+2026-10-26T01:41:25.7358130Z [nessa-server nessa_server] test result: ok. 4122 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 280.08s
+
+Windows server https://github.com/nessalabs/nessa-agent/actions/runs/40252725334/job/121348334050
+2026-10-26T01:39:45.4313990Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::registration_tests::cancellation_tests::complete_retired_history_and_duplicate_lifecycle_facts_are_checked_before_cold_restore ... ok
+2026-10-26T01:39:51.1185524Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::registration_tests::cancellation_tests::complete_retired_history_and_duplicate_lifecycle_facts_are_checked_before_live_publication ... ok
+2026-10-26T01:39:53.4497774Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+2026-10-26T01:43:14.9240268Z [nessa-server nessa_server] test webhooks::infrastructure::product_tests::delivery::actual_response_survives_failed_publication_without_repeating_the_post ... ok
+2026-10-26T01:44:12.8407942Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded ... ok
+2026-10-26T01:44:18.7555109Z [nessa-server nessa_server] test webhooks::infrastructure::product_tests::delivery::public_grant_delivers_only_its_chat_with_real_tls_signature_and_stable_retry ... ok
+2026-10-26T01:45:03.4855723Z [nessa-server nessa_server] test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+2026-10-26T01:45:03.4858047Z [nessa-server nessa_server] test result: ok. 3395 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 1562.65s
+
+Windows remaining https://github.com/nessalabs/nessa-agent/actions/runs/40252725334/job/121348333962
+2026-10-26T01:22:17.5701479Z [nessa-sdk nessa_sdk] test infrastructure::claude_acp::tools::wire::tests::provider_name_retention_is_bounded_by_name_identity_and_entry_limits ... ok
+2026-10-26T01:28:03.2168079Z [nessa-server native_enrollment] test result: ok. 110 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.96s
+
+Frontend https://github.com/nessalabs/nessa-agent/actions/runs/40252725334/job/121348334051
+2026-10-26T01:19:04.2647336Z  Test Files  408 passed (408)
+2026-10-26T01:19:04.2670788Z       Tests  5324 passed (5324)
+2026-10-26T01:19:22.4057953Z ✓ built in 17.02s

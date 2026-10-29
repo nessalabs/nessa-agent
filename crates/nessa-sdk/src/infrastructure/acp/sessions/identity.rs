@@ -70,7 +70,8 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 ///
 /// Also not hashed:
 /// - the credential environment, so credentials rotate without stranding a
-///   conversation;
+///   conversation, and the open credentials (`AcpConfig::open_credentials`)
+///   for the same reason: a sign-in that begins or ends between opens;
 /// - the stand-in grants (`AcpConfig::stand_ins`), fresh on every open;
 /// - the MCP servers (`AcpConfig::mcp_servers`): their names, commands and
 ///   arguments. They are attached to each provider open, like the grants, and

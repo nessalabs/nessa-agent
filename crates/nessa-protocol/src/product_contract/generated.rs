@@ -154,6 +154,14 @@ pub enum ConversationErrorCode {
     AttachmentStorageUnavailable,
     #[serde(rename = "attachment_cleanup_unavailable")]
     AttachmentCleanupUnavailable,
+    #[serde(rename = "upload_ticket_invalid")]
+    UploadTicketInvalid,
+    #[serde(rename = "upload_failed")]
+    UploadFailed,
+    #[serde(rename = "unsupported_image")]
+    UnsupportedImage,
+    #[serde(rename = "image_too_large")]
+    ImageTooLarge,
     #[serde(rename = "conversation_deleted")]
     ConversationDeleted,
     #[serde(rename = "conversation_erasure_incomplete")]
@@ -204,6 +212,8 @@ pub enum ConversationErrorCode {
     RevokedAfterSave,
     #[serde(rename = "unavailable_after_save")]
     UnavailableAfterSave,
+    #[serde(rename = "channel_not_found")]
+    ChannelNotFound,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -247,6 +257,10 @@ impl ConversationErrorCode {
             Self::AttachmentCapacity => "attachment_capacity",
             Self::AttachmentStorageUnavailable => "attachment_storage_unavailable",
             Self::AttachmentCleanupUnavailable => "attachment_cleanup_unavailable",
+            Self::UploadTicketInvalid => "upload_ticket_invalid",
+            Self::UploadFailed => "upload_failed",
+            Self::UnsupportedImage => "unsupported_image",
+            Self::ImageTooLarge => "image_too_large",
             Self::ConversationDeleted => "conversation_deleted",
             Self::ConversationErasureIncomplete => "conversation_erasure_incomplete",
             Self::McpAppUnknown => "mcp_app_unknown",
@@ -272,6 +286,7 @@ impl ConversationErrorCode {
             Self::Revoked => "revoked",
             Self::RevokedAfterSave => "revoked_after_save",
             Self::UnavailableAfterSave => "unavailable_after_save",
+            Self::ChannelNotFound => "channel_not_found",
         }
     }
 }
@@ -374,6 +389,9 @@ impl CatalogueReadErrorCode {
         }
     }
 }
+pub const BACKGROUND_TASK_ID_PATTERN: &str = "^[A-Za-z0-9_-]+$";
+pub const MIN_BACKGROUND_TASK_ID_CHARACTERS: usize = 1;
+pub const MAX_BACKGROUND_TASK_ID_CHARACTERS: usize = 128;
 /// Published bound from the product schema.
 pub const MAX_MCP_MESSAGE_BYTES: usize = 8192;
 /// Published MCP App call timing from the product schema, in milliseconds.

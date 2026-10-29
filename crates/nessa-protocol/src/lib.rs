@@ -30,3 +30,4 @@ pub mod product;
 pub mod product_contract;
 pub mod protocol;
 pub mod relay;
+pub mod tunnel;

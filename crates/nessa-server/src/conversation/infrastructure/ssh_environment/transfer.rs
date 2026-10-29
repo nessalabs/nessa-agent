@@ -36,13 +36,12 @@
 //! paired connection's frames have no channel of their own to fail: when
 //! the connection goes, the lease goes with it, so nothing is resumed.
 use super::{
-    connector::ArtifactChannels,
     link::{ArtifactReadAnswer, HostLink},
     sftp::{ByteSink, ByteSource, SftpError, SftpSession, SinkWrite, SourceRead},
 };
 use crate::conversation::application::{
-    ArtifactBytes, ArtifactChunk, ArtifactReadFailure, HeldSource, HeldSourceFailure,
-    ARTIFACT_READ_RESUMES,
+    ArtifactBytes, ArtifactChannels, ArtifactChunk, ArtifactReadFailure, HeldSource,
+    HeldSourceFailure, ARTIFACT_READ_RESUMES,
 };
 use nessa_protocol::lease::{ArtifactReadRefusal, MAX_ARTIFACT_READS_IN_FLIGHT, MAX_DATA_BYTES};
 use std::{

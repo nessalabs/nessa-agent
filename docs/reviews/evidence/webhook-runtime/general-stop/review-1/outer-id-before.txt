@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/tmp/nessa-general-stop-review-build.py", line 17, in <module>
+    with (out/'tests.txt').open('w') as f: subprocess.run([str(out/'tests-bin'),'--nocapture',*filters],stdout=f,stderr=subprocess.STDOUT,check=True,env=env)
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/tmp/nessa-general-stop-independent-review/tests-bin', '--nocapture', 'review_outer_retirement_identity_allocation_probe']' returned non-zero exit status 101.

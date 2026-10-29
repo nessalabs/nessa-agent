@@ -93,6 +93,7 @@ async fn fixture() -> Fixture {
         .unwrap();
     let audience = AudienceId::new("gateway").unwrap();
     let bootstrap = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: registry.as_ref(),
         access: registry.as_ref(),
         clock: &Time,
@@ -217,6 +218,7 @@ async fn fixture() -> Fixture {
     let channel = worker.join().unwrap();
     let verifier = registry.device_verifier(channel.device_proof());
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &verifier,
         access: registry.as_ref(),
         clock: &Time,
@@ -281,10 +283,18 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.subscribeList",
         "conversation.subscribeEvents",
         "conversation.peek",
+        // A card shows what a review or question asks before it is answered.
+        "conversation.answer",
+        "conversation.permissionReview",
+        "conversation.answerQuestion",
+        "conversation.questionReview",
+        "channel.list",
         "attachment.begin",
+        "attachment.write",
         "artifact.read",
         "agents.list",
         "server.health",
+        "server.reach",
         "auth.session",
     ] {
         let action = nessa_protocol::product::generated::action_for_method(method);
@@ -300,10 +310,13 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
     }
     for method in [
         "agents.install",
+        "channel.create",
         "mcp.servers.list",
         "credential.issue",
         "conversation.share",
         "pairing.approve",
+        "pairing.setTunnel",
+        "pairing.tunnel",
         "peer.relay",
         "unknown.future",
     ] {
@@ -755,6 +768,9 @@ mod catalogue;
 
 #[path = "owner_phone_delete.rs"]
 mod delete;
+
+#[path = "owner_phone_channel.rs"]
+mod channel;
 
 #[path = "owner_phone_remember.rs"]
 mod remember;

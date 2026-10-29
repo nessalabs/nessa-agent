@@ -54,7 +54,7 @@ export const labsSamples: readonly SampleSession[] = [
     unread: true,
     approval: {
       id: "retry-tests",
-      command: "cargo test -p nessa-gateway reconnect -- --nocapture",
+      command: "cargo test -p gateway reconnect",
       reason: "Runs the reconnect tests, including the new budget-exhaustion case.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,
@@ -155,7 +155,7 @@ export const labsSamples: readonly SampleSession[] = [
     id: "reconnect-storm",
     channelId: "gateway",
     title: "Reconnect storm after sleep",
-    model: models.astra,
+    model: models.sonnet,
     status: "needs-you",
     updated: 12,
     started: 40,
@@ -163,10 +163,23 @@ export const labsSamples: readonly SampleSession[] = [
     now: "Waiting to restart the gateway with 200 clients to prove the jitter",
     approval: {
       id: "storm-restart",
-      command: "cargo run -p nessa-gateway -- --simulate-clients 200",
+      // As Claude asks: its shell tool and the tool's input, five answers.
+      command: `mcp__nessa__shell ${JSON.stringify({
+        command: "cargo run -p gateway -- --clients 200",
+      })}`,
       reason: "Restarts the local gateway and opens 200 connections.",
       origin: { kind: "agent" },
-      options: sampleApprovalOptions,
+      options: [
+        { id: "no", label: "No", choice: "deny" },
+        { id: "never", label: "Always deny in this project", choice: "deny" },
+        { id: "project", label: "Always allow in this project", choice: "always" },
+        { id: "yes", label: "Yes", choice: "once" },
+        {
+          id: "shell",
+          label: "Yes, and don't ask again for Shell commands",
+          choice: "always",
+        },
+      ],
       ask: "tool",
     },
     messages: exchange(
@@ -221,6 +234,60 @@ export const labsSamples: readonly SampleSession[] = [
       "Run that tool.",
       "The tool's name is written right to left. I will not run it until the name stays left of the argument.",
       10,
+    ),
+  },
+  {
+    id: "lab-shell",
+    channelId: "gateway",
+    title: "Shell through the lab's tool",
+    model: models.sonnet,
+    status: "needs-you",
+    updated: 9,
+    started: 18,
+    preview: "Asks to start the gateway through the lab's own shell tool.",
+    now: "Waiting to start the gateway through the lab's shell tool",
+    approval: {
+      id: "lab-shell-ask",
+      // A tool name longer than the card is wide: its line wraps, drawn whole.
+      command: `mcp__nessa_gateway_lab__simulated_shell ${JSON.stringify({
+        command: "cargo run -p gateway",
+      })}`,
+      reason: "Starts the local gateway through the lab's shell tool.",
+      origin: { kind: "agent" },
+      options: sampleApprovalOptions,
+      ask: "tool",
+    },
+    messages: exchange(
+      "Start the gateway in the lab.",
+      "I will start it through the lab's shell tool, so its clients connect to the simulated network.",
+      9,
+    ),
+  },
+  {
+    id: "wide-marks",
+    channelId: "gateway",
+    title: "Marks wider than the card",
+    model: models.sol,
+    status: "needs-you",
+    updated: 8,
+    started: 16,
+    preview: "Asks to list folders whose names are each one wide character.",
+    now: "Waiting to list folders named in marks that join into one character",
+    approval: {
+      id: "wide-marks-ask",
+      // Characters that join into one wider than the card, which no break
+      // can split: Arabic number signs, conjoining jamo, a letter under
+      // spacing marks. Never allowed from the list; read in the chat.
+      command: `ls ${"\u0600".repeat(40)}~ ${"\u1100".repeat(20)}${"\u1161".repeat(20)}~ x${"\u093E".repeat(40)}~`,
+      reason: "Lists the folders named in the command.",
+      origin: { kind: "agent" },
+      options: sampleApprovalOptions,
+      ask: "tool",
+    },
+    messages: exchange(
+      "List those folders.",
+      "Each name is one character built from forty marks, wider than a line. Read them whole before I list them.",
+      8,
     ),
   },
   {
@@ -355,7 +422,7 @@ export const labsSamples: readonly SampleSession[] = [
         "agent",
         9 * 24 * 60,
         [
-          text("The sample trail: open it beside us, or over the panes."),
+          text("The sample trail: open it in the panel, or over the panes."),
           widget(sampleWidgets.trail),
           text("And what a host says when it cannot draw one:"),
           widget(sampleWidgets.unread),

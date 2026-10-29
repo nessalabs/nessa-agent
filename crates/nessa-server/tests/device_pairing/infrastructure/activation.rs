@@ -281,6 +281,7 @@ async fn authenticate(
     connect.join().unwrap().unwrap();
     let verifier = fixture.registry.device_verifier(accepted.device_proof());
     AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &verifier,
         access: fixture.registry.as_ref(),
         clock: &Time,

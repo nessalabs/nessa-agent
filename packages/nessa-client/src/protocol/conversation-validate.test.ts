@@ -313,6 +313,23 @@ describe("conversation view agreement", () => {
     )
   })
 
+  it("retains a background task association and rejects malformed identities", () => {
+    const value = view()
+    Object.assign(value.tools[0]!, { backgroundTaskId: "background-1" })
+    expect(conversationView(value, "conversation").tools[0]?.backgroundTaskId).toBe(
+      "background-1",
+    )
+    for (const invalid of [
+      "",
+      "contains space",
+      "a".repeat(bounds.maxBackgroundTaskIdBytes + 1),
+      null,
+    ]) {
+      Object.assign(value.tools[0]!, { backgroundTaskId: invalid })
+      expect(() => conversationView(value, "conversation")).toThrow()
+    }
+  })
+
   it("accepts complete matching pending and tool evidence", () => {
     expect(conversationView(view(), "conversation").revision).toBe("1")
   })
@@ -1760,4 +1777,50 @@ describe("a share's policy revision", () => {
       minPolicyRevision,
     )
   })
+})
+
+it("correlates pending uploaded input across every original fact and ignores JSON key order", () => {
+  const file = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "application/pdf",
+    size: 12,
+    name: "report.pdf",
+  }
+  const value = view()
+  Object.assign(value.messages[0]!, { userText: "", uploads: [file] })
+  Object.assign(value.pending[0]!, {
+    text: "",
+    uploads: [
+      { name: file.name, size: file.size, mimeType: file.mimeType, digest: file.digest },
+    ],
+  })
+  expect(() => conversationView(value, "conversation")).not.toThrow()
+  for (const replacement of [
+    { name: "other.pdf" },
+    { size: 13 },
+    { mimeType: "text/plain" },
+    { digest: `sha256:${"b".repeat(64)}` },
+  ]) {
+    const changed = structuredClone(value)
+    Object.assign(changed.pending[0]!, { uploads: [{ ...file, ...replacement }] })
+    expect(() => conversationView(changed, "conversation")).toThrow(
+      "Pending execution contradicts",
+    )
+  }
+  const bad = structuredClone(value)
+  Object.assign(bad.messages[0]!, { uploads: [{ ...file, name: "../escape" }] })
+  expect(() => conversationView(bad, "conversation")).toThrow("filename")
+})
+
+it("keeps a non-whitespace Unicode filename accepted by phone and SDK", () => {
+  const value = view()
+  Object.assign(value.messages[0]!, {
+    uploads: [{ digest: DIGEST, mimeType: "text/plain", size: 1, name: "\uFEFF" }],
+  })
+  Object.assign(value.pending[0]!, {
+    uploads: [{ digest: DIGEST, mimeType: "text/plain", size: 1, name: "\uFEFF" }],
+  })
+  expect(conversationView(value, "conversation").messages[0]?.uploads?.[0]?.name).toBe(
+    "\uFEFF",
+  )
 })

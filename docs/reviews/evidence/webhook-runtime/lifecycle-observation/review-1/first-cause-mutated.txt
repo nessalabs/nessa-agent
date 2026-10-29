@@ -1,0 +1,14 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::independent_probes::all_original_readers_survive_ack_loss_restart_and_later_revocation' (146714) panicked at /tmp/nessa-expiry-observation-independent-review/probes.rs:42:162:
+called `Result::unwrap()` on an `Err` value: Invalid
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::independent_probes::all_original_readers_survive_ack_loss_restart_and_later_revocation ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::independent_probes::all_original_readers_survive_ack_loss_restart_and_later_revocation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 111 filtered out; finished in 0.02s

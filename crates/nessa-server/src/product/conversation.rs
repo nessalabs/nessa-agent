@@ -1,15 +1,16 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
+    read_access::CatalogueReader,
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
-    ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate, QuestionChoiceInput,
-    ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError, RuleChange,
-    RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
-    UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
+    QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
+    RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
+    SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
@@ -106,6 +107,19 @@ async fn answer(
     ) {
         return Ok(dispatch_permission_rules(state, session, frame).await);
     }
+    // Catalogue refusal precedes service availability (row L12). Retain the
+    // admitted scope for the read rather than resolving the binding again.
+    let list_scope = if matches!(
+        frame.method.as_str(),
+        "conversation.list" | "conversation.observe"
+    ) {
+        match super::read_access::admit_list(state, session).await {
+            Ok(scope) => Some(scope),
+            Err(code) => return Ok(failure(&frame.id, code)),
+        }
+    } else {
+        None
+    };
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
@@ -147,12 +161,25 @@ async fn answer(
         match frame.method.as_str() {
             "conversation.create" => {
                 let params = target_params!(ConversationCreateParams);
+                // The phone check judges the preset the conversation starts
+                // in, which a channel's defaults can set.
+                let default_mode = service
+                    .creation_default_mode(
+                        &caller(params.request_id.clone()),
+                        requested_channel(params.channel_id.as_deref())?.as_ref(),
+                    )
+                    .await?;
                 if let Err(code) = super::owner_phone::admit_creation(
                     state,
                     session,
-                    params.approval_mode.map(approval_mode).map(|mode| mode.as_str()),
-                    crate::conversation::application::ConversationService::default_creation_approval_mode().as_str(),
-                ).await {
+                    params
+                        .approval_mode
+                        .map(approval_mode)
+                        .map(|mode| mode.as_str()),
+                    default_mode.as_str(),
+                )
+                .await
+                {
                     return Ok(failure(&frame.id, code));
                 }
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
@@ -161,7 +188,7 @@ async fn answer(
                         store,
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
-                        requested_conversation(&params),
+                        requested_conversation(&params)?,
                     )
                     .await
                     .map_err(creation_failure)?;
@@ -339,37 +366,47 @@ async fn answer(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
-                let listed =
-                    read_list(state, service, session, archived.unwrap_or(false), &frame.id).await?;
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
+                let (listed, _) = read_list(
+                    state,
+                    service,
+                    session,
+                    archived.unwrap_or(false),
+                    &frame.id,
+                    scope,
+                )
+                .await?;
                 Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,
                 };
                 let observed = service
-                    .observe(
+                    .observe_for(
                         caller(frame.id.clone()),
                         params.archived.unwrap_or(false),
                         cursor,
+                        &scope.reader,
+                        &scope.owner,
+                        scope.policy.as_deref(),
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
                 let observed = observe_result(observed?);
-                super::read_access::admit_index_rows(state, session, &observed.conversations).await?;
+                super::read_access::admit_index_rows(state, session, &observed.conversations)
+                    .await?;
                 Ok(success(&frame.id, &observed))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = target_params!(ConversationSendParams);
-                if let Err(code) = super::owner_phone::admit_submission_input(state, session, params.files.len()).await {
+                if let Err(code) =
+                    super::owner_phone::admit_submission_input(state, session, params.files.len())
+                        .await
+                {
                     return Ok(failure(&frame.id, code));
                 }
                 let mode = if frame.method == "conversation.steer" {
@@ -474,6 +511,7 @@ async fn answer(
                             || params.text.is_some()
                             || params.attachments.is_some()
                             || params.files.is_some()
+                            || params.uploads.is_some()
                         {
                             return Err(ConversationError::InvalidInput);
                         }
@@ -1041,16 +1079,24 @@ pub(super) async fn read_list(
     session: &AuthenticatedSession,
     archived: bool,
     request_id: &str,
-) -> Result<ConversationListResult, ConversationError> {
+    scope: &CatalogueReader,
+) -> Result<(ConversationListResult, Option<CatalogueHead>), ConversationError> {
     let listed = service
-        .list(caller(session, request_id.to_owned()), archived)
+        .list_for(
+            caller(session, request_id.to_owned()),
+            archived,
+            &scope.reader,
+            &scope.owner,
+            scope.policy.as_deref(),
+        )
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    let listed = list_result(listed?);
+    let (listed, head) = listed?;
+    let listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
-    Ok(listed)
+    Ok((listed, head))
 }
 
 fn usage_limit_preference_facts(
@@ -1109,13 +1155,25 @@ fn permission_answer_failure(
     )
 }
 
-fn requested_conversation(params: &ConversationCreateParams) -> RequestedConversation {
-    RequestedConversation {
+fn requested_conversation(
+    params: &ConversationCreateParams,
+) -> Result<RequestedConversation, ConversationError> {
+    Ok(RequestedConversation {
         agent: requested_agent(params.agent.as_deref()),
         model: params.model.clone(),
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
-    }
+        channel: requested_channel(params.channel_id.as_deref())?,
+    })
+}
+/// A channel id as asked: one that is not an id is an invalid request.
+fn requested_channel(
+    channel: Option<&str>,
+) -> Result<Option<crate::conversation::domain::ChannelId>, ConversationError> {
+    channel
+        .map(crate::conversation::domain::ChannelId::new)
+        .transpose()
+        .map_err(|_| ConversationError::InvalidInput)
 }
 fn requested_conversation_from_receipt(
     params: &ConversationReceiptParams,
@@ -1124,6 +1182,7 @@ fn requested_conversation_from_receipt(
         || params.text.is_some()
         || params.attachments.is_some()
         || params.files.is_some()
+        || params.uploads.is_some()
     {
         return Err(ConversationError::InvalidInput);
     }
@@ -1132,6 +1191,7 @@ fn requested_conversation_from_receipt(
         model: params.model.clone(),
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
+        channel: requested_channel(params.channel_id.as_deref())?,
     })
 }
 fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
@@ -1143,6 +1203,18 @@ fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
 }
 fn submitted_message(params: &ConversationSendParams) -> SubmittedMessage {
     SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone(),
         images: params
             .attachments
@@ -1177,6 +1249,18 @@ fn submitted_message_from_receipt(
         return Err(ConversationError::InvalidInput);
     }
     Ok(SubmittedMessage {
+        uploads: params
+            .uploads
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| SubmittedUpload {
+                digest: file.digest.clone(),
+                media_type: file.mime_type.clone(),
+                size: file.size,
+                name: file.name.clone(),
+            })
+            .collect(),
         text: params.text.clone().ok_or(ConversationError::InvalidInput)?,
         images: params
             .attachments
@@ -1468,6 +1552,7 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
                 updated_at_ms: entry.updated_at_ms,
                 running: entry.running,
                 archived: entry.archived,
+                channel_id: entry.channel_id,
             })
             .collect(),
         complete: listed.complete,
@@ -1498,6 +1583,7 @@ fn observe_result(observed: ConversationObservation) -> ConversationObserveResul
                 updated_at_ms: entry.updated_at_ms,
                 running: entry.running,
                 archived: entry.archived,
+                channel_id: entry.channel_id,
             })
             .collect(),
         complete: observed.complete,

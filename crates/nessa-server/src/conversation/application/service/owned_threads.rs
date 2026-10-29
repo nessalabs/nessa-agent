@@ -12,9 +12,11 @@ use super::{
     ConversationId, ConversationService, Inner, RequestedAgent, RequestedConversation, StopBy,
     SubmissionMode, SubmittedMessage,
 };
+use crate::conversation::domain::ChannelId;
 use async_trait::async_trait;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, Agent, OwnedLifetime};
 use nessa_sdk::application::agent_execution::commands::{
     CreationFailure, CreationReceipt, CreationStorage, CreationTaskFault, MutationFailure,
@@ -64,6 +66,10 @@ struct Preparation {
     agent: Option<String>,
     model: Option<String>,
     environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    channel: Option<ChannelId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approval_mode: Option<ConversationApprovalMode>,
 }
 impl Preparation {
     fn caller(&self) -> Result<ConversationCaller, ConversationError> {
@@ -84,8 +90,9 @@ impl Preparation {
                 .and_then(AgentId::parse)
                 .map(RequestedAgent::Known),
             model: self.model.clone(),
-            approval_mode: None,
+            approval_mode: self.approval_mode,
             environment: self.environment.clone(),
+            channel: self.channel.clone(),
         }
     }
 }
@@ -116,8 +123,9 @@ impl ConversationService {
     }
 
     /// Create an empty ordinary child under a verified exact source turn.
-    /// Approval selection stays with ordinary creation; no parent's permission
-    /// answers or effective approval configuration are copied into the child.
+    /// Channel placement and its initial preset come from the existing channel
+    /// start owner; ordinary creation enforces them. Callers cannot provide a
+    /// channel or approval override, and permission answers are not copied.
     pub async fn create_owned_thread(
         &self,
         source: AgentToolSource,
@@ -125,7 +133,7 @@ impl ConversationService {
         requested: RequestedConversation,
     ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
         let caller = source.caller();
-        if requested.approval_mode.is_some() {
+        if requested.approval_mode.is_some() || requested.channel.is_some() {
             return Err(CreationFailure::Target(ConversationError::InvalidInput));
         }
         let agent = match requested.agent {
@@ -143,6 +151,8 @@ impl ConversationService {
             agent,
             model: requested.model,
             environment: requested.environment,
+            channel: None,
+            approval_mode: None,
         };
         let service = self.clone();
         tokio::spawn(async move {
@@ -188,6 +198,15 @@ impl ConversationService {
         {
             return Err(CreationFailure::Target(ConversationError::Unavailable));
         }
+        let (channel, approval_mode) = self
+            .thread_start(source.conversation(), preparation.environment.is_some())
+            .await
+            .map_err(CreationFailure::Target)?;
+        let preparation = Preparation {
+            channel,
+            approval_mode,
+            ..preparation
+        };
         let session = conversation_session(source.conversation());
         let lifetime = ownership
             .coordinator
@@ -201,7 +220,7 @@ impl ConversationService {
             &caller.action_id,
         );
         // This is the ordinary creation policy, not inherited authority.
-        let policy = creation_policy();
+        let policy = creation_policy(preparation.approval_mode);
         let prepared = ownership
             .coordinator
             .prepare_child(
@@ -676,13 +695,15 @@ impl ChildFactory for Factory {
             .coordinator
             .lifetime_state(&request.child)
             .is_none()
-            || request.policy != creation_policy()
             || request.model.is_some()
         {
             return Err(refused());
         }
         let preparation: Preparation =
             serde_json::from_str(&request.task).map_err(|_| refused())?;
+        if request.policy != creation_policy(preparation.approval_mode) {
+            return Err(refused());
+        }
         if preparation
             .agent
             .as_deref()
@@ -1127,9 +1148,13 @@ impl ConversationService {
     }
 }
 
-fn creation_policy() -> ApprovalPolicy {
-    ApprovalPolicy::new("ask", "ordinary-creation", "gateway-creation")
-        .expect("static ordinary creation policy")
+fn creation_policy(mode: Option<ConversationApprovalMode>) -> ApprovalPolicy {
+    ApprovalPolicy::new(
+        mode.unwrap_or(ConversationApprovalMode::Ask).as_str(),
+        "ordinary-creation",
+        "gateway-creation",
+    )
+    .expect("static ordinary creation policy")
 }
 
 pub(super) fn creation_request(principal: &str, surface: &str, action: &str) -> SpawnRequestId {
