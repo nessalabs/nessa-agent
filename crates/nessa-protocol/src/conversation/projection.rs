@@ -2197,14 +2197,20 @@ pub fn bound_view_within(
                     || !message.uploads.is_empty())
         }) {
             // One turn left: its start gives way first, the person's message
-            // with it, read again as an earlier turn.
+            // with it, read again as an earlier turn. A message too long for a
+            // page of its own could never be read again, so it is left out.
             let before = encoded_len(message);
+            let pageable = input_fits_a_page(&view.conversation_id, message);
             message.user_text.clear();
             message.attachments.clear();
             message.files.clear();
             message.uploads.clear();
-            message.starts_at = Some(ConversationPartPosition { part: 0, byte: 0 });
-            view.earlier = true;
+            if pageable {
+                message.starts_at = Some(ConversationPartPosition { part: 0, byte: 0 });
+                view.earlier = true;
+            } else {
+                view.truncated = true;
+            }
             size = resized(size, before, encoded_len(message));
             continue;
         }
@@ -2316,6 +2322,23 @@ pub fn bound_view_within(
         view.truncated = true;
     }
     view
+}
+
+/// Whether the person's message of `message`, with nothing of its reply,
+/// fits a page of earlier turns on its own.
+fn input_fits_a_page(conversation_id: &str, message: &ConversationMessage) -> bool {
+    let mut page = Projection::new(
+        conversation_id.to_owned(),
+        ConversationCapabilities::read_only(),
+        None,
+    )
+    .read();
+    let mut input = message.clone();
+    input.parts.clear();
+    input.retained_text = 0;
+    input.starts_at = None;
+    page.messages.push(input);
+    encoded_len(&page) <= MAX_VIEW_BYTES
 }
 
 /// The most turns one page of earlier turns lists, as the schema allows.

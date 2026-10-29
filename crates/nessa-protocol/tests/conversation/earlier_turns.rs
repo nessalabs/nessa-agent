@@ -369,3 +369,33 @@ fn a_queued_turn_that_gives_way_is_not_earlier() {
     assert_ne!(view.messages[0].execution_id, "turn-0");
     assert!(view.truncated);
 }
+
+/// A person's message too long for a page of its own is left out, not
+/// offered as earlier: a read before it could only give it back cut again,
+/// and reading back would never get past it.
+#[test]
+fn a_message_too_long_for_any_page_is_left_out() {
+    let mut snapshot = chat(&["first".to_owned(), "reply ".repeat(20_000)]);
+    snapshot.invocations[1].request.user_message =
+        UserMessage::text_only(PromptText::new("\u{1}".repeat(12_000)).unwrap());
+    let view = view_of(&snapshot);
+    assert!(view.truncated);
+    assert_eq!(view.messages.len(), 1);
+    assert!(view.messages[0].user_text.is_empty());
+    let mut point = before(&view.messages[0]);
+    let mut pages = 0;
+    loop {
+        pages += 1;
+        assert!(pages < 100, "reading back never got past the message");
+        let read = page(&snapshot, &point, None);
+        let first = read.messages.first().unwrap();
+        assert!(first.user_text.is_empty() || first.execution_id == "turn-0");
+        if first.execution_id == "turn-0" {
+            assert_eq!(first.user_text, "asked 0");
+            assert!(!read.more);
+            break;
+        }
+        assert!(read.more);
+        point = before(first);
+    }
+}
