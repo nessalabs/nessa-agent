@@ -79,6 +79,13 @@ pub enum AccessSubject<'a> {
     /// The holder of a share grant, by its receiver, with no session: a note
     /// it left being delivered later.
     GrantHolder { receiver: &'a str },
+    /// Outbound-only registered principal. Registration ownership is an
+    /// authoritative fact; there is no receiver and no owner fallback.
+    WebhookReader {
+        organization: &'a OrganizationId,
+        principal: &'a PrincipalId,
+        registration_owner: &'a PrincipalId,
+    },
 }
 
 /// What the subject asks to do. Each is one Cedar action of the same name
@@ -129,11 +136,13 @@ pub enum AccessAction {
     ChannelList,
     /// Create a conversation in a channel.
     ChannelUse,
+    /// Read or edit a channel's runtime settings.
+    ChannelSettings,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::AgentTools,
         Self::Locate,
         Self::Act,
@@ -154,6 +163,7 @@ impl AccessAction {
         Self::ChannelCreate,
         Self::ChannelList,
         Self::ChannelUse,
+        Self::ChannelSettings,
     ];
 
     /// The action's name, as the policy spells it.
@@ -179,6 +189,7 @@ impl AccessAction {
             Self::ChannelCreate => "channel.create",
             Self::ChannelList => "channel.list",
             Self::ChannelUse => "channel.use",
+            Self::ChannelSettings => "channel.settings",
         }
     }
 }

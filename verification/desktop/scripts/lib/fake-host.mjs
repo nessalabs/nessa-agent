@@ -114,6 +114,10 @@ export function gatewayHost({
       return id
     },
     invoke(command, args) {
+      if (command === "vault_command")
+        return typeof window.__NESSA_VAULT_COMMAND === "function"
+          ? window.__NESSA_VAULT_COMMAND(args.request)
+          : new Promise(() => {})
       if (notices) {
         const answered = noticeHost(command, args)
         if (answered) return answered

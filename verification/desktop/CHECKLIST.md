@@ -164,6 +164,12 @@ controls — text, icons, images, code, or decorative art — in any frame.
   _Check:_ `columns.mjs --only titlebar-row` for the page;
   `cargo test -p nessa-app --no-default-features --test traffic_lights` for the
   buttons in a real AppKit window (macOS) and the row height the two share.
+- [ ] **The pane root stays unscrolled after a long conversation, reviews and
+  a split.** Its transcript owns scrolling; the pane clips instead of retaining
+  a scroll offset that can move its header above the titlebar (#1184).
+  _Check:_ `columns.mjs --only pane-clipping` focuses an overflowing fixture
+  with the pane's real styles; `conversation-stress.mjs` (`window`, full seeded
+  sequence) records its offset and header geometry beside the list and panes alone.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
@@ -965,7 +971,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   source taking an established session out of two panes drops its composer
   text at once and keeps the box. On the next frame that box still shows
   the reply. After the box goes, the pane count is what it was before the
-  split. _Check:_ `columns.mjs --only reply-held`.
+  split. The check reclaims side-column room before typing into the two-pane fixture
+  and reveals the session rows before removing it, including at 760px.
+  _Check:_ `columns.mjs --only reply-held`.
 - [ ] **A message still on its way stays until that box goes.** The source
   removing the session drops the outbox at once, including a send it
   refused. The box still shows that message and the send failure until
@@ -979,7 +987,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **Stop stays until that box goes while a turn was running.** The
   source removing the session drops the transcript at once. The box still
   shows the turn and Stop, rather than Send, until the box itself goes.
-  _Check:_ `columns.mjs --only stop-held`. The layout test removes a
+  _Check:_ `columns.mjs --only stop-held`; the fixture reveals the session rows
+  again if opening beside folded them away. The layout test removes a
   session whose conversation was showing a running turn.
 - [ ] **A model change stays until that box goes.** The source removing
   the session drops the choice and the transcript's model control at
@@ -1024,6 +1033,19 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   _Check:_ `responsive.mjs --only header-picture`, and `safe-area.mjs`.
 
 ## Settings
+
+- [ ] **Live GitHub events are opt-in on the existing account.**
+  `github-live-events.mjs` drives the real gateway through Settings in Chromium
+  and WebKit: initially off, device sign-in, enable, reload, disable, provider
+  refusal without optimistic switch state, retry and disconnect. It asserts one
+  repository before disconnect and zero after, refused sign-out when cleanup audit
+  fails, concurrent enable/sign-out, and a visible switch at least
+  24 × 16 CSS pixels. The separate live row stays at most 100 CSS pixels high at
+  1000px width. Its help popup has five bullets, fits 600px and 1000px windows,
+  and Escape returns focus to the help button while Settings stays open.
+  The loopback GitHub is a provider substitute; cloud
+  authorization and private payload delivery are checked separately.
+
 
 _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds below a page's 420px).
 
@@ -1137,10 +1159,18 @@ phone's scanner is not this screen.
   composed `GithubAvatar`; without one, or when it fails, the login's initial.
   Choose repositories and Disconnect are icon buttons that take "Connected"'s
   place under the pointer or keyboard focus, and take no pointer while hidden;
-  Shift+Tab and Tab move between them. They show at all times while an action
-  is in flight or after one failed, and on touch-capable screens.
+  Reverse and forward Tab move between them (Option+Tab in macOS WebKit to
+  include links). They show at all times while an action is in flight or after
+  one failed, and on touch-capable screens.
   _Check:_ `conversation-stress.mjs` (`github`); unit tests
   `github-row.test.tsx`, `github-avatar.test.tsx`.
+- [ ] **The GitHub sign-in stays out of agent and managed-shell environments.**
+  After Connect, both report no Nessa `GH_TOKEN` or git credential helper,
+  while a source-authorized `nessa-github.read_repository` returns the requested
+  repository. Disconnect removes the saved sign-in; a later agent still has no
+  Nessa credential. _Check:_ `conversation-stress.mjs` (`github`, default and
+  raised count), `crates/nessa-mcp/src/main.rs`'s command environment test, and
+  `crates/nessa-server/tests/github/mod.rs`'s read/disconnect tests.
 
 ### Integrations: the gateway's MCP servers
 
@@ -1297,7 +1327,10 @@ it is redesigned on its own branch.
   with `--desktop-hover`, a chosen row with `--desktop-selected`, and an
   unread title weighs `--desktop-unread-weight`; a kit row's name says the
   count or glyph the kit lays beside it, which stays silent, and pointed at
-  that glyph the row keeps its fill; a switcher result, whose choice
+  that glyph the row keeps its fill and receives its click. A channel's settings
+  action receives its own click, with the label clear of the trailing band;
+  its presence does not make the decorative count or glyph intercept the row.
+  A switcher result, whose choice
   follows the pointer, draws no hover of its own. _Check:_ `shared-controls.mjs`
   (`rows`, per engine and layout: on load, in the overview, with the switcher
   open). Rules: `ui/list-row.css`, `source-list.css` › Rows. At the base
@@ -1744,19 +1777,23 @@ says why where the conversations would be.
   load run. The table itself is nessa_ui's `MessageMarkdown` / `Table`
   (`edgeFade`), with its own story checks.
 
-- [ ] **A run of tool calls draws each call on one time axis, and an instant
-  call is a dot.**
+- [ ] **A run of tool calls draws each call on one time axis, an instant
+  call is a dot, and a long name is cut before the bar.**
   _Check:_ `conversation-stress.mjs`'s `trace` step (knob `traces`): the
   scripted agent makes three calls, one failing. The window folds them into
   "Ran 3 tools", which opens to one row per call with its status. Each bar
   starts within 3% of the axis where its call started, is at least as wide as
   it is tall (a call of a few milliseconds is a round dot, never a hairline),
-  and ends no more than 0.5 px past the axis. A call's card shows its input.
+  and ends no more than 0.5 px past the axis. One call is announced under a
+  title far longer than its column, as a harness names a web search: every
+  row's name ends before its bar's track starts, and the long one is cut
+  with an ellipsis while still holding its whole title. A call's card shows
+  its input.
   While the run is still at work (the agent holds after its last call), the
   trace alone says so: its line reads "Working", open or folded, the call at
   work is named once in its run, and no live row repeats it below
   (`shownActivity` in `model/transcript.ts`). Chromium in the PR job; WebKit with the stress load run. The trace itself is
-  nessa_ui's `ToolTrace`, with its own story checks (`Instant`).
+  nessa_ui's `ToolTrace`, with its own story checks (`Instant`, `LongLabel`).
 
 ### Onboarding readiness recovery
 
@@ -2044,6 +2081,32 @@ and is dev-only in run-all.
   Staging and Answer drops the first question. Skip drops the second. A frame
   that no longer lists the third drops it on the desktop and the panel.
 
+## Tool disclosure scroll
+
+`tool-disclosure.mjs` opens the sample conversations `split-panes` and
+`retry-budget` in the desktop window. The rule is
+`watchToolDisclosure` in `src/desktop/workspace/ui/transcript/tool-disclosure.ts`
+and the state table in `docs/design/transcript-tool-disclosure-scroll.md`.
+Chromium and WebKit, both layouts, at 1280×720, so the sample
+conversation overflows while its tool header is still on screen at the end.
+
+- [ ] **Opening or closing a tool run at the end of the transcript keeps
+  that header's top within 1px and grows the distance from the end.**
+  The same header stays within 1px when the reader is at the top.
+  _Check:_ `tool-disclosure.mjs --only group-end,group-away`. Anchoring is
+  off during the motion. The shot `waterfall-open-<engine>-<layout>.png`
+  is that open run: the header's bar, each call's duration bar, and the
+  0s–30s axis, with the header still in view. `waterfall-call-<engine>.png`
+  is a call's details open under its row. Closing may move the header down
+  only by the browser's clamp, and only as far as `scrollTop` decreases.
+- [ ] **Opening a call's row at the end keeps that row's top within 1px.**
+  _Check:_ `--only step-end`.
+- [ ] **Showing the calls folded above a long run keeps that row's top
+  within 1px.** _Check:_ `--only earlier` (`retry-budget`).
+- [ ] **A growth while the reader is back at the end leaves them within
+  24px of it.** _Check:_ `--only follow`. This is after a disclosure, so
+  the hold has already let go.
+
 ## Transcript notes
 
 `transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page
@@ -2144,26 +2207,16 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `empty`. "No linked devices yet." and Link a Device, no Done and no
   Share; the link closes the dialog and opens Settings on Linked devices.
 
-## Session list: pinned first, request cards (#1084)
+## Session list: pinned first, waiting rows (#1084)
 
 - [ ] **In three columns the sidebar lists channels only; a channel's pinned
   sessions lead its list under "Pinned", each listed once.** _Check:_
   `columns.mjs` (`channels-alone`); Sessions in sidebar still discloses a
   channel's sessions.
-- [ ] **Each waiting row the list asks about is a request card, answered from
-  the list.** It reads the command as the transcript card does
-  (`approvalGist`), offers the review's refusal and primary allow on one row,
-  every other answer in the menu beside them.
-  It allows only a request it shows whole, by a rule over the request
-  (`allowableFromList`): nothing in the tool's input but the command, at
-  most three lines and 180 characters; any other offers its refusals and
-  Review in Chat. _Check:_ `columns.mjs` (`list-request`: Allow moves
-  the row out of Needs you; `list-request-claude`: Claude's five-answer shell
-  review at the list's narrowest, read as the transcript reads it, answers
-  that fit their words, under 260px); `conversation-stress.mjs`
-  (`listAnswer`); unit tests `list-request.test.tsx` (only what is drawn is
-  asked: never a pinned row, a row the search hides, or a folded list's; the
-  bound of 12; a card's controls keep their keys).
+- [ ] **A waiting row in Needs you is a plain session row.** No answer
+  buttons or question forms are drawn in the list; clicking the row opens the
+  chat, where the review or question is answered, and the answered row leaves
+  Needs you. _Check:_ `conversation-stress.mjs` (`waitingRow`).
 
 ## The window never scrolls sideways (#1084)
 
@@ -2356,3 +2409,43 @@ _Check:_ `settings-action-owners.mjs` (both engines), component regressions in
 
 _Check:_ `conversation-stress.mjs` step `menuPanel` (knob `menuPanels`), in
 Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).
+
+## Local vault
+
+`vault.mjs` exercises setup strength and confirmation, wrong passphrase refusal,
+transient input clearing, concise help, reload without re-unlock, and pipe EOF
+locking through the actual gateway and native child. Check keyboard focus and
+Later/Escape leave ordinary workspace use available. GitHub protected actions
+still require backend admission after a canceled dialog.
+
+The conversation stress notice and launch reloads check the current vault state.
+After an earlier gateway restart has sealed it, they wait for the unlock dialog,
+enter the disposable passphrase through the UI, and verify unlocked state before
+continuing ordinary clicks. Review-notice identity, delivery and at-rest automatic
+denial checks still apply. The minimized sequence is seed 2 with one pool step
+and one notice step; pool precedes notice, whose page reload used to leave the
+vault dialog blocking the main conversation click.
+
+## Boat VM lifetime settings
+
+- [ ] The global default saves from Settings → Connections → Accounts without a
+  Boat token. A saved channel's gear opens its settings in both layouts. A new
+  channel inherits the global lifetime; an explicit No automatic stop overrides
+  it, and Use Nessa default removes only that override. Invalid, null-scope and
+  contradictory commands leave the default unchanged. _Check:_
+  `boat-runtime-settings.mjs` in Chromium/WebKit, columns/sidebar, against a real
+  gateway; the same shared check runs in the conversation stress `channel` step.
+- [ ] The dialog's controls remain usable by keyboard, Escape closes it, and
+  the text explains that finite durations include active work and changes apply
+  at create/resume rather than changing an active deadline. _Check:_ manual
+  screenshot/focus review and the settings control's rendered tests.
+
+
+## Background tasks
+
+- The conversation stress `background` step starts a real local command through
+  the MCP relay. Its original waterfall row stays running after the calling turn
+  finishes, then settles with the command's actual output. Exactly one internal
+  continuation reaches the conversation and no synthetic user bubble appears.
+- Check the running and completed row in Chromium and WebKit. Ordinary foreground
+  tools still settle when their calling turn ends. No separate task list is added.

@@ -27,6 +27,7 @@ fn made(request_id: &str, name: &str, at: u64) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
+            execution: crate::conversation::domain::ChannelExecution::default(),
             name: ChannelName::new(name).unwrap(),
             folder: ChannelFolder {
                 path: path(&absolute("/work/repo")),
@@ -263,6 +264,125 @@ fn this_systems_folders_are_refused() {
             folders.accept_folder(&chosen(Path::new(refused))),
             Err(FolderRefusal::Refused),
             "{refused}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let original = made("main-life", "design", 1);
+    let first = original.coordinator_id();
+    let worker = conversation();
+    store.create(original.clone()).await.unwrap();
+    store.place(&first, original.id()).await.unwrap();
+    store.place(&worker, original.id()).await.unwrap();
+    store.forget(&worker).await.unwrap();
+    assert_eq!(
+        store
+            .get(original.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .coordinator_id(),
+        first
+    );
+    let (one, two) = tokio::join!(store.forget(&first), store.forget(&first));
+    one.unwrap();
+    two.unwrap();
+    let next = store
+        .get(original.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .coordinator_id();
+    assert_ne!(next, first);
+    assert_eq!(store.channel_of(&first).await.unwrap(), None);
+    // A retry of creation must answer the current generation, too.
+    assert_eq!(
+        store
+            .create(original.clone())
+            .await
+            .unwrap()
+            .coordinator_id(),
+        next
+    );
+    drop(store);
+    let reopened =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let channel = reopened.get(original.id()).await.unwrap().unwrap();
+    assert_eq!(channel.coordinator_id(), next);
+    reopened.place(&next, channel.id()).await.unwrap();
+    reopened.forget(&next).await.unwrap();
+    let third = reopened
+        .get(channel.id())
+        .await
+        .unwrap()
+        .unwrap()
+        .coordinator_id();
+    assert_ne!(third, first);
+    assert_ne!(third, next);
+}
+
+#[tokio::test]
+async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
+    for version in [1, 2] {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("channels.sqlite3");
+        // Start from the actual old schema, rather than a second handwritten one.
+        let current = DEFINITION;
+        let old = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
+        let old = if version == 1 {
+            old.lines()
+                .filter(|line| {
+                    !line.trim_start().starts_with("coordinator_placement")
+                        && !line.trim_start().starts_with("thread_placement")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            old
+        };
+        drop(
+            nessa_local_storage::open(&path, nessa_local_storage::OpenMode::OpenOrCreate).unwrap(),
+        );
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(&format!("{old}\nPRAGMA user_version = {version};"))
+            .unwrap();
+        let kept = made("migration", "old channel", 1);
+        connection.execute("INSERT INTO channels (channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at) VALUES (?1, 'org', 'owner', 'migration', 'old channel', ?2, 0, 'codex', 'gpt-5.6-terra', 'full', '', '[]', 1)", params![kept.id().as_str(), absolute("/work/repo")]).unwrap();
+        let main = kept.coordinator_id();
+        connection
+            .execute(
+                "INSERT INTO channel_conversations VALUES (?1, ?2)",
+                params![main.to_string(), kept.id().as_str()],
+            )
+            .unwrap();
+        drop(connection);
+        let store = LocalChannelStore::open(&path).unwrap();
+        let restored = store.get(kept.id()).await.unwrap().unwrap();
+        assert_eq!(
+            restored.execution(),
+            crate::conversation::domain::ChannelExecution::default()
+        );
+        assert_eq!(restored.coordinator_id(), main);
+        assert_eq!(
+            store.channel_of(&main).await.unwrap(),
+            Some(kept.id().clone())
+        );
+        store.forget(&main).await.unwrap();
+        assert_ne!(
+            store
+                .get(kept.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .coordinator_id(),
+            main
         );
     }
 }

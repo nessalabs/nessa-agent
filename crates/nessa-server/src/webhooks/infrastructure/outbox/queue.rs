@@ -1,0 +1,134 @@
+//! One transaction advances the contiguous source cursor with its delivery.
+use super::journal::{commit, delivery_audit};
+use super::publication::publish;
+use super::stored::{self, StoredDelivery};
+use super::{codec, cursor, integer, unavailable};
+use crate::webhooks::application::{DeliveryCause, OutboxError, QueuedRecord, MAX_BODY_BYTES};
+use crate::webhooks::domain::Delivery;
+use nessa_local_database::rusqlite::{params, Connection, OptionalExtension};
+use std::path::Path;
+use uuid::Uuid;
+
+pub(super) fn queue(
+    connection: &mut Connection,
+    audit: &Path,
+    record: QueuedRecord,
+) -> Result<Uuid, OutboxError> {
+    if record.body.len() > MAX_BODY_BYTES
+        || record.position == 0
+        || record.expected_after.checked_add(1) != Some(record.position)
+        || record.scope.access_epoch().as_str() != format!("epoch-{}", record.epoch)
+    {
+        return Err(OutboxError::Invalid);
+    }
+    let registration = record.registration.to_string();
+    let conversation = record.conversation.to_string();
+    cursor::check_identity(&registration, &conversation, &record.scope)?;
+    let scope = codec::scope_text(&record.scope)?;
+    let position = integer(record.position)?;
+    let transaction = connection.transaction().map_err(unavailable)?;
+    let current_registration = transaction
+        .query_row(
+            &format!("{} FROM registrations WHERE id=?1", super::registry::SELECT),
+            [&registration],
+            |row| super::registry::StoredRegistration::row(row, 0),
+        )
+        .optional()
+        .map_err(super::cursor::row_error)?
+        .map(super::registry::StoredRegistration::checked)
+        .transpose()?;
+    if !current_registration.is_some_and(|saved| saved.lifecycle.retains_queued()) {
+        return Err(OutboxError::Conflict);
+    }
+    let current = cursor::read(&transaction, record.registration, &record.conversation)?;
+    if let Some(expected) = &record.expected_source {
+        cursor::check_identity(&registration, &conversation, expected)?;
+    }
+    if let Some(current) = &current {
+        if current.reset_required {
+            return Err(OutboxError::ResetRequired);
+        }
+        if current.reset != record.capture
+            || (!codec::same_source(&current.scope, &record.scope)
+                && !record
+                    .expected_source
+                    .as_ref()
+                    .is_some_and(|expected| codec::same_source(&current.scope, expected)))
+        {
+            return Err(OutboxError::Conflict);
+        }
+    } else if record.capture.is_some() {
+        return Err(OutboxError::Conflict);
+    }
+    if let Some(current) = &current {
+        let old = &current.scope;
+        if !codec::same_source(old, &record.scope) {
+            super::source_reset::observe(
+                &transaction,
+                record.registration,
+                &record.conversation,
+                current,
+                &record.scope,
+                record.initiator,
+                record.observed_at_ms,
+            )?;
+            commit(
+                transaction,
+                Some(record.registration),
+                record.observed_at_ms,
+            )?;
+            publish(connection, audit)?;
+            return Err(OutboxError::ResetRequired);
+        }
+    }
+    let existing:Option<(StoredDelivery,Vec<u8>)>=transaction.query_row(
+        &format!("{},body FROM deliveries WHERE registration=?1 AND conversation=?2 AND incarnation=?3 AND position=?4",stored::SELECT),
+        params![registration,conversation,record.scope.incarnation().as_str(),position],
+        |r|Ok((StoredDelivery::row(r)?,r.get(10)?)),
+    ).optional().map_err(unavailable)?;
+    if let Some((saved, body)) = existing {
+        let existing = saved.checked(&transaction)?;
+        if codec::scope_text(&existing.scope)? != scope
+            || body != record.body
+            || existing.delivery.epoch() != record.epoch
+        {
+            return Err(OutboxError::Conflict);
+        }
+        return Ok(existing.delivery.id());
+    }
+    if let Some(current) = &current {
+        if current.position != record.expected_after {
+            return Err(OutboxError::Conflict);
+        }
+    } else if record.expected_after != 0 {
+        return Err(OutboxError::Conflict);
+    }
+    if current.is_none() {
+        super::capacity::admit_cursor(&transaction, record.registration)?;
+    }
+    let delivery = Delivery::queued(record.id, record.epoch);
+    transaction.execute(
+        "INSERT INTO deliveries(id,registration,conversation,incarnation,position,scope,body,state) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![record.id.to_string(),registration,conversation,record.scope.incarnation().as_str(),position,scope,record.body,codec::encode(&delivery)?],
+    ).map_err(unavailable)?;
+    transaction.execute(
+        "INSERT INTO cursors(registration,conversation,scope,position) VALUES(?1,?2,?3,?4) ON CONFLICT(registration,conversation) DO UPDATE SET scope=excluded.scope,position=excluded.position",
+        params![registration,conversation,scope,position],
+    ).map_err(unavailable)?;
+    delivery_audit(
+        &transaction,
+        &delivery,
+        None,
+        DeliveryCause::SourceQueued {
+            initiator: record.initiator,
+        },
+        record.observed_at_ms,
+    )?;
+    commit(
+        transaction,
+        Some(record.registration),
+        record.observed_at_ms,
+    )?;
+    publish(connection, audit)?;
+    Ok(record.id)
+}

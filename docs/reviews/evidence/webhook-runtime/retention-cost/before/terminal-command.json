@@ -1,0 +1,13 @@
+[
+  "strace",
+  "-f",
+  "-c",
+  "-e",
+  "trace=fsync,fdatasync,openat,rename,renameat,link,linkat,unlink,fcntl,pwrite64,write",
+  "-o",
+  "/tmp/nessa-retention-oldhead-probes/terminal-syscalls.txt",
+  "/tmp/nessa-retention-oldhead-probes/tests-bin",
+  "--exact",
+  "webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bounded",
+  "--nocapture"
+]

@@ -320,8 +320,9 @@ pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
 pub use record_read::{
-    ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
-    RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
+    PrincipalRecordReadSource, PrincipalRecordScope, ReadRecords, RecordHead, RecordReadError,
+    RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
+    RecordReadValue,
 };
 pub use service::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
@@ -393,8 +394,18 @@ mod local_golden_tests;
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
 
+#[cfg(unix)]
+pub(crate) use placement::ThreadEnvironments;
+pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
+
+#[cfg(unix)]
+mod artifact_channels;
+#[cfg(unix)]
+pub(crate) use artifact_channels::{ArtifactChannel, ArtifactChannels};
+
 mod input_files;
 pub(crate) use input_files::{ConversationInputFiles, InputFileDelivery};
 pub use input_files::{InputFileAudit, InputFileStage};
 #[cfg(any(unix, test))]
 pub(crate) use input_files::{LocalInputFile, LocalInputFilePlacement};
+pub mod background_tasks;

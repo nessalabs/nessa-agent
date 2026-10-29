@@ -22,17 +22,37 @@ diagramLinks: {}
 
 A new desktop session begins as a local draft. Sending keeps a stable input ID so a retry can refer to the same message.
 
+Sending or retrying a local session requires its channel to remain in the
+current index. If the source refused its first send, discarding that message
+restores the draft in a current channel when one is available. With no current
+channel, it removes the local session and any pane showing it.
+
+The current-channel decision is checked again immediately before a local
+message reaches the source. An index can replace the channel list after the
+composer stages a message and before the asynchronous delivery continuation.
+
+| Channel when send or retry starts | Channel before source dispatch | Result |
+| --- | --- | --- |
+| Present | Present | Send the staged message under its stable ID. |
+| Missing | Missing | Do not stage or send a message. |
+| Present | Missing | Mark the staged message failed with a channel-unavailable explanation; do not call the source. A retry may use the same ID if the channel returns. |
+| Present | Removed after source dispatch | Settle from the source's answer or later update; the window cannot retract the request. |
+
+These rows apply to drafts and sessions the source has not confirmed. An
+established session is sent under its source-owned identity without a local
+`start` channel.
+
 The selected [connection mode](README.md#connection-modes) decides where the message goes. Gateway mode sends through the workspace client; sample mode produces scripted replies. A sample reply does not prove a provider ran.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Draft: New session identity
-    Draft --> Sending: First nonempty send / provisional summary and outbox
+    Draft --> Sending: First nonempty send [channel current] / provisional summary and outbox
     Sending --> AwaitingReplacement: Source accepted / clear sending mark
     Sending --> Failed: Typed refusal or unknown outcome
-    Failed --> Sending: Retry / same message identity
-    Failed --> Draft: Discard last failed message [source never began and still shown]
-    Failed --> Forgotten: Discard last failed message [never began and unshown]
+    Failed --> Sending: Retry [channel current] / same message identity
+    Failed --> Draft: Discard last failed message [never began, still shown, current home]
+    Failed --> Forgotten: Discard last failed message [never began, unshown or no current home]
     Sending --> Confirmed: Replacement includes message identity
     AwaitingReplacement --> Confirmed: Replacement includes message identity
     Failed --> Confirmed: Replacement includes message identity

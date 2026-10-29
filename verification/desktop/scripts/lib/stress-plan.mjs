@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  backgroundTasks: {
+    default: 1,
+    what: "background commands outliving their calling turn and settling the original tool row",
+  },
   inputFiles: {
     default: 1,
     what: "PDF, ZIP and text inputs uploaded by another surface, retained and drawn in the conversation",
@@ -101,9 +105,13 @@ export const KNOBS = {
     default: 1,
     what: 'times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving; "nessa Studio" stays while a column holds the corner and goes over the panes alone',
   },
-  listAnswers: {
+  waitingRows: {
     default: 1,
-    what: "reviews answered from the session list's Needs you card: it reads the transcript card's command, and its answer settles the turn",
+    what: "reviews waiting under Needs you as a plain session row, no answers or form beside it; opened from the row and answered in the chat, the row leaves Needs you",
+  },
+  streams: {
+    default: 1,
+    what: "replies streamed in over 512 small chunks and over 16 KB: the newest words are drawn live, still after the sidebar closes and opens, and a fresh read holds every word, nothing left out",
   },
   panels: {
     default: 1,
@@ -155,11 +163,15 @@ export const KNOBS = {
   },
   githubs: {
     default: 1,
-    what: "times GitHub is connected from Settings through a fake GitHub, an agent started after it holds the sign-in, then disconnected",
+    what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
   },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
+  },
+  webhooks: {
+    default: 1,
+    what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
   },
   channels: {
     default: 1,
@@ -220,6 +232,7 @@ export function plan(knobs) {
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
+  add(knobs.backgroundTasks, () => ({ kind: "background" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
@@ -236,7 +249,8 @@ export function plan(knobs) {
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.rails, () => ({ kind: "rail" }))
   add(knobs.panels, () => ({ kind: "panel" }))
-  add(knobs.listAnswers, () => ({ kind: "listAnswer" }))
+  add(knobs.waitingRows, () => ({ kind: "waitingRow" }))
+  add(knobs.streams, () => ({ kind: "stream" }))
   add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
@@ -251,6 +265,7 @@ export function plan(knobs) {
   add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
+  add(knobs.webhooks, () => ({ kind: "webhook" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
@@ -282,7 +297,7 @@ export function plan(knobs) {
     } else if (
       step.kind === "reviews" ||
       step.kind === "large" ||
-      step.kind === "listAnswer" ||
+      step.kind === "waitingRow" ||
       step.kind === "model"
     ) {
       // These are about cards being shown, so they run where the agent asks.

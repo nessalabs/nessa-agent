@@ -6,6 +6,7 @@ import type {
   ConversationObserveResult,
   ConversationSummary,
   ConversationView,
+  ConversationEarlier,
   ConversationPermission,
   ConversationQuestion,
   ConversationLease,
@@ -453,85 +454,12 @@ export function conversationModel(
   oneOf(text(item, "effect"), ["subsequentResponses", "nextTurn"])
   return item as unknown as ConversationSetModelResult
 }
-export function conversationView(value: unknown, expected: string): ConversationView {
-  const item = record(value)
-  exact(item, [
-    "conversationId",
-    "revision",
-    "serverNowMs",
-    "messages",
-    "pending",
-    "permissions",
-    "questions",
-    "tools",
-    "capabilities",
-    "lifecycle",
-    "truncated",
-    "interactionViewError",
-    "queueComplete",
-    "transcriptState",
-    "runtime",
-    "lease",
-    "artifacts",
-    "notes",
-    "unreadable",
-    "unreadableTruncated",
-    "usageLimitAutoContinue",
-    "handoffs",
-    "title",
-    "approvalMode",
-    "approvalModes",
-    "approvalModeChange",
-    "modelChange",
-    "modelChangeEffect",
-    "model",
-  ])
-  if (identity(item, "conversationId") !== expected)
-    throw new Error("Conversation response belongs to another conversation")
-  identity(item, "revision")
-  // The gateway's time the view was sent at: what each deadline's `dueAtMs`
-  // is measured against (`clientDueAtMs`).
-  const serverNowMs = item.serverNowMs
-  if (
-    typeof serverNowMs !== "number" ||
-    !Number.isSafeInteger(serverNowMs) ||
-    serverNowMs < 1
-  )
-    throw new Error("Invalid conversation serverNowMs")
-  if (
-    item.usageLimitAutoContinue !== undefined &&
-    typeof item.usageLimitAutoContinue !== "boolean"
-  )
-    throw new Error("Conversation response has invalid usageLimitAutoContinue")
-  optionalText(item, "title", bounds.maxConversationTitleBytes)
-  flag(item, "truncated")
-  flag(item, "queueComplete")
-  oneOf(text(item, "transcriptState", maxTranscriptStateBytes, false), transcriptStates)
-  const committedMode = text(item, "approvalMode", 4, false)
-  const offeredModes = approvalModeChoices(item.approvalModes)
-  if (!offeredModes.some((choice) => choice.id === committedMode))
-    throw new Error("Conversation mode is unavailable for its model")
-  if (item.approvalModeChange !== undefined) {
-    const change = record(item.approvalModeChange)
-    exact(change, ["requestId", "requestedMode", "status"])
-    identity(change, "requestId")
-    const requested = text(change, "requestedMode", 4, false)
-    if (!offeredModes.some((choice) => choice.id === requested))
-      throw new Error("Conversation requested mode is unavailable")
-    oneOf(text(change, "status"), ["changing", "recovery_required"])
-  }
-  if (item.modelChange !== undefined) {
-    const change = record(item.modelChange)
-    exact(change, ["requestId", "requestedModel", "status"])
-    identity(change, "requestId")
-    text(change, "requestedModel", 256, false)
-    oneOf(text(change, "status"), ["changing", "recovery_required"])
-  }
-  if (item.modelChangeEffect !== undefined)
-    oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
-  text(item, "model", 256, false)
-  if (item.interactionViewError !== undefined)
-    text(item, "interactionViewError", 2048, false)
+/**
+ * The turns `item` lists, checked as a view's: shared by a view and a page of
+ * earlier turns. `targetsListed` says a steering message's target must be
+ * listed too, as it must in a view that left nothing out.
+ */
+function transcriptTurns(item: Record<string, unknown>, targetsListed: boolean) {
   const messages = items(item, "messages", 128)
   const messageIds = new Set<string>()
   const messageStatuses = new Map<string, string>()
@@ -543,7 +471,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageAgents = new Map<string, string>()
   const toolPartIds = new Set<string>()
   const noticePartIds = new Set<string>()
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     exact(message, [
       "executionId",
       "userText",
@@ -560,8 +488,19 @@ export function conversationView(value: unknown, expected: string): Conversation
       "usageLimit",
       "parts",
       "steeringOffset",
+      "startsAt",
     ])
     const executionId = identity(message, "executionId")
+    // Only the first turn listed can start partway: what comes before it is
+    // read as earlier turns.
+    if (message.startsAt !== undefined) {
+      if (index !== 0) throw new Error("Conversation turn starts partway after the first")
+      const at = record(message.startsAt)
+      exact(at, ["part", "byte"])
+      for (const key of ["part", "byte"])
+        if (!Number.isSafeInteger(at[key]) || (at[key] as number) < 0)
+          throw new Error("Invalid conversation turn start")
+    }
     if (messageIds.has(executionId))
       throw new Error("Conversation response repeats a message execution")
     if (
@@ -603,7 +542,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       const target = identity(message, "steeringTarget")
       if (target === executionId)
         throw new Error("Conversation steering input targets itself")
-      if (!item.truncated && !messageIds.has(target))
+      if (targetsListed && !messageIds.has(target))
         throw new Error("Conversation steering input targets later or missing work")
       if (message.steeringOffset === undefined)
         throw new Error("Injected input has no observation offset")
@@ -615,7 +554,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Invalid steering offset")
     let previousOffset = -1
-    for (const part of items(message, "parts", 512)) {
+    for (const part of items(message, "parts", 4096)) {
       exact(part, [
         "offset",
         "kind",
@@ -630,7 +569,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       previousOffset = part.offset as number
       const kind = text(part, "kind")
       oneOf(kind, ["text", "thought", "tool", "local_notice"])
-      text(part, "text")
+      text(part, "text", 65536)
       const toolId = text(part, "toolId", 256)
       const noticeId = text(part, "noticeId", 20)
       const noticeKind = part.noticeKind
@@ -668,7 +607,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       }
       if (part.messageId !== undefined) identity(part, "messageId")
     }
-    const userText = text(message, "userText")
+    const userText = text(message, "userText", 65536)
     const status = text(message, "status")
     oneOf(status, [
       "queued",
@@ -721,6 +660,238 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Conversation message names both an app and an agent")
     messageAgents.set(executionId, agent)
   }
+  return {
+    messages,
+    messageIds,
+    messageStatuses,
+    messageTexts,
+    messageImages,
+    messageFiles,
+    messageUploads,
+    messageApps,
+    messageAgents,
+    toolPartIds,
+  }
+}
+
+/**
+ * The tool calls `item` lists, checked as a view's against the turns'
+ * `toolPartIds`. `complete` says each call and each tool part has the other.
+ */
+function transcriptTools(
+  item: Record<string, unknown>,
+  toolPartIds: ReadonlySet<string>,
+  complete: boolean,
+) {
+  const toolIds = new Set<string>()
+  // One execution runs in one process, so its tools share that start's choice.
+  const executionHooks = new Map<string, string>()
+  for (const tool of items(item, "tools", 128)) {
+    exact(tool, [
+      "executionId",
+      "toolId",
+      "title",
+      "kind",
+      "status",
+      "details",
+      "input",
+      "mcp",
+      "structuredContent",
+      "backgroundTaskId",
+      "nativeHooks",
+      "startedAtMs",
+      "endedAtMs",
+      "changes",
+      "changesCut",
+    ])
+    // Absent when the process start the call ran under recorded no choice.
+    if (Object.hasOwn(tool, "nativeHooks")) {
+      const nativeHooks = text(tool, "nativeHooks", 3)
+      if (nativeHooks !== "off" && nativeHooks !== "on")
+        throw new Error("Invalid native hooks choice")
+    }
+    const executionId = identity(tool, "executionId")
+    if (Object.hasOwn(tool, "nativeHooks")) {
+      const recorded = executionHooks.get(executionId)
+      if (recorded !== undefined && recorded !== tool.nativeHooks)
+        throw new Error("An execution names two native hooks choices")
+      executionHooks.set(executionId, tool.nativeHooks as string)
+    }
+    identity(tool, "toolId")
+    const toolKey = JSON.stringify([tool.executionId, tool.toolId])
+    if (toolIds.has(toolKey)) throw new Error("Conversation response repeats a tool")
+    toolIds.add(toolKey)
+    text(tool, "title", 2048)
+    // The provider's own category, empty until it says. The schema names the
+    // values, so an unknown one is a gateway this client does not understand.
+    oneOf(text(tool, "kind", 32), [
+      "",
+      "read",
+      "edit",
+      "search",
+      "fetch",
+      "execute",
+      "think",
+      "delete",
+      "move",
+      "switch_mode",
+      "other",
+    ])
+    text(tool, "status", 64)
+    text(tool, "details", 16384)
+    text(tool, "input", 32768)
+    // Present only once the harness named the MCP server and tool; which names
+    // are valid is the SDK's rule, and only the published bound is checked here.
+    if (tool.mcp !== undefined) {
+      const mcp = record(tool.mcp)
+      exact(mcp, ["server", "tool", "resourceUri", "argumentsJson"])
+      text(mcp, "server", bounds.maxMcpNameBytes, false)
+      text(mcp, "tool", bounds.maxMcpNameBytes, false)
+      // The UI the gateway read from the server itself; which URIs are valid is
+      // the SDK's rule, and only the published bound is checked here.
+      if (mcp.resourceUri !== undefined)
+        text(mcp, "resourceUri", bounds.maxUiResourceUriBytes, false)
+      // The arguments the connection saw, within the same published bound as
+      // a review and an app's own call. Absent when it could not match them.
+      if (mcp.argumentsJson !== undefined)
+        text(mcp, "argumentsJson", bounds.maxMcpArgumentsBytes)
+    }
+    if (Object.hasOwn(tool, "backgroundTaskId")) {
+      const task = text(tool, "backgroundTaskId", bounds.maxBackgroundTaskIdBytes, false)
+      if (!new RegExp(bounds.backgroundTaskIdPattern).test(task))
+        throw new Error("Invalid background task identity")
+    }
+    if (tool.structuredContent !== undefined)
+      text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)
+    // When the gateway heard the call start and settle; absent on calls saved
+    // before it kept them, and the end absent while the call runs. Wall-clock
+    // times, so an end before its start (a clock step) is the reader's to clamp.
+    for (const key of ["startedAtMs", "endedAtMs"]) {
+      const at = tool[key]
+      if (at !== undefined && (!Number.isSafeInteger(at) || (at as number) < 0))
+        throw new Error(`Invalid conversation tool ${key}`)
+    }
+    // The files the call changed, as the agent reported them; absent when it
+    // reported none. Each side is cut to its bound, and says so.
+    if (tool.changes !== undefined) {
+      for (const change of items(tool, "changes", 16)) {
+        exact(change, ["path", "before", "after", "cut"])
+        text(change, "path", 4096, false)
+        if (change.before !== undefined) text(change, "before", 7000)
+        text(change, "after", 7000)
+        if (typeof change.cut !== "boolean")
+          throw new Error("Invalid conversation tool change")
+      }
+    }
+    // Present only when changes leaves out files the call changed.
+    if (tool.changesCut !== undefined && typeof tool.changesCut !== "boolean")
+      throw new Error("Invalid conversation tool changesCut")
+  }
+  if (complete) {
+    for (const toolKey of toolIds) {
+      if (!toolPartIds.has(toolKey))
+        throw new Error("Conversation tool is orphaned from its message")
+    }
+    for (const toolKey of toolPartIds) {
+      if (!toolIds.has(toolKey))
+        throw new Error("Conversation tool part has no matching tool state")
+    }
+  }
+  return toolIds
+}
+
+export function conversationView(value: unknown, expected: string): ConversationView {
+  const item = record(value)
+  exact(item, [
+    "conversationId",
+    "revision",
+    "serverNowMs",
+    "messages",
+    "pending",
+    "permissions",
+    "questions",
+    "tools",
+    "capabilities",
+    "lifecycle",
+    "truncated",
+    "earlier",
+    "interactionViewError",
+    "queueComplete",
+    "transcriptState",
+    "runtime",
+    "lease",
+    "artifacts",
+    "notes",
+    "unreadable",
+    "unreadableTruncated",
+    "usageLimitAutoContinue",
+    "handoffs",
+    "title",
+    "approvalMode",
+    "approvalModes",
+    "approvalModeChange",
+    "modelChange",
+    "modelChangeEffect",
+    "model",
+  ])
+  if (identity(item, "conversationId") !== expected)
+    throw new Error("Conversation response belongs to another conversation")
+  identity(item, "revision")
+  // The gateway's time the view was sent at: what each deadline's `dueAtMs`
+  // is measured against (`clientDueAtMs`).
+  const serverNowMs = item.serverNowMs
+  if (
+    typeof serverNowMs !== "number" ||
+    !Number.isSafeInteger(serverNowMs) ||
+    serverNowMs < 1
+  )
+    throw new Error("Invalid conversation serverNowMs")
+  if (
+    item.usageLimitAutoContinue !== undefined &&
+    typeof item.usageLimitAutoContinue !== "boolean"
+  )
+    throw new Error("Conversation response has invalid usageLimitAutoContinue")
+  optionalText(item, "title", bounds.maxConversationTitleBytes)
+  flag(item, "truncated")
+  flag(item, "earlier")
+  flag(item, "queueComplete")
+  oneOf(text(item, "transcriptState", maxTranscriptStateBytes, false), transcriptStates)
+  const committedMode = text(item, "approvalMode", 4, false)
+  const offeredModes = approvalModeChoices(item.approvalModes)
+  if (!offeredModes.some((choice) => choice.id === committedMode))
+    throw new Error("Conversation mode is unavailable for its model")
+  if (item.approvalModeChange !== undefined) {
+    const change = record(item.approvalModeChange)
+    exact(change, ["requestId", "requestedMode", "status"])
+    identity(change, "requestId")
+    const requested = text(change, "requestedMode", 4, false)
+    if (!offeredModes.some((choice) => choice.id === requested))
+      throw new Error("Conversation requested mode is unavailable")
+    oneOf(text(change, "status"), ["changing", "recovery_required"])
+  }
+  if (item.modelChange !== undefined) {
+    const change = record(item.modelChange)
+    exact(change, ["requestId", "requestedModel", "status"])
+    identity(change, "requestId")
+    text(change, "requestedModel", 256, false)
+    oneOf(text(change, "status"), ["changing", "recovery_required"])
+  }
+  if (item.modelChangeEffect !== undefined)
+    oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
+  text(item, "model", 256, false)
+  if (item.interactionViewError !== undefined)
+    text(item, "interactionViewError", 2048, false)
+  const {
+    messages,
+    messageStatuses,
+    messageTexts,
+    messageImages,
+    messageFiles,
+    messageUploads,
+    messageApps,
+    messageAgents,
+    toolPartIds,
+  } = transcriptTurns(item, !item.truncated && !item.earlier)
   const pendingIds = new Set<string>()
   for (const pending of items(item, "pending", 128)) {
     exact(pending, [
@@ -798,114 +969,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     oneOf(text(entry, "origin", 16), ["harness", "app"])
     text(entry, "toolName", bounds.maxReviewEntryToolNameBytes)
   }
-  const toolIds = new Set<string>()
-  // One execution runs in one process, so its tools share that start's choice.
-  const executionHooks = new Map<string, string>()
-  for (const tool of items(item, "tools", 128)) {
-    exact(tool, [
-      "executionId",
-      "toolId",
-      "title",
-      "kind",
-      "status",
-      "details",
-      "input",
-      "mcp",
-      "structuredContent",
-      "nativeHooks",
-      "startedAtMs",
-      "endedAtMs",
-      "changes",
-      "changesCut",
-    ])
-    // Absent when the process start the call ran under recorded no choice.
-    if (Object.hasOwn(tool, "nativeHooks")) {
-      const nativeHooks = text(tool, "nativeHooks", 3)
-      if (nativeHooks !== "off" && nativeHooks !== "on")
-        throw new Error("Invalid native hooks choice")
-    }
-    const executionId = identity(tool, "executionId")
-    if (Object.hasOwn(tool, "nativeHooks")) {
-      const recorded = executionHooks.get(executionId)
-      if (recorded !== undefined && recorded !== tool.nativeHooks)
-        throw new Error("An execution names two native hooks choices")
-      executionHooks.set(executionId, tool.nativeHooks as string)
-    }
-    identity(tool, "toolId")
-    const toolKey = JSON.stringify([tool.executionId, tool.toolId])
-    if (toolIds.has(toolKey)) throw new Error("Conversation response repeats a tool")
-    toolIds.add(toolKey)
-    text(tool, "title", 2048)
-    // The provider's own category, empty until it says. The schema names the
-    // values, so an unknown one is a gateway this client does not understand.
-    oneOf(text(tool, "kind", 32), [
-      "",
-      "read",
-      "edit",
-      "search",
-      "fetch",
-      "execute",
-      "think",
-      "delete",
-      "move",
-      "switch_mode",
-      "other",
-    ])
-    text(tool, "status", 64)
-    text(tool, "details", 16384)
-    text(tool, "input", 32768)
-    // Present only once the harness named the MCP server and tool; which names
-    // are valid is the SDK's rule, and only the published bound is checked here.
-    if (tool.mcp !== undefined) {
-      const mcp = record(tool.mcp)
-      exact(mcp, ["server", "tool", "resourceUri", "argumentsJson"])
-      text(mcp, "server", bounds.maxMcpNameBytes, false)
-      text(mcp, "tool", bounds.maxMcpNameBytes, false)
-      // The UI the gateway read from the server itself; which URIs are valid is
-      // the SDK's rule, and only the published bound is checked here.
-      if (mcp.resourceUri !== undefined)
-        text(mcp, "resourceUri", bounds.maxUiResourceUriBytes, false)
-      // The arguments the connection saw, within the same published bound as
-      // a review and an app's own call. Absent when it could not match them.
-      if (mcp.argumentsJson !== undefined)
-        text(mcp, "argumentsJson", bounds.maxMcpArgumentsBytes)
-    }
-    if (tool.structuredContent !== undefined)
-      text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)
-    // When the gateway heard the call start and settle; absent on calls saved
-    // before it kept them, and the end absent while the call runs. Wall-clock
-    // times, so an end before its start (a clock step) is the reader's to clamp.
-    for (const key of ["startedAtMs", "endedAtMs"]) {
-      const at = tool[key]
-      if (at !== undefined && (!Number.isSafeInteger(at) || (at as number) < 0))
-        throw new Error(`Invalid conversation tool ${key}`)
-    }
-    // The files the call changed, as the agent reported them; absent when it
-    // reported none. Each side is cut to its bound, and says so.
-    if (tool.changes !== undefined) {
-      for (const change of items(tool, "changes", 16)) {
-        exact(change, ["path", "before", "after", "cut"])
-        text(change, "path", 4096, false)
-        if (change.before !== undefined) text(change, "before", 7000)
-        text(change, "after", 7000)
-        if (typeof change.cut !== "boolean")
-          throw new Error("Invalid conversation tool change")
-      }
-    }
-    // Present only when changes leaves out files the call changed.
-    if (tool.changesCut !== undefined && typeof tool.changesCut !== "boolean")
-      throw new Error("Invalid conversation tool changesCut")
-  }
-  if (!item.truncated) {
-    for (const toolKey of toolIds) {
-      if (!toolPartIds.has(toolKey))
-        throw new Error("Conversation tool is orphaned from its message")
-    }
-    for (const toolKey of toolPartIds) {
-      if (!toolIds.has(toolKey))
-        throw new Error("Conversation tool part has no matching tool state")
-    }
-  }
+  const toolIds = transcriptTools(item, toolPartIds, !item.truncated)
   if (item.runtime !== undefined) {
     const runtime = record(item.runtime)
     exact(runtime, [
@@ -1024,7 +1088,7 @@ const leaseValues = {
     refused: true,
     unreadable: true,
   } satisfies Record<ConversationLease["state"], true>,
-  environment: { here: true, ssh: true, peer: true } satisfies Record<
+  environment: { here: true, ssh: true, peer: true, boat: true } satisfies Record<
     NonNullable<ConversationLease["environment"]>,
     true
   >,
@@ -1668,4 +1732,30 @@ export function conversationShares(value: unknown): ConversationSharesResult {
       throw new Error("Invalid conversation shares cursor")
   }
   return result as unknown as ConversationSharesResult
+}
+
+/**
+ * A page of earlier turns (`conversation.readEarlier`): its turns and tool
+ * calls checked as a view's, the fork it may end on, and whether more came
+ * before. A steering message's target may be earlier still.
+ */
+export function conversationEarlier(
+  value: unknown,
+  expected: string,
+): ConversationEarlier {
+  const item = record(value)
+  exact(item, ["conversationId", "messages", "tools", "handoffs", "more", "truncated"])
+  if (identity(item, "conversationId") !== expected)
+    throw new Error("Conversation response belongs to another conversation")
+  flag(item, "more")
+  flag(item, "truncated")
+  const { toolPartIds } = transcriptTurns(item, false)
+  transcriptTools(item, toolPartIds, !item.truncated)
+  const handoffIds = new Set<string>()
+  for (const handoff of items(item, "handoffs", 256)) {
+    const id = conversationHandoff(handoff)
+    if (handoffIds.has(id)) throw new Error("Repeated conversation handoff id")
+    handoffIds.add(id)
+  }
+  return item as unknown as ConversationEarlier
 }

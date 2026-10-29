@@ -56,6 +56,8 @@ export type Part =
        * `stopped`. Absent where nothing said; read as finished once the turn is.
        */
       readonly status?: StepStatus
+      /** Gateway-owned work whose lifecycle is independent of this turn. */
+      readonly backgroundTaskId?: string
       /** When it started and settled, in Unix milliseconds on this device's clock. */
       readonly startedAtMs?: number
       readonly endedAtMs?: number
@@ -449,7 +451,7 @@ export interface TranscriptLease {
   readonly state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
   /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
    * `peer` a paired machine that dials the gateway. */
-  readonly environment?: "here" | "ssh" | "peer"
+  readonly environment?: "here" | "ssh" | "peer" | "boat"
   /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
    * `environment` is `ssh` or `peer`. */
   readonly host?: string
@@ -593,10 +595,15 @@ export function runSettled(
   last: boolean,
   working: boolean,
 ): boolean {
+  const backgroundRunning = steps.some(
+    (step) =>
+      step.backgroundTaskId && (step.status === "pending" || step.status === "running"),
+  )
   return (
-    !working ||
-    (!last &&
-      steps.every((step) => step.status !== "pending" && step.status !== "running"))
+    !backgroundRunning &&
+    (!working ||
+      (!last &&
+        steps.every((step) => step.status !== "pending" && step.status !== "running")))
   )
 }
 

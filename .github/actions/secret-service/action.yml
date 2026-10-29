@@ -1,0 +1,10 @@
+name: Disposable native secret service
+description: Start the real Linux OS credential boundary for isolated gateway checks.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        timeout 300 sudo apt-get update -qq
+        timeout 300 sudo apt-get install -y -qq gnome-keyring dbus-x11
+        node .github/actions/secret-service/start.mjs

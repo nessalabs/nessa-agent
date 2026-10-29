@@ -10,7 +10,9 @@ use nessa_auth::{
         pairing::{ManualCode, OsEntropy},
     },
     application::{
-        credential_admin::{IssueCredentialOutcome, IssueCredentialRequest},
+        credential_admin::{
+            CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
+        },
         dto::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             PrincipalInputDto, PrincipalKindDto, ResourceDto,
@@ -342,6 +344,7 @@ async fn owner_route_refuses_a_member_before_disclosure() {
     let IssueCredentialOutcome::Issued { evidence, .. } = fixture
         .registry
         .issue_sync(IssueCredentialRequest {
+            purpose: CredentialIssuePurpose::Product,
             request_id: "member-request".into(),
             issuer_principal_id: "owner".into(),
             credential_id: "member-credential".into(),

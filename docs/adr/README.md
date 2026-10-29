@@ -38,6 +38,10 @@ it by.
 [233 — Responsive gateway startup](done/233-responsive-gateway-startup.md) records
 the Interactive macOS policy, local timing logs, and deferred follow-up work.
 
+[1198 — Settings inheritance](done/1198-settings-inheritance.md) records the
+typed broad-to-near selection rule. Each feature keeps its own storage,
+authorization and parent identity.
+
 | ADR | Implemented scope |
 | --- | --- |
 | [0001 — Redux product state](done/0001-redux-toolkit-for-product-state.md) | Product state and dispatchable conversation actions |
@@ -151,3 +155,10 @@ then copy [0000-template.md](0000-template.md) into `todo/<issue>-<slug>.md`.
 Keep it to one page. If it needs more than a page, the decision is probably two decisions.
 
 [501 — Provider authentication recovery](todo/501-provider-authentication-recovery.md) records typed ACP recovery and the remaining Claude internal-error limitation.
+
+## Hosted GitHub ingress
+
+[1107 — GitHub webhook receiver](todo/1107-github-webhook-receiver.md) records
+the Cloudflare Workers Free/D1 ingress contract. Desktop event delivery is
+explicitly outside that initial receiver. Live deployment evidence is tracked
+on [#1107](https://github.com/nessalabs/nessa-agent/issues/1107).

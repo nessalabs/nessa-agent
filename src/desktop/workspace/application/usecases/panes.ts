@@ -16,6 +16,7 @@ import {
   paneByKey,
   paneCount,
   removePane,
+  singlePane,
   showInPane,
   splitPane,
   equalizePanes as equalizeLayout,
@@ -122,7 +123,8 @@ function openItem(
   { item, pane }: { item: PaneItem; pane?: PaneKey },
 ): WorkspaceState {
   const panes = state.panes
-  if (!panes || !showable(state, item)) return state
+  if (!showable(state, item)) return state
+  if (!panes) return withPanes(opened(state, item), singlePane(paneItemKey(item)))
   const next = showInPane(panes, pane ?? panes.focused, paneItemKey(item))
   if (next === panes && !paneShowingItem(panes, item)) return state
   return withPanes(opened(state, item), next)
@@ -292,14 +294,15 @@ export function createDraft(
     restore?: boolean
   },
 ): WorkspaceState {
-  const panes = state.panes
-  if (!panes || showable(state, sessionItem(draftId))) return state
+  // With no pane at all (everything shown was removed), it opens alone.
+  const side = state.panes ? beside : undefined
+  if (showable(state, sessionItem(draftId))) return state
   const home = draftHome(state, { channelId, model })
   if (!home) return state
   const kept = restore ? keptDraftIn(state, home.channelId) : undefined
   if (kept)
-    return beside
-      ? openBeside(state, { sessionId: kept, target, side: beside, room, replace: false })
+    return side
+      ? openBeside(state, { sessionId: kept, target, side, room, replace: false })
       : openSession(state, { sessionId: kept, pane: target })
   const drafted: WorkspaceState = {
     ...state,
@@ -308,11 +311,11 @@ export function createDraft(
       [draftId]: { id: draftId, ...home },
     },
   }
-  const placed = beside
+  const placed = side
     ? openBeside(drafted, {
         sessionId: draftId,
         target,
-        side: beside,
+        side,
         room,
         replace: false,
       })
@@ -324,7 +327,10 @@ export function createDraft(
 /** The channel a new session starts in: the one being looked at, else the focused session's. */
 function draftChannel(state: WorkspaceState): string | undefined {
   if (channelOf(state, state.view.channelId)) return state.view.channelId
-  return focusedChannel(state) ?? state.channels[0]?.id
+  const focused = focusedChannel(state)
+  return (
+    (focused && channelOf(state, focused) ? focused : undefined) ?? state.channels[0]?.id
+  )
 }
 
 /**
@@ -334,7 +340,7 @@ function draftChannel(state: WorkspaceState): string | undefined {
  * None when there is no channel or no model to start on — a new session
  * runs on a model, and with none, none starts.
  */
-function draftHome(
+export function draftHome(
   state: WorkspaceState,
   { channelId, model }: { channelId?: string; model?: ModelRef },
 ): { channelId: string; model: ModelRef } | undefined {

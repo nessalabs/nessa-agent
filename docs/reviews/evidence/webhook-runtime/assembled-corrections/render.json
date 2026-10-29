@@ -1,0 +1,39 @@
+{
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "browser": "151.0.7922.173",
+  "results": [
+    {
+      "id": "gateway-webhook-outbox",
+      "sourceRevision": "8f83f7394251814575429f5f1362cb3abac61687",
+      "diagrams": [
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Acknowledging one durable operationIn DetailsFit96%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans"
+        },
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Source replacement and stoppingIn DetailsFit100%#mmd-2{font-family:\"Geist Variable\",Geist,ui-sans-se"
+        }
+      ]
+    },
+    {
+      "id": "gateway-webhook-issuance",
+      "sourceRevision": "1c1355b537037e7416486856211b74c605804fa7",
+      "diagrams": [
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Guards and effectsIn DetailsFit94%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,"
+        },
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Destination installationIn DetailsFit86%#mmd-2{font-family:\"Geist Variable\",Geist,ui-sans-serif,syst"
+        }
+      ]
+    }
+  ],
+  "pageErrors": []
+}

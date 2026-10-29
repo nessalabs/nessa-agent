@@ -4,6 +4,7 @@
  * both processes with the recorder. The failed-start retention check also
  * starts a disposable stand-in gateway.
  */
+import { DatabaseSync } from "node:sqlite"
 import { strict as assert } from "node:assert"
 import {
   chmodSync,
@@ -17,9 +18,16 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
+import { once } from "node:events"
+import { Worker } from "node:worker_threads"
 
 import { TEXT_REPLY_SCENARIO } from "../../../../scripts/mcp-test-server/scenarios.mjs"
-import { panelTarget, scriptedLaunch, startGatewayStack } from "./gateway-stack.mjs"
+import {
+  panelTarget,
+  scriptedLaunch,
+  startGatewayStack,
+  webhookNoAttempt,
+} from "./gateway-stack.mjs"
 
 test("a tool launch is the recorded agent, and a scenario launch is not", () => {
   const tool = scriptedLaunch("claude", { tool: "review_rows" })
@@ -110,6 +118,133 @@ test("a throw while building the target closes the stack", async () => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+test("native no-send proof requires queued zero-attempt rows in the fixed complete scope", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "webhook-native-proof-"))
+  const scope = {
+    receiver: "registration",
+    origin: "origin",
+    stream: "chat",
+    incarnation: "J",
+    schema: "records",
+    accessEpoch: "epoch",
+  }
+  const saved = { ...scope, access_epoch: scope.accessEpoch }
+  delete saved.accessEpoch
+  const path = join(directory, "ci", "instances", "test", "auth")
+  mkdirSync(path, { recursive: true })
+  const db = new DatabaseSync(join(path, "webhooks.sqlite"))
+  try {
+    db.exec(
+      "CREATE TABLE registrations(id TEXT,credential TEXT); CREATE TABLE deliveries(registration TEXT,conversation TEXT,position INTEGER,scope TEXT,state TEXT); INSERT INTO registrations VALUES('registration','credential')",
+    )
+    const insert = db.prepare(
+      "INSERT INTO deliveries VALUES('registration','chat',2,?,?)",
+    )
+    const checkpoint = { scope, head: "2" }
+    const probe = (deadline = Date.now() + 15_000) =>
+      webhookNoAttempt({ directory }, "test", "credential", checkpoint, deadline)
+    for (const deadline of [Date.now(), Infinity, NaN])
+      assert.throws(() => probe(deadline), /deadline expired/)
+    assert.throws(probe, /missing/)
+    for (const state of [
+      { phase: "sending", attempts: 1, timestamp_ms: 100 },
+      { phase: "queued", attempts: "0", timestamp_ms: null },
+      { phase: "queued", attempts: 0 },
+    ]) {
+      insert.run(JSON.stringify(saved), JSON.stringify(state))
+      assert.throws(probe, /attempt admission/)
+      db.exec("DELETE FROM deliveries")
+    }
+    insert.run(
+      JSON.stringify({ ...saved, incarnation: "K" }),
+      JSON.stringify({ phase: "queued", attempts: 0, timestamp_ms: null }),
+    )
+    assert.throws(probe, /different source scope/)
+    db.exec("DELETE FROM deliveries")
+    insert.run(
+      JSON.stringify(saved),
+      JSON.stringify({ phase: "queued", attempts: 0, timestamp_ms: null }),
+    )
+    assert.deepEqual(probe(), { queued: 1, attempted: 0 })
+    assert.throws(
+      () =>
+        webhookNoAttempt(
+          { directory },
+          "test",
+          "foreign",
+          checkpoint,
+          Date.now() + 15_000,
+        ),
+      /missing/,
+    )
+    assert.throws(
+      () =>
+        webhookNoAttempt(
+          { directory },
+          "test",
+          "credential",
+          { scope, head: "3" },
+          Date.now() + 15_000,
+        ),
+      /fixed Head/,
+    )
+    assert.equal(db.prepare("SELECT count(*) n FROM deliveries").get().n, 1)
+    const now = Date.now
+    const deadline = now() + 15_000
+    const late = {
+      scope: {
+        ...scope,
+        get accessEpoch() {
+          Date.now = () => deadline
+          return scope.accessEpoch
+        },
+      },
+      head: "2",
+    }
+    try {
+      assert.throws(
+        () => webhookNoAttempt({ directory }, "test", "credential", late, deadline),
+        /deadline expired/,
+      )
+    } finally {
+      Date.now = now
+    }
+    const writer = new Worker(
+      `const { parentPort, workerData } = require('node:worker_threads');
+       const { DatabaseSync } = require('node:sqlite');
+       const db = new DatabaseSync(workerData);
+       db.exec('BEGIN EXCLUSIVE');
+       parentPort.postMessage('locked');
+       parentPort.once('message', () => setTimeout(() => {
+         db.exec('COMMIT'); db.close();
+         parentPort.postMessage('released'); parentPort.close();
+       }, 200));`,
+      { eval: true, workerData: join(path, "webhooks.sqlite") },
+    )
+    try {
+      const message = () =>
+        once(writer, "message", { signal: AbortSignal.timeout(2_000) })
+      assert.deepEqual(await message(), ["locked"])
+      const started = performance.now()
+      assert.throws(() => probe(Date.now() + 40), /database is locked|deadline expired/)
+      assert.ok(
+        performance.now() - started < 500,
+        "lock wait uses only the remaining case budget",
+      )
+      // A writer that never releases must refuse, never manufacture no-send.
+      assert.throws(probe, /database is locked/)
+      const released = message()
+      writer.postMessage("release")
+      assert.deepEqual(probe(), { queued: 1, attempted: 0 })
+      assert.deepEqual(await released, ["released"])
+    } finally {
+      await writer.terminate()
+    }
+  } finally {
+    db.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
 test("the stack preserves startup and retention causes instead of rewriting failed evidence", async (t) => {
   const scratch = mkdtempSync(join(tmpdir(), "nessa-stack-retention-test-"))
   const fake = join(scratch, "nessa")

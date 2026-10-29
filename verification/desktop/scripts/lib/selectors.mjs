@@ -19,6 +19,9 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  boatRuntimeSettings: "[data-boat-runtime-settings]",
+  channelSettingsOpen: "[data-channel-settings-open]",
+  channelSettingsDialog: "[data-channel-settings]",
   localLifetimes: "[data-local-lifetimes]",
   // Committed conversation production-component fixture
   historyTabConsumer: "[data-history-tab-consumer]",
@@ -196,6 +199,7 @@ export const css = {
   approvalCopy: ".workspace-approval-copy",
   approvalCommandBlock: ".workspace-approval-command-block",
   approvalDeny: ".workspace-approval-deny",
+  approvalAlways: 'button[data-answer="always"]',
   approvalCard: ".workspace-approval", // class
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
@@ -304,6 +308,8 @@ export const css = {
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  githubLive: "[data-github-live]",
+  githubLiveHelp: "[data-github-live] button[popovertarget]",
   github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
   githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
   githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus

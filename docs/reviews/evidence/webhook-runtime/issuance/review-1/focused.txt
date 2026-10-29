@@ -1,0 +1,29 @@
+   Compiling nessa-auth v0.1.0 (/tmp/independent-webhook-issuance-review/checkout/crates/nessa-auth)
+    Finished `test` profile [unoptimized] target(s) in 3.46s
+     Running unittests src/lib.rs (/tmp/independent-webhook-issuance-review/target/debug/deps/nessa_auth-d8c2b69b9ce32e17)
+
+running 5 tests
+test adapters::local::registry::webhook_issue_tests::independent_competing_receipts_deliver_one_secret_and_keep_purpose_identity ... FAILED
+test adapters::local::registry::webhook_issue_tests::independent_injected_policy_owns_webhook_grants_without_a_second_rust_rule ... ok
+test adapters::local::registry::webhook_issue_tests::independent_cold_replay_preserves_issue_evidence_but_returns_current_revoked_metadata ... ok
+test adapters::local::registry::webhook_issue_tests::independent_bearer_authorization_keeps_read_no_write_and_current_lifetime ... ok
+test adapters::local::registry::webhook_issue_tests::independent_malformed_webhook_requests_and_revoke_namespace_write_nothing ... ok
+
+failures:
+
+---- adapters::local::registry::webhook_issue_tests::independent_competing_receipts_deliver_one_secret_and_keep_purpose_identity stdout ----
+
+thread '<unnamed>' (73892) panicked at crates/nessa-auth/src/adapters/local/../../../tests/adapters/local/webhook_issue.rs:263:26:
+unexpected competing outcome
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'adapters::local::registry::webhook_issue_tests::independent_competing_receipts_deliver_one_secret_and_keep_purpose_identity' (73890) panicked at crates/nessa-auth/src/adapters/local/../../../tests/adapters/local/webhook_issue.rs:268:60:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+
+failures:
+    adapters::local::registry::webhook_issue_tests::independent_competing_receipts_deliver_one_secret_and_keep_purpose_identity
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p nessa-auth --lib`

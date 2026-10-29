@@ -10,6 +10,7 @@ fn path(text: &str) -> ChannelPath {
 
 fn parts(folder: ChannelFolder) -> ChannelParts {
     ChannelParts {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder,
         defaults: ChannelDefaults {
@@ -159,6 +160,7 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         made: true,
     });
     let mut asked = ChannelRequest {
+        execution: crate::conversation::domain::ChannelExecution::default(),
         name: made.name().clone(),
         folder: None,
         defaults: made.defaults().clone(),

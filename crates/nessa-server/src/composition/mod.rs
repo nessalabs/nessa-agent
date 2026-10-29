@@ -47,6 +47,9 @@ mod env_grant_command;
 mod env_serve_command;
 #[cfg(unix)]
 mod github;
+mod github_relay;
+#[cfg(unix)]
+mod github_tools;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;
@@ -78,6 +81,8 @@ mod attachments;
 mod desktop;
 
 #[cfg(unix)]
+mod background_tools;
+#[cfg(unix)]
 pub(crate) mod conversation_tools;
 #[cfg(unix)]
 mod environment_tools;
@@ -101,3 +106,11 @@ mod peer_reading_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
+
+mod webhooks;
+
+#[cfg(test)]
+pub(crate) use root::cleanup_product;
+mod vault;
+
+mod vault_session;

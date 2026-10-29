@@ -205,6 +205,9 @@ while True:
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
         saved = root / "saved-session"
         if method == "session/resume":
+            if mode == "uninvoked-context" and not saved.exists():
+                send({"id": msg["id"], "error": {"code": -32002, "message": "Resource not found"}})
+                continue
             assert saved.exists(), "cannot restore missing session"
             state = json.loads(saved.read_text())
             assert msg["params"]["sessionId"] == state["id"]
@@ -231,7 +234,8 @@ while True:
             count_path = root / "new-session-count"
             count = int(count_path.read_text()) if count_path.exists() else 0
             record("new-session-count", str(count + 1))
-            record("saved-session", json.dumps({"id": session, "history": history}))
+            if mode != "uninvoked-context":
+                record("saved-session", json.dumps({"id": session, "history": history}))
         if mode == "system-prompt":
             assert msg["params"]["_meta"]["systemPrompt"] == "Core instructions.\nPlugin instructions."
             assert set(msg["params"]["_meta"]) == {"systemPrompt", "claudeCode"}
@@ -838,6 +842,9 @@ while True:
             elif mode == "byte-generation":
                 for _ in range(4):
                     text("x" * (3 * 1024 * 1024))
+            elif mode == "burst":
+                for _ in range(10000):
+                    text("burst")
             else:
                 text("|".join(prior_history + [user_text]) if mode in ("resume-context", "resume-no-id") else user_text)
             stop_reason = "cancelled" if mode == "cancelled-once" and len(launches) == 1 else mode if mode in ("max_tokens", "max_turn_requests", "refusal", "cancelled") else "end_turn"

@@ -168,6 +168,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
 
 fn deletion(out: &mut String, failures: &DeletionFailures) {
     let DeletionFailures {
+        background_tasks,
         stop,
         history,
         history_leased_elsewhere,
@@ -182,6 +183,9 @@ fn deletion(out: &mut String, failures: &DeletionFailures) {
         another_attempt,
     } = failures;
     let mut group = Group::new(out, "deletion-incomplete");
+    if let Some(error) = background_tasks {
+        group.cause("background-tasks").push_str(error.code());
+    }
     match stop {
         Some(StopFailure::OverBudget) => group.cause("stop").push_str("over-budget"),
         Some(StopFailure::Failed(error)) => agent(group.cause("stop"), error),

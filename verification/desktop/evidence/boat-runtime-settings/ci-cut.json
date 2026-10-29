@@ -1,0 +1,16 @@
+{
+  "contractSourceRevision": "fbadc7b8de10ab69030fd6a15a584a0c98e09098",
+  "workflowFixRevision": "d9cc877372f150a9c8694e6b4a7c8f37921e069c",
+  "before": {
+    "harnessPassed": 19,
+    "harnessFailed": 1,
+    "missingInput": "crates/nessa-server/src/conversation/domain/value_objects/vm_lifetime.rs"
+  },
+  "after": {
+    "harnessPassed": 20,
+    "harnessFailed": 0,
+    "actualIsolatedProtocolTestsPassed": 65,
+    "protocolDrift": "pass"
+  },
+  "environment": "bare Node harness; actual extracted Python staging program in an isolated archived checkout, with tooling dependencies shared read-only"
+}

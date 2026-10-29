@@ -249,6 +249,7 @@ fn command_terms(terms: &CommandTerms) -> usize {
     let environment = match &terms.environment {
         EnvironmentRef::Here => 0,
         EnvironmentRef::Ssh(host) => host.as_str().len(),
+        EnvironmentRef::Boat => "boat:thread".len(),
         EnvironmentRef::Peer(_) => PeerEnvironment::PREFIX.len() + 2 * PeerEnvironment::KEY_BYTES,
     };
     terms
@@ -347,7 +348,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
                 .fold(0usize, usize::saturating_add),
         )
         .saturating_add(match message.sender() {
-            MessageSender::Person => 0,
+            MessageSender::Person | MessageSender::Internal => 0,
             MessageSender::App(app) => app.payload_bytes(),
             MessageSender::Agent(source) => source.payload_bytes(),
         })

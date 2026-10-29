@@ -1,5 +1,5 @@
 use super::CliError;
-pub(crate) const MAX_SAFE_TIMESTAMP: u64 = 9_007_199_254_740_991;
+use nessa_client_core::local_product::MAX_SAFE_TIMESTAMP;
 /// Verified identity returned by the gateway handshake, not command arguments.
 pub struct GatewayIdentity {
     pub gateway_id: String,

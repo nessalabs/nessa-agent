@@ -79,7 +79,7 @@ pub(crate) use finalized_execution::{
 };
 pub use harness_host::{
     HarnessCleanupFuture, HarnessControl, HarnessHost, HarnessHostIdentity, HarnessLaunch,
-    HarnessProcess,
+    HarnessMcpRelay, HarnessProcess,
 };
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};

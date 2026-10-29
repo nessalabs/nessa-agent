@@ -28,3 +28,8 @@ const marginMs = 10_000
  * answers in seconds.
  */
 export const conversationDeleteTimeoutMs = deletionWorstCaseMs + marginMs
+
+/** Channel creation can first provision and connect a workspace. Its client
+ * deadline includes that bound plus the existing conservative agent exchange
+ * and cleanup allowance. It does not replay an uncertain create. */
+export const conversationWorkspaceCreateTimeoutMs = 120_000 + conversationDeleteTimeoutMs

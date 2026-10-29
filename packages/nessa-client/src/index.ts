@@ -317,6 +317,9 @@ export {
 export { clientDueAtMs, deadlinePendingLine } from "./protocol/deadline-pending.js"
 export type {
   ConversationView,
+  ConversationEarlier,
+  ConversationPoint,
+  ConversationPartPosition,
   ApprovalMode,
   ApprovalModeChoice,
   AgentModelOption,
@@ -384,6 +387,10 @@ export type {
   ConversationShareResult,
   ConversationSharesCursor,
   ConversationSharesResult,
+  ConversationWebhookCursorParams,
+  ConversationWebhookCursorResult,
+  ConversationWebhookResetParams,
+  ConversationWebhookResetResult,
   ConversationToolPolicy,
 } from "./generated/product.js"
 export {
@@ -473,3 +480,24 @@ export type {
   WorkspaceWidget,
   WorkspaceWindow,
 } from "./generated/product.js"
+
+export { type VaultApi } from "./presentation/vault-api.js"
+export { NessaVaultError } from "./application/vault-error.js"
+export { VaultErrorCode, VaultState, type VaultStatus } from "./generated/product.js"
+
+export type { BoatApi } from "./presentation/boat-api.js"
+export {
+  BoatErrorCode,
+  type BoatStatus,
+  type BoatRuntimeReadParams,
+  type BoatRuntimeSetParams,
+  type BoatRuntimeSettings,
+  type BoatVmLifetime,
+  type VmLifetimeSeconds,
+  VmLifetimeMode,
+  BoatRuntimeSelection,
+  vmLifetimeSeconds,
+  type BoatSaveParams,
+} from "./generated/product.js"
+
+export { NessaBoatError } from "./presentation/boat-api.js"

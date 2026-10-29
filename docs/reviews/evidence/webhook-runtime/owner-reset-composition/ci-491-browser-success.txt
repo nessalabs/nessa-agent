@@ -1,0 +1,21 @@
+PRhead4914f5e7bc41982c7a62d4b0d31c859cf83ea1f0; run40257115915 job121361629344
+CIcheckoutaa316c59dd4d69b48685b922e9fc0a055e97961a merges491intoaef11ea3b3d0c96f8c96fd9509f5657c58693780
+2026-10-26T02:07:25.8964884Z HEAD is now at aa316c5 Merge 4914f5e7bc41982c7a62d4b0d31c859cf83ea1f0 into aef11ea3b3d0c96f8c96fd9509f5657c58693780
+2026-10-26T02:07:25.9001342Z ##[endgroup]
+2026-10-26T02:13:26.9384494Z scripted-scenarios: 8/8 held
+2026-10-26T02:13:27.1356097Z 
+2026-10-26T02:13:59.7669469Z usage-limit: 16/16 held
+2026-10-26T02:13:59.9119675Z ##[group]Run node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+2026-10-26T02:15:12.5943453Z drag: 8/8 held
+2026-10-26T02:15:12.7518258Z ##[group]Run set -o pipefail
+2026-10-26T02:18:27.2532490Z webhook captured fixed Head 46; 46 queued, 0 attempted; loopback policy unchanged
+2026-10-26T02:18:27.5478912Z ok    036 webhook [chromium columns]
+2026-10-26T02:18:31.2873564Z ok    037 switch [chromium columns]
+2026-10-26T02:20:57.4443608Z conversation-stress: 50/50 held
+2026-10-26T02:20:57.8291780Z ##[group]Run set -o pipefail
+2026-10-26T02:21:17.9587313Z conversation-stress: 4/4 held
+2026-10-26T02:21:18.1562447Z ##[group]Run set -o pipefail
+2026-10-26T02:22:04.0655283Z conversation-stress: 4/4 held
+2026-10-26T02:22:04.3034221Z ##[group]Run set -o pipefail
+2026-10-26T02:23:31.3096877Z conversation-chaos: 2/2 runs held
+2026-10-26T02:23:31.3371903Z Post job cleanup.

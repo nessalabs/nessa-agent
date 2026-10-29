@@ -1,0 +1,31 @@
+.github-live-help-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.github-live-help-panel {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: 16px;
+  font-size: var(--desktop-text-body);
+  line-height: 1.5;
+}
+.github-live-help-panel ul {
+  margin: 10px 0 14px;
+  padding-left: 18px;
+  list-style: disc;
+}
+.github-live-help-panel li + li {
+  margin-top: 8px;
+}

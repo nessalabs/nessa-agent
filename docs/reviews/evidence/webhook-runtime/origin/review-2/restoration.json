@@ -1,0 +1,14 @@
+{
+  "crates/nessa-auth/src/adapters/local/registry.rs": {
+    "sha256": "938cc8b2eaa81c7dd16165246d5afb546cb9c83656b728e4b7e4a8ac13b082dd",
+    "restored_identical": true
+  },
+  "crates/nessa-auth/src/adapters/cedar/policies.cedar": {
+    "sha256": "1304dfc9a33113bf3a077fd3580aedb41464f26e3b4b18b0738d6e504217e3f9",
+    "restored_identical": true
+  },
+  "crates/nessa-server/src/webhooks/application/registration.rs": {
+    "sha256": "8c7cdacc74df624f7a6ea4283bb7dceea9cf8a77484f33be9bfce8887aca41c0",
+    "restored_identical": true
+  }
+}

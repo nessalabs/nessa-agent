@@ -1,0 +1,125 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-27T18:19:10.388Z",
+  "finished": "2026-10-27T18:20:23.241Z",
+  "target": {
+    "url": "http://127.0.0.1:59655/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 channel",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 10339,
+      "seen": {
+        "index": 1,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 channel",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 11304,
+      "seen": {
+        "index": 2,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 reply",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 306,
+      "seen": {
+        "index": 3,
+        "kind": "reply"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 channel",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 15378,
+      "seen": {
+        "index": 4,
+        "kind": "channel"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 reply",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 576,
+      "seen": {
+        "index": 5,
+        "kind": "reply"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "006 reply",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 257,
+      "seen": {
+        "index": 6,
+        "kind": "reply"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": {
+        "conversations": 3,
+        "turns": 2
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 47,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 9
+        },
+        {
+          "conversations": 7,
+          "churned": 43,
+          "resumed": 0,
+          "lagging": 0,
+          "refusedAsExpected": 10
+        }
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

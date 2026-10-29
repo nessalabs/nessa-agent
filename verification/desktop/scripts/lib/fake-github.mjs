@@ -37,11 +37,13 @@ const CLIENT_ID = "Iv1.stressfake"
 const SLUG = "nessa-stress"
 
 /** Starts the fake on a free loopback port. Resolves with its controls. */
-export async function startFakeGithub() {
+export async function startFakeGithub({ clientId = CLIENT_ID, slug = SLUG } = {}) {
   const token = `ghu_${randomBytes(18).toString("hex")}`
   const codes = new Map()
   let latest = null
-  const calls = { device: 0, poll: 0, user: 0 }
+  let repositoryCount = 1
+  let repositoryFailure = false
+  const calls = { device: 0, poll: 0, user: 0, repository: 0 }
   const json = (response, status, body) => {
     response.writeHead(status, { "content-type": "application/json" })
     response.end(JSON.stringify(body))
@@ -54,7 +56,7 @@ export async function startFakeGithub() {
       const url = new URL(request.url ?? "/", "http://fake")
       if (request.method === "POST" && url.pathname === "/login/device/code") {
         calls.device += 1
-        if (form.get("client_id") !== CLIENT_ID)
+        if (form.get("client_id") !== clientId)
           return json(response, 200, { error: "unauthorized_client" })
         const deviceCode = randomBytes(12).toString("hex")
         const userCode = `${letters(4)}-${letters(4)}`
@@ -72,7 +74,7 @@ export async function startFakeGithub() {
         calls.poll += 1
         const code = codes.get(form.get("device_code") ?? "")
         if (
-          form.get("client_id") !== CLIENT_ID ||
+          form.get("client_id") !== clientId ||
           form.get("grant_type") !== "urn:ietf:params:oauth:grant-type:device_code" ||
           !code ||
           code.taken
@@ -92,6 +94,30 @@ export async function startFakeGithub() {
           return json(response, 401, { message: "Bad credentials" })
         return json(response, 200, FAKE_ACCOUNT)
       }
+      if (request.method === "GET" && url.pathname === "/repos/nessalabs/nessa-agent") {
+        calls.repository += 1
+        if (request.headers.authorization !== `Bearer ${token}`)
+          return json(response, 401, { message: "Bad credentials" })
+        return json(response, 200, { full_name: "nessalabs/nessa-agent" })
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/user/installations")) {
+        if (request.headers.authorization !== `Bearer ${token}`)
+          return json(response, 401, {})
+        if (repositoryFailure) return json(response, 503, {})
+        if (url.pathname === "/user/installations")
+          return json(response, 200, {
+            total_count: 1,
+            installations: [{ id: 77, app_slug: slug, suspended_at: null }],
+          })
+        if (url.pathname === "/user/installations/77/repositories")
+          return json(response, 200, {
+            total_count: repositoryCount,
+            repositories: Array.from({ length: repositoryCount }, (_, i) => ({
+              id: 42 + i,
+              full_name: `owner/repo${i}`,
+            })),
+          })
+      }
       json(response, 404, { message: "Not Found" })
     })
   })
@@ -100,10 +126,14 @@ export async function startFakeGithub() {
   return {
     token,
     calls,
+    repositories(count, failed = false) {
+      repositoryCount = count
+      repositoryFailure = failed
+    },
     /** The code the last device-code call handed out, or null. */
     userCode: () => (latest ? codes.get(latest).userCode : null),
     verificationUri: `${base}/login/device`,
-    installUrl: `${base}/apps/${SLUG}/installations/new`,
+    installUrl: `${base}/apps/${slug}/installations/new`,
     /** The person enters the last code on GitHub and approves the app. */
     approve() {
       if (!latest) throw new Error("no code was asked for")
@@ -111,10 +141,7 @@ export async function startFakeGithub() {
     },
     /** Writes the app description the gateway reads from `NESSA_GITHUB_APP`. */
     app(file) {
-      writeFileSync(
-        file,
-        JSON.stringify({ clientId: CLIENT_ID, slug: SLUG, webUrl: base, apiUrl: base }),
-      )
+      writeFileSync(file, JSON.stringify({ clientId, slug, webUrl: base, apiUrl: base }))
       return file
     },
     close: () => new Promise((closed) => server.close(closed)),
@@ -125,4 +152,12 @@ export async function startFakeGithub() {
 function letters(n) {
   const alphabet = "BCDFGHJKLMNPQRSTVWXZ"
   return [...randomBytes(n)].map((byte) => alphabet[byte % alphabet.length]).join("")
+}
+
+/** Hermetic provider placeholders; the disposable vault never reads an OS store. */
+export function disposableGithubEnvironment() {
+  return {
+    ANTHROPIC_API_KEY: "signed-out-gateway-placeholder",
+    OPENAI_API_KEY: "signed-out-gateway-placeholder",
+  }
 }

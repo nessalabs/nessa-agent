@@ -949,6 +949,32 @@ async fn agent_origin_must_agree_with_the_saved_message_before_admission_and_on_
         )
         .await
         .is_err());
+    for other in [
+        AgentSource::new(
+            "8b547a4b-6974-49a4-b878-d13a9c031f17",
+            origin.execution().clone(),
+        )
+        .unwrap(),
+        AgentSource::new(
+            origin.conversation(),
+            ExecutionId::new("another-source-turn").unwrap(),
+        )
+        .unwrap(),
+    ] {
+        let mut conflicting = request.clone();
+        conflicting.user_message = conflicting
+            .user_message
+            .sent_by(MessageSender::Agent(other));
+        assert!(matches!(
+            manager
+                .begin(
+                    conflicting,
+                    Submitter::new(actor.clone(), Initiation::agent(origin.clone()))
+                )
+                .await,
+            Err(AgentError::InvalidInput(_))
+        ));
+    }
     assert!(lease.changes.lock().unwrap().is_empty());
     let mut sent = request;
     sent.user_message = sent
@@ -961,9 +987,28 @@ async fn agent_origin_must_agree_with_the_saved_message_before_admission_and_on_
             .unwrap(),
         1
     );
-    let mut restored = manager.snapshot().await.unwrap();
-    restored.invocations[1].initiation = Initiation::owner();
-    assert!(Continuation::restore(Some(restored)).is_err());
+    let snapshot = manager.snapshot().await.unwrap();
+    for initiation in [
+        Initiation::owner(),
+        Initiation::agent(
+            AgentSource::new(
+                "8b547a4b-6974-49a4-b878-d13a9c031f17",
+                ExecutionId::new("source-turn").unwrap(),
+            )
+            .unwrap(),
+        ),
+        Initiation::agent(
+            AgentSource::new(
+                "8b547a4b-6974-49a4-b878-d13a9c031f16",
+                ExecutionId::new("another-source-turn").unwrap(),
+            )
+            .unwrap(),
+        ),
+    ] {
+        let mut restored = snapshot.clone();
+        restored.invocations[1].initiation = initiation;
+        assert!(Continuation::restore(Some(restored)).is_err());
+    }
 }
 /// Admission asks the app rule of the turns saved before the message ("The
 /// app a message names", A1, A2, A5, A6): an app of the running turn's tool

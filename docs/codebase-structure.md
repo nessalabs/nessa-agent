@@ -1412,7 +1412,10 @@ and reuses a generation only for the complete desired command ([ADR 689](adr/689
   compiling. `verify-linux-bundle.mjs` checks the runtime inside the `.deb` this
   build wrote; it is the Linux counterpart of `verify-macos-bundle.mjs`.
   `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
-  the release build against. `release-assets.mjs` names what each release
+  the release build against. Native Linux CI uses the explicit Ubuntu release
+  baseline, with its Rust cache keyed by distribution to avoid reusing binaries
+  built against a newer glibc; `ci-harness.test.mjs` checks that agreement and
+  retains the required native smoke commands. `release-assets.mjs` names what each release
   target publishes and its updater key: one per macOS architecture, and
   `linux-x86_64-deb`. Windows has no preparation.
 - `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
@@ -1643,6 +1646,55 @@ Place each next real rule in its prescribed role rather than leaving everything
 in one catch-all file. New MCP shell code is the small Rust example; the desktop
 gateway context demonstrates an application port with native adapters. Older SDK
 paths remain current until the coordinated TODO updates all consumers.
+
+## Outbound webhook foundation
+
+The outbound [webhook foundation](design/webhook-delivery-implementation.md)
+lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
+values in `domain/value_objects`, message/transport ports in `application`, and
+JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
+under `tests/webhooks`. `application/admission.rs` combines current credential
+effect holds, principal grant revision holds, checked conversation metadata and
+the existing conversation Cedar evaluator. Credential mutation fences live in
+the auth registry; principal/resource fences remain in the grant store.
+`application/outbox.rs` publishes the persistence port and limits.
+`infrastructure/outbox` owns the private database: `store` owns the lifetime lock
+and bounded physical operations; `schema` publishes and validates every owned SQLite definition against its one SQL schema; `stored` validates restored
+identity and scope; `cursor` decodes complete cursor values for startup and live
+reads; `audit` owns closed typed historical records and validates transitions
+through the domain owner; `codec` owns the current serialized values; `capacity` owns
+accounting; `queue` advances source cursor and delivery together; `journal` owns
+state/audit commits, source-change context and retirement; `publication` writes
+immutable audit files and exact acknowledgements; `restoration` exhaustively
+correlates every audit variant with retained facts and owns delivery-history
+validation before effects; `retirement` retains bounded secret-free original
+identity/stop facts and the exact retirement audit identity through lost
+acknowledgement; `source_reset` owns immutable original reset facts and first-capture
+membership (`source_reset/store.rs`) and bounded reference retention; `registry`
+persists installation target facts. `infrastructure/outbox/stop.rs` is the single
+bounded retained stop codec shared by live, retired and audit state.
+`application/registration_stop.rs` consumes the actual held Auth fact and derives
+the lifecycle projection; it grants no delivery permission and is not a command
+supervisor. Auth owns retained revocation decoding separately from its
+current-credential binding. `application/registration.rs` asks the
+existing auth owner to issue and correlates the returned credential/transition,
+then installs under a current credential hold. `infrastructure/outbox/intents.rs`
+retains bounded immutable private proposal/configuration facts across uncertain
+auth and installation acknowledgements; they supply no permission verdict.
+The installed registration references that original intent, and transactional
+retirement deletes the private configuration together with the registration. Tests remain in
+`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/webhooks/infrastructure/outbox/source_reset.rs`.
+`composition/webhooks.rs` loads private registration configuration;
+`infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
+`runtime/delivery.rs` composes canonical principal reads, contiguous durable
+queueing, fresh dispatch admission and signed HTTPS. `composition/root.rs` starts
+that worker after fallible startup and joins it through product cleanup.
+`tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
+commands with disposable authorities and an isolated TLS recipient. Whole-feature
+review, source-matched platform CI, browser and conversation stress qualification
+remain incomplete; mounted fixtures alone do not establish readiness. The outbox
+does not supply permission or open a listener.
 
 ## Browser sessions
 
@@ -2611,3 +2663,120 @@ windows `product/workspace.rs` holds for each connection in
 `domain/value_objects/workspace_window.rs`), through
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
+
+`nessa-server/src/composition/github_tools.rs` serves fixed repository, issue
+and pull request GETs as a separate built-in MCP server. It uses the same live
+source-turn admission before `github/application/connections.rs` reads the
+current sign-in. `github/domain/repository.rs` owns validated path segments
+and operations; `github/infrastructure/api.rs` fixes the GitHub host, request
+deadline, redirect policy and body bound. Provider opens and managed shell
+commands receive no Nessa GitHub credentials. See the [GitHub sign-in and
+broker contract](design/github-connect.md).
+
+## Background tasks
+
+`composition/background_tools.rs` exposes source-bound start, status and cancel
+through the existing MCP relay. `conversation/application/service/background_tasks.rs`
+coordinates admission, native-call binding, detached execution and internal
+continuation. Its runner, store and argument-decoder ports live in
+`conversation/application/background_tasks`; immutable lifecycle transitions live
+in `conversation/domain/background_task`. `infrastructure/background_tasks`
+implements transactional current-state/audit persistence and the Shepherd adapter.
+The service decorates existing tool rows; frontend transcript code retains their
+background identity while the turn ends. See [the lifecycle](state/services/gateway/background-tasks.md).
+
+## GitHub webhook ingress and relay
+
+`packages/github-webhooks` owns the hosted receiver and authenticated delivery
+boundary: feature-first `webhooks/` and `relay/`, each with domain, application
+ports and infrastructure. `composition/worker.ts` wires GitHub, Cedar/WASM, D1,
+clock, crypto and hibernating Durable Object adapters. Migrations own the atomic
+inbox, expiry watermarks and bounded audit metadata. Tests run the bundled Worker
+with real local D1 and Durable Objects.
+
+The native `crates/nessa-server/src/github_relay` context mirrors its own feature
+vocabulary: domain identities/order, application catch-up and ports, and
+infrastructure adapters for the existing `GithubConnections` token owner,
+HTTPS/WebSocket and encrypted SQLite. `application/catch_up.rs` obtains the
+existing zeroizing credential for each page request; `transport.rs` owns bounded
+success/refusal bodies and protocol-sized WebSocket frames/messages. `infrastructure/vault.rs` obtains the inbox key through the injected `secrets::VaultSecret`; `github/infrastructure/token_vault.rs` uses a separate vault entry for sign-in. `secrets/keychain.rs` remains the legacy import adapter. `nessa-local-database::encryption` owns SQLCipher and the atomic plaintext upgrade. `application/live_events.rs` coordinates opt-in
+and `infrastructure/selection.rs` commits selection changes and cleanup evidence.
+`product/github.rs` serializes enable/disable with sign-out;
+`settings/ui/github-row.tsx` presents that state. Composition
+owns optional lifecycle and CLI output. Tests under `tests/github_relay` exercise
+real SQLite, failures, competing consumers, identity isolation and reconnect
+fencing. No provider DTO chooses a conversation or actor.
+
+The packaged host retains build-stage ownership. The compiled public stage table
+and shared bounds are `protocol/defaults/github-relays.json` and
+`github-relay-contract.json`; the Worker deployment map supplies isolated configs.
+[The runbook](../packages/github-webhooks/README.md) and
+[ADR 1117](adr/todo/1117-github-relay.md) describe limits and operations.
+
+## Reusable local vault
+
+- `crates/nessa-vault`: domain passphrase/name/secret values; application repository,
+  clock, entropy and audit ports plus lease lifecycle; infrastructure Argon2id,
+  authenticated encrypted file and bounded secret-free audit journal. Its README
+  maps the shared contract and regression tests.
+- `crates/nessa-server/src/vault`: verified legacy import application and OS source
+  adapter. `product/vault.rs` owns authenticated controls and the unique socket
+  close guard. `composition/vault.rs` constructs it independently of providers;
+  `composition/vault_session.rs` owns the bounded anonymous-pipe command bridge.
+- `src-tauri/src/vault`: typed host connection port, retained child adapter and
+  trusted-window command. Host composition injects endpoint and credential ports.
+- `src/vault`: application dialog controller, gateway/native adapters, and UI.
+  No UI or RPC exposes stored secrets. `verification/desktop/scripts/vault.mjs`
+  tests the native lease through the real gateway and browser dialog.
+
+## Channel workspaces
+
+`crates/nessa-server/src/workspaces/` owns Boat connection settings and VM
+allocation receipts: `domain` contains values and failures; `application` orders
+allocation through Settings, Assignments, Provider and RecoveryAudit ports in
+`application/workspaces.rs`; `infrastructure`
+implements encrypted vault settings, private receipt files, Boat/workspace-sdk
+preparation and scoped SSH access. `domain/workspace.rs` owns legal receipt histories. `domain/environment.rs` owns the supported
+credential posture, immutable environment identity and bounded refusal evidence;
+`infrastructure/boat_admission.rs` checks complete current provider state and raw
+VM receipts before SDK authority. `assignments.rs` retains proof and terminal
+refusals in private histories, while old receipts are read only as Unverified.
+Tests live in `tests/workspaces`; real-provider
+verification lives in `scripts/workspaces`, with the single-file local MCP fixture
+under `scripts/mcp-test-server`. Composition maps recovery evidence into the
+existing durable EnvironmentAudit store; failed receipt publication retains its
+VM target independently of the assignment writer and initiating observer.
+
+Ordinary VM lifetime preferences use the existing gateway `config.json`, through
+the `RuntimeSettings` port and the Boat-specific `ConfigBoatRuntimeSettings` adapter
+in `boat_runtime_settings.rs`. The adapter shares
+`ConfigJson` publication and locking with other settings editors; only Boat
+credentials use the vault. Requested/outcome records in `boat-runtime-audit`
+retain the scoped choice and publication result. Runtime settings and their
+audits participate in the existing configuration and environment-audit backup cuts.
+The pure `crates/nessa-server/src/settings/inheritance.rs` rule resolves typed
+choices from broadest to most specific: an absent choice inherits its parent,
+while a present choice wins
+even when its value is explicitly nullable. Storage schema, scope identity,
+authorization and publication remain with each setting's owning feature.
+
+Conversation placement and main-agent identity remain in `conversation`.
+Its platform-neutral placement contract owns the workspace retention bound;
+the operational catalogue and Unix cache consume that same definition.
+Its lifetime values identify the global or channel target and use the shared
+inheritance rule for the current default and channel override. A future parent
+scope supplies another ordered choice when its identity exists; the resolver
+does not invent a project hierarchy. `workspace_runtime_config.rs` reads the pair from
+one document. The shared channel store resolves membership before allocation;
+the Boat adapter applies the selected lifetime on VM creation and archived resume.
+`conversation/infrastructure/workspaces.rs` adapts a workspace stream into the
+existing remote lease environment. `application/artifact_channels.rs` is the port
+for artifact streams. `channels.sql` owns the current schema; its two forward
+migrations preserve Local defaults and add the main replacement journal.
+
+The desktop composes a narrow Boat settings gateway into `BoatRow`; the shared
+`boat-runtime-control` edits the global default there and per-channel overrides
+from `workspace/ui/channel-settings`. Channel draft
+placement is a projection sent to the gateway, and navigation uses the gateway's
+current main conversation ID. See [ADR 1160](adr/todo/1160-boat-workspaces.md) and
+[lifetime settings](adr/todo/1168-boat-vm-lifetime.md).

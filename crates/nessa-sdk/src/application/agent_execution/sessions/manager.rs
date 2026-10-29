@@ -680,10 +680,9 @@ impl SessionManager {
                     *self.switching.lock().expect("switch") = Some((actor.clone(), *at_ms));
                     None
                 } else {
-                    let restores = snapshot
-                        .provider_context
-                        .recorded()
-                        .is_some_and(|saved| provider.restores_saved_context(saved));
+                    let restores = snapshot.provider_context.recorded().is_some_and(|saved| {
+                        provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
+                    });
                     if restores {
                         self.open_fresh_context.store(true, Ordering::Relaxed);
                         None
@@ -813,15 +812,15 @@ impl SessionManager {
         let restore = if fresh {
             None
         } else {
-            self.evidence
-                .lock()
-                .await
-                .observed()
-                .expect("prepared session evidence")
+            let evidence = self.evidence.lock().await;
+            let snapshot = evidence.observed().expect("prepared session evidence");
+            snapshot
                 .provider_context
                 .recorded()
                 .cloned()
-                .filter(|saved| provider.restores_saved_context(saved))
+                .filter(|saved| {
+                    provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
+                })
         };
         let opening = catch_unwind(AssertUnwindSafe(|| {
             provider.open(ProviderOpenRequest::new(

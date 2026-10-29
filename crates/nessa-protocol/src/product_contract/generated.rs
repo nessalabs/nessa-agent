@@ -389,6 +389,9 @@ impl CatalogueReadErrorCode {
         }
     }
 }
+pub const BACKGROUND_TASK_ID_PATTERN: &str = "^[A-Za-z0-9_-]+$";
+pub const MIN_BACKGROUND_TASK_ID_CHARACTERS: usize = 1;
+pub const MAX_BACKGROUND_TASK_ID_CHARACTERS: usize = 128;
 /// Published bound from the product schema.
 pub const MAX_MCP_MESSAGE_BYTES: usize = 8192;
 /// Published MCP App call timing from the product schema, in milliseconds.

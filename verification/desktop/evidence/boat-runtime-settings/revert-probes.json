@@ -1,0 +1,26 @@
+{
+  "source": "34672659bb87d44ad9f390e9725830bfe500e7db and corrected pre-e2f32 tree",
+  "probes": [
+    {
+      "receipt": "REVERT PROBE override exit 101",
+      "log": "nessa-1168-revert-probes.log"
+    },
+    {
+      "receipt": "REVERT PROBE scope exit 101",
+      "log": "nessa-1168-revert-probes.log"
+    },
+    {
+      "receipt": "REVERT PROBE FAILED AS EXPECTED: global count",
+      "log": "nessa-1168-round1-revert-probes.log"
+    },
+    {
+      "receipt": "REVERT PROBE FAILED AS EXPECTED: authority origin",
+      "log": "nessa-1168-round1-revert-probes.log"
+    },
+    {
+      "receipt": "REVERT PROBE FAILED AS EXPECTED: membership origin",
+      "log": "nessa-1168-round1-revert-probes.log"
+    }
+  ],
+  "restoration": "Source restored after each mutation; corrected targeted tests passed."
+}

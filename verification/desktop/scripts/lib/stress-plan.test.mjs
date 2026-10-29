@@ -14,6 +14,7 @@ test("every required step appears as often as its number says", () => {
   const knobs = knobsFrom({ rounds: "40", seed: "9" }, {})
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
+  assert.equal(count("background"), knobs.backgroundTasks)
   assert.equal(count("inputFiles"), knobs.inputFiles)
   assert.equal(count("model"), knobs.modelSwitches)
   assert.equal(count("pairedCatalogue"), 1)
@@ -40,7 +41,8 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("panel"), knobs.panels)
   assert.equal(count("menuPanel"), knobs.menuPanels)
   assert.equal(count("menu"), knobs.menus)
-  assert.equal(count("listAnswer"), knobs.listAnswers)
+  assert.equal(count("waitingRow"), knobs.waitingRows)
+  assert.equal(count("stream"), knobs.streams)
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
   assert.equal(count("trace"), knobs.traces)
@@ -52,6 +54,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("launch"), knobs.launches)
   assert.equal(count("github"), knobs.githubs)
   assert.equal(count("channel"), knobs.channels)
+  assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -72,7 +75,7 @@ test("a failure is always followed by a reply, and a switch never picks the mode
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
         assert.ok(
-          ["permission", "reviews", "large", "listAnswer", "model"].includes(
+          ["permission", "reviews", "large", "waitingRow", "model"].includes(
             steps[index + 1]?.kind,
           ),
         )
@@ -139,11 +142,13 @@ test("the legacy seed preserves the existing non-model work's relative order", (
     knobsFrom(
       {
         inputFiles: "0",
+        backgroundTasks: "0",
         windows: "0",
         linkings: "0",
         rails: "0",
         panels: "0",
-        listAnswers: "0",
+        waitingRows: "0",
+        streams: "0",
         onboardings: "0",
         tables: "0",
         traces: "0",
@@ -157,6 +162,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menus: "0",
         githubs: "0",
         channels: "0",
+        webhooks: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",
@@ -199,4 +205,13 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       "aside",
     ],
   )
+})
+
+test("webhook capture/no-send runs once by default and three times at the raised count", () => {
+  const count = (options) =>
+    plan(knobsFrom(options, {})).filter((step) => step.kind === "webhook").length
+  assert.equal(count({}), 1)
+  assert.equal(count({ webhooks: "3" }), 3)
+  assert.equal(count({ webhooks: "0" }), 0)
+  assert.equal(knobsFrom({}, { NESSA_STRESS_WEBHOOKS: "3" }).webhooks, 3)
 })

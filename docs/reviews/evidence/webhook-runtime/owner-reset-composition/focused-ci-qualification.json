@@ -1,0 +1,58 @@
+{
+  "reviewedAddition": "bd760f6610abcf9186cc8bf4c57641f427d5942a",
+  "base": "4914f5e7bc41982c7a62d4b0d31c859cf83ea1f0",
+  "integration": "108ce259cdc7b2628a19329181886de21cd88d3c",
+  "main": "aef11ea3b3d0c96f8c96fd9509f5657c58693780",
+  "ciCheckout": "aa316c59dd4d69b48685b922e9fc0a055e97961a",
+  "ui": "3118f2d8a15f68825ecef3fe0c337368b3d7f889",
+  "completeTreeDifferenceFromCiCheckout": "exactly the independently reviewed11 workflow additions",
+  "actionlint": {
+    "version": "1.7.12",
+    "allWorkflowsExitCode": 0
+  },
+  "controls": {
+    "passed": 24,
+    "failed": 0
+  },
+  "focusedPlans": [
+    {
+      "engines": [
+        "webkit"
+      ],
+      "seed": 1,
+      "webhooksPerEngine": 1,
+      "allOtherKnobs": 0,
+      "linkings": 0,
+      "pools": 0
+    },
+    {
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "seed": 1,
+      "webhooksPerEngine": 3,
+      "allOtherKnobs": 0,
+      "linkings": 0,
+      "pools": 0
+    }
+  ],
+  "actualFocusedExecution": "not yet run",
+  "frontend": {
+    "source": "108ce259cdc7b2628a19329181886de21cd88d3c",
+    "command": "pnpm frontend:check",
+    "exitCode": 0,
+    "unitPassed": 5306,
+    "unitFiles": 409,
+    "buildSeconds": 15.74
+  },
+  "review": {
+    "findings": [],
+    "originalReportSha256": "8d0f213fd22b1bacc2185d4c0f188ce85d0a6161651551d856a96fa3bb3f0fad",
+    "technicalExcerptSha256": "422822e7dff6a2a5f4a9e2b5728267be292ed0cbd707f03d090a9b82da214f37",
+    "integrationClosureSha256": "fab74863df7a2a2e2a8cca4d2b35e1bc7c701a6c8d19f0ec6086a467d09d2e22",
+    "newWholeFeatureRound": false
+  },
+  "stateDiagrams": "CI-only addition; no domain transitions changed; sourceRevision69351af retained",
+  "holds": "No rerun/dispatch/browser-download or security/network-setting change"
+}

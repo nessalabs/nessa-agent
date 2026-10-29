@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Opening beside a pane first looks for space on the right, then below."
 parent: "desktop-workspace"
-sourceRevision: "0769cc8b2dd72b8b6b2b215f9060c4354388e14a"
+sourceRevision: "3db7cdea6b545e18545799f590c058646ab9d620"
 sources:
   - "src/desktop/workspace/ui/panes/panes.css"
   - "src/desktop/styles.test.ts"
@@ -23,6 +23,8 @@ sources:
   - "src/desktop/workspace/model/window-fit.test.ts"
   - "verification/desktop/scripts/responsive.mjs"
   - "verification/desktop/scripts/safe-area.mjs"
+  - "verification/desktop/scripts/columns.mjs"
+  - "verification/desktop/scripts/conversation-stress.mjs"
   - "docs/adr/done/253-split-panes-component.md"
 diagramLinks: {}
 ---
@@ -44,6 +46,20 @@ while a side column reopens and the pane flies to its new position. The
 header returns to its normal inset after landing. Its background picture
 can still extend behind the window controls.
 
+The pane root clips overflowing content; its transcript owns scrolling. Focusing
+a descendant does not scroll the root or move its header out of the titlebar.
+`columns.mjs --only pane-clipping` checks this with an overflowing focus fixture
+in both browser engines and layouts; the conversation stress `window` step also
+measures root offsets and header geometry after its long preceding sequence.
+
+The split-motion and unsent-reply browser fixtures reclaim side-column room
+before opening a second pane. In columns layout they hide the session list;
+split admission can then fold the sidebar to fit the new pane. This reaches
+an admitted, readable layout even in a narrow window. Removal fixtures reveal the session rows before using
+their actions. This setup does not change the refusal when a real split has
+insufficient room, or the requirement to retain the closing pane's content
+until its box leaves.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Arranged
@@ -55,6 +71,8 @@ stateDiagram-v2
     Measuring --> Arranged: No room [new beside] / refuse unchanged
     Arranged --> Arranged: Close pane / reflow and choose remaining focus
     Arranged --> Arranged: Close last session / new draft when available
+    Arranged --> Empty: Source removes last session [no listed channel for a draft]
+    Empty --> Arranged: Open a session or New Session / create one pane
     note right of Arranged
         Operation chart of one layout, not execution state.
         Four panes and three columns bound arrangement.

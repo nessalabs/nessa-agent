@@ -3,12 +3,18 @@ id: auth-credential
 title: Credential lifecycle and access
 kind: statechart
 status: implemented
+sourceRevision: "d883b0ed6544c112f441ae1de73f443c7306280f"
 summary: "A credential is a way to prove who is asking for access."
 parent: auth
 sources:
   - crates/nessa-auth/src/domain/models.rs
   - crates/nessa-auth/src/domain/transition.rs
   - crates/nessa-auth/src/application/session.rs
+  - crates/nessa-auth/src/application/ports.rs
+  - crates/nessa-auth/src/application/origin.rs
+  - crates/nessa-auth/src/application/revocation.rs
+  - crates/nessa-auth/src/application/credential_journal.rs
+  - crates/nessa-auth/tests/revocation.rs
   - crates/nessa-auth/src/application/credential_registry.rs
   - crates/nessa-auth/src/adapters/local/registry.rs
 diagramLinks: {}
@@ -112,6 +118,42 @@ Nessa checks access again when a session is authenticated, resumed or used. A su
 
 Nessa can also refuse to open an unsafe or damaged credential store while preserving the file or lock. That is a storage problem; it does not mean a credential was revoked.
 
+
+## Original revocation in a held read
+
+Current access reads return the original issuance and an optional original
+revocation with credential metadata, membership and one committed revision.
+The existing admission hold keeps mutations fenced while its consumer acts.
+A credential that has expired but has not been revoked has no revocation fact;
+reading expiry does not invent an actor or a revocation command.
+
+For revoked metadata, the local registry reads its actual retained transition
+inside that same published snapshot. The immutable fact retains its original
+sequence, revision, command correlation, explicit or superseded cause, actor and
+requested time. Offline owner recovery keeps LocalOperator. Surface replacement
+keeps the principal that actually provisioned it. A later command receipt does
+not establish who performed an earlier revocation.
+
+The consuming snapshot checks the fact against current credential identity,
+issuance, expiry and recorded revocation, and against original issuance ordering.
+Missing required evidence returns Unavailable; contradictory binding or ordering
+returns IdentityMismatch. Neither result authorizes a lifecycle effect. The
+existing domain transition remains the owner of valid before/after and cause
+shapes. Journal identity decoding is shared with original issuance, without a
+second history store or permission table. Cedar remains the permission owner.
+
+A malformed stored history refuses cold open without replacing registry bytes.
+Repair requires restoring valid original evidence; the reader does not synthesize
+it. Ordinary credential issuance still returns its bearer once and reports it
+unavailable on replay. The new fact contains no bearer. These relationships are
+exercised by [actual-registry and substitution tests](../../../../crates/nessa-auth/tests/revocation.rs).
+
+This source review traced credential domain transitions, lifetime checks,
+current-session refusal, local registry reads and the immutable fact decoder.
+Linux checks cover auth, server webhook consumers and private mutation controls.
+Runtime webhook revocation/expiry coordination, actual recipient E2E and platform
+CI remain separate unfinished work. The first expiry observation belongs to the
+[outbox lifecycle](../gateway/webhook-outbox.md), rather than the auth journal.
 
 ## Further reading
 

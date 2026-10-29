@@ -29,6 +29,7 @@ import {
   sendMessage,
   setComposerText,
 } from "./commands"
+import { workspaceActions } from "./slice"
 
 describe("sending", () => {
   it("starts a draft with its first message and asks the source to start it under the same id", async () => {
@@ -66,6 +67,103 @@ describe("sending", () => {
       ),
     ).toBe("not-asked")
     expect(source.calls.some((call) => call[0] === "send")).toBe(false)
+  })
+
+  it("does not send a retained draft after its channel disappears", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    expect(store.getState().workspace.drafts[draftId]).toBeDefined()
+    expect(
+      await store.dispatch(
+        sendMessage({ initiator: "person", sessionId: draftId, text: "hi" }),
+      ),
+    ).toBe("not-asked")
+    expect(source.calls.some((call) => call[0] === "send")).toBe(false)
+  })
+
+  it("does not deliver a staged first send after a resync removes its channel", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const sending = store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Keep this" }),
+    )
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    expect(await sending).toBe("not-asked")
+    expect(source.calls.some((call) => call[0] === "send")).toBe(false)
+    expect(outboxOf(store, draftId)[0].delivery).toMatchObject({
+      state: "failed",
+      reason: "unavailable",
+      diagnostic: { message: "This channel is no longer available." },
+    })
+  })
+
+  it("does not deliver a staged retry after a resync removes its channel", async () => {
+    const source = fakeSource()
+    source.refuse("send", "unavailable")
+    const { store } = await ready(source)
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    await store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Keep this" }),
+    )
+    const messageId = outboxOf(store, draftId)[0].id
+    const before = source.calls.filter((call) => call[0] === "send").length
+    source.refuse("send", undefined)
+    const retrying = store.dispatch(
+      resendMessage({ initiator: "person", sessionId: draftId, messageId }),
+    )
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    expect(await retrying).toBe("not-asked")
+    expect(source.calls.filter((call) => call[0] === "send")).toHaveLength(before)
+    expect(outboxOf(store, draftId)[0].delivery).toMatchObject({
+      state: "failed",
+      reason: "unavailable",
+      diagnostic: { message: "This channel is no longer available." },
+    })
+  })
+
+  it("settles a first send already dispatched when its channel is later removed", async () => {
+    const source = fakeSource()
+    source.hold("send")
+    const { store } = await ready(source)
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    const sending = store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Keep this" }),
+    )
+    await settle()
+    expect(source.calls.filter((call) => call[0] === "send")).toHaveLength(1)
+    store.dispatch(
+      workspaceActions.indexLoaded({
+        index: { sections: [], channels: [], sessions: [] },
+        draftId: "unused",
+        read: "r",
+      }),
+    )
+    await source.release("send")
+    expect(await sending).toBe("sent")
+    expect(outboxOf(store, draftId)[0].delivery).toBeUndefined()
   })
 
   it("shows the message as sending until the source takes it", async () => {

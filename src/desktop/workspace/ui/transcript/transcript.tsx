@@ -15,7 +15,12 @@ import {
 } from "react"
 import { curveToken, durationToken } from "../../../adapters/motion"
 import { IconButton } from "../../../ui/icon-button"
-import { retryTranscript, setUsageLimitAutoContinue } from "../../adapters/store/commands"
+import {
+  loadEarlier,
+  retryTranscript,
+  setUsageLimitAutoContinue,
+} from "../../adapters/store/commands"
+import { LoadingText } from "@nessa-ui/react/loading-text"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectOutbox, selectTranscriptFailure } from "../../adapters/store/selectors"
 import {
@@ -32,6 +37,7 @@ import { type Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
 import { readFailureCopy } from "../failure-copy"
+import { followTranscriptEnd, watchToolDisclosure } from "./tool-disclosure"
 
 const noMessages: readonly MessageValue[] = []
 
@@ -68,6 +74,46 @@ function latestTurn(messages: readonly MessageValue[]) {
   return undefined
 }
 
+/**
+ * How far above the screen's top the earlier turns start loading, so a reader
+ * scrolling back meets them already there.
+ */
+const earlierWithin = "1200px"
+
+/** How long after a failed read of earlier turns the place asks again. */
+const earlierRetryMs = 2_000
+
+/** Where `element` sits in `scroller`'s content, whatever the scroll. */
+const contentTop = (scroller: HTMLElement, element: Element) =>
+  element.getBoundingClientRect().top -
+  scroller.getBoundingClientRect().top +
+  scroller.scrollTop
+
+/**
+ * What stays put while earlier turns load above the reader: the first
+ * message they see, held by its top. The first message drawn may start
+ * partway through its turn, and a page lengthens it from above: that one is
+ * held by its bottom, which a page above does not move.
+ */
+interface Anchor {
+  readonly element: Element
+  readonly edge: "top" | "bottom"
+  at: number
+}
+
+const edgeOf = (scroller: HTMLElement, element: Element, edge: Anchor["edge"]) =>
+  contentTop(scroller, element) +
+  (edge === "bottom" ? element.getBoundingClientRect().height : 0)
+
+function atTop(scroller: HTMLElement): Anchor | null {
+  const top = scroller.getBoundingClientRect().top
+  const messages = [...scroller.querySelectorAll(".workspace-message")]
+  const element = messages.find((message) => message.getBoundingClientRect().bottom > top)
+  if (!element) return null
+  const edge = element === messages[0] ? "bottom" : "top"
+  return { element, edge, at: edgeOf(scroller, element, edge) }
+}
+
 /** How close to the end the reader must be for a growing reply to keep them there. */
 const pinnedWithin = 24
 
@@ -89,7 +135,10 @@ const distanceFromEnd = (scroller: HTMLElement) =>
  *
  * Opening lands on the latest message. While the reader is at the end, a
  * growing reply, a new message, or a pane resized by a split keeps them
- * there; scrolled up to read, they stay put.
+ * there; scrolled up to read, they stay put. A tool they open or close keeps
+ * the clicked header where it is and opens downward (`tool-disclosure.ts`).
+ * Scrolled back near the top of a long conversation, its earlier turns load
+ * above what is shown, and what the reader was reading stays where it was.
  */
 export const Transcript = memo(function Transcript({
   sessionId,
@@ -123,7 +172,7 @@ export const Transcript = memo(function Transcript({
   const pinned = useRef(true)
   // Messages there when the conversation first showed stay put; later ones rise
   // into place. Messages already on screen before it loaded — sent while it was
-  // read — stay put too.
+  // read — stay put too, and so do earlier turns loaded above them.
   const shownBefore = useRef<readonly MessageValue[]>(noMessages)
   // Set once, when the conversation first loads; the same on any render after.
   const stayPut = useRef<ReadonlySet<string> | null>(null)
@@ -158,9 +207,15 @@ export const Transcript = memo(function Transcript({
     const onScroll = () => {
       pinned.current = measure() < pinnedWithin
     }
+    // A tool disclosure holds the end still for its own motion, then the
+    // distance decides whether a later growth follows (`tool-disclosure.ts`).
+    const stopWatchingDisclosure = watchToolDisclosure(scroller, () => {
+      if (!active) return
+      pinned.current = measure() < pinnedWithin
+    })
     const observer = new ResizeObserver(() => {
       if (!active) return
-      if (pinned.current) scroller.scrollTop = scroller.scrollHeight
+      followTranscriptEnd(scroller, pinned.current)
       measure()
     })
     observer.observe(scroller)
@@ -168,6 +223,7 @@ export const Transcript = memo(function Transcript({
     scroller.addEventListener("scroll", onScroll, { passive: true })
     return () => {
       active = false
+      stopWatchingDisclosure()
       observer.disconnect()
       scroller.removeEventListener("scroll", onScroll)
     }
@@ -254,12 +310,74 @@ export const Transcript = memo(function Transcript({
     stayPut.current = new Set(
       [...shownBefore.current, ...messages].map((message) => message.id),
     )
+  } else if (stayPut.current !== null) {
+    // Earlier turns loaded above the first one shown are not new.
+    const oldest = shownBefore.current[0]?.id
+    const at = messages.findIndex((message) => message.id === oldest)
+    for (const message of messages.slice(0, Math.max(at, 0)))
+      (stayPut.current as Set<string>).add(message.id)
   }
   // What is on screen, recorded once committed: a render React lets go shows nothing.
   useLayoutEffect(() => {
     shownBefore.current = messages
   }, [messages])
   const loaded = transcript !== undefined
+  const earlier = transcript?.history?.earlier === true
+
+  // Near the top with earlier turns to read, they are asked for. Watched
+  // again after each page, so a page that left the place still in reach
+  // asks for the next.
+  const earlierRef = useRef<HTMLDivElement>(null)
+  const anchor = useRef<Anchor | null>(null)
+  const [pagesRead, setPagesRead] = useState(0)
+  const retryEarlier = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => {
+    const scroller = scrollRef.current
+    const place = earlierRef.current
+    if (!earlier || !scroller || !place) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return
+        // What the reader is looking at is held in place while the read is
+        // under way: only then is layout read, never on an ordinary render.
+        const held = anchor.current ?? atTop(scroller)
+        anchor.current = held
+        void dispatch(loadEarlier({ sessionId })).then((read) =>
+          requestAnimationFrame(() => {
+            if (anchor.current === held) anchor.current = null
+            // Watched again: a page that left this place in reach asks for
+            // the next, though it only lengthened the first turn shown. A
+            // read that failed is asked again a moment on.
+            if (read) setPagesRead((count) => count + 1)
+            else
+              retryEarlier.current = setTimeout(
+                () => setPagesRead((count) => count + 1),
+                earlierRetryMs,
+              )
+          }),
+        )
+      },
+      { root: scroller, rootMargin: `${earlierWithin} 0px 0px 0px` },
+    )
+    observer.observe(place)
+    return () => {
+      observer.disconnect()
+      clearTimeout(retryEarlier.current)
+    }
+  }, [dispatch, earlier, pagesRead, scrollRef, sessionId])
+
+  // Turns loaded above keep the reader on what they were reading: while a
+  // read is under way, what was at the top of the screen stays there
+  // (`atTop`). At the end, the end is followed instead.
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current
+    const held = anchor.current
+    if (!scroller || !held) return
+    if (!held.element.isConnected || pinned.current) return
+    const at = edgeOf(scroller, held.element, held.edge)
+    if (at !== held.at) scroller.scrollTop += at - held.at
+    held.at = at
+  }, [messages, earlier, scrollRef])
 
   return (
     // The way back to the latest floats over the scroller's foot, above the composer.
@@ -291,7 +409,16 @@ export const Transcript = memo(function Transcript({
               </button>
             </div>
           ) : null}
-          {historyNotices(transcript?.history).map((notice) => (
+          {earlier ? (
+            <div
+              ref={earlierRef}
+              className="workspace-transcript-note"
+              data-history-earlier=""
+            >
+              <LoadingText />
+            </div>
+          ) : null}
+          {historyNotices(transcript?.history, { pagesEarlier: true }).map((notice) => (
             <div
               key={notice.kind}
               className="workspace-transcript-note"

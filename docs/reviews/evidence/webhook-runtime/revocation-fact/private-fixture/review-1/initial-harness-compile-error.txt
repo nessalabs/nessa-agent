@@ -1,0 +1,1 @@
+The initial private fact rustc invocation omitted the direct nessa_local_storage --extern required by the new fixture. It failed E0433 at tests/revocation.rs:30. Corrected args in fact-args.json add the immutable library. This harness failure is not a production finding or passing check. Subsequent fixed/reverted/restored/probe builds all succeeded with -D warnings.

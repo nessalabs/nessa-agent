@@ -56,7 +56,7 @@ use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::{
     Capabilities, Capability, Conversation, ReceiverBinding, ShareAccess, ToolPolicy,
 };
-use nessa_auth::application::ports::{AccessError, AccessReader};
+use nessa_auth::application::ports::{AccessError, AccessHold, AccessReader};
 use nessa_auth::domain::{AuthContext, CredentialId, PrincipalId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -358,6 +358,47 @@ pub struct ShareGrantReceipt {
 /// tables: this is the owner's side only, and a follower's choice of what to
 /// keep never reaches it.
 pub trait ShareGrants: Send + Sync {
+    /// Read a principal-subject grant without manufacturing a receiver binding.
+    /// The credential remains part of the row and must be correlated by callers.
+    fn principal_grant<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        principal: &'a PrincipalId,
+    ) -> ConversationFuture<'a, Option<ShareGrant>> {
+        Box::pin(async move {
+            Ok(self
+                .grants(id)
+                .await?
+                .grants
+                .into_iter()
+                .find(|grant| &grant.principal_id == principal))
+        })
+    }
+
+    /// Acquire only this principal/resource synchronization gate. This grants no
+    /// authority and validates no epoch: callers must reload facts and ask Cedar.
+    /// Acquisition must not start physical I/O; the caller owns any subsequent
+    /// read separately so a dispatch deadline can release partial fences while
+    /// joining that read. Adapters without this boundary fail closed.
+    fn hold_principal_gate<'a>(
+        &'a self,
+        _id: &'a ConversationId,
+        _principal: &'a PrincipalId,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+
+    /// Fence this principal/resource epoch using the same gate as grant changes.
+    /// An adapter without that synchronization fails closed.
+    fn hold_principal_revision<'a>(
+        &'a self,
+        _id: &'a ConversationId,
+        _principal: &'a PrincipalId,
+        _policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+
     /// The grant `receiver_id` holds on `id`, or `None` when it holds none
     /// there.
     fn held_grant<'a>(
@@ -399,6 +440,21 @@ pub trait ShareGrants: Send + Sync {
     /// grant no longer holds is refused `ShareGrantChanged` and writes
     /// nothing (row J30).
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt>;
+    /// Grant to the actual held principal/credential with no receiver. Native
+    /// adapters correlate current and replayed receiver absence before success
+    /// and retain the original Auth hold in physical writes after caller loss.
+    /// Application Cedar admission remains required; unsupported adapters refuse.
+    fn grant_principal_with_credential(
+        &self,
+        _conversation: ConversationId,
+        _access: ShareAccess,
+        _expected_policy_revision: Option<u64>,
+        _initiator: ConversationCaller,
+        _at_ms: u64,
+        _credential: AccessHold,
+    ) -> ConversationFuture<'_, ShareGrantReceipt> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
     /// The grants on one conversation, oldest first, with the catalogue
     /// revision they were read at.
     fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList>;

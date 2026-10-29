@@ -1557,7 +1557,7 @@ async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
         for index in 0..30 {
             projection.injected(&format!("steering-{index}"), "running-parent");
         }
-        assert!(projection.view().truncated);
+        assert!(projection.view().earlier);
         assert!(!projection
             .view()
             .messages
@@ -1865,3 +1865,6 @@ async fn a_stop_whose_cancel_meets_the_turn_ending_is_answered_by_its_end() {
     drop(live);
     retire(service, storage, metadata).await;
 }
+
+#[path = "background_tasks.rs"]
+mod background_tasks;

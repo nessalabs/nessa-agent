@@ -1,0 +1,19 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::actual_original_actor_cannot_be_replaced_by_a_claimed_reply_actor ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::actual_original_actor_cannot_be_replaced_by_a_claimed_reply_actor stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::actual_original_actor_cannot_be_replaced_by_a_claimed_reply_actor' (124393) panicked at /tmp/nessa-origin-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/registration_failures.rs:572:5:
+assertion `left == right` failed
+  left: Ok(RegisteredWebhook { registration_id: 33f8ccae-dd95-4c66-9239-9c112eabdb8d, credential: CredentialMetadataDto { id: "credential-e697113a-1edd-4cbb-994f-497b76a76245", principal_id: "hook", organization_id: "org", audience_id: "gateway", issued_at: 10, expires_at: Some(100), revoked_at: None, grants: [CredentialGrantDto { action: "conversation.read", resource: ResourceDto { organization_id: "org", id: "gateway" } }] } })
+ right: Err(Inconsistent)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::actual_original_actor_cannot_be_replaced_by_a_claimed_reply_actor
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.01s

@@ -1,0 +1,370 @@
+//! State/audit commits, immutable journal publication and bounded retirement.
+use super::audit::{Record, RegistrationChange};
+use super::stored::{self, StoredDelivery};
+use super::{capacity, codec, invalid, unavailable, uuid};
+use crate::webhooks::application::{
+    DeliveryCause, OutboxError, MAX_REGISTRATIONS, PENDING_LIMIT, RETAINED_LIMIT,
+};
+use crate::webhooks::domain::{Delivery, Phase};
+use nessa_local_database::rusqlite::{params, Connection, Result as SqlResult, Transaction};
+use nessa_protocol::conversation::domain::ConversationId;
+use std::path::Path;
+use tokio::time::Instant;
+use uuid::Uuid;
+
+use super::publication::{append, publish};
+
+pub(super) fn refuse_pending(
+    transaction: &Transaction<'_>,
+    registration: Uuid,
+    conversation: Option<&ConversationId>,
+    cause: DeliveryCause,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    let states = {
+        let mut statement=transaction.prepare(&format!("{} FROM deliveries WHERE registration=?1 AND (?2 IS NULL OR conversation=?2) AND phase IN ('queued','retry') ORDER BY rowid LIMIT ?3",stored::SELECT)).map_err(unavailable)?;
+        let rows = statement
+            .query_map(
+                params![
+                    registration.to_string(),
+                    conversation.map(ToString::to_string),
+                    (PENDING_LIMIT + 1) as i64
+                ],
+                StoredDelivery::row,
+            )
+            .map_err(unavailable)?;
+        rows.collect::<SqlResult<Vec<_>>>().map_err(unavailable)?
+    };
+    if states.len() > PENDING_LIMIT {
+        return Err(OutboxError::Invalid);
+    }
+    for saved in states {
+        let saved = saved.checked(transaction)?;
+        if saved.registration != registration
+            || conversation.is_some_and(|id| *id != saved.conversation)
+        {
+            return Err(OutboxError::Invalid);
+        }
+        refuse_one(transaction, saved, cause, at_ms)?;
+    }
+    Ok(())
+}
+
+pub(super) fn delivery_audit(
+    transaction: &Transaction<'_>,
+    after: &Delivery,
+    before: Option<&Delivery>,
+    cause: DeliveryCause,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    let saved = stored::by_id(transaction, after.id())?.ok_or(OutboxError::Conflict)?;
+    if saved.delivery != *after {
+        return Err(OutboxError::Invalid);
+    }
+    if let Some(before) = before {
+        if !cause.allows(before, after, at_ms) {
+            return Err(OutboxError::Invalid);
+        }
+    } else if !matches!(cause, DeliveryCause::SourceQueued { .. }) {
+        return Err(OutboxError::Invalid);
+    }
+    let registration_facts = super::registry::by_id(transaction, saved.registration)?;
+    let record = Record::delivery(
+        &saved,
+        &registration_facts.registration.target,
+        before,
+        cause,
+        registration_facts
+            .stop
+            .as_ref()
+            .filter(|_| registration_facts.lifecycle.stopped().is_some()),
+        at_ms,
+    )?;
+    append(transaction, record)
+}
+
+/// A cutoff counts all terminal rows, including newly owed ones. Deletion is
+/// still conditional on each old row's audit being published. The materialized
+/// relation computes one indexed cutoff per bounded registration, not per row.
+pub(super) const TRIM_TERMINALS: &str = "WITH cutoffs AS MATERIALIZED (
+    SELECT r.id, (
+        SELECT oldest.rowid FROM deliveries AS oldest INDEXED BY terminal_deliveries
+        WHERE oldest.registration=r.id AND oldest.phase NOT IN ('queued','sending','retry')
+        ORDER BY oldest.rowid DESC LIMIT 1 OFFSET ?1
+    ) AS oldest_retained FROM registrations r
+)
+DELETE FROM deliveries WHERE rowid IN (
+    SELECT d.rowid FROM cutoffs c JOIN deliveries AS d INDEXED BY terminal_deliveries ON d.registration=c.id
+    WHERE d.phase NOT IN ('queued','sending','retry') AND d.rowid<c.oldest_retained
+) AND NOT EXISTS (SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0)";
+
+/// Published delivery history belongs to its delivery-delete trigger. This
+/// indexed cleanup visits only the separate registration projections.
+pub(super) const TRIM_REGISTRATION_AUDIT: &str =
+    "DELETE FROM audit INDEXED BY published_registration_audit WHERE published=1 AND delivery IS NULL AND json_extract(record,'$.cause')!='owner_reset'";
+
+/// A formerly queued row can be older than all retained terminals. Protect its
+/// owed response while reclaiming the oldest actually published alternative.
+/// The window visits only registrations still over budget after the normal
+/// indexed cutoff; it never makes an unpublished row eligible for deletion.
+pub(super) const TRIM_PROTECTED_TERMINALS: &str = "WITH protected AS MATERIALIZED (
+    SELECT DISTINCT d.registration FROM audit a INDEXED BY unpublished_audit
+    JOIN deliveries d ON d.id=a.delivery
+    WHERE a.published=0 AND d.phase NOT IN ('queued','sending','retry')
+), excess AS MATERIALIZED (
+    SELECT d.registration, count(*) - ?1 AS amount
+    FROM protected p CROSS JOIN deliveries d INDEXED BY terminal_deliveries ON d.registration=p.registration
+    WHERE d.phase NOT IN ('queued','sending','retry')
+    GROUP BY d.registration HAVING count(*) > ?1
+), eligible AS MATERIALIZED (
+    SELECT d.rowid AS target, e.amount,
+        row_number() OVER (PARTITION BY d.registration ORDER BY d.rowid) AS age
+    FROM excess e CROSS JOIN deliveries d INDEXED BY terminal_deliveries ON d.registration=e.registration
+    WHERE d.phase NOT IN ('queued','sending','retry')
+        AND NOT EXISTS (SELECT 1 FROM audit a WHERE a.delivery=d.id AND a.published=0)
+)
+DELETE FROM deliveries WHERE rowid IN (SELECT target FROM eligible WHERE age<=amount)";
+
+fn trim(connection: &Connection) -> Result<(), OutboxError> {
+    connection
+        .execute(TRIM_TERMINALS, [RETAINED_LIMIT as i64 - 1])
+        .map_err(unavailable)?;
+    connection
+        .execute(TRIM_PROTECTED_TERMINALS, [RETAINED_LIMIT as i64])
+        .map_err(unavailable)?;
+    connection.execute("DELETE FROM deliveries WHERE registration IN (SELECT id FROM registrations WHERE active=0) AND phase NOT IN ('queued','sending','retry') AND NOT EXISTS(SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0)",[]).map_err(unavailable)?;
+    connection
+        .execute(TRIM_REGISTRATION_AUDIT, [])
+        .map_err(unavailable)?;
+    connection.execute("DELETE FROM retirements WHERE NOT EXISTS(SELECT 1 FROM audit WHERE audit.registration=retirements.id)",[]).map_err(unavailable)?;
+    Ok(())
+}
+
+/// Publish first; only then retire stopped projections and their private
+/// registration material. Retire evidence commits with the deletes, and any
+/// failed projection is replayed before the next operation by `run`.
+pub(super) fn finish(
+    connection: &mut Connection,
+    audit: &Path,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    publish(connection, audit)?;
+    let transaction = connection.transaction().map_err(unavailable)?;
+    let stopped = {
+        let mut statement = transaction
+            .prepare("SELECT id FROM registrations WHERE active=0 LIMIT ?1")
+            .map_err(unavailable)?;
+        let rows = statement
+            .query_map([(MAX_REGISTRATIONS + 1) as i64], |r| r.get::<_, String>(0))
+            .map_err(unavailable)?;
+        rows.collect::<SqlResult<Vec<_>>>().map_err(unavailable)?
+    };
+    if stopped.len() > MAX_REGISTRATIONS {
+        return Err(OutboxError::Invalid);
+    }
+    for id in stopped {
+        refuse_pending(
+            &transaction,
+            uuid(&id)?,
+            None,
+            DeliveryCause::AuthorityStopped,
+            at_ms,
+        )?;
+    }
+    refuse_invalidated(&transaction, at_ms)?;
+    commit(transaction, None, at_ms)?;
+    publish(connection, audit)
+}
+
+fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), OutboxError> {
+    let retired = {
+        let mut statement=transaction.prepare("SELECT id FROM registrations r WHERE active=0 AND NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.registration=r.id) LIMIT ?1").map_err(unavailable)?;
+        let rows = statement
+            .query_map([(MAX_REGISTRATIONS + 1) as i64], |r| r.get::<_, String>(0))
+            .map_err(unavailable)?;
+        rows.collect::<SqlResult<Vec<_>>>().map_err(unavailable)?
+    };
+    if retired.len() > MAX_REGISTRATIONS {
+        return Err(OutboxError::Invalid);
+    }
+    for id in retired {
+        let saved = super::registry::by_id(transaction, uuid(&id)?)?;
+        let stop = saved.stop.as_ref().ok_or(OutboxError::Invalid)?;
+        let record =
+            Record::registration(&saved.registration, RegistrationChange::Retire(stop), at_ms);
+        let (audit_id, _, _) = record.keys()?;
+        append(transaction, record)?;
+        super::retirement::retain(
+            transaction,
+            &saved.registration,
+            stop,
+            at_ms,
+            audit_id,
+            saved.issued_at_ms,
+            super::retirement::RetirementKind::Drained,
+        )?;
+        transaction.execute("DELETE FROM audit WHERE registration=?1 AND published=1 AND json_extract(record,'$.cause')='owner_reset'", [&id]).map_err(unavailable)?;
+        transaction
+            .execute("DELETE FROM cursors WHERE registration=?1", [&id])
+            .map_err(unavailable)?;
+        transaction
+            .execute("DELETE FROM registrations WHERE id=?1", [&id])
+            .map_err(unavailable)?;
+    }
+    Ok(())
+}
+
+pub(super) fn commit(
+    transaction: Transaction<'_>,
+    registration: Option<Uuid>,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    commit_before(transaction, registration, at_ms, None)
+}
+
+/// The final interruptible guard. Once COMMIT enters filesystem sync, its late
+/// conditional result must be joined/reconciled (W-audit-race), never dispatched.
+pub(super) fn commit_before(
+    transaction: Transaction<'_>,
+    registration: Option<Uuid>,
+    at_ms: u64,
+    deadline: Option<Instant>,
+) -> Result<(), OutboxError> {
+    trim(&transaction)?;
+    retire_drained(&transaction, at_ms)?;
+    super::intents::validate(&transaction)?;
+    capacity::check(&transaction, registration)?;
+    if deadline.is_some_and(|at| Instant::now() >= at) {
+        return Err(OutboxError::Conflict);
+    }
+    transaction.commit().map_err(unavailable)
+}
+
+/// A pinned attempt cannot run generic retirement or trim its published receipt.
+/// On its first terminal write the new, unpublished observation already protects
+/// that delivery; reuse the existing published-alternative bound enforcement.
+pub(super) fn commit_observation(
+    transaction: Transaction<'_>,
+    registration: Uuid,
+    deadline: Option<Instant>,
+) -> Result<(), OutboxError> {
+    transaction
+        .execute(TRIM_PROTECTED_TERMINALS, [RETAINED_LIMIT as i64])
+        .map_err(unavailable)?;
+    super::intents::validate(&transaction)?;
+    capacity::check(&transaction, Some(registration))?;
+    if deadline.is_some_and(|at| Instant::now() >= at) {
+        return Err(OutboxError::Conflict);
+    }
+    transaction.commit().map_err(unavailable)
+}
+
+/// The cursor keeps the new refusal, and admitted rows retain its causal fact
+/// across a later cursor reset. Sending itself still resolves its observation.
+pub(super) fn invalidate_source(
+    transaction: &Transaction<'_>,
+    fact: &super::source_reset::Fact,
+) -> Result<(), OutboxError> {
+    let rows = {
+        let mut statement=transaction.prepare(&format!("{} FROM deliveries WHERE registration=?1 AND conversation=?2 AND phase IN ('queued','retry','sending') LIMIT ?3",stored::SELECT)).map_err(unavailable)?;
+        let rows = statement
+            .query_map(
+                params![
+                    fact.registration.to_string(),
+                    fact.conversation.to_string(),
+                    (PENDING_LIMIT + 1) as i64
+                ],
+                StoredDelivery::row,
+            )
+            .map_err(unavailable)?;
+        rows.collect::<SqlResult<Vec<_>>>().map_err(unavailable)?
+    };
+    if rows.len() > PENDING_LIMIT {
+        return Err(OutboxError::Invalid);
+    }
+    for row in rows {
+        let saved = row.checked(transaction)?;
+        if !codec::same_source(&saved.scope, &fact.prior_scope) || saved.source_reset.is_some() {
+            continue;
+        }
+        super::source_reset::capture(transaction, fact, &saved)?;
+        if saved.delivery.phase() != Phase::Sending {
+            refuse_one(
+                transaction,
+                saved,
+                DeliveryCause::SourceChanged {
+                    initiator: fact.stop.initiator,
+                },
+                fact.stop.at_ms,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn refuse_one(
+    transaction: &Transaction<'_>,
+    saved: stored::CheckedDelivery,
+    cause: DeliveryCause,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    let before = saved.delivery;
+    let after = before.refused().map_err(invalid)?;
+    let changed = transaction
+        .execute(
+            "UPDATE deliveries SET state=?1 WHERE id=?2 AND state=?3",
+            params![
+                codec::encode(&after)?,
+                after.id().to_string(),
+                saved.saved_state
+            ],
+        )
+        .map_err(unavailable)?;
+    if changed != 1 {
+        return Err(OutboxError::Conflict);
+    }
+    delivery_audit(transaction, &after, Some(&before), cause, at_ms)
+}
+
+fn refuse_invalidated(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), OutboxError> {
+    let registrations = {
+        let mut statement = transaction
+            .prepare("SELECT id FROM registrations LIMIT ?1")
+            .map_err(unavailable)?;
+        let rows = statement
+            .query_map([(MAX_REGISTRATIONS + 1) as i64], |r| r.get::<_, String>(0))
+            .map_err(unavailable)?;
+        rows.collect::<SqlResult<Vec<_>>>().map_err(unavailable)?
+    };
+    if registrations.len() > MAX_REGISTRATIONS {
+        return Err(OutboxError::Invalid);
+    }
+    for registration in registrations {
+        let rows = {
+            let mut statement=transaction.prepare(&format!("{} FROM deliveries WHERE registration=?1 AND EXISTS(SELECT 1 FROM source_reset_members WHERE delivery=deliveries.id) AND phase='retry' LIMIT ?2",stored::SELECT)).map_err(unavailable)?;
+            let rows = statement
+                .query_map(
+                    params![registration, (PENDING_LIMIT + 1) as i64],
+                    StoredDelivery::row,
+                )
+                .map_err(unavailable)?;
+            rows.collect::<SqlResult<Vec<_>>>().map_err(unavailable)?
+        };
+        if rows.len() > PENDING_LIMIT {
+            return Err(OutboxError::Invalid);
+        }
+        for row in rows {
+            let saved = row.checked(transaction)?;
+            let stop = saved.source_stop.ok_or(OutboxError::Invalid)?;
+            refuse_one(
+                transaction,
+                saved,
+                DeliveryCause::SourceChanged {
+                    initiator: stop.initiator,
+                },
+                at_ms,
+            )?;
+        }
+    }
+    Ok(())
+}

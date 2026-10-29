@@ -6126,7 +6126,7 @@ async fn returned_committed_views_bound_late_titles_and_preserve_pending_selecti
             .await
             .unwrap();
         assert!(
-            view.truncated,
+            view.earlier,
             "metadata addition must reach the budget owner: pending={pending_mode}, size={}, baseline={size}, length={length}", serde_json::to_vec(&view).unwrap().len()
         );
         assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);

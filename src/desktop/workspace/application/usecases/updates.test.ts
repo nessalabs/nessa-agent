@@ -556,6 +556,36 @@ describe("the index read again: the resync", () => {
     expect(resynced.drafts.fresh.channelId).toBe("desktop")
   })
 
+  it("clears the last pane when the source removes its session and all channels", () => {
+    const empty = { sections: [], channels: [], sessions: [] }
+    const resynced = indexLoaded(indexRequested(loaded(), { read: "r" }), {
+      index: empty,
+      draftId: "fresh",
+      read: "r",
+    })
+    expect(resynced.panes).toBeNull()
+    expect(resynced.sessions.a).toBeUndefined()
+    expect(resynced.drafts.fresh).toBeUndefined()
+
+    const streamed = sessionRemoved(
+      { ...loaded(), channels: [] },
+      {
+        sessionId: "a",
+        revision: 2,
+        draftId: "fresh",
+      },
+    )
+    expect(streamed.panes).toBeNull()
+    expect(streamed.sessions.a).toBeUndefined()
+
+    // With a channel listed again, New Session opens a pane from nothing.
+    const relisted = { ...streamed, channels: loaded().channels }
+    for (const beside of [undefined, "right"] as const)
+      expect(
+        shown(createDraft(relisted, { draftId: "again", beside, room: roomy })),
+      ).toEqual(["again"])
+  })
+
   it("takes an index that contradicts itself as far as it holds together", () => {
     // A channel under a section the index does not list is reachable from
     // nowhere in the sidebar: it and its session are left out, not opened.

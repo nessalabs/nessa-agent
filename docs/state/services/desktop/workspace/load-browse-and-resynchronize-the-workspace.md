@@ -24,6 +24,9 @@ diagramLinks: {}
 
 The desktop loads a workspace source and uses it to show sessions and summaries. Refreshing replaces those summaries while preserving valid local selections.
 
+When the source removes a visible session, its pane closes. The last pane
+shows a new draft if a current channel permits one; otherwise it clears.
+
 The selected [connection mode](README.md#connection-modes) supplies gateway data, a seeded workspace, or an in-memory sample. Some preferences persist, but the complete arrangement of panes does not. Losing a local view is different from deleting a server conversation.
 
 ```mermaid

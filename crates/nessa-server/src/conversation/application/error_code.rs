@@ -205,6 +205,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
     // Every field named, so a new one cannot be left out of this decision
     // without failing to compile.
     let DeletionFailures {
+        background_tasks,
         stop,
         history,
         history_leased_elsewhere,
@@ -218,7 +219,8 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         interrupted,
         another_attempt,
     } = failures;
-    let evidence_only = stop.is_none()
+    let evidence_only = background_tasks.is_none()
+        && stop.is_none()
         && history.is_none()
         && !history_leased_elsewhere
         && provider.is_none()

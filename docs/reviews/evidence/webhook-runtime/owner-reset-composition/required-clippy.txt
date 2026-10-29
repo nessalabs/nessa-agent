@@ -1,0 +1,62 @@
+    Checking mio v1.2.2
+    Checking scopeguard v1.2.0
+    Checking socket-pktinfo v0.4.1
+    Checking if-addrs v0.15.0
+    Checking lock_api v0.4.14
+    Checking spin v0.9.9
+    Checking tokio v1.53.1
+    Checking flume v0.12.0
+    Checking mdns-sd v0.21.6
+    Checking nessa-local-storage v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-local-storage)
+    Checking event-stream v0.1.0 (https://github.com/nessalabs/event-stream?rev=e16580f#e16580f3)
+    Checking shepherd-app v0.1.0 (https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8)
+    Checking tokio-util v0.7.19
+    Checking nessa-auth v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-auth)
+    Checking nessa-local-database v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-local-database)
+    Checking h2 v0.4.19
+    Checking shepherd-infra v0.1.0 (https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8)
+    Checking shepherd v0.1.0 (https://github.com/nessalabs/shepherd?rev=26bd7cb8843c1bc6c3eccfbbae8be926f8c49103#26bd7cb8)
+    Checking tower v0.5.3
+    Checking tokio-rustls v0.26.5
+    Checking tower-http v0.6.11
+    Checking tokio-tungstenite v0.29.0
+    Checking nessa-gateway-endpoint v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-gateway-endpoint)
+    Checking nessa-sdk v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-sdk)
+    Checking hyper v1.11.1
+    Checking hyper-util v0.1.20
+    Checking hyper-rustls v0.27.9
+    Checking axum v0.8.9
+    Checking reqwest v0.13.4
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-client-core)
+    Checking nessa-server v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-server)
+    Checking nessa-device-client v0.1.0 (/workspace/nessa-webhook-delivery-review/crates/nessa-device-client)
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1048:9
+     |
+1048 | /         while at < source.len() {
+1049 | |             if source[at] != b'\r' {
+1050 | |                 hash = (hash ^ source[at] as u64).wrapping_mul(PRIME);
+...    |
+1053 | |         }
+     | |_________^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:51:9
+     |
+  51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  63 | / lease_protocol!(
+  64 | |     "../../../nessa-protocol/src/lease.rs",
+  65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  66 | |     "../env_serve/mod.rs",
+...    |
+ 105 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 106 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 22s

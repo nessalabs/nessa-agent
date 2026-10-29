@@ -88,7 +88,7 @@ pub(crate) fn validate_app_sources<'a>(
     recorded: impl Fn(&ExecutionId, &ToolCallId) -> Option<&'a McpTool>,
 ) -> Result<(), UnknownApp> {
     let writer = match message.sender() {
-        MessageSender::Person => None,
+        MessageSender::Person | MessageSender::Internal => None,
         MessageSender::App(app) => Some(app),
         MessageSender::Agent(_) => None,
     };

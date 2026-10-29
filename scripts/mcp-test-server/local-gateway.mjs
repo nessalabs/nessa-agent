@@ -136,7 +136,7 @@ export function agentCommand(agent) {
 
 /**
  * What a signed-out gateway is started with, over `NESSA_*`: this process's
- * `PATH` (`path` first, when given), `TMPDIR` and `RUST_LOG`, and a `HOME` of
+ * `PATH` (`path` first, when given), `TMPDIR`, `RUST_LOG` and local OS-service addresses, and a `HOME` of
  * its own under `directory`, so neither a credential variable nor a sign-in
  * kept under the real home reaches it or the agent it starts. Built from
  * what it needs rather than by removing the credentials it might find.
@@ -146,7 +146,7 @@ export function agentCommand(agent) {
  */
 export function signedOutEnvironment(directory, path) {
   const kept = Object.fromEntries(
-    ["TMPDIR", "RUST_LOG"]
+    ["TMPDIR", "RUST_LOG", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]
       .filter((name) => process.env[name] !== undefined)
       .map((name) => [name, process.env[name]]),
   )
@@ -215,6 +215,9 @@ export async function exited(child, ms) {
  *   error carries the gateway's output as `gatewayLog`.
  */
 export async function startLocalGateway(o) {
+  const stage = o.stage ?? "ci"
+  if (!["ci", "dev"].includes(stage))
+    throw new Error("verification gateways use ci or dev")
   const nessa = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
   if (!existsSync(nessa))
     throw new Error(
@@ -276,7 +279,7 @@ export async function startLocalGateway(o) {
             ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
           }),
       ...o.environment,
-      NESSA_STAGE: "ci",
+      NESSA_STAGE: stage,
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,
       NESSA_INSTANCE: o.instance,
@@ -288,7 +291,7 @@ export async function startLocalGateway(o) {
       { env, encoding: "utf8" },
     )
     if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
-    const configPath = join(directory, "ci", "instances", o.instance, "config.json")
+    const configPath = join(directory, stage, "instances", o.instance, "config.json")
     writeFileSync(
       configPath,
       JSON.stringify({
@@ -312,6 +315,7 @@ export async function startLocalGateway(o) {
         },
         ...(o.limits ? { limits: o.limits } : {}),
         ...(o.native ? { native: o.native } : {}),
+        ...(o.webhooks ? { webhooks: o.webhooks } : {}),
       }),
     )
     chmodSync(configPath, 0o600)

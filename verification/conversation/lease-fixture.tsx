@@ -98,6 +98,7 @@ function withLease(lease: ConversationLease | undefined): Conversation {
       transcriptState: "complete_empty",
       queueComplete: true,
       truncated: false,
+      earlier: false,
       messages: [],
       pending: [],
       questions: [],

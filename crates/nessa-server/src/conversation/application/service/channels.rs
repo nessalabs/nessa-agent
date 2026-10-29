@@ -328,6 +328,7 @@ impl ConversationService {
             caller.organization_id.clone(),
             caller.principal_id.clone(),
             ChannelParts {
+                execution: resolved.execution,
                 name: resolved.name.clone(),
                 folder,
                 defaults: resolved.defaults.clone(),
@@ -393,6 +394,33 @@ impl ConversationService {
         let Some(id) = channel.filter(|id| !id.is_default()) else {
             return Ok(None);
         };
+        self.channel_for_action(caller, id, AccessAction::ChannelUse)
+            .await
+            .map(Some)
+    }
+
+    /// Authorize a saved channel's runtime settings using current stored
+    /// owner facts. The synthetic default channel uses global settings.
+    #[cfg(unix)]
+    pub(crate) async fn authorize_channel_settings(
+        &self,
+        caller: &ConversationCaller,
+        id: &ChannelId,
+    ) -> Result<(), ConversationError> {
+        if id.is_default() {
+            return Err(ConversationError::ChannelNotFound);
+        }
+        self.channel_for_action(caller, id, AccessAction::ChannelSettings)
+            .await
+            .map(|_| ())
+    }
+
+    async fn channel_for_action(
+        &self,
+        caller: &ConversationCaller,
+        id: &ChannelId,
+        action: AccessAction,
+    ) -> Result<Channel, ConversationError> {
         let store = self
             .channel_store()
             .ok_or(ConversationError::ChannelNotFound)?;
@@ -400,15 +428,18 @@ impl ConversationService {
             .get(id)
             .await?
             .ok_or(ConversationError::ChannelNotFound)?;
+        if found.id() != id {
+            return Err(ConversationError::Unavailable);
+        }
         match self.admit_channel(
             caller,
-            AccessAction::ChannelUse,
+            action,
             AccessResource::Channel {
                 organization: found.organization(),
                 owner: found.owner(),
             },
         ) {
-            Ok(()) => Ok(Some(found)),
+            Ok(()) => Ok(found),
             Err(ChannelError::Unavailable) => Err(ConversationError::Unavailable),
             Err(_) => Err(ConversationError::ChannelNotFound),
         }
@@ -475,7 +506,11 @@ impl ConversationService {
             .get(&channel)
             .await?
             .ok_or(ConversationError::Unavailable)?;
-        Ok(Some(AgentPlace::of(&found)))
+        let mut place = AgentPlace::of(&found);
+        if *id == found.coordinator_id() {
+            place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and its configured worker placement. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");
+        }
+        Ok(Some(place))
     }
 
     /// The stored channel `id` is in; `None` is the default one.
@@ -525,12 +560,14 @@ impl ConversationService {
     }
 
     /// Let go of a deleted conversation's placement.
-    pub(super) async fn forget_channel_of(&self, id: &ConversationId) {
+    pub(super) async fn forget_channel_of(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(), ConversationError> {
         if let Some(store) = self.channel_store() {
-            if let Err(error) = store.forget(id).await {
-                tracing::warn!(conversation_id = %id, ?error, "a deleted conversation's channel placement was not let go");
-            }
+            store.forget(id).await?;
         }
+        Ok(())
     }
 }
 

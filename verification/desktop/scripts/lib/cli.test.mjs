@@ -559,4 +559,26 @@ process.exit(rep.finish());`,
     assert.match(result.stderr, /temporarily_unavailable/)
     assert.doesNotMatch(result.stderr, /TypeError/)
   })
+
+  it("reports a layout exclusion without claiming it requires a dev server", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { report } from ${JSON.stringify(new URL("./cli.mjs", import.meta.url).href)};
+const rep = report("columns", {});
+rep.add({ name: "split-motion", failures: [] });
+rep.add({ name: "waiting-rows", skipped: "no session list in this layout" });
+process.exit(rep.finish());`,
+      ],
+      { encoding: "utf8" },
+    )
+    assert.equal(result.status, 0, result.stderr)
+    const document = JSON.parse(result.stdout)
+    assert.equal(document.results[1].ok, false)
+    assert.equal(document.results[1].skipped, "no session list in this layout")
+    assert.match(result.stderr, /columns: 1\/1 held, 1 not run/)
+    assert.doesNotMatch(result.stderr, /dev server only/)
+  })
 })

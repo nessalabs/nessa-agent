@@ -48,11 +48,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::sync::{Condvar, MutexGuard, PoisonError};
+#[cfg(test)]
+use std::time::Duration;
 
 /// A grant write that has entered its blocking task and will not commit
 /// until [`GrantWritePause::release`]. The permit is held across the wait.
 #[cfg(test)]
-pub(super) struct GrantWritePause {
+pub(crate) struct GrantWritePause {
     entered: Mutex<bool>,
     entered_cv: Condvar,
     release: Mutex<bool>,
@@ -61,7 +63,7 @@ pub(super) struct GrantWritePause {
 
 #[cfg(test)]
 impl GrantWritePause {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             entered: Mutex::new(false),
             entered_cv: Condvar::new(),
@@ -85,7 +87,7 @@ impl GrantWritePause {
         }
     }
 
-    pub(super) fn wait_until_entered(&self) {
+    pub(crate) fn wait_until_entered(&self) {
         let mut entered = self.entered.lock().unwrap_or_else(PoisonError::into_inner);
         while !*entered {
             entered = self
@@ -95,7 +97,16 @@ impl GrantWritePause {
         }
     }
 
-    pub(super) fn release(&self) {
+    pub(crate) fn wait_until_entered_timeout(&self, timeout: Duration) -> bool {
+        let entered = self.entered.lock().unwrap_or_else(PoisonError::into_inner);
+        let (entered, _) = self
+            .entered_cv
+            .wait_timeout_while(entered, timeout, |entered| !*entered)
+            .unwrap_or_else(PoisonError::into_inner);
+        *entered
+    }
+
+    pub(crate) fn release(&self) {
         let mut release = self.release.lock().unwrap_or_else(PoisonError::into_inner);
         *release = true;
         self.release_cv.notify_all();
@@ -221,7 +232,7 @@ impl LocalConversationStore {
     /// Hold the next grant write inside its blocking task until `pause` is
     /// released. The permit stays taken across that wait.
     #[cfg(test)]
-    pub(super) fn pause_grant_writes(&self, pause: Arc<GrantWritePause>) {
+    pub(crate) fn pause_grant_writes(&self, pause: Arc<GrantWritePause>) {
         *self
             .grant_write_pause
             .lock()
@@ -235,7 +246,7 @@ impl LocalConversationStore {
         self.run(|connection| export::read(connection))
     }
     #[cfg(test)]
-    pub(super) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {
         self.connection
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

@@ -217,6 +217,8 @@ pub(super) struct Metadata {
     /// (`deserialize_with` keeps serde from reading its absence as `None`).
     #[serde(deserialize_with = "Option::deserialize")]
     pub(super) user_app: Option<App>,
+    /// Application-generated continuation, never simultaneously an app message.
+    pub(super) user_internal: bool,
     /// What apps gave the model with this message; empty when none did.
     pub(super) user_app_model_context: Vec<AppModelContext>,
     pub(super) estimated_input_tokens: u64,
@@ -452,10 +454,11 @@ impl From<&InvocationRecord> for Metadata {
                 .map(Into::into)
                 .collect(),
             user_app: match value.request.user_message.sender() {
-                MessageSender::Person => None,
+                MessageSender::Person | MessageSender::Internal => None,
                 MessageSender::App(app) => Some(app.into()),
                 MessageSender::Agent(_) => None,
             },
+            user_internal: matches!(value.request.user_message.sender(), MessageSender::Internal),
             user_app_model_context: value
                 .request
                 .user_message
@@ -634,15 +637,16 @@ impl Provider {
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
         let initiation = self.initiation.decode()?;
-        // Agent sender origin has one stored owner: the initiation. An app
-        // cannot write the same message as an agent.
-        let sender = match (initiation.initiator(), self.user_app) {
-            (Initiator::Agent(source), None) => MessageSender::Agent(source.clone()),
-            (Initiator::Agent(_), Some(_)) => {
-                return Err(corrupt("an agent's message also names an app"))
+        // Agent sender origin has one stored owner: the initiation. Internal
+        // input and app messages cannot also claim that agent origin.
+        let sender = match (initiation.initiator(), self.user_internal, self.user_app) {
+            (Initiator::Agent(source), false, None) => MessageSender::Agent(source.clone()),
+            (Initiator::Agent(_), _, _) | (_, true, Some(_)) => {
+                return Err(corrupt("input has two senders"))
             }
-            (_, None) => MessageSender::Person,
-            (_, Some(app)) => MessageSender::App(app.decode()?),
+            (_, false, None) => MessageSender::Person,
+            (_, true, None) => MessageSender::Internal,
+            (_, false, Some(app)) => MessageSender::App(app.decode()?),
         };
         Ok(InvocationRecord {
             target_event_offset: self.target_event_offset,

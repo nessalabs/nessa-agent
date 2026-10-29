@@ -2,7 +2,7 @@
 use super::agent::AgentsConfig;
 use crate::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 use crate::{
-    conversation::domain::CommandPolicy,
+    conversation::{domain::CommandPolicy, infrastructure::BoatRuntimeConfig},
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
@@ -35,11 +35,15 @@ pub(super) const MAX_CONFIG_BYTES: usize = 65_536;
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct RuntimeConfig {
+    /// Private endpoint/MAC seeds selected by the existing credential.issue principal.
+    pub webhooks: Vec<super::webhooks::WebhookConfig>,
     pub registry: LocalStoreConfig,
     pub session: SessionConfig,
     /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.
     pub limits: LimitsConfig,
     pub agents: Option<AgentsConfig>,
+    /// Ordinary VM lifetime defaults and channel overrides, never credentials.
+    pub boat: BoatRuntimeConfig,
     /// Native device pairing; absent, `null` or `"enabled": false` keeps it
     /// off (design rows S1, S2). Settings › Linked devices writes it
     /// (`native_linking`).

@@ -173,7 +173,16 @@ impl ConversationService {
             .hosts()
             .iter()
             .map(|(name, environment)| (name.clone(), environment.clone()));
-        for (name, environment) in hosts.chain(environments.connected_peers()) {
+        let workspace =
+            if current.as_deref() == Some(crate::conversation::application::placement::BOAT) {
+                vec![(
+                    crate::conversation::application::placement::BOAT.to_owned(),
+                    environments.of(id).await?,
+                )]
+            } else {
+                Vec::new()
+            };
+        for (name, environment) in hosts.chain(environments.connected_peers()).chain(workspace) {
             let usable = match (policy, &initiator) {
                 (Some(policy), Some(initiator)) => {
                     allows_host(policy.as_ref(), initiator.ask(), &name)
@@ -286,6 +295,22 @@ impl ConversationService {
         // the agent's own shell's.
         let environment: Option<Arc<dyn Environment>> = match named {
             EnvironmentRef::Here => None,
+            EnvironmentRef::Boat => {
+                if self
+                    .inner
+                    .environment
+                    .runs_on(id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some(crate::conversation::application::placement::BOAT)
+                {
+                    self.inner.environment.of(id).await.ok()
+                } else {
+                    None
+                }
+            }
             _ => self.inner.environment.named(&call.environment),
         };
         let Some(environment) = environment else {

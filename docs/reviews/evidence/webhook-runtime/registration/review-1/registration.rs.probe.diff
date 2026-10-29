@@ -1,0 +1,65 @@
+diff --git a/workspace/nessa-webhook-runtime/crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs b/tmp/nessa-registration-independent-review/crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
+index 2046157d..e1b87866 100644
+--- a/workspace/nessa-webhook-runtime/crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
++++ b/tmp/nessa-registration-independent-review/crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
+@@ -567,3 +567,60 @@ async fn installation_requires_the_retained_original_intent_before_any_effect()
+         .unwrap();
+     assert_eq!(f.count("registrations"), 1);
+ }
++
++
++struct SubstitutedReservation<'a>(&'a SqlOutbox);
++#[async_trait]
++impl RegistrationIntents for SubstitutedReservation<'_> {
++    async fn reserve(&self, mut proposed: RegistrationIntent) -> Result<RegistrationIntent, OutboxError> {
++        proposed.config.destination = Destination::parse("https://different-recipient.test/changed").unwrap();
++        proposed.config.key = Arc::new(MacKey::new([87;32]));
++        self.0.reserve(proposed).await
++    }
++    async fn install(&self, intent: RegistrationIntent) -> Result<(), OutboxError> {
++        RegistrationIntents::install(self.0,intent).await
++    }
++    async fn discard(&self, id:Uuid) -> Result<(),OutboxError> {self.0.discard(id).await}
++}
++
++#[tokio::test]
++async fn independent_substituted_reservation_changes_destination_before_auth_and_install() {
++    let f=Registered::new();
++    let proposed=f.proposed();
++    let original=proposed.config.destination.clone();
++    let credential=CredentialId::new(&proposed.issue.credential_id).unwrap();
++    let substitute=SubstitutedReservation(&f.store);
++    let outcome=f.command(&substitute).execute(proposed).await;
++    assert!(matches!(outcome,Ok(IssueCredentialOutcome::Issued {..})),"currently succeeds");
++    let installed=f.store.registration(credential).await.unwrap().unwrap();
++    assert_ne!(installed.destination,original,"original caller destination was discarded");
++    assert_eq!(installed.destination,Destination::parse("https://different-recipient.test/changed").unwrap());
++    assert_eq!(installed.key.expose_bytes(),&[87;32]);
++}
++
++
++#[tokio::test]
++async fn independent_transient_step_interruption_is_reported_as_invalid_intent() {
++    struct Counter { steps:usize, stop:usize }
++    unsafe extern "C" fn interrupt(context:*mut std::ffi::c_void)->std::ffi::c_int {
++        let counter=unsafe {&mut *(context as *mut Counter)};
++        counter.steps+=1;
++        i32::from(counter.steps>=counter.stop)
++    }
++    let f=Registered::new();
++    f.store.reserve(f.proposed()).await.unwrap();
++    let connection=f.store.owner.connection.lock().unwrap();
++    let mut wrongly_invalid=Vec::new();
++    for stop in 1..=150 {
++        let mut counter=Counter{steps:0,stop};
++        unsafe { nessa_local_database::rusqlite::ffi::sqlite3_progress_handler(
++            connection.handle(),1,Some(interrupt),&mut counter as *mut Counter as *mut std::ffi::c_void);
++        }
++        let result=intents::validate(&connection);
++        unsafe { nessa_local_database::rusqlite::ffi::sqlite3_progress_handler(connection.handle(),0,None,std::ptr::null_mut()); }
++        assert_eq!(intents::validate(&connection),Ok(()),"the exact same rows are valid without transient interruption");
++        if result==Err(OutboxError::Invalid) { wrongly_invalid.push(stop); }
++    }
++    assert!(!wrongly_invalid.is_empty(),"currently source maps transient step failure to Invalid");
++    println!("interruption thresholds misreported as Invalid: {wrongly_invalid:?}");
++}

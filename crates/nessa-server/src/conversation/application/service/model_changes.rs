@@ -681,6 +681,8 @@ impl ConversationService {
         } else {
             bound_view(view)
         };
+        let view = self.with_background_tasks(id, view).await?;
+        self.check_view_access(id, caller).await?;
         Ok((view, cursor))
     }
 

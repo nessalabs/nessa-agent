@@ -20,6 +20,7 @@ use crate::mcp_servers::{
     infrastructure::ResourceTicketStore,
 };
 use crate::peer_gateways::infrastructure::PeerCommands;
+use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -161,6 +162,7 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    pub(crate) webhooks: Option<Arc<WebhookRuntime>>,
     /// Reconciles the deletion inventory after `conversation.unshare`.
     /// Absent, the grant is still revoked.
     pub(crate) fence_capture: Option<Arc<dyn FenceCapture>>,
@@ -188,6 +190,11 @@ pub struct ProductRouteState {
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// Shared vault; each socket attaches a distinct non-owning lease.
+    pub(crate) vault: Option<Arc<super::VaultRoutes>>,
+    #[cfg(unix)]
+    pub(crate) workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
+    pub(crate) vault_lease: Option<nessa_vault::application::Lease>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -318,6 +325,7 @@ impl ProductRouteState {
             owner_phone_policy: dependencies.owner_phone_policy,
             owner_phone_receivers: dependencies.owner_phone_receivers,
             admin: None,
+            webhooks: None,
             fence_capture: None,
             mcp_server_settings: None,
             mcp_authorization: None,
@@ -325,6 +333,10 @@ impl ProductRouteState {
             native_linking: None,
             tunnel: None,
             github: None,
+            vault: None,
+            vault_lease: None,
+            #[cfg(unix)]
+            workspaces: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -375,6 +387,13 @@ impl ProductRouteState {
         self
     }
 
+    /// Bind the concrete retained webhook/ordinary credential command owner.
+    pub fn with_webhooks(mut self, runtime: Arc<WebhookRuntime>) -> Self {
+        self.admin = Some(runtime.clone());
+        self.webhooks = Some(runtime);
+        self
+    }
+
     /// Register credential lifecycle operations; missing administration fails closed.
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
         self.admin = Some(admin);
@@ -415,6 +434,21 @@ impl ProductRouteState {
     /// Register what turns native linking on or off from Settings.
     pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
         self.native_linking = Some(linking);
+        self
+    }
+
+    /// Register channel workspace allocation.
+    #[cfg(unix)]
+    pub(crate) fn with_workspaces(
+        mut self,
+        workspaces: Arc<crate::workspaces::application::Workspaces>,
+    ) -> Self {
+        self.workspaces = Some(workspaces);
+        self
+    }
+    /// Register the reusable vault independently of provider configuration.
+    pub fn with_vault(mut self, vault: Arc<super::VaultRoutes>) -> Self {
+        self.vault = Some(vault);
         self
     }
 

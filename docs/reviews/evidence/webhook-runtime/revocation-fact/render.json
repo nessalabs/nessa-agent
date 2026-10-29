@@ -1,0 +1,28 @@
+{
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "browser": "151.0.7922.173",
+  "results": [
+    {
+      "id": "auth-credential",
+      "sourceRevision": "d883b0ed6544c112f441ae1de73f443c7306280f",
+      "diagrams": [
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Fit100%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,sans-serif;font-size:14px;f"
+        },
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "Explicit revocationIn DetailsFit100%CredentialCredential#mmd-2{font-family:\"Geist Variable\",Geist,ui"
+        },
+        {
+          "state": "rendered",
+          "svgs": 4,
+          "text": "SupersessionIn DetailsFit100%Existing credentialCallerExisting credentialCaller#mmd-3{font-family:\"G"
+        }
+      ]
+    }
+  ],
+  "pageErrors": []
+}

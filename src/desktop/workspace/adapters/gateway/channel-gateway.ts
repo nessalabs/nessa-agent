@@ -50,6 +50,8 @@ export function channelGateway(options: {
           ...(draft.folder === null ? {} : { folder: draft.folder }),
           agent,
           model: draft.model.modelId,
+          coordinatorPlacement: draft.coordinatorPlacement,
+          threadPlacement: draft.threadPlacement,
           approvalMode: draft.access,
           ...(draft.notes.trim() === "" ? {} : { notes: draft.notes }),
           ...(draft.resources.length === 0 ? {} : { resources: [...draft.resources] }),

@@ -43,99 +43,127 @@ impl ConversationService {
         tokio::spawn(async move {
             let _physical = physical;
             let _admission = service.admit().await?;
-            // Preserve an early existence diagnostic; this record is not the
-            // source authority used after waiting for runtime evidence.
-            load_conversation(service.inner.metadata.as_ref(), &source)
-                .await?
-                .ok_or(ConversationError::NotFound)?;
-            let live = service
-                .live(&source)
-                .await
-                .ok_or(ConversationError::Unavailable)?;
-            let snapshot = live
-                .agent
-                .session_manager()
-                .snapshot()
-                .await
-                .ok_or(ConversationError::Unavailable)?;
-            let (lease, execution, actor, initiation) =
-                running_turn(&snapshot, &call).ok_or(ConversationError::Unavailable)?;
-            let principal = PrincipalId::new(actor.principal_id())
-                .map_err(|_| ConversationError::InvalidInput)?;
-            let owner_initiated = matches!(initiation.initiator(), Initiator::Owner);
-            // The snapshot fixes provenance; current metadata fixes resource
-            // authority. In particular, a fence may have landed during live()
-            // or snapshot(). Read it last, directly before synchronous Cedar.
-            let record = load_conversation(service.inner.metadata.as_ref(), &source)
-                .await?
-                .ok_or(ConversationError::NotFound)?;
-            let decision = service.inner.access_policy.evaluate(&AccessAsk {
-                subject: AccessSubject::AgentTurn {
-                    organization: record.organization(),
-                    principal: &principal,
-                    owner_initiated,
-                },
-                action: AccessAction::AgentTools,
-                resource: AccessResource::of(&record),
-                held: None,
-                request: RequestShape::default(),
-                target: None,
-            });
-            let (allowed, policies, reason) = match decision {
-                AccessDecision::Allow { policies } => (true, policies, None),
-                AccessDecision::Deny(AccessDenial::Forbidden { policies }) => {
-                    (false, policies, Some("forbidden".into()))
-                }
-                AccessDecision::Deny(AccessDenial::NotPermitted) => {
-                    (false, Vec::new(), Some("not_permitted".into()))
-                }
-                AccessDecision::Deny(AccessDenial::Unavailable) => {
-                    (false, Vec::new(), Some("policy_unavailable".into()))
-                }
-            };
-            let audit = service
-                .inner
-                .agent_tool_audit
-                .get()
-                .ok_or(ConversationError::Audit)?;
-            audit
-                .record(AgentToolAuditRecord {
-                    source: source.clone(),
-                    execution: execution.as_str().into(),
-                    lease: lease.as_str().into(),
+            service
+                .authorize_admitted_agent_tool(
+                    source,
                     call,
-                    request: request.logical,
-                    command: request.command.clone(),
                     tool,
                     target,
-                    principal: actor.principal_id().into(),
-                    surface: actor.surface_id().into(),
-                    owner_initiated,
-                    allowed,
-                    policies,
-                    reason,
-                })
-                .await?;
-            if !allowed {
-                return Err(ConversationError::NotFound);
-            }
-            if *stop.borrow() {
-                return Err(ConversationError::Unavailable);
-            }
-            let caller = ConversationCaller {
-                organization_id: record.organization().clone(),
-                principal_id: principal,
-                surface_id: actor.surface_id().into(),
-                action_id: request.command,
-            };
-            caller.actor()?;
-            Ok(AgentToolSource {
-                caller,
-                source,
-                execution,
-            })
+                    request,
+                    stop,
+                    _physical,
+                    &_admission,
+                )
+                .await
         })
         .await
         .map_err(|_| ConversationError::Unavailable)?
+    }
+
+    /// Resolve and audit authority under the caller's existing admission. The
+    /// held read prevents export/retirement from cutting this operation in two.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn authorize_admitted_agent_tool(
+        &self,
+        source: ConversationId,
+        call: String,
+        tool: String,
+        target: Option<ConversationId>,
+        request: AgentToolRequest,
+        stop: watch::Receiver<bool>,
+        _physical: crate::conversation::application::SourcePermit,
+        _admission: &tokio::sync::RwLockReadGuard<'_, ()>,
+    ) -> Result<AgentToolSource, ConversationError> {
+        // Preserve an early existence diagnostic; this record is not the
+        // source authority used after waiting for runtime evidence.
+        load_conversation(self.inner.metadata.as_ref(), &source)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        let live = self
+            .live(&source)
+            .await
+            .ok_or(ConversationError::Unavailable)?;
+        let snapshot = live
+            .agent
+            .session_manager()
+            .snapshot()
+            .await
+            .ok_or(ConversationError::Unavailable)?;
+        let (lease, execution, actor, initiation) =
+            running_turn(&snapshot, &call).ok_or(ConversationError::Unavailable)?;
+        let principal =
+            PrincipalId::new(actor.principal_id()).map_err(|_| ConversationError::InvalidInput)?;
+        let owner_initiated = matches!(initiation.initiator(), Initiator::Owner);
+        // The snapshot fixes provenance; current metadata fixes resource
+        // authority. In particular, a fence may have landed during live()
+        // or snapshot(). Read it last, directly before synchronous Cedar.
+        let record = load_conversation(self.inner.metadata.as_ref(), &source)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        let decision = self.inner.access_policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: record.organization(),
+                principal: &principal,
+                owner_initiated,
+            },
+            action: AccessAction::AgentTools,
+            resource: AccessResource::of(&record),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        });
+        let (allowed, policies, reason) = match decision {
+            AccessDecision::Allow { policies } => (true, policies, None),
+            AccessDecision::Deny(AccessDenial::Forbidden { policies }) => {
+                (false, policies, Some("forbidden".into()))
+            }
+            AccessDecision::Deny(AccessDenial::NotPermitted) => {
+                (false, Vec::new(), Some("not_permitted".into()))
+            }
+            AccessDecision::Deny(AccessDenial::Unavailable) => {
+                (false, Vec::new(), Some("policy_unavailable".into()))
+            }
+        };
+        let audit = self
+            .inner
+            .agent_tool_audit
+            .get()
+            .ok_or(ConversationError::Audit)?;
+        audit
+            .record(AgentToolAuditRecord {
+                source: source.clone(),
+                execution: execution.as_str().into(),
+                lease: lease.as_str().into(),
+                call,
+                request: request.logical,
+                command: request.command.clone(),
+                tool,
+                target,
+                principal: actor.principal_id().into(),
+                surface: actor.surface_id().into(),
+                owner_initiated,
+                allowed,
+                policies,
+                reason,
+            })
+            .await?;
+        if !allowed {
+            return Err(ConversationError::NotFound);
+        }
+        if *stop.borrow() {
+            return Err(ConversationError::Unavailable);
+        }
+        let caller = ConversationCaller {
+            organization_id: record.organization().clone(),
+            principal_id: principal,
+            surface_id: actor.surface_id().into(),
+            action_id: request.command,
+        };
+        caller.actor()?;
+        Ok(AgentToolSource {
+            caller,
+            source,
+            execution,
+        })
     }
 }

@@ -36,25 +36,6 @@ export interface SessionView {
   readonly query?: string
 }
 
-/**
- * The sessions the session list asks the person about from its rows: the
- * view's, as its search lists them, in its "Needs you" group — so a pinned
- * one, listed under Pinned, is not asked there — newest first. The one rule
- * for what the list draws as request cards and what the window answers from
- * them (`listAskIds`, `workspace-state.ts`).
- */
-export function waitingInList(
-  sessions: readonly SessionSummary[],
-  view: SessionView,
-): SessionSummary[] {
-  const listed = sessions.filter(
-    (session) => inView(session, view) && matchesSearch(session, view.query ?? ""),
-  )
-  return [
-    ...(groupByStatus(listed).find((group) => group.id === "needs-you")?.sessions ?? []),
-  ]
-}
-
 export function inView(session: SessionSummary, view: SessionView): boolean {
   return session.channelId === view.channelId
 }

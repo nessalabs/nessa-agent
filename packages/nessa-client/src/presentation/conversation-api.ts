@@ -14,8 +14,11 @@ import {
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
-import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
-import { bounds, ProductMethod } from "../generated/product.js"
+import {
+  conversationDeleteTimeoutMs,
+  conversationWorkspaceCreateTimeoutMs,
+} from "../application/agent-budgets.js"
+import { bounds, passiveReadTiming, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
   ConversationListResult,
@@ -25,6 +28,8 @@ import type {
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
+  ConversationEarlier,
+  ConversationPoint,
   ConversationPermission,
   ConversationQuestion,
   ConversationReceipt,
@@ -40,6 +45,9 @@ import type {
   ConversationShareResult,
   ConversationSharesCursor,
   ConversationSharesResult,
+  ConversationWebhookCursorParams,
+  ConversationWebhookCursorResult,
+  ConversationWebhookResetResult,
   ConversationToolPolicy,
   ApprovalMode,
   PermissionRule,
@@ -60,6 +68,7 @@ import {
   conversationMessageStatus,
   conversationObserve,
   conversationView,
+  conversationEarlier,
   conversationReceipt,
   conversationCommandReceipt,
   conversationMutation,
@@ -77,6 +86,7 @@ import {
   reviewKeyPattern,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
+import { recordHead, validRecordScope } from "../protocol/record-read-validate.js"
 import {
   permissionFields,
   type PermissionTarget,
@@ -222,6 +232,19 @@ export type ConversationApi = {
   ) => Promise<ConversationCreateResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
+  /**
+   * Read what came before `before` in the conversation's saved history: the
+   * turns nearest it that fit one frame, oldest first, ending where `before`
+   * is. A view lists them only as `earlier`; its first message's start is
+   * where to read before. With `after`, only what comes after that point, to
+   * fill the gap between two points. A point the gateway's history does not
+   * hold is refused as invalid input. Opens nothing.
+   */
+  readEarlier: (
+    conversationId: string,
+    before: ConversationPoint,
+    after?: ConversationPoint,
+  ) => Promise<ConversationEarlier>
   /**
    * List the conversations the authenticated caller owns, most recently
    * updated first, at most 500: each with its title, the last thing said in
@@ -491,6 +514,27 @@ export type ConversationApi = {
     conversationId: string,
     options: { pageSize: number; cursor?: ConversationSharesCursor },
   ) => Promise<ConversationSharesResult>
+  /** Read the owner's registered webhook checkpoint. Optional source Head follows
+   * the native snapshot as a separate, non-atomic observation; compare the whole
+   * scope before comparing positions. Omitted/false performs no source I/O.
+   * Its requestId is available only while frozen and is the server-issued reset
+   * identity; a scope in this result grants no receiver/read/send authority.
+   */
+  webhookCursor: (
+    conversationId: string,
+    credentialId: string,
+    options?: Omit<ConversationWebhookCursorParams, "conversationId" | "credentialId">,
+  ) => Promise<ConversationWebhookCursorResult>
+  /** Select an observed incarnation for one frozen server-issued capture.
+   * Explicit retries use that same requestId and receive the original receipt;
+   * they do not rewind again. Fresh server authorization applies to every call.
+   * The result is not a current-status or resumed-delivery promise.
+   */
+  resetWebhookCursor: (
+    conversationId: string,
+    credentialId: string,
+    requestId: string,
+  ) => Promise<ConversationWebhookResetResult>
 }
 
 const utf8 = new TextEncoder()
@@ -876,6 +920,11 @@ export function createConversationApi(
           ...channelId,
         },
         (value) => conversationId(value, id),
+        true,
+        false,
+        options.channelId !== undefined || options.environment === "boat:thread"
+          ? { atLeastMs: conversationWorkspaceCreateTimeoutMs }
+          : undefined,
       )
     },
     setModel: (id, model, options = {}) => {
@@ -968,6 +1017,15 @@ export function createConversationApi(
       conversationView(
         await session.request(ProductMethod.ConversationRead, {
           conversationId: validConversationId(id),
+        }),
+        id,
+      ),
+    readEarlier: async (id, before, after) =>
+      conversationEarlier(
+        await session.request(ProductMethod.ConversationReadEarlier, {
+          conversationId: validConversationId(id),
+          before,
+          ...(after === undefined ? {} : { after }),
         }),
         id,
       ),
@@ -1223,6 +1281,35 @@ export function createConversationApi(
         (value) => conversationMutation(value, requestId),
       )
     },
+    webhookCursor: async (id, credentialId, options = {}) => {
+      validConversationId(id)
+      boundedText(credentialId, "Credential ID", 256)
+      const includeSourceHead = options.includeSourceHead
+      if (includeSourceHead !== undefined && typeof includeSourceHead !== "boolean")
+        throw new TypeError("includeSourceHead must be boolean")
+      const params = {
+        conversationId: id,
+        credentialId,
+        ...(includeSourceHead === undefined ? {} : { includeSourceHead }),
+      }
+      const value = includeSourceHead
+        ? await session.request(ProductMethod.ConversationWebhookCursor, params, {
+            atLeastMs: passiveReadTiming.minRequestTimeoutMs,
+          })
+        : await session.request(ProductMethod.ConversationWebhookCursor, params)
+      return webhookCursorResult(value, id, includeSourceHead === true)
+    },
+    resetWebhookCursor: (id, credentialId, requestId) => {
+      validConversationId(id)
+      boundedText(credentialId, "Credential ID", 256)
+      if (typeof requestId !== "string" || !conversationIdPattern.test(requestId))
+        throw new TypeError("Reset request ID must be the server-issued canonical UUID")
+      return mutate(
+        ProductMethod.ConversationWebhookReset,
+        { conversationId: id, credentialId, requestId },
+        (value) => webhookResetResult(value, id, requestId),
+      )
+    },
     shares: async (id, options) => {
       const pageSize = sharePageSize(options.pageSize)
       const page = conversationShares(
@@ -1239,4 +1326,58 @@ export function createConversationApi(
       return page
     },
   }
+}
+
+function webhookCursorResult(
+  value: unknown,
+  conversation: string,
+  includeSourceHead: boolean,
+): ConversationWebhookCursorResult {
+  const item = record(value)
+  if (
+    !item ||
+    Object.keys(item).length !== (includeSourceHead ? 5 : 4) ||
+    !validRecordScope(item.scope) ||
+    item.scope.stream !== conversation ||
+    !decimal(item.position) ||
+    typeof item.resetRequired !== "boolean" ||
+    (item.resetRequired
+      ? typeof item.requestId !== "string" || !conversationIdPattern.test(item.requestId)
+      : item.requestId !== null)
+  ) {
+    throw new TypeError("Invalid registered webhook checkpoint")
+  }
+  if (includeSourceHead) {
+    const head = recordHead(item.observedSourceHead)
+    if (
+      head.scope.stream !== conversation ||
+      head.scope.receiver !== item.scope.receiver ||
+      head.scope.accessEpoch !== item.scope.accessEpoch
+    )
+      throw new TypeError("Invalid registered webhook source selector")
+  }
+  return item as unknown as ConversationWebhookCursorResult
+}
+function webhookResetResult(
+  value: unknown,
+  conversation: string,
+  requestId: string,
+): ConversationWebhookResetResult {
+  const item = record(value)
+  if (
+    !item ||
+    Object.keys(item).length !== 5 ||
+    item.requestId !== requestId ||
+    typeof item.receiptId !== "string" ||
+    !conversationIdPattern.test(item.receiptId) ||
+    item.receiptId === requestId ||
+    !validRecordScope(item.scope) ||
+    item.scope.stream !== conversation ||
+    item.position !== "0" ||
+    !Number.isSafeInteger(item.appliedAtMs) ||
+    (item.appliedAtMs as number) < 0
+  ) {
+    throw new TypeError("Invalid observed-incarnation reset receipt")
+  }
+  return item as unknown as ConversationWebhookResetResult
 }

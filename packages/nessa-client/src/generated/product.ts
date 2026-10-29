@@ -528,7 +528,7 @@ export interface ConversationUsageLimit {
 export interface ConversationMessage {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** User input text; empty for a message of images alone. */
+  /** User input text, whole; empty for a message of images alone. Its only bound is the frame's. */
   userText: string
   /** Images the user sent with this turn, in attachment order. */
   attachments: ImageAttachment[]
@@ -556,6 +556,8 @@ export interface ConversationMessage {
   parts: ConversationPart[]
   /** Target event count when steering was admitted locally; does not imply provider consumption timing. */
   steeringOffset?: number
+  /** Where the first listed part starts in the whole turn, when the view begins partway through it. The person's message and the parts before it are read with conversation.readEarlier. Absent when the turn is listed from its start. */
+  startsAt?: ConversationPartPosition
 }
 /** A waiting input that may be removed before dispatch. */
 export interface ConversationPending {
@@ -666,6 +668,8 @@ export interface ConversationQuestionEntry {
 }
 /** Bounded presentation of an observed tool call. */
 export interface ConversationTool {
+  /** Gateway-owned background task bound to this original native call. Its running status remains authoritative after the provider turn ends. */
+  backgroundTaskId?: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
   /** Tool call identity within the execution. */
@@ -748,8 +752,10 @@ export interface ConversationView {
   capabilities: ConversationCapabilities
   /** Current provider attachment lifecycle. */
   lifecycle: ConversationLifecycle
-  /** Some history, text or whole interactions were omitted to bound this response; interactionViewError explains omitted actionable units. */
+  /** Something no read gives back was omitted to bound this response: a gap between the turns listed, notes, artifacts, or whole interactions; interactionViewError explains omitted actionable units. Older turns that only come before the first one listed are earlier instead. */
   truncated: boolean
+  /** Turns, or the start of the first turn listed, came before what this view lists. They are read with conversation.readEarlier, before the first message's start. */
+  earlier: boolean
   /** Why complete pending reviews or questions cannot safely be shown; do not infer omitted choices or question fields. */
   interactionViewError?: string
   /** All currently pending execution IDs are represented, so an exact reorder may be attempted. */
@@ -832,6 +838,44 @@ export interface ConversationPeekResult {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
   executionId: string | null
+}
+/** A place in a turn: the part, counted from the turn's first, and the byte within that part's text. */
+export interface ConversationPartPosition {
+  /** The part, counted from the turn's first part. */
+  part: number
+  /** The UTF-8 byte within that part's text where the place falls; 0 at the part's start. */
+  byte: number
+}
+/** A place in a conversation's history: the start of a turn, before the person's message, when at is absent; otherwise a place among the turn's parts, after the person's message. */
+export interface ConversationPoint {
+  /** The turn the point is in. */
+  executionId: string
+  /** A place among the turn's parts, after the person's message; absent for the turn's start, before it. */
+  at?: ConversationPartPosition
+}
+/** Read what came before a point in the conversation's history: the turns nearest it that fit one frame. With after, only what comes after that point, to fill a gap between two points. */
+export interface ConversationReadEarlierParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Where what is read ends: the first point the reader already holds. */
+  before: ConversationPoint
+  /** Where what is read starts, when the reader holds what comes before it; absent to read back toward the first turn. */
+  after?: ConversationPoint
+}
+/** What came before a point, oldest first, ending where the point is. The first message starts partway through its turn when it carries startsAt. */
+export interface ConversationEarlier {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The turns before the point, oldest first; the first may start partway (startsAt) and the last may end partway, where the point falls. */
+  messages: ConversationMessage[]
+  /** The calls the messages made. */
+  tools: ConversationTool[]
+  /** The fork the conversation began as, with its copied turns, on the page that reaches the start; empty otherwise. */
+  handoffs: ConversationHandoff[]
+  /** Something comes before the first message's start (after the after point, when one was given). */
+  more: boolean
+  /** The page left out something no read gives back, as a view's truncated says. */
+  truncated: boolean
 }
 /** Read the current bounded projection. */
 export interface ConversationReadParams {
@@ -1270,7 +1314,7 @@ export interface ConversationLease {
   /** Which issuance of this conversation's leases this is, counting refused ones; absent when not known. */
   revision?: number
   /** Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files. */
-  environment?: "here" | "ssh" | "peer"
+  environment?: "here" | "ssh" | "peer" | "boat"
   /** The machine the agent runs on: for ssh, the OpenSSH destination as config.json names it; for peer, `peer:` and the paired environment's device key in lowercase hex. Present exactly when environment is ssh or peer. */
   host?: string
   /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. none: nothing encloses what runs beyond the account the environment runs as. */
@@ -1324,7 +1368,7 @@ export interface ConversationPart {
   offset: number
   /** Text, exposed thought content, a tool call, or a Nessa-owned runtime notice. A tool call is one part however many updates it has, at its first update's offset; its current state is its entry in tools. */
   kind: "text" | "thought" | "tool" | "local_notice"
-  /** Exact text fragment for text, thought, or local notice observations; empty for a tool call. */
+  /** Exact text for text, thought, or local notice observations; empty for a tool call. Adjacent streamed chunks of one kind are joined into one part, so its only bound is the frame's. */
   text: string
   /** The tool call's identity, which names its entry in tools; empty otherwise. */
   toolId: string
@@ -2611,10 +2655,23 @@ export interface GithubCode {
   /** Whole seconds left before the code expires, when this was answered. */
   expiresInSeconds: number
 }
-/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
+/** Live delivery is opted in for this gateway's signed-in GitHub account. Gaps report expired catch-up history; they are not acknowledged automatically. */
+export interface GithubLiveEvents {
+  enabled: boolean
+  repositories: number
+  gaps: number
+}
+export interface GithubLiveEventsParams {
+  enabled: boolean
+  /** Explicit acknowledgement of missing history, continue within retained events. */
+  acceptGaps?: boolean
+}
+/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in its passphrase-protected local vault, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
 export interface GithubConnection {
   /** Where the sign-in stands. */
   state: GithubConnectState
+  /** Present when this build stage has a live relay configured. */
+  liveEvents?: GithubLiveEvents
   /** Present exactly when connected. */
   account?: GithubAccount
   /** Present exactly when connecting. */
@@ -2626,13 +2683,16 @@ export interface GithubConnection {
   /** Where the person chooses the repositories the Nessa app may use. A token reaches only those. */
   installUrl: string
 }
-/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
+/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: the encrypted local vault could not complete the requested sign-in operation; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
 export const GithubErrorCode = {
   GithubNotConfigured: "github_not_configured",
   GithubUnreachable: "github_unreachable",
   GithubRejected: "github_rejected",
   GithubStorageUnavailable: "github_storage_unavailable",
   GithubAuditUnavailable: "github_audit_unavailable",
+  GithubLiveUnavailable: "github_live_unavailable",
+  GithubLiveCapacity: "github_live_capacity",
+  VaultLocked: "vault_locked",
 } as const
 export type GithubErrorCode = (typeof GithubErrorCode)[keyof typeof GithubErrorCode]
 /** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
@@ -3209,6 +3269,12 @@ export interface Channel {
   approvalMode: ApprovalMode
   /** When the channel was made, in Unix milliseconds; 0 for the default channel. */
   createdAtMs: number
+  /** Where the channel coordinator should run, independently of worker threads. */
+  coordinatorPlacement: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
+  threadPlacement: "local" | "boat"
+  /** Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity. */
+  coordinatorConversationId: string | null
 }
 /** Make a channel (channel.create). Repeating the same requestId with the same channel answers the channel it made; with another, channel_request_conflict. The folder is the one path a request may name, and only here: a conversation names its channel, never a folder. */
 export interface ChannelCreateParams {
@@ -3228,6 +3294,10 @@ export interface ChannelCreateParams {
   notes?: string
   /** Existing absolute files and folders to attach, none twice, at most x-channelRules.maxResourceBytes of paths in all; omitted is none. */
   resources?: string[]
+  /** Where the channel coordinator should run, independently of worker threads. */
+  coordinatorPlacement?: "local" | "boat"
+  /** Where new worker-thread workspaces run. Boat allocates one VM per thread. */
+  threadPlacement?: "local" | "boat"
 }
 /** The channel channel.create made, or made earlier under the same requestId. */
 export interface ChannelCreateResult {
@@ -3263,6 +3333,155 @@ export interface WorkspacePublishResult {
   /** False when a later revision was already held, so this one changed nothing. */
   applied: boolean
 }
+/** The local vault state. Unlock belongs to the connection that proved its passphrase; closing its owner locks the vault. */
+export const VaultState = {
+  Unconfigured: "unconfigured",
+  Locked: "locked",
+  Unlocked: "unlocked",
+} as const
+export type VaultState = (typeof VaultState)[keyof typeof VaultState]
+/** The current state of the local encrypted vault; never includes secret contents. */
+export interface VaultStatus {
+  /** Whether protected local credentials are unconfigured, locked, or available to this app session. */
+  state: VaultState
+}
+/** Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed. */
+export interface VaultPassphraseParams {
+  /** Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json. */
+  passphrase: string
+}
+/** Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault. */
+export const VaultErrorCode = {
+  VaultUnavailable: "vault_unavailable",
+  VaultLocked: "vault_locked",
+  VaultPassphrasePolicy: "vault_passphrase_policy",
+  VaultWrongPassphrase: "vault_wrong_passphrase",
+  VaultBusy: "vault_busy",
+  VaultCooldown: "vault_cooldown",
+  VaultSessionClosed: "vault_session_closed",
+  VaultSessionOwned: "vault_session_owned",
+  VaultAlreadyConfigured: "vault_already_configured",
+  VaultCapacity: "vault_capacity",
+  VaultAuditUnavailable: "vault_audit_unavailable",
+  VaultMigrationUnavailable: "vault_migration_unavailable",
+} as const
+export type VaultErrorCode = (typeof VaultErrorCode)[keyof typeof VaultErrorCode]
+/** Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription. */
+export interface BoatSaveParams {
+  /** Boat infrastructure token. Never returned or logged. */
+  token: string
+}
+/** Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
+export const BoatErrorCode = {
+  VaultLocked: "vault_locked",
+  BoatNotConfigured: "boat_not_configured",
+  InvalidRequest: "invalid_request",
+  BoatStorageUnavailable: "boat_storage_unavailable",
+  BoatResourceMissing: "boat_resource_missing",
+  BoatUnreachable: "boat_unreachable",
+  BoatWorkerUnavailable: "boat_worker_unavailable",
+  BoatEnvironmentBlocksCredentials: "boat_environment_blocks_credentials",
+  BoatProvisioningUncertain: "boat_provisioning_uncertain",
+  BoatCleanupUncertain: "boat_cleanup_uncertain",
+} as const
+export type BoatErrorCode = (typeof BoatErrorCode)[keyof typeof BoatErrorCode]
+/** Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs. */
+export interface BoatStatus {
+  /** Locked when the vault cannot be read, disconnected when no connection is saved, or connected after validation and encrypted persistence. */
+  state: "locked" | "disconnected" | "connected"
+  /** The dedicated Boat environment saved with this connection; present only while connected. */
+  environment?: string
+  /** The release-owned shared worker image saved with this connection; present only while connected. */
+  image?: string
+}
+/** Disable automatic stop or stop after a positive duration, including active work. */
+export const VmLifetimeMode = { Never: "never", After: "after" } as const
+export type VmLifetimeMode = (typeof VmLifetimeMode)[keyof typeof VmLifetimeMode]
+/** Positive whole seconds representable by the Boat provider. */
+export type VmLifetimeSeconds = number
+/** The never mode omits seconds; after requires seconds. Validated together before any configuration write. */
+export interface BoatVmLifetime {
+  /** Disable automatic stop or use the finite seconds value. */
+  mode: VmLifetimeMode
+  /** Present only in after mode. Includes time spent on active work. */
+  seconds?: VmLifetimeSeconds
+}
+/** Use the default (or reset the global initial choice), disable auto-stop, or choose a finite lifetime. */
+export const BoatRuntimeSelection = {
+  Default: "default",
+  Never: "never",
+  After: "after",
+} as const
+export type BoatRuntimeSelection =
+  (typeof BoatRuntimeSelection)[keyof typeof BoatRuntimeSelection]
+/** Read default and optional channel override from one ordinary configuration snapshot. Does not read a Boat token. */
+export interface BoatRuntimeReadParams {
+  /** Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings. */
+  channelId?: string
+}
+/** Change ordinary lifetime settings without a token. Default/never forbid seconds; after requires it. New allocations and archived-VM resumes use the saved choice; active VM deadlines are unchanged. Read settings after an uncertain response; calls are not replayed. */
+export interface BoatRuntimeSetParams {
+  /** Stored channel identity; omitted selects the Nessa default. The synthetic default channel inherits global settings. */
+  channelId?: string
+  /** Default removes the channel override or resets the global initial choice. Never disables automatic stop; after requires seconds. */
+  mode: BoatRuntimeSelection
+  /** Positive provider-compatible duration, required only in after mode. */
+  seconds?: VmLifetimeSeconds
+}
+/** Non-secret settings. An omitted override inherits the default; explicit never remains unlimited when the default changes. Initial default is no automatic stop; provider/account limits still apply. */
+export interface BoatRuntimeSettings {
+  /** The Nessa default used by inheriting channels; initially no automatic stop. */
+  defaultLifetime: BoatVmLifetime
+  /** The requested channel's explicit choice. Omission inherits the default; never remains unlimited when the default changes. */
+  channelOverride?: BoatVmLifetime
+  /** The stored channel whose settings were read or saved. Omitted only for the global default; an override requires this identity. */
+  channelId?: string
+}
+/** Read the owner-only registered webhook checkpoint. Performs no canonical record I/O or delivery control. */
+export interface ConversationWebhookCursorParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
+  credentialId: string
+  /** Explicitly request a separately observed canonical Head under current owner read authority. Omitted/false performs no canonical admission or physical Head I/O. This does not reconcile or mutate the native checkpoint. */
+  includeSourceHead?: boolean
+}
+/** Reset only a frozen webhook checkpoint. requestId is its server-issued frozen capture UUID. Fresh owner authorization applies on replay; no caller-supplied scope or offset is accepted. */
+export interface ConversationWebhookResetParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The actual registered webhook target credential owned by this conversation owner; this is not a paired-device selector. */
+  credentialId: string
+  /** The frozen capture UUID returned by the owner cursor query. Explicit retries retain this exact identity. */
+  requestId: string
+}
+/** Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority. */
+export interface ConversationWebhookCursorResult {
+  /** Complete scope/incarnation bound to the native checkpoint; its presence grants no read or delivery authority. */
+  scope: RecordScope
+  /** Canonical unsigned decimal position committed in this native scope. */
+  position: string
+  /** Whether fresh source capture requires an explicit owner reset for this frozen generation. */
+  resetRequired: boolean
+  /** Frozen capture UUID when resetRequired is true; null otherwise. Not a caller-selected rewind identity. */
+  requestId: string | null
+  /** Present only when explicitly requested and successfully read. Observed after the native checkpoint; these are separate non-atomic observations. Not a delivery, reset, publication or current-at-commit acknowledgement. */
+  observedSourceHead?: ConversationRecordsHeadResult
+}
+/** Immutable result: reset applied for this explicitly observed scope at position zero. Does not promise current-at-commit, resumed delivery or current resetRequired status. Same request replays this result without another rewind. */
+export interface ConversationWebhookResetResult {
+  /** Original frozen capture request UUID; matching replay returns the same selection without another rewind. */
+  requestId: string
+  /** Immutable native selection and audit receipt UUID for this applied reset. */
+  receiptId: string
+  /** Complete server-observed incarnation selected by this reset. It need not remain current when the native commit completes. */
+  scope: RecordScope
+  /** Scoped checkpoint selected by the reset, always zero in the returned observed incarnation. */
+  position: "0"
+  /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
+  appliedAtMs: number
+}
+export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -3323,7 +3542,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 91,
+  maxReadyMethods: 104,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3354,6 +3573,8 @@ export const bounds = {
   maxFilePathBytes: 4096,
   filePathPattern:
     "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
+  maxBackgroundTaskIdBytes: 128,
+  backgroundTaskIdPattern: "^[A-Za-z0-9_-]+$",
   conversationIdPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxConversationTitleBytes: 256,
   maxConversationRenameCharacters: 48,
@@ -3610,6 +3831,7 @@ export const ProductMethod = {
   PairingSetLinking: "pairing.setLinking",
   PairingSetTunnel: "pairing.setTunnel",
   PairingTunnel: "pairing.tunnel",
+  GithubLiveEvents: "github.liveEvents",
   GithubStatus: "github.status",
   GithubConnect: "github.connect",
   GithubCancel: "github.cancel",
@@ -3630,10 +3852,22 @@ export const ProductMethod = {
   ChannelCreate: "channel.create",
   ChannelList: "channel.list",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
+  ConversationReadEarlier: "conversation.readEarlier",
   ConversationPeek: "conversation.peek",
   ConversationSetModel: "conversation.setModel",
   ConversationSwitchAgent: "conversation.switchAgent",
   ConversationFork: "conversation.fork",
+  VaultStatus: "vault.status",
+  VaultSetup: "vault.setup",
+  VaultUnlock: "vault.unlock",
+  VaultLock: "vault.lock",
+  BoatStatus: "boat.status",
+  BoatSave: "boat.save",
+  BoatDisconnect: "boat.disconnect",
+  BoatRuntimeSettings: "boat.runtimeSettings",
+  BoatSetRuntimeSettings: "boat.setRuntimeSettings",
+  ConversationWebhookCursor: "conversation.webhook.cursor",
+  ConversationWebhookReset: "conversation.webhook.reset",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3714,6 +3948,7 @@ export const productReadyMethods = [
   "pairing.setLinking",
   "pairing.setTunnel",
   "pairing.tunnel",
+  "github.liveEvents",
   "github.status",
   "github.connect",
   "github.cancel",
@@ -3734,10 +3969,22 @@ export const productReadyMethods = [
   "channel.create",
   "channel.list",
   "conversation.subscribeEvents",
+  "conversation.readEarlier",
   "conversation.peek",
   "conversation.setModel",
   "conversation.switchAgent",
   "conversation.fork",
+  "vault.status",
+  "vault.setup",
+  "vault.unlock",
+  "vault.lock",
+  "boat.status",
+  "boat.save",
+  "boat.disconnect",
+  "boat.runtimeSettings",
+  "boat.setRuntimeSettings",
+  "conversation.webhook.cursor",
+  "conversation.webhook.reset",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3809,6 +4056,7 @@ export const productMethodGrants = {
   "pairing.setLinking": "credential.manage",
   "pairing.setTunnel": "credential.manage",
   "pairing.tunnel": "credential.manage",
+  "github.liveEvents": "credential.manage",
   "github.status": "credential.manage",
   "github.connect": "credential.manage",
   "github.cancel": "credential.manage",
@@ -3829,10 +4077,22 @@ export const productMethodGrants = {
   "channel.create": "conversation.write",
   "channel.list": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
+  "conversation.readEarlier": "conversation.write",
   "conversation.peek": "conversation.write",
   "conversation.setModel": "conversation.write",
   "conversation.switchAgent": "conversation.write",
   "conversation.fork": "conversation.write",
+  "vault.status": "credential.manage",
+  "vault.setup": "credential.manage",
+  "vault.unlock": "credential.manage",
+  "vault.lock": "credential.manage",
+  "boat.status": "credential.manage",
+  "boat.save": "credential.manage",
+  "boat.disconnect": "credential.manage",
+  "boat.runtimeSettings": "credential.manage",
+  "boat.setRuntimeSettings": "credential.manage",
+  "conversation.webhook.cursor": "credential.manage",
+  "conversation.webhook.reset": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

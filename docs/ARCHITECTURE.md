@@ -236,10 +236,8 @@ Two layouts, chosen in Settings › Workspace › Layout
 arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
 sidebar of channels under the Agents overview's entry, the chosen channel's
 session list (its pinned sessions first, then grouped Needs you, Running,
-Earlier; searchable; ⌥⌘S folds it — each waiting row a compact request card,
-answered from the list: `ui/session-list/list-request.tsx`, with `listAskIds`
-the one rule for which rows ask and what the window reads and answers for
-them),
+Earlier; searchable; ⌥⌘S folds it — a waiting row is a plain row, and what
+it asks is answered in its chat),
 and the panes. *Sessions in sidebar* (`ui/layouts/sessions-in-sidebar.tsx`)
 is one sidebar — search, the Agents overview's entry, then channels — where a
 channel discloses its newest sessions inline, with a quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns
@@ -1078,7 +1076,7 @@ what the window last published over `workspace.publish`; see
 
 ## Nessa-owned tools over MCP
 
-`crates/nessa-mcp` is the stdio MCP server for all Nessa-provided tools. Claude's
+`crates/nessa-mcp` is the stdio MCP server for Nessa's managed shell tool. Claude's
 native file/web tools remain provider-owned. No tool request selects executable
 configuration. The gateway holds the connection to each configured MCP server
 for each harness session (ADR 344): each provider open gets a stand-in in the
@@ -1098,6 +1096,16 @@ carried in the stand-in's environment. The conversation view fills
 The shell tool coordinates an injected Shepherd runner and private process audit
 through its application ports. See the [MCP server](../crates/nessa-mcp/README.md).
 
+The gateway also serves `nessa-github` as a built-in MCP server, composed beside
+thread, background and environment tools. It admits the live source turn through
+Cedar before `GithubConnections` uses the current vault generation for a fixed
+repository, issue or pull request GET. Cancellation interrupts the generation
+lock wait or local HTTP future; a departed generation's answer is refused.
+Nessa's sign-in is not placed in provider or managed-shell environments. Raw
+`gh` and git commands therefore need separately configured credentials. This
+broker remains read-only; the [GitHub read lifecycle](state/services/gateway/github-reads.md)
+and [design table](design/github-connect.md) describe its scope and orderings.
+
 ## CLI surface
 
 The `nessa` executable runs the gateway with `nessa server`. That command serves
@@ -1111,3 +1119,103 @@ bootstraps first access, and local recovery/provisioning retain their exclusive
 registry lock. Cloud selection fails explicitly until its implementation exists.
 See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
+
+## Hosted GitHub webhook ingress and local relay
+
+`packages/github-webhooks` composes the Workers Free signed receiver, bounded D1
+inbox, GitHub identity adapter, Cedar repository policy and SQLite Durable Object
+wake-up channels. Native edge limits precede provider work; atomic verified-user budgets and signed-installation storage quotas bound shared capacity. An authenticated page rechecks the GitHub user and current
+repository access; an installation is not a user. Per-repository sequence/expiry
+watermarks support bounded offline catch-up and explicit gaps. No private payload
+is sent over the wake-up socket. Source wire bounds are published in
+`protocol/defaults/github-relay-contract.json`.
+
+`crates/nessa-server/src/github_relay` owns the native consumer and private local
+SQLCipher-encrypted inbox, keyed from the session-unlocked local vault. `GithubConnections` remains the sole token owner through its injected vault entry; its injected
+credential adapter discovers the App-selected repositories. `LiveEvents` owns
+selection changes through one private SQLite transaction, including deletion
+evidence, cursor preservation and gap acknowledgement. Its application coordinates
+credentials, source and store. An injected selection admission holds the vault
+unlock generation through the transaction commit, so a selection begun before
+a lock cannot erase bindings restored after the next unlock. The credential
+port preserves GitHub's redacted, zeroizing `AccessToken`; each page obtains a
+fresh request-scoped copy, released
+before persistence or idle watching. Success and body-bearing refusals share one
+streamed response bound; watch frame/message limits fit the changed notification
+and RFC control frames. Composition starts the optional follower under the serving gateway and exposes
+the existing GitHub sign-in and Settings live-events opt-in, alongside local
+connect/events/disconnect CLI commands. The packaged host's existing baked
+stage selects the compiled table in `protocol/defaults/github-relays.json`.
+Production has no dev fallback; a future stage needs its own GitHub App and cloud
+resources. The consumer saves event pages/cursors atomically and fences old
+connection generations. It imports data without creating conversational authority
+or automatically dispatching turns.
+
+The [module map and operations runbook](../packages/github-webhooks/README.md),
+[receiver ADR](adr/todo/1107-github-webhook-receiver.md) and
+[relay ADR](adr/todo/1117-github-relay.md) own the boundaries and lifecycle.
+
+## Local vault
+
+`nessa-vault` owns encrypted named entries and the connection-scoped unlock lifetime.
+The gateway composes it before agents and GitHub, so onboarding can create it independently.
+The native host retains one `nessa vault session` child over anonymous pipes across
+window reloads. The child uses `nessa-client-core::local_product`; the host keeps
+its existing Rust toolchain floor. Pipe EOF closes the authenticated socket, whose
+unique guard seals the vault even if request work still holds cloned state.
+The passphrase never enters command arguments, environment variables or settings.
+
+`src/vault` owns the setup/unlock dialog and typed UI port. Protected GitHub use
+asks that port to unlock; backend Cedar admission and cryptographic availability
+remain authoritative. GitHub's token and SQLCipher key use separate named entries
+in the encrypted vault. Existing OS entries are read only for a verified one-time
+import; their sources are retired after matching encrypted receipts.
+See [the vault lifecycle](state/services/gateway/local-vault.md) and
+[ADR 1152](adr/todo/1152-local-vault.md).
+
+### Channel execution placement
+
+A channel independently places its main agent and its worker threads on Local or
+Boat. The channel store owns those choices and the current main conversation
+identity. The workspace context owns encrypted Boat connection settings and
+thread-to-VM allocation receipts. Workspace SDK prepares an attached workspace;
+conversation infrastructure carries existing agent leases over SSH, with scoped
+MCP relay forwarding and SFTP artifact channels. Authorization remains in the
+existing conversation, credential and MCP policies. The gateway never treats a
+missing VM as permission to allocate a replacement or fall back to Local.
+Receipt-publication failure, including a port panic, enters a target-bearing
+recovery path that records evidence independently. A pending new allocation
+attempts rollback even if audit delivery fails; existing, replayed or
+unrecognized receipt targets are retained. Provider-side thread correlation survives local persistence
+failure; unconfirmed cleanup stays uncertain.
+
+Boat admission checks the complete supported agent-credential posture and binds
+the immutable provider environment/version identity to the received VM before
+workspace authority. Creation rechecks after the provider's name-based create;
+reconnect checks before resume and again before SDK open. Private receipt
+histories admit only Provisioning then Assigned or Refused, with one further
+Assigned-to-Refused transition for later drift. A durably Refused receipt cannot
+reconnect or create a replacement; old receipts without proof are retained as
+Unverified and cannot execute. Refusal records retain expected/observed identity
+and cause independently of the UI. Only an acknowledged pending allocation may
+roll back automatically; reconnect and idempotent replay preserve existing VM
+data. Storage, audit and cleanup failures remain
+separately observable. Provider-side mutation during name-based create remains a
+trust boundary; these checks do not attest physical erasure.
+
+The main agent runs when messaged or notified by workers. Cloud wake endpoints,
+VM parking, live migration and local-folder mounts are outside this alpha. See
+[ADR 1160](adr/todo/1160-boat-workspaces.md) for ordering, failure and lifecycle
+contracts, and [workspace verification](../scripts/workspaces/README.md) for the
+opt-in provider test.
+
+
+## Background commands
+
+The optional `nessa-background` MCP tools reuse the authenticated session relay
+and conversation tool admission. Shepherd owns a command's process scope; the
+conversation application owns the original call binding, durable lifecycle and
+internal completion delivery. Status projection updates the existing waterfall
+row after the provider turn has ended. Local workspace placement is required;
+remote commands are refused. See [background tasks](state/services/gateway/background-tasks.md)
+for recovery and cleanup limits.

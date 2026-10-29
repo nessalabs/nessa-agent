@@ -23,6 +23,7 @@ Its phase marker is an empty file under that test's disposable synthetic root.
 | N2 | Catalogue saved; first record head held; logical budget expires | Incomplete progress, no refusal recheck, no purge, catalogue retained | Native budget regression |
 | N3 | Operation does not finish before independent wall watchdog | Request native closure (wake enrollment, retained read and product owners), join watchdog, fail test | Actual stalled-gateway and watchdog negative probes |
 | N4 | N1 session closes; gateway stops; independent offline reopen | Same retained progress and facts, stale passive projection | Existing native refusal regression |
+| N5 | Complete paired read; close and offline reopen; gateway restart; terminal revoke and purge | Complete canonical history survives offline/restart; terminal purge retains its receipt | Native lifecycle regression uses the same controlled elapsed clock and independent failing watchdog for each refresh |
 
 The first head hold uses a separate fixture mode. It does not change the
 preparing retries or follow/watch behavior owned by #965. A controlled delay

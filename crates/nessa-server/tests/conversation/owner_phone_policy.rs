@@ -93,6 +93,7 @@ async fn fixture() -> Fixture {
         .unwrap();
     let audience = AudienceId::new("gateway").unwrap();
     let bootstrap = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: registry.as_ref(),
         access: registry.as_ref(),
         clock: &Time,
@@ -217,6 +218,7 @@ async fn fixture() -> Fixture {
     let channel = worker.join().unwrap();
     let verifier = registry.device_verifier(channel.device_proof());
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &verifier,
         access: registry.as_ref(),
         clock: &Time,
@@ -281,6 +283,7 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.subscribeList",
         "conversation.subscribeEvents",
         "conversation.peek",
+        "conversation.readEarlier",
         // A card shows what a review or question asks before it is answered.
         "conversation.answer",
         "conversation.permissionReview",

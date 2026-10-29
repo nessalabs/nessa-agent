@@ -642,7 +642,7 @@ const checks = {
     for (const kind of ["count", "glyph"]) {
       const beside = page
         .locator(
-          `${css.sidebar} [data-trailing="${kind}"] + [data-slot="sidebar-menu-item-trailing"] :is(${css.countBadge}, .workspace-status)`,
+          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${kind === "count" ? css.countBadge : ".workspace-status"}`,
         )
         .first()
       if (!(await beside.count())) {
@@ -665,7 +665,50 @@ const checks = {
         failures.push(
           `a kit row pointed at by its ${kind} is ${fill}, not ${scale.hover}`,
         )
+      if (layout === "columns") {
+        const through = await beside.evaluate((element, sel) => {
+          const frame = element.closest(sel.kitRowFrame)
+          const control = frame.querySelector(sel.kitRow)
+          const box = element.getBoundingClientRect()
+          const hit = document.elementFromPoint(
+            box.x + box.width / 2,
+            box.y + box.height / 2,
+          )
+          return hit === control || control.contains(hit)
+        }, css)
+        if (!through) failures.push(`the row's decorative ${kind} intercepts its click`)
+      }
       await page.mouse.move(1, 1)
+    }
+    if (layout === "columns") {
+      const actions = await page
+        .locator(`${css.sidebar} ${css.channelSettingsOpen}`)
+        .evaluateAll(
+          (buttons, sel) =>
+            buttons.map((button) => {
+              const frame = button.closest(sel.kitRowFrame)
+              const label = frame.querySelector(sel.rowLabel)
+              const band = button.closest('[data-slot="sidebar-menu-item-trailing"]')
+              const box = button.getBoundingClientRect()
+              const hit = document.elementFromPoint(
+                box.x + box.width / 2,
+                box.y + box.height / 2,
+              )
+              return {
+                labelClear:
+                  label.getBoundingClientRect().right <=
+                  band.getBoundingClientRect().left,
+                reachable: hit === button || button.contains(hit),
+              }
+            }),
+          css,
+        )
+      if (!actions.length) failures.push("no channel settings action beside the row")
+      if (actions.some((action) => !action.labelClear || !action.reachable))
+        failures.push(
+          "a channel settings action overlaps its label or cannot receive its click",
+        )
+      measured.actions = actions
     }
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
       const fill = await hovered(page, selector)
@@ -809,16 +852,10 @@ function measureAdopted(root) {
   for (const row of rows) {
     if (!row.classList.contains("desktop-list-row"))
       failures.push("a session row is not ListRow")
-    // A row is its group's option; a request card's head is a button (`list-request.tsx`).
-    const role = row.closest(".workspace-request-card") ? "button" : "option"
-    if (row.getAttribute("role") !== role)
-      failures.push(
-        `a session row is not ${role === "option" ? "an option" : "a button"}`,
-      )
-    if (
-      role === "option" &&
-      row.closest("[data-list-group]")?.getAttribute("role") !== "listbox"
-    )
+    // A row is its group's option, waiting or not.
+    if (row.getAttribute("role") !== "option")
+      failures.push("a session row is not an option")
+    if (row.closest("[data-list-group]")?.getAttribute("role") !== "listbox")
       failures.push("a session row's group is not a listbox")
     if (!row.getAttribute("data-drag-item"))
       failures.push("a session row cannot be carried")

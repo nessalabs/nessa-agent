@@ -1,0 +1,7 @@
+{
+  "path": "/tmp/nessa-retained-progress-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/restoration/progress.rs",
+  "before": "                .is_some()",
+  "after": "                .is_some() && false",
+  "sourceSHA256": "b64ddee781249a482655463dad5058e8895806b6cb6288b29c39f263f04b3629",
+  "mutatedSHA256": "9a8dd64041ac0c6037af2939c955fc6b9509599b08ddff54e960c21d44830b25"
+}

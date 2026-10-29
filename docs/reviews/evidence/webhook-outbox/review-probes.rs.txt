@@ -1,0 +1,43 @@
+#[tokio::test]
+async fn final_review_malformed_owed_audit() {
+    let mut f=Fixture::new().await;
+    f.store.queue(f.record(1)).await.unwrap();
+    let (audit_id, mut value): (String, Value) = {
+        let c=f.store.owner.connection.lock().unwrap();
+        let (id,record):(String,String)=c.query_row("SELECT id,record FROM audit WHERE delivery IS NOT NULL LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        (id,serde_json::from_str(&record).unwrap())
+    };
+    std::fs::remove_file(f.audit.join(format!("{audit_id}.json"))).unwrap();
+    value["principal"]=json!("");
+    value["before"]=json!("unknown_phase");
+    value["atMs"]=json!(-1);
+    {
+        let c=f.store.owner.connection.lock().unwrap();
+        c.execute("UPDATE audit SET record=?1,published=0 WHERE id=?2",params![serde_json::to_string(&value).unwrap(),audit_id]).unwrap();
+    }
+    let placeholder=Fixture::new().await;
+    drop(std::mem::replace(&mut f.store,placeholder.store));
+    let reopened=SqlOutbox::open(&f.path,f.audit.clone(),f.clock.clone()).unwrap();
+    assert_eq!(reopened.due(2000).await.unwrap().len(),1);
+    let published:Value=serde_json::from_str(&std::fs::read_to_string(f.audit.join(format!("{audit_id}.json"))).unwrap()).unwrap();
+    assert_eq!(published["principal"],json!(""));
+    assert_eq!(published["atMs"],json!(-1));
+}
+
+#[tokio::test]
+async fn final_review_cursor_typeless_position() {
+    let mut f=Fixture::new().await;
+    let id=f.store.queue(f.record(1)).await.unwrap();
+    let queued=f.store.due(1000).await.unwrap().remove(0).delivery;
+    let refused=queued.refused().unwrap();
+    f.store.transition(&queued,&refused,DeliveryCause::Refused,1500).await.unwrap();
+    {
+        let c=f.store.owner.connection.lock().unwrap();
+        c.execute("UPDATE cursors SET position='invalid'",[]).unwrap();
+    }
+    let placeholder=Fixture::new().await;
+    drop(std::mem::replace(&mut f.store,placeholder.store));
+    let reopened=SqlOutbox::open(&f.path,f.audit.clone(),f.clock.clone()).unwrap();
+    assert_eq!(reopened.queue(f.record(1)).await.unwrap(),id);
+    assert_eq!(reopened.queue(f.record(2)).await,Err(OutboxError::Unavailable));
+}

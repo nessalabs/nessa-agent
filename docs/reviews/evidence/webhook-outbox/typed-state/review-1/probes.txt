@@ -1,0 +1,10 @@
+
+running 3 tests
+REPRO: active registration + no stop facts; restored and published credential_revoked attributed to unrelated-synthetic-revoker
+test webhooks::infrastructure::outbox::tests::independent_false_credential_stop_is_published ... ok
+REPRO: stopped registration says original-revoker; unchanged refusal snapshots with only initiator replaced restore and publish unrelated-synthetic-revoker
+test webhooks::infrastructure::outbox::tests::independent_known_stop_actor_is_replaced ... ok
+REPRO: retained terminal delivery has source_stop, but latest terminal audit sourceStop:null is restored and published
+test webhooks::infrastructure::outbox::tests::independent_terminal_audit_loses_source_stop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s

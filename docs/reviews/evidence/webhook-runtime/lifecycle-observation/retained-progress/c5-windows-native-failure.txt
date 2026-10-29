@@ -1,0 +1,21 @@
+2026-10-23T21:25:33.4973782Z [nessa-server native_enrollment] 
+2026-10-23T21:25:33.4974412Z [nessa-server native_enrollment] ---- peer_enroll::a_refused_or_wrong_class_invitation_saves_nothing stdout ----
+2026-10-23T21:25:33.4974707Z [nessa-server native_enrollment] 
+2026-10-23T21:25:33.4975319Z [nessa-server native_enrollment] thread 'peer_enroll::a_refused_or_wrong_class_invitation_saves_nothing' (2312) panicked at crates\nessa-server\tests\peer_gateways\enroll.rs:535:5:
+2026-10-23T21:25:33.4975807Z [nessa-server native_enrollment] assertion `left == right` failed
+2026-10-23T21:25:33.4976081Z [nessa-server native_enrollment]   left: "peer_audit_unavailable"
+2026-10-23T21:25:33.4976336Z [nessa-server native_enrollment]  right: "peer_unreachable"
+2026-10-23T21:25:33.4976545Z [nessa-server native_enrollment] 
+2026-10-23T21:25:33.4976958Z [nessa-server native_enrollment] thread 'tokio-rt-worker' (6104) panicked at crates\nessa-server\tests\device_pairing\infrastructure\support.rs:328:31:
+2026-10-23T21:25:33.4977614Z [nessa-server native_enrollment] called `Result::unwrap()` on an `Err` value: RecvError(())
+2026-10-23T21:25:33.4977876Z [nessa-server native_enrollment] 
+2026-10-23T21:25:33.4978029Z [nessa-server native_enrollment] 
+2026-10-23T21:25:33.4978198Z [nessa-server native_enrollment] failures:
+2026-10-23T21:25:33.4978838Z [nessa-server native_enrollment]     peer_enroll::a_refused_or_wrong_class_invitation_saves_nothing
+2026-10-23T21:25:33.4979226Z [nessa-server native_enrollment] 
+2026-10-23T21:25:33.4979609Z [nessa-server native_enrollment] test result: FAILED. 109 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 78.15s
+2026-10-23T21:25:33.4980049Z [nessa-server native_enrollment] 
+2026-10-23T21:25:33.8234453Z ##[error]D:\a\nessa-agent\nessa-agent\target\debug\deps\native_enrollment-2d4bf454443f6a8a.exe [] exited with 101
+Captured output; at most 16384 characters:
+
+running 110 tests

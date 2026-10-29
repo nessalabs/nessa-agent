@@ -8,10 +8,11 @@
 //! never finds a socket an older `ssh` still holds, and the path stays far
 //! inside a Unix socket's bound (104 bytes on macOS).
 use super::connector::{
-    channel_arguments, master_arguments, ssh_arguments, ArtifactChannel, ArtifactChannels,
-    ArtifactTransport, LeaseConnection, LeaseConnector,
+    channel_arguments, master_arguments, ssh_arguments, ArtifactTransport, LeaseConnection,
+    LeaseConnector,
 };
 use super::install::{RemoteShell, ShellFuture};
+use crate::conversation::application::{ArtifactChannel, ArtifactChannels};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use std::{
     fs::{self, File},
@@ -145,6 +146,7 @@ impl LeaseConnector for OpenSshConnector {
             log_stderr(host, stderr);
         }
         Ok(LeaseConnection {
+            mcp_relay: None,
             from_environment: Box::new(stdout),
             to_environment: Box::new(stdin),
             keep: Box::new(KeptChild(child)),

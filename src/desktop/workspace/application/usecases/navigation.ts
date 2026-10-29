@@ -94,18 +94,23 @@ export function openChannel(
     room,
   }: { channelId: string; beside?: boolean; draftId?: string; room?: PaneRoom },
 ): WorkspaceState {
-  if (!channelOf(state, channelId)) return state
+  const channel = channelOf(state, channelId)
+  if (!channel) return state
   const disclosed = setChannelOpen({ ...state, view: { channelId } }, channelId, true)
-  const latest = listedSessions(state)
-    .filter((session) => session.channelId === channelId)
-    .sort(byRecency)[0]
+  const latest = channel.coordinatorConversationId
+    ? listedSessions(state).find(
+        (session) => session.id === channel.coordinatorConversationId,
+      )
+    : listedSessions(state)
+        .filter((session) => session.channelId === channelId)
+        .sort(byRecency)[0]
   if (latest)
     return beside
       ? openBeside(disclosed, { sessionId: latest.id, room })
       : openSession(disclosed, { sessionId: latest.id })
   if (!draftId) return disclosed
   return createDraft(disclosed, {
-    draftId,
+    draftId: channel.coordinatorConversationId ?? draftId,
     channelId,
     beside: beside ? "right" : undefined,
     room,

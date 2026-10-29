@@ -20,7 +20,13 @@ import {
   sessionRead,
   unsentDiscarded,
 } from "./sessions"
-import { indexLoaded, sessionRemoved, transcriptLoaded, updateReceived } from "./updates"
+import {
+  indexLoaded,
+  indexRequested,
+  sessionRemoved,
+  transcriptLoaded,
+  updateReceived,
+} from "./updates"
 
 const loaded = () =>
   indexLoaded(initialWorkspace, {
@@ -515,6 +521,30 @@ describe("what the person changes", () => {
     const discarded = unsentDiscarded(elsewhere, { sessionId: "new", messageId: "m1" })
     expect(discarded.sessions.new).toBeUndefined()
     expect(discarded.drafts).toEqual({})
+  })
+
+  it("releases a refused first send when its channel has disappeared", () => {
+    const drafted = createDraft(loaded(), { draftId: "new" })
+    const sent = messageSent(drafted, {
+      initiator: "person",
+      sessionId: "new",
+      message: message("m1", "hi"),
+    })
+    const refused = sendFailed(sent, {
+      sessionId: "new",
+      messageId: "m1",
+      reason: "unavailable",
+    })
+    const empty = { sections: [], channels: [], sessions: [] }
+    const resynced = indexLoaded(indexRequested(refused, { read: "r" }), {
+      index: empty,
+      draftId: "fresh",
+      read: "r",
+    })
+    const discarded = unsentDiscarded(resynced, { sessionId: "new", messageId: "m1" })
+    expect(discarded.sessions.new).toBeUndefined()
+    expect(discarded.drafts.new).toBeUndefined()
+    expect(discarded.panes).toBeNull()
   })
 
   it("keeps a session the source has spoken of listed when its refused message goes", () => {

@@ -1,0 +1,87 @@
+{
+  "sourceRevision": "b5776acd35d6d6df3856224ab4618212b58d3dfe",
+  "pullRequest": "https://github.com/nessalabs/nessa-agent/pull/1137",
+  "deployment": {
+    "stage": "dev",
+    "origin": "https://nessa-github-webhooks.saurav-panthee.workers.dev",
+    "workerVersion": "aa9340d5-fc75-48a4-bbf8-549fc8c62a49",
+    "migration": "0003_fair_use.sql",
+    "plan": "Free",
+    "planEvidence": "Account dashboard showed 100,000 requests/day and 200,000 observability events/day; no billing change or paid resource provisioned.",
+    "otherStages": "alpha, ci and prod disabled; no dev fallback"
+  },
+  "liveVerification": {
+    "syntheticOnly": true,
+    "deliveryId": "3099c8a2-40d5-4fcb-bcd8-54b6605c26ea",
+    "health": 200,
+    "signedDelivery": 202,
+    "duplicate": 200,
+    "unsigned": 401,
+    "quotaReceipt": {
+      "delivery_id": "3099c8a2-40d5-4fcb-bcd8-54b6605c26ea",
+      "bytes": 300,
+      "installation_deliveries": 1,
+      "installation_bytes": 300,
+      "installation_repositories": 1
+    },
+    "metadataCounters": {
+      "user_counter_matches": 1,
+      "repository_counter_matches": 1
+    },
+    "cleanup": {
+      "fixture_deliveries": 0,
+      "fixture_installations": 0,
+      "fixture_repository_usage": 0
+    },
+    "auditCause": "verification_cleanup",
+    "auditInitiator": "verification:hardening-1132"
+  },
+  "checks": {
+    "worker": 44,
+    "nativeGithub": 54,
+    "localDatabase": 18,
+    "scripts": {
+      "passed": 456,
+      "skipped": 2
+    },
+    "strictClippy": "CI package selection passed locally; inherited long-running const-evaluation warning remains.",
+    "actualLockedMacKeychain": "1 passed in0.15s; only disposable keychain touched",
+    "settingsBrowsers": "Chromium and WebKit, 2/2",
+    "restartThenGithubStress": "Chromium 5/5",
+    "architecture": "108 passed",
+    "mermaid": "all three state-page diagrams parsed",
+    "fullFrontend": "5301 tests and production build passed at initial hardening commit; latest platform CI tracked on PR",
+    "idleTraffic": {
+      "beforeRequestsPerRepositoryDay": 2880,
+      "afterRequestsPerRepositoryDay": 360,
+      "reductionPercent": 87.5
+    },
+    "triggerCost": {
+      "installations": 4096,
+      "expired": 64,
+      "d1RowsReadIncludingTriggers": 836
+    }
+  },
+  "adversarialReview": {
+    "rounds": 3,
+    "round1": "Three accepted findings fixed: cleanup scans, Linux interactive unlock, lexical namespace identity.",
+    "round2": "Three accepted findings fixed: per-expiry global accounting scan, macOS write/delete prompt path, stale attachment comment. Structural keyed accounting/counters replace repeated global work.",
+    "round3": "No new actionable findings; independent Worker44 pass, 1800 seeded accounting operations, actual locked-keychain check.",
+    "report": "evidence/hardening-review.md",
+    "mutationEvidence": "Isolated encryption, quota, index/range, keyed-trigger and metadata-counter weakenings were detected by regressions."
+  },
+  "boundaries": [
+    "Cloudflare sees plaintext and provides managed encryption at rest; no E2EE.",
+    "Historical plaintext backups/snapshots are not erased. Stop old gateways before one-time inbox migration.",
+    "A running gateway retains acquired keys until exit. Database-only backup lacks its OS key.",
+    "Free quotas refuse excess work and do not provide capacity for 10,000 busy users or a distributed DoS SLA.",
+    "No live private GitHub installation exercised; provider fixtures cover private authorization.",
+    "No power-loss testing, packaged release, agent/chat dispatch, PR automation or merge included.",
+    "Cross-platform CI is tracked on the PR; native runtime coverage must not be inferred from the local macOS review."
+  ],
+  "documentation": {
+    "reviewedStatePage": "docs/state/services/github-webhooks/README.md",
+    "sourceCheckpoint": "b5776acd35d6d6df3856224ab4618212b58d3dfe",
+    "validation": "Nessa Docs ok, 133 documents, zero errors. Installed older renderer warns about sourceRevision metadata; checkpoint manually checked against source. Unrelated checkpoints not advanced."
+  }
+}

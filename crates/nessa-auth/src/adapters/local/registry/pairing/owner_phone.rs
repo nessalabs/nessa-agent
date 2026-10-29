@@ -65,7 +65,7 @@ impl OwnerPhoneStore for LocalCredentialStore {
     ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
         Box::pin(async move {
             let mut slot = self
-                .registry()
+                .mutation_registry()
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();

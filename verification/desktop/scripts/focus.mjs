@@ -379,6 +379,7 @@ async function answerOnceOnCard(page) {
     if (!card) throw new CannotRun("no sample session is still waiting on an approval")
     const composer = page.locator(`${css.focusedPane} ${css.field}`).first()
     await composer.fill("keep these words")
+    let choice = names.allowOnce
     if (answer === "held") {
       // The pick's caret lands in the composer a frame or two after it: let
       // it, then put the keyboard on Allow Once, and hold ↩ only once it is there.
@@ -395,7 +396,16 @@ async function answerOnceOnCard(page) {
       if (!onAllow) throw new CannotRun("the keyboard would not stay on Allow Once")
       for (let i = 0; i < 5; i++) await page.keyboard.down(keys.enter)
       await page.keyboard.up(keys.enter)
-    } else await card.getByRole("button", { name, exact: true }).dblclick()
+    } else {
+      // Providers name their choices. The card marks the semantic answer so
+      // this check still exercises permanent allow when its caption differs.
+      const button =
+        name === names.alwaysAllow
+          ? card.locator(css.approvalAlways).first()
+          : card.getByRole("button", { name, exact: true })
+      choice = (await button.getAttribute("aria-label")) ?? (await button.innerText())
+      await button.dblclick()
+    }
     // Counted in the overview once the answer has had its effect, and for a
     // while after, in case a second one was taken.
     await page.keyboard.press(keys.overview)
@@ -408,7 +418,7 @@ async function answerOnceOnCard(page) {
     await page.keyboard.press(keys.escape)
     await contentIs(page, content.panes)
     const typed = await composer.inputValue().catch(() => "")
-    trail.push({ step: name, before, after, typed })
+    trail.push({ step: name, choice, before, after, typed })
     if (!once)
       failures.push(`${name} on a pane's card answered ${before - after} requests, not 1`)
     if (answer === "held" && typed !== "keep these words")

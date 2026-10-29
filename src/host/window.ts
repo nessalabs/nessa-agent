@@ -1351,3 +1351,14 @@ export async function writeClipboardText(text: string): Promise<void> {
   if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable.")
   await navigator.clipboard.writeText(text)
 }
+
+/** Transient local-vault input; the native host retains one app-owned connection.
+ * Browser composition uses the gateway adapter instead of invoking this seam. */
+export async function vaultCommand(request: {
+  operation: "status" | "setup" | "unlock" | "lock"
+  passphrase?: string
+}): Promise<unknown> {
+  if (!inTauri) return undefined
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("vault_command", { request })
+}

@@ -1,0 +1,15 @@
+
+running 11 tests
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::all_erased_proof_leaves_initial_acknowledgement_undetermined ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::initial_rejection_with_only_retained_source_history ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_initial_identity_excludes_a_second_pending_identity ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::retained_audit_summary_reads_only_its_registration_at_real_limit ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::two_pending_initial_identities_are_not_lost_ack_recovery ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::two_published_initial_identities_are_also_contradictory ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::retained_progress_uses_registration_keys_at_retained_capacity ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::unowned_reset_is_contradictory_evidence_before_initial_effects ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_original_issue_remains_valid_with_later_history ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 119 filtered out; finished in 0.42s

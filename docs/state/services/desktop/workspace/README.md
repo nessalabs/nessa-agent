@@ -92,7 +92,6 @@ flowchart TB
 
 ## Browse flows
 
-- [Answer requests from the session list](answer-requests-from-the-session-list.md)
 - [Manage MCP integrations](manage-mcp-integrations.md)
 - [Configure native harness hooks](configure-native-hooks.md)
 - [Enable waiting-review notifications](enable-review-notices.md)
