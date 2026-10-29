@@ -30,7 +30,13 @@ export async function settledOffset(wrapper, closed) {
           content.getBoundingClientRect().left -
           element.getBoundingClientRect().left -
           from,
-        tray: tray?.getBoundingClientRect().width ?? 0,
+        tray:
+          parseFloat(
+            getComputedStyle(
+              tray?.querySelector('[data-slot="workspace-swipe-row-action"]') ?? element,
+            ).getPropertyValue("--nessa-swipe-open"),
+          ) ||
+          (tray?.getBoundingClientRect().width ?? 0),
         geometryActive,
       }
     }, closed)

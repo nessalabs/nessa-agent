@@ -67,9 +67,7 @@ struct Preparation {
     model: Option<String>,
     environment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    channel: Option<ChannelId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    approval_mode: Option<ConversationApprovalMode>,
+    channel: Option<String>,
 }
 impl Preparation {
     fn caller(&self) -> Result<ConversationCaller, ConversationError> {
@@ -82,18 +80,26 @@ impl Preparation {
             action_id: self.action.clone(),
         })
     }
-    fn requested(&self) -> RequestedConversation {
-        RequestedConversation {
+    fn requested(
+        &self,
+        approval_mode: Option<ConversationApprovalMode>,
+    ) -> Result<RequestedConversation, ConversationError> {
+        Ok(RequestedConversation {
             agent: self
                 .agent
                 .as_deref()
                 .and_then(AgentId::parse)
                 .map(RequestedAgent::Known),
             model: self.model.clone(),
-            approval_mode: self.approval_mode,
+            approval_mode,
             environment: self.environment.clone(),
-            channel: self.channel.clone(),
-        }
+            channel: self
+                .channel
+                .as_deref()
+                .map(ChannelId::new)
+                .transpose()
+                .map_err(|_| ConversationError::InvalidInput)?,
+        })
     }
 }
 
@@ -152,7 +158,6 @@ impl ConversationService {
             model: requested.model,
             environment: requested.environment,
             channel: None,
-            approval_mode: None,
         };
         let service = self.clone();
         tokio::spawn(async move {
@@ -203,8 +208,7 @@ impl ConversationService {
             .await
             .map_err(CreationFailure::Target)?;
         let preparation = Preparation {
-            channel,
-            approval_mode,
+            channel: channel.map(|channel| channel.as_str().to_owned()),
             ..preparation
         };
         let session = conversation_session(source.conversation());
@@ -220,7 +224,7 @@ impl ConversationService {
             &caller.action_id,
         );
         // This is the ordinary creation policy, not inherited authority.
-        let policy = creation_policy(preparation.approval_mode);
+        let policy = creation_policy(approval_mode);
         let prepared = ownership
             .coordinator
             .prepare_child(
@@ -701,9 +705,6 @@ impl ChildFactory for Factory {
         }
         let preparation: Preparation =
             serde_json::from_str(&request.task).map_err(|_| refused())?;
-        if request.policy != creation_policy(preparation.approval_mode) {
-            return Err(refused());
-        }
         if preparation
             .agent
             .as_deref()
@@ -719,6 +720,19 @@ impl ChildFactory for Factory {
             .spawn_binding_for_lifetime(&request.child)
             .filter(|binding| binding.request_id == request.request)
             .ok_or_else(refused)?;
+        // The coordinator owns the admission snapshot. A retry can arrive after
+        // the parent's current preset changes; restoring this preparation must
+        // use that original binding, not recapture the current preset.
+        let approval_mode =
+            ConversationApprovalMode::parse(binding.policy.mode()).ok_or_else(refused)?;
+        if request.policy != binding.policy
+            || binding.policy != creation_policy(Some(approval_mode))
+        {
+            return Err(refused());
+        }
+        let requested = preparation
+            .requested(Some(approval_mode))
+            .map_err(|_| refused())?;
         service.inner.ownership_preparations.lock().await.insert(
             request.session.clone(),
             PendingPreparation {
@@ -727,13 +741,7 @@ impl ChildFactory for Factory {
             },
         );
         let result = service
-            .create_child_command(
-                storage,
-                id.clone(),
-                caller,
-                preparation.requested(),
-                binding.task_digest,
-            )
+            .create_child_command(storage, id.clone(), caller, requested, binding.task_digest)
             .await;
         let resources = service
             .inner
@@ -943,6 +951,7 @@ impl Resources {
             let record = super::load_conversation(service.inner.metadata.as_ref(), &self.id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
+            let place = service.agent_place(&self.id).await?;
             let configured = service
                 .inner
                 .agents
@@ -950,6 +959,7 @@ impl Resources {
                     record.agent().ok_or(ConversationError::AgentUnsupported)?,
                     record.model().as_str(),
                     record.approval_mode(),
+                    place.as_ref(),
                 )
                 .await?;
             let manager = SessionManager::open(

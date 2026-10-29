@@ -106,6 +106,7 @@ async fn an_injected_report_waits_for_its_suspended_hosts_exact_successor() {
         text: text.into(),
         images: vec![],
         files: vec![],
+        uploads: vec![],
     };
     service
         .submit(

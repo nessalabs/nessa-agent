@@ -946,7 +946,7 @@ async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
             execution: "active".into(),
         };
         let child = new_id();
-        fixture
+        let original = fixture
             .service
             .create_owned_thread(
                 source("owned-child"),
@@ -980,6 +980,72 @@ async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
             mode.as_str(),
             "the SDK binding and actual ordinary child retain the same preset"
         );
+        if mode == ConversationApprovalMode::Auto {
+            let opened = fixture
+                .source
+                .factory
+                .open_calls
+                .load(std::sync::atomic::Ordering::SeqCst);
+            fixture
+                .service
+                .set_approval_mode(
+                    parent.clone(),
+                    caller("person", "later-ask"),
+                    ConversationApprovalMode::Ask,
+                )
+                .await
+                .unwrap();
+            let live = fixture
+                .service
+                .resolve(&parent, &caller("person", "inspect-active"))
+                .await
+                .unwrap();
+            assert_eq!(
+                live.agent
+                    .active_execution_id()
+                    .as_ref()
+                    .map(|id| id.as_str()),
+                Some("active"),
+                "the original source execution remains active across the in-place mode change"
+            );
+            drop(live);
+            let replayed = fixture
+                .service
+                .create_owned_thread(
+                    source("owned-child"),
+                    child.clone(),
+                    RequestedConversation::default(),
+                )
+                .await;
+            assert_eq!(
+                replayed.unwrap(),
+                original,
+                "exact replay retains its original Ready receipt after the parent's preset changes"
+            );
+            let retained =
+                super::super::load_conversation(fixture.service.inner.metadata.as_ref(), &child)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(retained.approval_mode(), ConversationApprovalMode::Auto);
+            assert_eq!(
+                ownership
+                    .spawn_binding_for_lifetime(&child_lifetime)
+                    .unwrap()
+                    .policy
+                    .mode(),
+                "auto"
+            );
+            assert_eq!(
+                fixture
+                    .source
+                    .factory
+                    .open_calls
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                opened,
+                "replay does not prepare the provider again"
+            );
+        }
         for requested in [
             RequestedConversation {
                 approval_mode: Some(ConversationApprovalMode::Full),

@@ -242,8 +242,11 @@ is not a claim that an external effect was rolled back.
 
 Owned creation asks the existing channel start owner for placement and the
 initial preset while holding thread admission and after verifying the exact
-running source. Those choices travel in the coordinator's existing preparation
-description into ordinary child creation. A caller cannot supply either choice;
+running source. Stable channel placement travels in the existing preparation
+description; the coordinator's existing spawn binding retains the admitted
+preset. The factory validates that binding and forwards its original preset to
+ordinary child creation. A later parent preset change does not change an exact
+retry's task identity or child policy. A caller cannot supply either choice;
 permission answers are not copied. A source outside a channel, or an explicitly
 remote environment, retains the ordinary channel start owner's no-channel choice.
 
@@ -251,7 +254,8 @@ remote environment, retains the ordinary channel start owner's no-channel choice
 | --- | --- | --- |
 | Same-channel source starts an owned child | The child and its SDK spawn-policy binding retain the source channel's current preset, including a person's Ask override of the channel's Auto default | `owned_threads_use_channel_start_without_accepting_caller_overrides` |
 | Agent supplies a preset or channel override | Refuse invalid input before child preparation, provider open or child metadata | same regression |
-| A prepared child is restored | The existing preparation description supplies its retained channel and preset to ordinary creation; omitted optional choices denote ordinary default placement | existing owned recovery tests and the channel regression |
+| Parent preset changes after owned creation, then the exact command retries | Return the original Ready receipt, child preset and SDK policy, with no second provider open | same regression |
+| A prepared child is restored | The preparation description supplies stable channel placement and the existing spawn binding supplies its original preset; omitted channel denotes ordinary default placement | existing owned recovery tests and the channel regression |
 
 ## Service admission order
 

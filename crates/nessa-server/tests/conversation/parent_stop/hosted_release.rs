@@ -22,7 +22,7 @@ use nessa_sdk::domain::{
     model_metadata::entities::ModelMetadata,
 };
 use nessa_sdk::infrastructure::{
-    acp::sessions::{AcpConfig, McpServerList, StandInSessions},
+    acp::sessions::{AcpConfig, McpServerList, OpenCredentials, StandInSessions},
     claude_acp::sessions::ClaudeAcpProvider,
     harness_process::SupervisedHarness,
 };
@@ -183,6 +183,7 @@ impl ExecutionAudit for AcceptAudit {
 fn provider(workspace: &Path, executable: ExecutableUseSnapshot) -> ClaudeAcpProvider {
     let config = AcpConfig {
         executable,
+        open_credentials: OpenCredentials::none(),
         arguments: Vec::new(),
         staged_runtime_arguments: Vec::new(),
         environment: BTreeMap::new(),

@@ -8,7 +8,7 @@
 //!
 //! Arrows mean facts consumed here, not another execution-state authority.
 //! Provider results remain distinct from withdrawal and report acknowledgement.
-use super::super::{SubmittedFile, SubmittedImage, SubmittedMessage};
+use super::super::{SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload};
 use super::{
     conversation_session, ConversationCaller, ConversationError, ConversationId,
     ConversationService, SubmissionMode,
@@ -212,6 +212,18 @@ impl ConversationService {
                         digest: image.digest().to_string(),
                         media_type: image.media_type().as_str().into(),
                         size: image.size(),
+                    })
+                    .collect(),
+                uploads: record
+                    .request
+                    .user_message
+                    .uploads()
+                    .iter()
+                    .map(|file| SubmittedUpload {
+                        digest: file.digest().to_string(),
+                        media_type: file.media_type().as_str().into(),
+                        size: file.size(),
+                        name: file.name().into(),
                     })
                     .collect(),
                 files: record

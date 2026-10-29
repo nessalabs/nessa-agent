@@ -870,6 +870,9 @@ fn stored_phone_file(owner: &str) -> SessionChange {
     .unwrap();
     SessionChange::InputAccepted(Box::new(InvocationRecord {
         target_event_offset: None,
+        resumed_from: None,
+        decline: None,
+        cancellation_delivery: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {
             execution_id: ExecutionId::new("phone-file").unwrap(),
