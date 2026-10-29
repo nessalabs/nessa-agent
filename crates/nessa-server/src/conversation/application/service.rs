@@ -57,20 +57,20 @@ use nessa_protocol::conversation::domain::{
 };
 use nessa_protocol::conversation::{
     projection::{
-        agent_question, agent_review, bound_view, clipped, question_entry, review_entry,
-        CommittedCursor, Projection, MAX_TEXT,
+        agent_question, agent_review, bound_view, clipped, earlier_turns, question_entry,
+        review_entry, CommittedCursor, Projection, MAX_TEXT,
     },
     tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
-        ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
-        ConversationLifecyclePhase, ConversationList, ConversationListEntry,
+        ConversationCapabilities, ConversationDisposition, ConversationEarlier,
+        ConversationLifecycle, ConversationLifecyclePhase, ConversationList, ConversationListEntry,
         ConversationObservation, ConversationObservationCursor, ConversationPermission,
-        ConversationQuestion, ConversationQuestionEntry, ConversationReorderOutcome,
-        ConversationReviewEntry, ConversationReviewKind, ConversationRuntime,
-        ConversationSelectionView, ConversationStartupFailure, ConversationStartupFailureCode,
-        ConversationView, SubmissionReceipt,
+        ConversationPoint, ConversationQuestion, ConversationQuestionEntry,
+        ConversationReorderOutcome, ConversationReviewEntry, ConversationReviewKind,
+        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
+        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
     },
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
@@ -3393,6 +3393,58 @@ impl ConversationService {
             .as_ref()
             .is_some_and(|attachments| attachments.offers_images());
         Ok((view, cursor))
+    }
+    /// What came before `before` in `id`'s committed history — after
+    /// `after`, when given — for a reader scrolling back past what its view
+    /// lists (`earlier_turns`). Reads only what is saved: nothing is opened.
+    /// A point that names no turn of the history, or no place in its turn, is
+    /// refused as invalid input: the reader's view is from another history.
+    pub async fn read_earlier(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        before: &ConversationPoint,
+        after: Option<&ConversationPoint>,
+    ) -> Result<ConversationEarlier, ConversationError> {
+        let _admission = self.admit().await?;
+        self.check_view_access(id, caller).await?;
+        // Whatever has it open now, without waiting on one opening or
+        // stopping: a page of history needs neither.
+        let running = self
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .and_then(|slot| {
+                slot.value
+                    .get()
+                    .and_then(|value| value.as_ref().ok().cloned())
+            })
+            .and_then(|live| live.agent.active_execution_id());
+        let (committed, order) = self.committed_with_order(id).await?;
+        // Turns this gateway runs or holds queued are not ones a restart
+        // left unresolved.
+        let live: HashSet<String> = order
+            .iter()
+            .chain(running.as_ref())
+            .map(|execution| execution.as_str().to_owned())
+            .collect();
+        let page = committed
+            .snapshot()
+            .and_then(|snapshot| {
+                earlier_turns(
+                    &id.to_string(),
+                    snapshot,
+                    self.inner.tool_uis.clone(),
+                    before,
+                    after,
+                    &live,
+                )
+            })
+            .ok_or(ConversationError::InvalidInput)?;
+        self.check_view_access(id, caller).await?;
+        Ok(page)
     }
     /// The committed history of `id`, and its pending order.
     async fn committed_with_order(

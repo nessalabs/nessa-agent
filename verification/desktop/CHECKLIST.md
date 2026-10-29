@@ -336,8 +336,8 @@ Experimental turns it on; the rail stands beside the workspace in
 
 - [ ] **The panes are one flat surface, not cards.** The chat area reaches the
   window's top, right and bottom edges; no pane draws a fill, rim or shadow of
-  its own; a 1px hairline mid-gutter divides two panes, a column's from below
-  the continuous window toolbar to the window's bottom, a row's to the surface's side or the column's
+  its own; a 1px hairline mid-gutter divides two panes, a column's from the
+  window's top to its bottom, a row's to the surface's side or the column's
   hairline. Focus changes no pane's fill or elevation (the unfocused header
   dims). Both themes, beside and stacked. _Check:_ `columns.mjs --only pane-level`;
   `conversation-stress` step `window`.
@@ -356,26 +356,27 @@ Experimental turns it on; the rail stands beside the workspace in
   out first; rain, the lit layer, and steam lay out on the frame after.
   Drag previews must also retain content; verify
   these with the drag and focus checks when changing their motion.
-- [ ] **Content columns do not overlap**, and nothing sits under the rail, in any
+- [ ] **No two columns overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents
-  overview, at 1440, 1000 and 760 wide. The overview covers the sidebar's
-  gutter to hide the underlying resize edge. _Check:_ `columns.mjs --only no-overlap`
+  overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
   (Chromium and WebKit, both layouts).
-- [ ] **Conversation cards clear the window toolbar**: New Session
-  is absent from the window toolbar; ⌘N still opens a new conversation, and
-  conversation cards begin below the toolbar; the frameless sidebar wash
-  extends to the window top.
+- [ ] **Each pane's header is the window's top row**: New Session is in the
+  window toolbar only in the layout without a session list (the session list's
+  head holds it otherwise); ⌘N still opens a new conversation; each pane's one
+  header sits in the toolbar's row; the frameless sidebar wash extends to the
+  window top.
   Sidebar content clears the toolbar, with no card rim behind the traffic lights.
   Sidebar and session-list toggles are adjacent, followed by Back and Forward.
   The 48px rail starts its icons
-  below the controls on every host. The toggle keeps its bottom-left mark slot, including when both side
-  columns are closed, with "nessa Studio" beside it and centred on the same row. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
+  below the controls on every host. The toggle stays at the bottom-left control
+  edge, including when both side columns are closed, and a folded rail has a
+  reserved slot beside "nessa Studio" in the
+  sidebar footer. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
   ⌥⌘S change nothing behind it. Its opaque view covers the workspace cards and
   chat controls all the way to the top edge. One top sidebar toggle folds and
-  reopens the rail in Notes, Calendar, Browser and Files. The empty top bar
-  remains a native window drag surface.
+  reopens the rail in Notes, Calendar, Browser and Files.
   _Check:_ `columns.mjs --only rail-view-inert`.
 - [ ] **An item's view opens empty, and a slow load shows only text**: no
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
@@ -403,11 +404,6 @@ _ADR 238 › Focus follows the focused pane_; keys in
   Wait for the command's expected pane membership, destination, focus mark and
   composer together, with finite motion finished, within the existing 3 s
   settlement budget. The old pane's caret cannot complete a new-pane command.
-- [ ] **A document tab gives the caret to a new session** when ⌘N or ⇧⌘N
-  deselects it. Arrow selection keeps focus in the selected tab; a shortcut
-  must land in the new focused pane's composer after its finite motion.
-  _Check:_ `focus.mjs` (`focus-tab-shortcuts`) and
-  `src/desktop/workspace/adapters/dom/focus.test.tsx`.
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
@@ -770,8 +766,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   so; its destructive call waits on a review in the conversation's
   permissions, its origin the app, shown in the window, and the app shows
   the answer to the review's Allow and to its Deny (the card does not offer
-  Always Allow); the panel tab's close control remains clickable beneath the
-  window toolbar's empty drag strip, and closing a mount with a
+  Always Allow); closing the panel tab of a mount with a
   call waiting withdraws the review, the window's card for it goes once it is
   withdrawn, and the inline mount stays. _#349
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
@@ -1027,8 +1022,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **Any pane's menu chooses the header picture.** From a conversation
   pane's "…" menu, Choose Header Picture… opens the file dialog and the
   picture chosen shows in the panes' bands; a new session's home draws it from
-  its pane's top edge, behind the pane title row — in the window's corner with
-  nothing beside it too, immediately below the continuous window toolbar;
+  its pane's top edge, behind the title row — in the window's corner with
+  nothing beside it too, behind the window's controls;
   Use Night Scene, offered only with a picture, takes it back; a file that is
   not an image is refused with why, in that pane's header (issue #320).
   _Check:_ `responsive.mjs --only header-picture`, and `safe-area.mjs`.
@@ -1161,10 +1156,18 @@ phone's scanner is not this screen.
   composed `GithubAvatar`; without one, or when it fails, the login's initial.
   Choose repositories and Disconnect are icon buttons that take "Connected"'s
   place under the pointer or keyboard focus, and take no pointer while hidden;
-  Shift+Tab and Tab move between them. They show at all times while an action
-  is in flight or after one failed, and on touch-capable screens.
+  Reverse and forward Tab move between them (Option+Tab in macOS WebKit to
+  include links). They show at all times while an action is in flight or after
+  one failed, and on touch-capable screens.
   _Check:_ `conversation-stress.mjs` (`github`); unit tests
   `github-row.test.tsx`, `github-avatar.test.tsx`.
+- [ ] **The GitHub sign-in stays out of agent and managed-shell environments.**
+  After Connect, both report no Nessa `GH_TOKEN` or git credential helper,
+  while a source-authorized `nessa-github.read_repository` returns the requested
+  repository. Disconnect removes the saved sign-in; a later agent still has no
+  Nessa credential. _Check:_ `conversation-stress.mjs` (`github`, default and
+  raised count), `crates/nessa-mcp/src/main.rs`'s command environment test, and
+  `crates/nessa-server/tests/github/mod.rs`'s read/disconnect tests.
 
 ### Integrations: the gateway's MCP servers
 
@@ -1771,19 +1774,23 @@ says why where the conversations would be.
   load run. The table itself is nessa_ui's `MessageMarkdown` / `Table`
   (`edgeFade`), with its own story checks.
 
-- [ ] **A run of tool calls draws each call on one time axis, and an instant
-  call is a dot.**
+- [ ] **A run of tool calls draws each call on one time axis, an instant
+  call is a dot, and a long name is cut before the bar.**
   _Check:_ `conversation-stress.mjs`'s `trace` step (knob `traces`): the
   scripted agent makes three calls, one failing. The window folds them into
   "Ran 3 tools", which opens to one row per call with its status. Each bar
   starts within 3% of the axis where its call started, is at least as wide as
   it is tall (a call of a few milliseconds is a round dot, never a hairline),
-  and ends no more than 0.5 px past the axis. A call's card shows its input.
+  and ends no more than 0.5 px past the axis. One call is announced under a
+  title far longer than its column, as a harness names a web search: every
+  row's name ends before its bar's track starts, and the long one is cut
+  with an ellipsis while still holding its whole title. A call's card shows
+  its input.
   While the run is still at work (the agent holds after its last call), the
   trace alone says so: its line reads "Working", open or folded, the call at
   work is named once in its run, and no live row repeats it below
   (`shownActivity` in `model/transcript.ts`). Chromium in the PR job; WebKit with the stress load run. The trace itself is
-  nessa_ui's `ToolTrace`, with its own story checks (`Instant`).
+  nessa_ui's `ToolTrace`, with its own story checks (`Instant`, `LongLabel`).
 
 ### Onboarding readiness recovery
 
@@ -2197,28 +2204,16 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `empty`. "No linked devices yet." and Link a Device, no Done and no
   Share; the link closes the dialog and opens Settings on Linked devices.
 
-## Session list: pinned first, request cards (#1084)
+## Session list: pinned first, waiting rows (#1084)
 
 - [ ] **In three columns the sidebar lists channels only; a channel's pinned
   sessions lead its list under "Pinned", each listed once.** _Check:_
   `columns.mjs` (`channels-alone`); Sessions in sidebar still discloses a
   channel's sessions.
-- [ ] **Each waiting row the list asks about is a request card, answered from
-  the list.** It reads the command as the transcript card does
-  (`approvalGist`), offers the review's refusal and primary allow on one row,
-  every other answer in the menu beside them.
-  It allows only a request it shows whole, by a rule over the request
-  (`allowableFromList`): nothing in the tool's input but the command, at
-  most three lines and 180 characters; any other offers its refusals and
-  Review in Chat. _Check:_ `columns.mjs` (`list-request`: Allow moves
-  the row out of Needs you; `list-request-claude`: Claude's five-answer shell
-  review at the list's narrowest, read as the transcript reads it, answers
-  that fit their words, under 260px). These request-card checks run in columns
-  layout; sidebar layout has no separate session list and is reported as not run.
-  `conversation-stress.mjs`
-  (`listAnswer`); unit tests `list-request.test.tsx` (only what is drawn is
-  asked: never a pinned row, a row the search hides, or a folded list's; the
-  bound of 12; a card's controls keep their keys).
+- [ ] **A waiting row in Needs you is a plain session row.** No answer
+  buttons or question forms are drawn in the list; clicking the row opens the
+  chat, where the review or question is answered, and the answered row leaves
+  Needs you. _Check:_ `conversation-stress.mjs` (`waitingRow`).
 
 ## The window never scrolls sideways (#1084)
 
@@ -2387,24 +2382,27 @@ with a typed failure.
   fold, then retain their next-frame reply and Stop assertions. _Check:_
   `session-rows.mjs`, `responsive.mjs --only list-gutter`, and
   `columns.mjs --only content-visible,reply-held,stop-held --sizes 760x700`.
-### Conversation document tabs and the right panel (#1077)
 
-- `columns.mjs --only window-tabs,shell-chrome` (Chromium and WebKit) checks
-  document selection, closure, keyboard navigation, and the titlebar around
-  the right-panel controls at three widths in both layouts. Switching retains
-  unsent text and the neighboring split. Selecting an already visible document
-  focuses its pane. Home/End select and reveal tabs; Tab reaches the strip from
-  Agents and reaches Close Tab to dismiss a draft. At narrow widths, New Tab and
-  Split Right remain clickable.
-- `widgets.mjs` and `subagents.mjs` check that a widget opens as a tab inside
-  its chat's right panel, keeps its conversation document, and takes focus
-  into the widget body. Open in Window, Back to Panel, and Escape keep their
-  existing paths.
-- The `fresh` conversation-stress step switches document tabs before sending
-  a first message through the gateway. The `panel` step checks the expanded
-  right panel and ⌘N docking it before a new session opens.
-- By hand: inspect native traffic-light clearance and the panel controls with
-  the window both windowed and fullscreen.
+### One header per chat; tabs only in the right panel
+
+- `columns.mjs --only chat-layout` (Chromium and WebKit): with the side columns
+  folded and two panes side by side, rail open and closed, no tab strip is drawn
+  for the chats; each pane has one header in the titlebar's row, none of it on
+  the window's controls (the cluster on the left, the panel's toggle on the
+  right); each pane's picture reaches the window's top edge; and with the rail
+  closed the left pane's composer starts past the corner mark.
+- `widgets.mjs` and `subagents.mjs`: a card's Open adds a tab to its chat's
+  panel, never a pane, the caret in its body; Open in Window and Back to Panel;
+  Escape inside the panel steps back and never closes the tab; closing the last
+  tab hands the caret to the chat's composer.
+- `safe-area.mjs`: nothing but a header's picture is painted under the window's
+  controls.
+- The `window` conversation-stress step holds one header per chat in the
+  titlebar row and the picture to the top edge, beside the session list and
+  with the panes alone; the `panel` step holds the expanded panel to its own
+  tabs or note, with ⌘N docking it.
+- By hand: the traffic lights over the corner pane's picture on a Mac, windowed
+  and fullscreen.
 
 ### Pending action ownership (#1087)
 

@@ -569,7 +569,7 @@ process.exit(rep.finish());`,
         `import { report } from ${JSON.stringify(new URL("./cli.mjs", import.meta.url).href)};
 const rep = report("columns", {});
 rep.add({ name: "split-motion", failures: [] });
-rep.add({ name: "list-request", skipped: "no session list in this layout" });
+rep.add({ name: "waiting-rows", skipped: "no session list in this layout" });
 process.exit(rep.finish());`,
       ],
       { encoding: "utf8" },

@@ -268,7 +268,6 @@ against a private scripted gateway.
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state, including
-  the open conversation document tabs in `usecases/session-tabs.ts` and
   each chat's right-panel tabs in `usecases/chat-panel.ts`),
   `adapters/` (the Redux slice, commands — one list in `store/commands.ts`,
   implemented for the index, the panes, and the session in
@@ -2702,6 +2701,15 @@ cleanup counterexamples. The SDK session manager distinguishes an applied schedu
 decision from its persistence acknowledgement; the decline owner audits that actual
 decision and retains independent persistence and audit failures.
 `verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.
+
+`nessa-server/src/composition/github_tools.rs` serves fixed repository, issue
+and pull request GETs as a separate built-in MCP server. It uses the same live
+source-turn admission before `github/application/connections.rs` reads the
+current sign-in. `github/domain/repository.rs` owns validated path segments
+and operations; `github/infrastructure/api.rs` fixes the GitHub host, request
+deadline, redirect policy and body bound. Provider opens and managed shell
+commands receive no Nessa GitHub credentials. See the [GitHub sign-in and
+broker contract](design/github-connect.md).
 
 ## Background tasks
 

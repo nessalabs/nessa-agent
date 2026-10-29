@@ -6,14 +6,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde_json::Value;
 use tokio::sync::Notify;
 
 use crate::github::application::{
     ApiFailure, AuditUnavailable, DeviceAuthorization, DeviceCode, EndCause, GithubApi,
     GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubConnections, GithubError,
-    GithubTokenStore, PollAnswer, StoreUnavailable,
+    GithubReadError, GithubReadFailure, GithubTokenStore, PollAnswer, StoreUnavailable,
 };
-use crate::github::domain::{AccessToken, ConnectEnd, GithubAccount, GithubSignIn, GithubStatus};
+use crate::github::domain::{
+    AccessToken, ConnectEnd, GithubAccount, GithubReadKind, GithubRepository, GithubSignIn,
+    GithubStatus,
+};
 use crate::timer::{manual::ManualTimer, Moment, Timer};
 
 const INTERVAL: Duration = Duration::from_secs(5);
@@ -49,6 +53,10 @@ struct ScriptedGithub {
     /// Held polls wait here until the test lets them answer.
     hold_polls: Mutex<Option<Arc<Notify>>>,
     accounts: Mutex<VecDeque<Result<GithubAccount, ApiFailure>>>,
+    reads: Mutex<Vec<(AccessToken, GithubRepository, GithubReadKind)>>,
+    read_answer: Mutex<Result<Value, GithubReadFailure>>,
+    read_started: Notify,
+    hold_reads: Mutex<Option<Arc<Notify>>>,
 }
 
 impl Default for ScriptedGithub {
@@ -68,6 +76,10 @@ impl Default for ScriptedGithub {
             polled: Mutex::new(0),
             hold_polls: Mutex::default(),
             accounts: Mutex::default(),
+            reads: Mutex::default(),
+            read_answer: Mutex::new(Err(GithubReadFailure::NotFound)),
+            read_started: Notify::new(),
+            hold_reads: Mutex::new(None),
         }
     }
 }
@@ -108,6 +120,23 @@ impl GithubApi for ScriptedGithub {
             .unwrap()
             .pop_front()
             .unwrap_or(Ok(octo()))
+    }
+    async fn read_repository(
+        &self,
+        token: &AccessToken,
+        repository: &GithubRepository,
+        kind: GithubReadKind,
+    ) -> Result<Value, GithubReadFailure> {
+        self.reads
+            .lock()
+            .unwrap()
+            .push((token.clone(), repository.clone(), kind));
+        self.read_started.notify_one();
+        let hold = self.hold_reads.lock().unwrap().clone();
+        if let Some(hold) = hold {
+            hold.notified().await;
+        }
+        self.read_answer.lock().unwrap().clone()
     }
 }
 
@@ -737,6 +766,13 @@ async fn an_approval_that_cannot_be_recorded_or_stored_is_dropped() {
         assert_eq!(connections.token(), None);
         assert_eq!(fixture.store.held.lock().unwrap().clone(), None);
     }
+}
+
+fn never_stopped() -> tokio::sync::watch::Receiver<bool> {
+    let (send, receive) = tokio::sync::watch::channel(false);
+    // A retained false sender represents a live call in these positive tests.
+    tokio::spawn(async move { send.closed().await });
+    receive
 }
 
 async fn signed_in(fixture: &Fixture) -> GithubConnections {
@@ -1412,3 +1448,6 @@ async fn a_closed_vault_during_approved_receipts_preserves_a_new_restoration_and
         );
     }
 }
+
+mod read_http;
+mod reads;

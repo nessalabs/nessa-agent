@@ -1,7 +1,12 @@
 //! Coherent acknowledged prehistory, not a substitute for threshold effects.
 //! One representative delivery uses the real public durability path. Remaining
 //! past rows use canonical domain transitions/audit builders in one fixture
-//! transaction, with every corresponding private audit file actually synced.
+//! transaction, with every corresponding private audit file actually written
+//! and the audit directory synced once. Per-file fsync is deliberately omitted
+//! here: this bulk prehistory is setup, no retention test simulates power loss
+//! (every "restart"/"cold" case is an in-process reopen), and the up-to-6144
+//! individual FlushFileBuffers calls cost over two minutes per fixture call on
+//! Windows CI, which overran the server-other step budget (#1203).
 //! Retention tests still invoke the real crossing/reset/stop and recovery paths.
 use super::super::super::audit::Record;
 use super::super::super::{capacity, codec, intents, journal, restoration, source_reset, stored};
@@ -100,8 +105,8 @@ pub(super) async fn acknowledged_prehistory(
     )
     .unwrap();
     // These represent already acknowledged history. Materialize the exact
-    // canonical projections, flush every file and its directory, then commit
-    // their published flags together with the fixture rows. No production
+    // canonical projections, write every file and sync their directory, then
+    // commit their published flags with the fixture rows. No production
     // publisher, flush, or acknowledgement code is changed or bypassed by the
     // actual operation that follows this setup.
     let records = {
@@ -124,7 +129,6 @@ pub(super) async fn acknowledged_prehistory(
             nessa_local_storage::open(&f.audit.join(format!("{id}.json")), OpenMode::CreateNew)
                 .unwrap();
         file.write_all(text.as_bytes()).unwrap();
-        file.sync_all().unwrap();
         drop(file);
         assert_eq!(
             tx.execute(

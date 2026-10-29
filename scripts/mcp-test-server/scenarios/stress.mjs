@@ -33,10 +33,13 @@ export const STRESS = {
   await: "stress await",
   watch: "stress watch",
   long: "stress long",
+  oversized: "stress oversized",
+  stream: "stress stream",
   window: "stress window",
   table: "stress table",
   trace: "stress trace",
   github: "stress github",
+  githubRead: "stress repository read",
   githubShell: "stress shell github",
   channel: "stress channel",
 }
@@ -78,10 +81,14 @@ export const SAYS = {
   backgroundFinished: "Background outcome received.",
   watched: "Watched: ",
   long: "Long answer: ",
+  oversized: "Oversized answer: ",
+  stream: "Streamed: ",
+  streamEnd: "Stream finished.",
   window: "Window: ",
   table: "Tables: ",
   trace: "Traced: ",
   github: "GitHub: ",
+  githubRead: "GitHub repository: ",
   githubShell: "GitHub in the shell: ",
   carried: "Carried on by ",
   channel: "Working in: ",
@@ -114,6 +121,24 @@ export const TABLE_LINES = [
  */
 export const WATCH_CALLS = 12
 
+/**
+ * A `stream` turn's reply: `STREAM_WORDS` small chunks, as a provider streams
+ * a long answer a few characters at a time: 1,200 chunks, about 43 KB. That
+ * is more than 512 chunks and past the 32 KB a part's text was once held to on
+ * the wire, so a reply joined into one part longer than that still reaches
+ * the window whole. Each word names its place, so a check can see which was
+ * shown last.
+ */
+export const STREAM_WORDS = 1200
+/** The `index`th word of a `stream` reply, 36 bytes. */
+export const streamWord = (index) =>
+  ` w${String(index).padStart(4, "0")}${"y".repeat(30)}`
+/**
+ * How long a `stream` turn holds after its words, before its last sentence,
+ * for the window to be read while the turn is still live.
+ */
+export const STREAM_HOLD_MS = 8000
+
 /** How long a `trace` turn waits after each call but the last. */
 export const TRACE_PAUSE_MS = 400
 /**
@@ -123,11 +148,19 @@ export const TRACE_PAUSE_MS = 400
 export const TRACE_HOLD_MS = 8000
 /**
  * The calls a `trace` turn makes, in order: what each is called with, which
- * the gateway keeps as its input, and how each ends.
+ * the gateway keeps as its input, and how each ends. One is announced under
+ * a title far longer than the window's name column, as a harness names a
+ * web search, so the run shows how a long name is cut.
  */
 export const TRACE_CALLS = [
   { tool: "report_rows", arguments: {}, status: "completed" },
-  { tool: "link_resources", arguments: {}, status: "completed" },
+  {
+    tool: "link_resources",
+    title:
+      'Search "site:github.com/nessalabs/nessa-agent/issues startup problems must be handled by Nessa or explained in plain words crashes endless spinners"',
+    arguments: {},
+    status: "completed",
+  },
   // The server refuses what it does not take, so this call fails either
   // way; the arguments are there to be kept as its input.
   { tool: "always_fails", arguments: { reason: "stress trace" }, status: "failed" },
@@ -169,7 +202,8 @@ const review = (title, args, allowedText, deniedText = SAYS.denied) => ({
  * The scenario for `reviews` reviews in one turn, one review of about
  * `largeBytes` bytes, turns that pause for `pauseMs`, and long answers
  * streamed as `longChunks` chunks of `longChunkBytes` bytes each, so a
- * conversation's history grows fast.
+ * conversation's history grows fast, and an `oversized` answer of
+ * `oversizedChunks` such chunks, longer than one view's frame.
  */
 export function stressScenario({
   agent = "claude",
@@ -178,6 +212,7 @@ export function stressScenario({
   pauseMs = 3_000,
   longChunks = 40,
   longChunkBytes = 300,
+  oversizedChunks = 240,
 } = {}) {
   if (!["claude", "codex"].includes(agent))
     throw new Error("unsupported stress fixture agent")
@@ -263,6 +298,39 @@ export function stressScenario({
         ],
       },
       {
+        when: STRESS.oversized,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.oversized,
+              "${prompt.text}",
+              ...Array.from(
+                { length: oversizedChunks },
+                (_, index) => ` ${index} ${"x".repeat(longChunkBytes)}`,
+              ),
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.stream,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.stream,
+              "${prompt.text}",
+              ...Array.from({ length: STREAM_WORDS }, (_, index) => streamWord(index)),
+            ],
+          },
+          { do: "pause", ms: STREAM_HOLD_MS },
+          { do: "text", chunks: [" ", SAYS.streamEnd] },
+          { do: "end" },
+        ],
+      },
+      {
         when: STRESS.table,
         steps: [
           {
@@ -283,8 +351,8 @@ export function stressScenario({
         // after the last while the run is still live.
         when: STRESS.trace,
         steps: [
-          ...TRACE_CALLS.flatMap(({ tool, arguments: args }, index) => [
-            { do: "tool", tool, arguments: args },
+          ...TRACE_CALLS.flatMap(({ tool, title, arguments: args }, index) => [
+            { do: "tool", tool, ...(title ? { title } : {}), arguments: args },
             {
               do: "pause",
               ms: index < TRACE_CALLS.length - 1 ? TRACE_PAUSE_MS : TRACE_HOLD_MS,
@@ -295,7 +363,7 @@ export function stressScenario({
         ],
       },
       {
-        // What GitHub sign-in the agent was started with, as fingerprints.
+        // No Nessa GitHub credential is placed in an agent's environment.
         when: STRESS.github,
         steps: [
           {
@@ -305,6 +373,20 @@ export function stressScenario({
               "token=${credentials.githubToken} git=${credentials.gitPassword}",
             ],
           },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.githubRead,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-github",
+            tool: "read_repository",
+            arguments: { owner: "nessalabs", repository: "nessa-agent" },
+            save: "repository",
+          },
+          { do: "text", chunks: [SAYS.githubRead, "${repository.full_name}"] },
           { do: "end" },
         ],
       },

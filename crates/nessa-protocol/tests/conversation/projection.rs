@@ -11,8 +11,9 @@ use crate::conversation::projection::{
 };
 use crate::conversation::view::{
     ConversationModelChangeEffect, ConversationModelChangeStatus, ConversationModelChangeView,
-    ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationReviewKind,
-    ConversationRuntime, ConversationSelectionView, ConversationTranscriptState,
+    ConversationPartPosition, ConversationPermissionAsk, ConversationPermissionOptionEffect,
+    ConversationReviewKind, ConversationRuntime, ConversationSelectionView,
+    ConversationTranscriptState,
 };
 use crate::conversation::{
     projection::retained_view,
@@ -585,8 +586,10 @@ fn a_structured_result_after_long_text_is_kept_and_the_last_one_reported_wins() 
     assert!(tool.details.ends_with("[Output truncated]"));
 }
 
+/// Past the budget, a turn's older calls are read as earlier before any
+/// call's structured result is given up: what goes is read again.
 #[test]
-fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
+fn a_view_past_its_budget_lets_older_calls_go_before_structured_results() {
     let mut events = Vec::new();
     events.push(event(ExecutionUpdate::Message(MessageChunk::text(
         "Charted.",
@@ -607,19 +610,18 @@ fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
     }
     let view = committed_tool_view(&events);
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
-    // Nothing of the history was left out, so the view does not say it was.
+    // Nothing was left out that a read does not give back.
     assert!(!view.truncated);
+    assert!(view.earlier);
     assert_eq!(view.messages.len(), 1);
-    assert_eq!(view.messages[0].parts.len(), 4);
-    assert_eq!(view.tools.len(), 3);
-    // Oldest first: the earliest tools give theirs up, their details as they
-    // were; what still fits is kept.
-    assert_eq!(view.tools[0].structured_content, None);
-    assert_eq!(view.tools[0].details, "d".repeat(12_000));
-    assert_eq!(
-        view.tools[2].structured_content.as_deref(),
-        Some(json.as_str())
-    );
+    let start = view.messages[0].starts_at.unwrap().part;
+    assert_eq!(view.messages[0].parts.len(), 4 - start);
+    assert_eq!(view.tools.len(), 4 - start);
+    // Every call still listed keeps its result and details as they were.
+    for tool in &view.tools {
+        assert_eq!(tool.structured_content.as_deref(), Some(json.as_str()));
+        assert_eq!(tool.details, "d".repeat(12_000));
+    }
 }
 
 #[test]
@@ -740,8 +742,7 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
     )]);
     assert_eq!(damaged.tools[0].started_at_ms, None);
     assert_eq!(damaged.tools[0].ended_at_ms, None);
-    // A call whose row was let go for newer calls, and is back when it
-    // settles, keeps its start unknown rather than seeming to take no time.
+    // A call among many keeps its row, so its settling finds its start.
     let call = |name: &str, status, ms| {
         at(
             ToolCallUpdate::new(
@@ -764,9 +765,9 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
         .iter()
         .find(|tool| tool.tool_id == "first")
         .unwrap();
-    assert_eq!(first.started_at_ms, None);
+    assert_eq!(first.started_at_ms, Some(1_000));
     assert_eq!(first.ended_at_ms, Some(4_000));
-    assert!(crowded.truncated);
+    assert!(!crowded.truncated);
 }
 
 #[test]
@@ -1076,11 +1077,14 @@ fn a_view_past_its_budget_gives_up_call_arguments_after_its_history_and_before_t
         .with_mcp_tool(McpTool::new("charts", "show").unwrap())
         .with_mcp_arguments(McpCallArguments::new(r#"{"a":1}"#).unwrap()),
     ))]);
-    let older = view.messages[0].clone();
+    let mut older = view.messages[0].clone();
+    older.execution_id = "older".into();
+    older.parts.clear();
     view.messages.insert(0, older);
     let full = serde_json::to_vec(&view).unwrap().len();
     let bounded = bound_view_within(view, full - 1, true);
-    assert!(bounded.truncated);
+    assert!(bounded.earlier);
+    assert!(!bounded.truncated);
     assert_eq!(bounded.messages.len(), 1);
     assert_eq!(bounded.tools.len(), 1);
     assert_eq!(
@@ -1941,7 +1945,8 @@ fn committed_rendering_bounds_json_escaping_and_preserves_ordered_part_identity(
     )
     .read();
     let view = bound_view(view);
-    assert!(view.truncated);
+    assert!(view.earlier);
+    assert!(!view.truncated);
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
     let first = Projection::new(
         "conversation".into(),
@@ -2274,7 +2279,7 @@ fn a_bounded_view_keeps_every_question_and_review_it_lists() {
     );
     assert_eq!(view.model_change_effect, model_effect);
     assert_eq!(view.interaction_view_error, None);
-    assert!(view.truncated);
+    assert!(view.earlier);
 }
 
 #[test]
@@ -2351,7 +2356,8 @@ fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
         assert_eq!(bytes, serde_json::to_vec(&second).unwrap());
         assert_eq!(first.messages.is_empty(), snapshot.is_none());
         if snapshot.is_some() {
-            assert!(first.truncated);
+            assert!(first.earlier);
+            assert!(!first.truncated);
             assert!(first
                 .messages
                 .iter()
@@ -3022,6 +3028,8 @@ fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {
     message.parts.iter().map(|part| part.text.len()).sum()
 }
 
+/// A turn keeps all of its text: nothing is cut while it is folded, and the
+/// running total always matches what its parts hold.
 #[test]
 fn the_text_budget_keeps_a_running_total() {
     let limit = MAX_TEXT * 2;
@@ -3040,8 +3048,8 @@ fn the_text_budget_keeps_a_running_total() {
     let over = shown(vec![event(ExecutionUpdate::Message(MessageChunk::text(
         format!("{whole}b"),
     )))]);
-    assert!(over.truncated);
-    assert_eq!(over.messages[0].parts[0].text.len(), limit);
+    assert!(!over.truncated, "a long reply was cut");
+    assert_eq!(over.messages[0].parts[0].text, format!("{whole}b"));
     assert_eq!(over.messages[0].retained_text, text_len(&over.messages[0]));
 
     let emoji = shown(vec![
@@ -3050,9 +3058,13 @@ fn the_text_budget_keeps_a_running_total() {
         ))),
         event(ExecutionUpdate::Message(MessageChunk::text("😀"))),
     ]);
-    assert!(emoji.truncated);
-    assert_eq!(emoji.messages[0].parts[1].text, "");
-    assert!(text_len(&emoji.messages[0]) <= limit);
+    assert!(!emoji.truncated);
+    // One part: the newest chunk joined it whole.
+    assert_eq!(emoji.messages[0].parts.len(), 1);
+    assert_eq!(
+        emoji.messages[0].parts[0].text,
+        format!("{}😀", "a".repeat(limit - 1))
+    );
     assert_eq!(
         emoji.messages[0].retained_text,
         text_len(&emoji.messages[0])
@@ -3097,9 +3109,9 @@ fn the_text_budget_keeps_a_running_total() {
     let full_unconfirmed = shown(vec![selected_event.clone(), unconfirmed.clone()]).messages[0]
         .parts[0]
         .text
-        .len();
-    assert!(full_unconfirmed > room);
-    let clipped_notice = shown(vec![
+        .clone();
+    assert!(full_unconfirmed.len() > room);
+    let whole_notice = shown(vec![
         event(ExecutionUpdate::Message(MessageChunk::text(
             "y".repeat(limit - room),
         ))),
@@ -3107,15 +3119,17 @@ fn the_text_budget_keeps_a_running_total() {
         unconfirmed,
     ]);
     assert_eq!(
-        clipped_notice.messages[0].parts[1].text.len(),
-        room,
-        "a notice longer than the room the old one held was emptied"
+        whole_notice.messages[0].parts[1].text, full_unconfirmed,
+        "a notice was cut to the room the streamed text left it"
     );
-    assert!(!clipped_notice.messages[0].parts[1].text.is_empty());
-    assert_eq!(clipped_notice.messages[0].retained_text, limit);
+    assert!(!whole_notice.truncated);
     assert_eq!(
-        clipped_notice.messages[0].retained_text,
-        text_len(&clipped_notice.messages[0])
+        whole_notice.messages[0].retained_text,
+        limit - room + full_unconfirmed.len()
+    );
+    assert_eq!(
+        whole_notice.messages[0].retained_text,
+        text_len(&whole_notice.messages[0])
     );
 
     let events = vec![
@@ -3164,7 +3178,7 @@ fn the_text_budget_keeps_a_running_total() {
     );
 
     let kept = shown(vec![
-        event(ExecutionUpdate::Message(MessageChunk::text("alpha"))),
+        event(ExecutionUpdate::Message(MessageChunk::thought("alpha"))),
         event(ExecutionUpdate::Message(MessageChunk::text("beta-beta"))),
     ]);
     assert_eq!(kept.messages.len(), 1);
@@ -3172,8 +3186,13 @@ fn the_text_budget_keeps_a_running_total() {
     let full = serde_json::to_vec(&kept).unwrap().len();
     let trimmed = bound_view_within(kept.clone(), full - 1, true);
     assert!(
-        trimmed.messages[0].parts.len() < kept.messages[0].parts.len(),
-        "the display bound did not drop a part"
+        text_len(&trimmed.messages[0]) < text_len(&kept.messages[0]),
+        "the display bound gave up no text"
+    );
+    assert_eq!(
+        trimmed.messages[0].parts.last().unwrap().text,
+        "beta-beta",
+        "the display bound cut the newest text, not the oldest"
     );
     assert_eq!(
         trimmed.messages[0].retained_text,
@@ -3183,21 +3202,187 @@ fn the_text_budget_keeps_a_running_total() {
     assert!(trimmed.messages[0].retained_text < kept.messages[0].retained_text);
     assert_eq!(kept.messages[0].retained_text, text_len(&kept.messages[0]));
 
+    // Text and thought taking turns are a part each, and every one is kept.
     let mut capped_events = Vec::new();
-    for _ in 0..512 {
-        capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("x"))));
+    for at in 0..512 {
+        let chunk = if at % 2 == 0 {
+            MessageChunk::text("x")
+        } else {
+            MessageChunk::thought("x")
+        };
+        capped_events.push(event(ExecutionUpdate::Message(chunk)));
     }
     capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("y"))));
     let capped = shown(capped_events);
-    assert_eq!(capped.messages[0].parts.len(), 512);
-    assert!(capped.truncated);
-    assert!(capped.messages[0].parts.iter().all(|part| part.text == "x"));
-    assert_eq!(capped.messages[0].retained_text, 512);
+    assert_eq!(capped.messages[0].parts.len(), 513);
+    assert!(!capped.truncated);
+    assert_eq!(capped.messages[0].parts.last().unwrap().text, "y");
+    assert_eq!(capped.messages[0].retained_text, 513);
     assert_eq!(
         capped.messages[0].retained_text,
         text_len(&capped.messages[0]),
         "a part past the cap was still counted"
     );
+}
+
+/// A reply streamed in thousands of small chunks is one part holding all
+/// of it. Bounded for the wire past what one message carries, its oldest
+/// text gives way and its newest words stay.
+#[test]
+fn a_long_streamed_reply_is_one_whole_part() {
+    let words: Vec<String> = (0..5000)
+        .map(|at| format!(" w{at:04}yyyyyyyyyyyy"))
+        .collect();
+    let mut events: Vec<_> = vec![event(ExecutionUpdate::Message(MessageChunk::thought(
+        "thinking",
+    )))];
+    events.extend(
+        words
+            .iter()
+            .map(|word| event(ExecutionUpdate::Message(MessageChunk::text(word.clone())))),
+    );
+    let view = shown(events);
+    let message = &view.messages[0];
+    assert!(!view.truncated);
+    assert_eq!(message.parts.len(), 2);
+    assert_eq!(message.parts[1].text, words.concat());
+    assert_eq!(message.retained_text, text_len(message));
+    let bounded = bound_view(view.clone());
+    assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
+    // What gave way is read again as an earlier turn: nothing is lost.
+    assert!(!bounded.truncated);
+    assert!(bounded.earlier);
+    let kept = bounded.messages[0].parts.last().unwrap();
+    assert!(kept.text.ends_with(words.last().unwrap()));
+    let start = bounded.messages[0].starts_at.unwrap();
+    assert_eq!(start.part, 1, "the thought went first, whole");
+    assert_eq!(kept.text, words.concat()[start.byte..]);
+    assert!(bounded.messages[0].user_text.is_empty());
+    assert!(
+        kept.text.len() > MAX_VIEW_BYTES / 2,
+        "the bound gave up more than it had to"
+    );
+    assert_eq!(
+        bounded.messages[0].retained_text,
+        text_len(&bounded.messages[0])
+    );
+}
+
+/// Past the byte budget with one turn left, its older parts give way first,
+/// calls with their rows, to be read again as earlier: the reply is what a
+/// person reads.
+#[test]
+fn a_turns_older_calls_are_read_as_earlier_before_its_reply_gives_way() {
+    let mut events = Vec::new();
+    for call in 0..12 {
+        events.push(event(ExecutionUpdate::Tool(
+            ToolCallUpdate::new(
+                ToolCallId::new(format!("call-{call}")).unwrap(),
+                Some("shell".into()),
+                None,
+                Some(ToolStatus::Completed),
+                None,
+                None,
+            )
+            .with_content(vec![ToolContent::text("o".repeat(15_000))]),
+        )));
+    }
+    events.push(event(ExecutionUpdate::Message(MessageChunk::text(
+        "The reply a person reads.",
+    ))));
+    let view = bound_view(shown(events));
+    assert!(serde_json::to_vec(&view).unwrap().len() <= MAX_VIEW_BYTES);
+    assert!(!view.truncated);
+    assert!(view.earlier);
+    let said: String = view.messages[0]
+        .parts
+        .iter()
+        .map(|part| part.text.as_str())
+        .collect();
+    assert_eq!(said, "The reply a person reads.");
+    // Each call that went took its row: the view lists no call without one.
+    let calls = view.messages[0]
+        .parts
+        .iter()
+        .filter(|part| part.kind == "tool")
+        .count();
+    assert_eq!(view.tools.len(), calls);
+    assert_eq!(
+        view.messages[0].starts_at,
+        Some(ConversationPartPosition {
+            part: 12 - calls,
+            byte: 0
+        })
+    );
+}
+
+/// With one part left and that a call, its output gives way before the call
+/// does, and the row says its output was cut.
+#[test]
+fn the_last_calls_output_gives_way_before_the_call() {
+    let view = bound_view_within(
+        shown(vec![
+            event(ExecutionUpdate::Message(MessageChunk::text("Running it."))),
+            event(ExecutionUpdate::Tool(
+                ToolCallUpdate::new(
+                    ToolCallId::new("call").unwrap(),
+                    Some("shell".into()),
+                    None,
+                    Some(ToolStatus::Completed),
+                    None,
+                    None,
+                )
+                .with_content(vec![ToolContent::text("o".repeat(8_000))]),
+            )),
+        ]),
+        4_000,
+        true,
+    );
+    assert!(serde_json::to_vec(&view).unwrap().len() <= 4_000);
+    assert!(view.earlier);
+    assert!(!view.truncated);
+    assert_eq!(view.messages[0].parts.len(), 1);
+    assert_eq!(view.tools.len(), 1);
+    assert_eq!(view.tools[0].details, "[Output truncated]");
+}
+
+/// Streamed text joins the part before it only when it is the same kind,
+/// from the same message, with no steering message between: a person's
+/// message sent while the reply streamed stays where it was sent.
+#[test]
+fn streamed_text_joins_until_a_steering_message_falls_between() {
+    // The point is known from admission: a steer still queued while text
+    // streams splits it at the same place as one already injected.
+    for stage in [InvocationStage::Queued, InvocationStage::Injected] {
+        let mut snapshot = review_snapshot(vec![
+            event(ExecutionUpdate::Message(MessageChunk::text("before "))),
+            event(ExecutionUpdate::Message(MessageChunk::text("still before"))),
+            event(ExecutionUpdate::Message(MessageChunk::text("after"))),
+            event(ExecutionUpdate::Message(MessageChunk::text(" and on"))),
+        ]);
+        let target = snapshot.invocations[0].request.execution_id.clone();
+        let mut steering = scheduled("steering", stage, Some(target.as_str()));
+        steering
+            .scheduling
+            .truncate(if stage == InvocationStage::Queued {
+                1
+            } else {
+                2
+            });
+        steering.target_event_offset = Some(2);
+        snapshot.invocations.push(steering);
+        let view = shown_snapshot(&snapshot);
+        let parts: Vec<_> = view.messages[0]
+            .parts
+            .iter()
+            .map(|part| (part.offset, part.text.as_str()))
+            .collect();
+        assert_eq!(
+            parts,
+            vec![(0, "before still before"), (2, "after and on")],
+            "{stage:?}"
+        );
+    }
 }
 
 fn shown_snapshot(snapshot: &SessionSnapshot) -> ConversationView {

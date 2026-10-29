@@ -48,6 +48,8 @@ mod env_serve_command;
 #[cfg(unix)]
 mod github;
 mod github_relay;
+#[cfg(unix)]
+mod github_tools;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;

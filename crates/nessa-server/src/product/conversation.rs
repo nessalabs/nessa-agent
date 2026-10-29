@@ -19,7 +19,8 @@ use nessa_auth::domain::{MembershipRole, Resource};
 use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationModelChangeEffect, ConversationObservation,
-    ConversationObservationCursor, ConversationView as ApplicationConversationView,
+    ConversationObservationCursor, ConversationPartPosition, ConversationPoint,
+    ConversationView as ApplicationConversationView,
 };
 use nessa_protocol::product::generated::{
     ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
@@ -32,9 +33,9 @@ use nessa_protocol::product::generated::{
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
-    ConversationQuestionReviewResult, ConversationReadParams, ConversationReceiptParams,
-    ConversationReceiptResult, ConversationRemoveParams, ConversationRenameParams,
-    ConversationReorderParams, ConversationRevokePermissionRuleParams,
+    ConversationQuestionReviewResult, ConversationReadEarlierParams, ConversationReadParams,
+    ConversationReceiptParams, ConversationReceiptResult, ConversationRemoveParams,
+    ConversationRenameParams, ConversationReorderParams, ConversationRevokePermissionRuleParams,
     ConversationRevokePermissionRuleResult, ConversationSendParams,
     ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationSetModelParams, ConversationSetModelResult,
@@ -216,6 +217,20 @@ async fn answer(
                         "executionId": execution,
                     }),
                 ))
+            }
+            "conversation.readEarlier" => {
+                let params = target_params!(ConversationReadEarlierParams);
+                let id = conversation_id(&params.conversation_id)?;
+                if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
+                {
+                    return Ok(failure(&frame.id, code));
+                }
+                let before = point(params.before)?;
+                let after = params.after.map(point).transpose()?;
+                let page = service
+                    .read_earlier(&id, &caller(frame.id.clone()), &before, after.as_ref())
+                    .await?;
+                Ok(success(&frame.id, &page))
             }
             "conversation.read" => {
                 let params = target_params!(ConversationReadParams);
@@ -1384,6 +1399,25 @@ fn mutation_failure(failure: MutationFailure<ConversationError>) -> Conversation
 
 pub(super) fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
+}
+
+/// A point in a conversation's history, as a reader names it.
+fn point(
+    value: nessa_protocol::product::generated::ConversationPoint,
+) -> Result<ConversationPoint, ConversationError> {
+    let place = |value: u64| usize::try_from(value).map_err(|_| ConversationError::InvalidInput);
+    Ok(ConversationPoint {
+        execution_id: value.execution_id,
+        at: value
+            .at
+            .map(|at| {
+                Ok::<_, ConversationError>(ConversationPartPosition {
+                    part: place(at.part)?,
+                    byte: place(at.byte)?,
+                })
+            })
+            .transpose()?,
+    })
 }
 
 /// The authenticated catalog owns display facts and preset descriptions. The

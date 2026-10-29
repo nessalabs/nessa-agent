@@ -162,6 +162,15 @@ impl crate::github::application::GithubAudit for GithubEvidence {
 struct PendingGithub;
 #[async_trait::async_trait]
 impl crate::github::application::GithubApi for PendingGithub {
+    async fn read_repository(
+        &self,
+        _: &crate::github::domain::AccessToken,
+        _: &crate::github::domain::GithubRepository,
+        _: crate::github::domain::GithubReadKind,
+    ) -> Result<serde_json::Value, crate::github::application::GithubReadFailure> {
+        panic!("locked attempt must not read repository")
+    }
+
     async fn request_device_code(
         &self,
     ) -> Result<
