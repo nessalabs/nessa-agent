@@ -240,8 +240,7 @@ export function resendMessage({
  * says why while it shows the session); `unknown` when it is not known to be
  * taken (`outcomeOf`); `answering` already, a first answer on
  * its way; or `not-asked` — the window holds no such approval: the session is
- * not on screen (`onScreen`: in a pane, in the open overview, or as one of
- * the session list's request cards), or its
+ * not on screen (`onScreen`: in a pane or in the open overview), or its
  * conversation has moved on. Nothing is sent
  * then, and the source records nothing, since nothing was asked of it.
  */

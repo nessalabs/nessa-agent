@@ -163,8 +163,8 @@ fn a_bare_status_update_moves_the_status_and_adds_no_part() {
 
 /// Row: the completion merges into the call's one entry — its result and
 /// status replace what was there, a field it leaves out stays — and adds no
-/// part. The part stays at the announcement's offset, and the parts after it
-/// keep theirs.
+/// part. The part stays at the announcement's offset; the text streamed
+/// around the completion is one part, as it reads.
 #[test]
 fn a_completion_merges_into_the_one_entry_at_the_announcements_place() {
     let id = ToolCallId::new("call").unwrap();
@@ -190,7 +190,8 @@ fn a_completion_merges_into_the_one_entry_at_the_announcements_place() {
         .iter()
         .map(|part| (part.kind.as_str(), part.offset))
         .collect();
-    assert_eq!(parts, vec![("tool", 0), ("text", 1), ("text", 3)]);
+    assert_eq!(parts, vec![("tool", 0), ("text", 1)]);
+    assert_eq!(shown.messages[0].parts[1].text, "Looking. Found two.");
     assert_eq!(shown.tools.len(), 1);
     assert_eq!(shown.tools[0].title, "mcp.mcptest.report_rows");
     assert_eq!(shown.tools[0].status, "completed");
@@ -257,34 +258,26 @@ fn an_update_after_its_entry_was_let_go_adds_no_second_part() {
         .any(|tool| tool.tool_id == "call-0" && tool.status == "completed"));
 }
 
-/// Row: a turn holds at most 512 parts, and a full turn never frees one. A
-/// call that arrives when it is full gets no part on any of its updates; its
-/// entry is still kept, and the view says it left something out. The other
-/// way: the calls before it each kept their one part.
+/// Row: a turn lists a part for every call it makes, however many. A
+/// call's later update adds no second part.
 #[test]
-fn a_call_past_the_turns_part_bound_gets_no_part() {
+fn every_call_keeps_its_part() {
     let mut events: Vec<_> = (0..512)
         .map(|call| update(&format!("call-{call}"), Some(ToolStatus::Completed)))
         .collect();
-    let full = committed_tool_view(&events);
-    let parts = tool_parts(&full, 0);
-    assert_eq!(parts.len(), 512);
-    assert!(parts
-        .iter()
-        .enumerate()
-        .all(|(call, (id, offset))| { *id == format!("call-{call}") && *offset == call }));
     for status in [ToolStatus::Running, ToolStatus::Completed] {
         events.push(update("late", Some(status)));
     }
+    events.push(update("call-0", Some(ToolStatus::Completed)));
     let shown = committed_tool_view(&events);
     let parts = tool_parts(&shown, 0);
-    assert_eq!(parts.len(), 512);
-    assert!(parts.iter().all(|(id, _)| id != "late"));
+    assert_eq!(parts.len(), 513);
+    assert_eq!(parts.first().map(|(id, _)| id.as_str()), Some("call-0"));
+    assert_eq!(parts.last().map(|(id, _)| id.as_str()), Some("late"));
     assert!(shown
         .tools
         .iter()
         .any(|tool| tool.tool_id == "late" && tool.status == "completed"));
-    assert!(shown.truncated);
 }
 
 /// A turn's calls in `execution`, each a running update then a completion.

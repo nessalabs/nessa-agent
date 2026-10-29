@@ -1155,7 +1155,12 @@ impl<P: AcpProfile> Worker<P> {
                     return Err(AgentError::Closed);
                 },
                 _ = wait_for_deadline(&*self.config.clock, Some(deadline)) => { self.failure_cause = ObservationFailureCause::DeadlineExceeded; self.cancellation_cause = Some((PermissionCancellationReason::deadline_exceeded(), CancellationOrigin::Runtime)); return Err(AgentError::Deadline); },
-                message = self.reader.next() => message?,
+                message = next_with_room(
+                    &self.events,
+                    &mut self.reader,
+                    self.config.max_frame_bytes,
+                    &*self.config.clock,
+                ) => message?,
             };
             if first_frame {
                 tracing::info!(target: "nessa_sdk::timing", phase = method, request_id = id,
@@ -1432,7 +1437,12 @@ impl<P: AcpProfile> Worker<P> {
                     _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => Input::Deadline,
                     _ = wait_for_deadline(&*self.config.clock, permission_deadline), if permission_deadline.is_some() => Input::PermissionDeadline,
                     command = self.commands.recv(), if !self.closing => Input::Command(command),
-                    message = self.reader.next() => Input::Message(message),
+                    message = next_with_room(
+                    &self.events,
+                    &mut self.reader,
+                    self.config.max_frame_bytes,
+                    &*self.config.clock,
+                ) => Input::Message(message),
                 }
             };
             match input {
@@ -1668,6 +1678,25 @@ impl<P: AcpProfile> Worker<P> {
                     ));
                     return Err(AgentError::Deadline.into());
                 }
+                if !self.events.has_room(self.config.max_frame_bytes) {
+                    // Ready output waits for the consumer to take events, as in
+                    // the drive loop; closing and both deadlines still win.
+                    let deadline = self
+                        .current_deadline()
+                        .into_iter()
+                        .chain(dispatch_deadline)
+                        .min();
+                    tokio::select! { biased;
+                        _ = self.close_requested.changed() => {
+                            return Ok(DispatchReadiness::Interrupted(AgentError::Closed));
+                        }
+                        _ = self.events.closed() => {
+                            return Ok(DispatchReadiness::Interrupted(AgentError::Backpressure));
+                        }
+                        _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => continue,
+                        _ = self.events.room(self.config.max_frame_bytes, || consumer_stall(&*self.config.clock)) => {}
+                    }
+                }
                 let next = poll_fn(|cx| {
                     // One bounded reader poll must distinguish input readiness from
                     // Tokio's task budget; explicit decoder yields remain observable.
@@ -1705,22 +1734,27 @@ impl<P: AcpProfile> Worker<P> {
                             .chain(dispatch_deadline)
                             .min();
                         let message = tokio::select! { biased;
-                            _ = self.close_requested.changed() => {
-                                return Ok(DispatchReadiness::Interrupted(AgentError::Closed));
-                            }
-                            _ = self.events.closed() => {
-                                return Ok(DispatchReadiness::Interrupted(AgentError::Backpressure));
-                            }
-                            _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => {
-                                self.failure_cause = ObservationFailureCause::DeadlineExceeded;
-                                self.cancellation_cause = Some((
-                                    PermissionCancellationReason::deadline_exceeded(),
-                                    CancellationOrigin::Runtime,
-                                ));
-                                return Err(AgentError::Deadline.into());
-                            }
-                            message = self.reader.next() => message,
-                        };
+                                    _ = self.close_requested.changed() => {
+                                        return Ok(DispatchReadiness::Interrupted(AgentError::Closed));
+                                    }
+                                    _ = self.events.closed() => {
+                                        return Ok(DispatchReadiness::Interrupted(AgentError::Backpressure));
+                                    }
+                                    _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => {
+                                        self.failure_cause = ObservationFailureCause::DeadlineExceeded;
+                                        self.cancellation_cause = Some((
+                                            PermissionCancellationReason::deadline_exceeded(),
+                                            CancellationOrigin::Runtime,
+                                        ));
+                                        return Err(AgentError::Deadline.into());
+                                    }
+                                    message = next_with_room(
+                            &self.events,
+                            &mut self.reader,
+                            self.config.max_frame_bytes,
+                            &*self.config.clock,
+                        ) => message,
+                                };
                         self.message(execution, message?, deadline).await?;
                     }
                     None => {
@@ -4851,6 +4885,26 @@ impl<P: AcpProfile> Worker<P> {
     }
 }
 
+/// How long a read waits for the event consumer to take one more event before
+/// it reads the agent's next frame anyway.
+const CONSUMER_PATIENCE: Duration = Duration::from_secs(1);
+/// The agent's next frame, read once the event queue has room for it, or once
+/// the consumer has taken nothing for [`CONSUMER_PATIENCE`]. A burst of output
+/// then waits in the pipe while a slow consumer catches up, instead of
+/// failing the turn with `Backpressure` on a full queue; a consumer that has
+/// stopped still fails it.
+async fn next_with_room(
+    events: &EventSender,
+    reader: &mut Reader<ProcessOutput>,
+    frame_bytes: usize,
+    clock: &dyn Clock,
+) -> Result<Envelope, AgentError> {
+    events.room(frame_bytes, || consumer_stall(clock)).await;
+    reader.next().await
+}
+fn consumer_stall(clock: &dyn Clock) -> ClockSleep {
+    clock.sleep_until(clock.now() + CONSUMER_PATIENCE)
+}
 /// No artificial far-future timestamp: no configured limit means no timer.
 fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> ClockSleep {
     match deadline {

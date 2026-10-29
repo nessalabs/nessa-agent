@@ -202,3 +202,33 @@ fn review_snapshots_charge_accumulated_observations_and_cancellation_evidence() 
         [ExecutionAuditRecord::SessionClosed(_)]
     ));
 }
+
+/// A full queue waits while its consumer takes events, until the headroom is
+/// free, and stops waiting once the consumer takes nothing for a while.
+#[tokio::test(start_paused = true)]
+async fn room_waits_for_a_moving_consumer_and_gives_up_on_a_stopped_one() {
+    let budget = budget(MAX_QUEUED_BYTES);
+    let (sender, mut receiver) = budget.channel(HEADROOM * 2);
+    for _ in 0..HEADROOM * 2 {
+        assert_eq!(sender.try_send(text_event()), Ok(()));
+    }
+    let patience = std::time::Duration::from_secs(1);
+    let consumer = tokio::spawn(async move {
+        for _ in 0..HEADROOM {
+            tokio::time::sleep(patience / 2).await;
+            receiver.recv().await.unwrap();
+        }
+        receiver
+    });
+    let started = tokio::time::Instant::now();
+    sender.room(0, || tokio::time::sleep(patience)).await;
+    assert_eq!(sender.sender.capacity(), HEADROOM);
+    assert!(started.elapsed() >= patience / 2 * HEADROOM as u32);
+    let _receiver = consumer.await.unwrap();
+    // The consumer has stopped: one patience, then the wait ends unfilled.
+    assert_eq!(sender.try_send(text_event()), Ok(()));
+    let started = tokio::time::Instant::now();
+    sender.room(0, || tokio::time::sleep(patience)).await;
+    assert_eq!(started.elapsed(), patience);
+    assert_eq!(sender.sender.capacity(), HEADROOM - 1);
+}

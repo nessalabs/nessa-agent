@@ -33,7 +33,7 @@ import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { WindowArrangement } from "../model/shown-window"
 import { keepDrafts, type Draft } from "../model/session-lifecycle"
-import { waitingInList, type SessionView } from "../model/session-groups"
+import type { SessionView } from "../model/session-groups"
 import type { ChatPanel } from "../model/chat-panel"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import { settledBy, type AccessChoice } from "../model/access"
@@ -532,31 +532,13 @@ export function overviewShows(state: WorkspaceState, sessionId: string): boolean
 }
 
 /**
- * The sessions the session list asks the person about from request cards:
- * in three columns, the list drawn and not under the overview, its "Needs
- * you" rows as its search lists them (`waitingInList`), the newest first, at
- * most `retention.listConversations`. The one rule for which rows the list
- * draws as cards, what they answer (`onScreen`), and whose conversations the
- * window reads and keeps for them (`shownIds`).
- */
-export function listAskIds(state: WorkspaceState): string[] {
-  if (state.arrangement !== "columns" || state.content === "agents") return []
-  if (!drawn(state.chrome.sessionList)) return []
-  return waitingInList(listedSessions(state), state.view)
-    .slice(0, retention.listConversations)
-    .map((session) => session.id)
-}
-
-/**
- * On screen: in a pane, in the open overview, or asked about by the session
- * list. Only an approval on screen is answered (`approve`, `deny`), so an
- * agent answers what it has opened.
+ * On screen: in a pane, or in the open overview. Only an approval on screen
+ * is answered (`approve`, `deny`), so an agent answers what it has opened.
  */
 export function onScreen(state: WorkspaceState, sessionId: string): boolean {
   return (
     (state.panes !== null && paneShowingSession(state.panes, sessionId) !== undefined) ||
-    overviewShows(state, sessionId) ||
-    listAskIds(state).includes(sessionId)
+    overviewShows(state, sessionId)
   )
 }
 
@@ -579,15 +561,11 @@ export function overviewShownIds(state: WorkspaceState): string[] {
 
 /**
  * The sessions on screen whose conversations the window keeps whatever
- * their age: the panes' (drafts among them), the overview's and the
- * session list's requests, each bounded.
+ * their age: the panes' (drafts among them) and the overview's, each
+ * bounded.
  */
 export function shownIds(state: WorkspaceState): Set<string> {
-  return new Set([
-    ...paneIds(state.panes),
-    ...overviewShownIds(state),
-    ...listAskIds(state),
-  ])
+  return new Set([...paneIds(state.panes), ...overviewShownIds(state)])
 }
 
 /**

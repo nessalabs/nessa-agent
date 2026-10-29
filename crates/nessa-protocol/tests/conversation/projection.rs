@@ -3019,6 +3019,8 @@ fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {
     message.parts.iter().map(|part| part.text.len()).sum()
 }
 
+/// A turn keeps all of its text: nothing is cut while it is folded, and the
+/// running total always matches what its parts hold.
 #[test]
 fn the_text_budget_keeps_a_running_total() {
     let limit = MAX_TEXT * 2;
@@ -3037,8 +3039,8 @@ fn the_text_budget_keeps_a_running_total() {
     let over = shown(vec![event(ExecutionUpdate::Message(MessageChunk::text(
         format!("{whole}b"),
     )))]);
-    assert!(over.truncated);
-    assert_eq!(over.messages[0].parts[0].text.len(), limit);
+    assert!(!over.truncated, "a long reply was cut");
+    assert_eq!(over.messages[0].parts[0].text, format!("{whole}b"));
     assert_eq!(over.messages[0].retained_text, text_len(&over.messages[0]));
 
     let emoji = shown(vec![
@@ -3047,9 +3049,13 @@ fn the_text_budget_keeps_a_running_total() {
         ))),
         event(ExecutionUpdate::Message(MessageChunk::text("😀"))),
     ]);
-    assert!(emoji.truncated);
-    assert_eq!(emoji.messages[0].parts[1].text, "");
-    assert!(text_len(&emoji.messages[0]) <= limit);
+    assert!(!emoji.truncated);
+    // One part: the newest chunk joined it whole.
+    assert_eq!(emoji.messages[0].parts.len(), 1);
+    assert_eq!(
+        emoji.messages[0].parts[0].text,
+        format!("{}😀", "a".repeat(limit - 1))
+    );
     assert_eq!(
         emoji.messages[0].retained_text,
         text_len(&emoji.messages[0])
@@ -3094,9 +3100,9 @@ fn the_text_budget_keeps_a_running_total() {
     let full_unconfirmed = shown(vec![selected_event.clone(), unconfirmed.clone()]).messages[0]
         .parts[0]
         .text
-        .len();
-    assert!(full_unconfirmed > room);
-    let clipped_notice = shown(vec![
+        .clone();
+    assert!(full_unconfirmed.len() > room);
+    let whole_notice = shown(vec![
         event(ExecutionUpdate::Message(MessageChunk::text(
             "y".repeat(limit - room),
         ))),
@@ -3104,15 +3110,17 @@ fn the_text_budget_keeps_a_running_total() {
         unconfirmed,
     ]);
     assert_eq!(
-        clipped_notice.messages[0].parts[1].text.len(),
-        room,
-        "a notice longer than the room the old one held was emptied"
+        whole_notice.messages[0].parts[1].text, full_unconfirmed,
+        "a notice was cut to the room the streamed text left it"
     );
-    assert!(!clipped_notice.messages[0].parts[1].text.is_empty());
-    assert_eq!(clipped_notice.messages[0].retained_text, limit);
+    assert!(!whole_notice.truncated);
     assert_eq!(
-        clipped_notice.messages[0].retained_text,
-        text_len(&clipped_notice.messages[0])
+        whole_notice.messages[0].retained_text,
+        limit - room + full_unconfirmed.len()
+    );
+    assert_eq!(
+        whole_notice.messages[0].retained_text,
+        text_len(&whole_notice.messages[0])
     );
 
     let events = vec![
@@ -3161,7 +3169,7 @@ fn the_text_budget_keeps_a_running_total() {
     );
 
     let kept = shown(vec![
-        event(ExecutionUpdate::Message(MessageChunk::text("alpha"))),
+        event(ExecutionUpdate::Message(MessageChunk::thought("alpha"))),
         event(ExecutionUpdate::Message(MessageChunk::text("beta-beta"))),
     ]);
     assert_eq!(kept.messages.len(), 1);
@@ -3169,8 +3177,13 @@ fn the_text_budget_keeps_a_running_total() {
     let full = serde_json::to_vec(&kept).unwrap().len();
     let trimmed = bound_view_within(kept.clone(), full - 1, true);
     assert!(
-        trimmed.messages[0].parts.len() < kept.messages[0].parts.len(),
-        "the display bound did not drop a part"
+        text_len(&trimmed.messages[0]) < text_len(&kept.messages[0]),
+        "the display bound gave up no text"
+    );
+    assert_eq!(
+        trimmed.messages[0].parts.last().unwrap().text,
+        "beta-beta",
+        "the display bound cut the newest text, not the oldest"
     );
     assert_eq!(
         trimmed.messages[0].retained_text,
@@ -3180,21 +3193,145 @@ fn the_text_budget_keeps_a_running_total() {
     assert!(trimmed.messages[0].retained_text < kept.messages[0].retained_text);
     assert_eq!(kept.messages[0].retained_text, text_len(&kept.messages[0]));
 
+    // Text and thought taking turns are a part each, and every one is kept.
     let mut capped_events = Vec::new();
-    for _ in 0..512 {
-        capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("x"))));
+    for at in 0..512 {
+        let chunk = if at % 2 == 0 {
+            MessageChunk::text("x")
+        } else {
+            MessageChunk::thought("x")
+        };
+        capped_events.push(event(ExecutionUpdate::Message(chunk)));
     }
     capped_events.push(event(ExecutionUpdate::Message(MessageChunk::text("y"))));
     let capped = shown(capped_events);
-    assert_eq!(capped.messages[0].parts.len(), 512);
-    assert!(capped.truncated);
-    assert!(capped.messages[0].parts.iter().all(|part| part.text == "x"));
-    assert_eq!(capped.messages[0].retained_text, 512);
+    assert_eq!(capped.messages[0].parts.len(), 513);
+    assert!(!capped.truncated);
+    assert_eq!(capped.messages[0].parts.last().unwrap().text, "y");
+    assert_eq!(capped.messages[0].retained_text, 513);
     assert_eq!(
         capped.messages[0].retained_text,
         text_len(&capped.messages[0]),
         "a part past the cap was still counted"
     );
+}
+
+/// A reply streamed in thousands of small chunks is one part holding all
+/// of it. Bounded for the wire past what one message carries, its oldest
+/// text gives way and its newest words stay.
+#[test]
+fn a_long_streamed_reply_is_one_whole_part() {
+    let words: Vec<String> = (0..5000)
+        .map(|at| format!(" w{at:04}yyyyyyyyyyyy"))
+        .collect();
+    let mut events: Vec<_> = vec![event(ExecutionUpdate::Message(MessageChunk::thought(
+        "thinking",
+    )))];
+    events.extend(
+        words
+            .iter()
+            .map(|word| event(ExecutionUpdate::Message(MessageChunk::text(word.clone())))),
+    );
+    let view = shown(events);
+    let message = &view.messages[0];
+    assert!(!view.truncated);
+    assert_eq!(message.parts.len(), 2);
+    assert_eq!(message.parts[1].text, words.concat());
+    assert_eq!(message.retained_text, text_len(message));
+    let bounded = bound_view(view.clone());
+    assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
+    assert!(bounded.truncated);
+    let kept = bounded.messages[0].parts.last().unwrap();
+    assert!(kept.text.ends_with(words.last().unwrap()));
+    assert!(
+        kept.text.len() > MAX_VIEW_BYTES / 2,
+        "the bound gave up more than it had to"
+    );
+    assert_eq!(
+        bounded.messages[0].retained_text,
+        text_len(&bounded.messages[0])
+    );
+}
+
+/// Past the byte budget with one turn left, the tools' output gives way
+/// before the turn's text: the reply is what a person reads, and an output
+/// is read only on asking.
+#[test]
+fn tool_output_gives_way_before_the_reply() {
+    let mut events = Vec::new();
+    for call in 0..12 {
+        events.push(event(ExecutionUpdate::Tool(
+            ToolCallUpdate::new(
+                ToolCallId::new(format!("call-{call}")).unwrap(),
+                Some("shell".into()),
+                None,
+                Some(ToolStatus::Completed),
+                None,
+                None,
+            )
+            .with_content(vec![ToolContent::text("o".repeat(15_000))]),
+        )));
+    }
+    events.push(event(ExecutionUpdate::Message(MessageChunk::text(
+        "The reply a person reads.",
+    ))));
+    let view = bound_view(shown(events));
+    assert!(serde_json::to_vec(&view).unwrap().len() <= MAX_VIEW_BYTES);
+    assert!(view.truncated);
+    let said: String = view.messages[0]
+        .parts
+        .iter()
+        .map(|part| part.text.as_str())
+        .collect();
+    assert_eq!(said, "The reply a person reads.");
+    assert_eq!(
+        view.tools.len(),
+        12,
+        "a tool row was let go before its output"
+    );
+    assert!(view
+        .tools
+        .iter()
+        .any(|tool| tool.details == "[Output truncated]"));
+}
+
+/// Streamed text joins the part before it only when it is the same kind,
+/// from the same message, with no steering message between: a person's
+/// message sent while the reply streamed stays where it was sent.
+#[test]
+fn streamed_text_joins_until_a_steering_message_falls_between() {
+    // The point is known from admission: a steer still queued while text
+    // streams splits it at the same place as one already injected.
+    for stage in [InvocationStage::Queued, InvocationStage::Injected] {
+        let mut snapshot = review_snapshot(vec![
+            event(ExecutionUpdate::Message(MessageChunk::text("before "))),
+            event(ExecutionUpdate::Message(MessageChunk::text("still before"))),
+            event(ExecutionUpdate::Message(MessageChunk::text("after"))),
+            event(ExecutionUpdate::Message(MessageChunk::text(" and on"))),
+        ]);
+        let target = snapshot.invocations[0].request.execution_id.clone();
+        let mut steering = scheduled("steering", stage, Some(target.as_str()));
+        steering
+            .scheduling
+            .truncate(if stage == InvocationStage::Queued {
+                1
+            } else {
+                2
+            });
+        steering.target_event_offset = Some(2);
+        snapshot.invocations.push(steering);
+        let view = shown_snapshot(&snapshot);
+        let parts: Vec<_> = view.messages[0]
+            .parts
+            .iter()
+            .map(|part| (part.offset, part.text.as_str()))
+            .collect();
+        assert_eq!(
+            parts,
+            vec![(0, "before still before"), (2, "after and on")],
+            "{stage:?}"
+        );
+    }
 }
 
 fn shown_snapshot(snapshot: &SessionSnapshot) -> ConversationView {

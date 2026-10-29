@@ -2193,28 +2193,16 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `empty`. "No linked devices yet." and Link a Device, no Done and no
   Share; the link closes the dialog and opens Settings on Linked devices.
 
-## Session list: pinned first, request cards (#1084)
+## Session list: pinned first, waiting rows (#1084)
 
 - [ ] **In three columns the sidebar lists channels only; a channel's pinned
   sessions lead its list under "Pinned", each listed once.** _Check:_
   `columns.mjs` (`channels-alone`); Sessions in sidebar still discloses a
   channel's sessions.
-- [ ] **Each waiting row the list asks about is a request card, answered from
-  the list.** It reads the command as the transcript card does
-  (`approvalGist`), offers the review's refusal and primary allow on one row,
-  every other answer in the menu beside them.
-  It allows only a request it shows whole, by a rule over the request
-  (`allowableFromList`): nothing in the tool's input but the command, at
-  most three lines and 180 characters; any other offers its refusals and
-  Review in Chat. _Check:_ `columns.mjs` (`list-request`: Allow moves
-  the row out of Needs you; `list-request-claude`: Claude's five-answer shell
-  review at the list's narrowest, read as the transcript reads it, answers
-  that fit their words, under 260px). These request-card checks run in columns
-  layout; sidebar layout has no separate session list and is reported as not run.
-  `conversation-stress.mjs`
-  (`listAnswer`); unit tests `list-request.test.tsx` (only what is drawn is
-  asked: never a pinned row, a row the search hides, or a folded list's; the
-  bound of 12; a card's controls keep their keys).
+- [ ] **A waiting row in Needs you is a plain session row.** No answer
+  buttons or question forms are drawn in the list; clicking the row opens the
+  chat, where the review or question is answered, and the answered row leaves
+  Needs you. _Check:_ `conversation-stress.mjs` (`waitingRow`).
 
 ## The window never scrolls sideways (#1084)
 
