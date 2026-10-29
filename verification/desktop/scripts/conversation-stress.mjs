@@ -2142,6 +2142,7 @@ const steps = {
           ...(kind === "compact" ? { expectedVersion: process.version } : {}),
         })
         await run.page
+          .locator(css.focusedPane)
           .getByText(expectedReply, { exact: true })
           .waitFor({ timeout: 30_000 })
         if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
