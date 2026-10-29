@@ -528,7 +528,7 @@ export interface ConversationUsageLimit {
 export interface ConversationMessage {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** User input text; empty for a message of images alone. */
+  /** User input text, whole; empty for a message of images alone. Its only bound is the frame's. */
   userText: string
   /** Images the user sent with this turn, in attachment order. */
   attachments: ImageAttachment[]
@@ -1315,7 +1315,7 @@ export interface ConversationPart {
   offset: number
   /** Text, exposed thought content, a tool call, or a Nessa-owned runtime notice. A tool call is one part however many updates it has, at its first update's offset; its current state is its entry in tools. */
   kind: "text" | "thought" | "tool" | "local_notice"
-  /** Exact text fragment for text, thought, or local notice observations; empty for a tool call. */
+  /** Exact text for text, thought, or local notice observations; empty for a tool call. Adjacent streamed chunks of one kind are joined into one part, so its only bound is the frame's. */
   text: string
   /** The tool call's identity, which names its entry in tools; empty otherwise. */
   toolId: string
