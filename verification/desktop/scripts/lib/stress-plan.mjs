@@ -105,9 +105,13 @@ export const KNOBS = {
     default: 1,
     what: 'times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving; "nessa Studio" stays while a column holds the corner and goes over the panes alone',
   },
-  listAnswers: {
+  waitingRows: {
     default: 1,
-    what: "reviews answered from the session list's Needs you card: it reads the transcript card's command, and its answer settles the turn",
+    what: "reviews waiting under Needs you as a plain session row, no answers or form beside it; opened from the row and answered in the chat, the row leaves Needs you",
+  },
+  streams: {
+    default: 1,
+    what: "replies streamed in over 512 small chunks and over 16 KB: the newest words are drawn live, still after the sidebar closes and opens, and a fresh read holds every word, nothing left out",
   },
   panels: {
     default: 1,
@@ -245,7 +249,8 @@ export function plan(knobs) {
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.rails, () => ({ kind: "rail" }))
   add(knobs.panels, () => ({ kind: "panel" }))
-  add(knobs.listAnswers, () => ({ kind: "listAnswer" }))
+  add(knobs.waitingRows, () => ({ kind: "waitingRow" }))
+  add(knobs.streams, () => ({ kind: "stream" }))
   add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
@@ -292,7 +297,7 @@ export function plan(knobs) {
     } else if (
       step.kind === "reviews" ||
       step.kind === "large" ||
-      step.kind === "listAnswer" ||
+      step.kind === "waitingRow" ||
       step.kind === "model"
     ) {
       // These are about cards being shown, so they run where the agent asks.

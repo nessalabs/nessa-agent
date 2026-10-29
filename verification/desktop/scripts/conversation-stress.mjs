@@ -238,11 +238,14 @@ import { MODELS, repoRoot } from "../../../scripts/mcp-test-server/local-gateway
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
+  STREAM_HOLD_MS,
+  STREAM_WORDS,
   STRESS,
   TABLE_LINES,
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
+  streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { browse } from "./lib/mdns-probe.mjs"
@@ -1938,46 +1941,108 @@ const steps = {
     )
   },
 
-  async listAnswer(run, step, failures) {
+  async waitingRow(run, step, failures) {
     const text = prompt(run, STRESS.permission, step)
     const seen = await send(run, run.main.id, text, failures)
-    // The conversation asks; the session list's Needs you card asks the same.
-    const listCard = run.page.locator(
-      `[data-list-group="needs-you"] .workspace-request-card:has([data-session-row="${run.main.id}"])`,
-    )
-    const shown = await listCard
-      .locator(".workspace-request")
-      .first()
+    // The conversation asks; the session list only lists it under Needs you.
+    const group = run.page.locator('[data-list-group="needs-you"]')
+    const row = group.locator(`[data-session-row="${run.main.id}"]`)
+    const listed = await row
       .waitFor({ timeout: 30_000 })
       .then(() => true)
       .catch(() => false)
-    if (!shown) {
-      failures.push("the session list shows no request card for the waiting conversation")
+    if (!listed) {
+      failures.push("the waiting conversation is not listed under Needs you")
       return
     }
-    const words = async (locator) =>
-      ((await locator.first().textContent()) ?? "").replace(/\s+/g, " ").trim()
-    const fromList = await words(listCard.locator(".workspace-approval-command"))
-    const fromPane = await words(
-      run.page.locator(`${css.agentApproval} .workspace-approval-command`),
-    )
-    if (fromList !== fromPane)
+    // A plain row: nothing of the request, no answers, no form beside it.
+    const drawn = await group.evaluate((element) => ({
+      role: element.getAttribute("role"),
+      controls: [...element.querySelectorAll("button, input, textarea")]
+        .filter((control) => !control.closest("[data-session-row]"))
+        .map((control) => control.getAttribute("aria-label") ?? control.textContent),
+      asks: element.querySelectorAll(".workspace-approval-command, .workspace-question")
+        .length,
+    }))
+    if (drawn.role !== "listbox") failures.push(`Needs you is a ${drawn.role}`)
+    if (drawn.controls.length || drawn.asks)
       failures.push(
-        `the list's card reads "${fromList}", the conversation's "${fromPane}"`,
+        `Needs you draws the request beside its row: ${JSON.stringify(drawn.controls)}`,
       )
-    await listCard
-      .locator(`button[data-answer="${step.answer === "allow" ? "once" : "deny"}"]`)
-      .first()
-      .click()
+    // Opened from its row, the chat asks, and is answered there.
+    await row.click()
+    await answerCard(run, run.main.id, step.answer, failures, "Report the rows")
     await settled(run, run.main.id, seen, text, "completed", failures)
     await expectShown(
       run.page,
       step.answer === "allow" ? SAYS.allowed : SAYS.denied,
       failures,
     )
-    // Answered, the card goes with the row out of Needs you.
-    if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
-      failures.push("the answered card is still in Needs you")
+    if (!(await waitFor(async () => (await row.count()) === 0, 10_000)))
+      failures.push("the answered row is still in Needs you")
+  },
+
+  async stream(run, step, failures) {
+    const text = prompt(run, STRESS.stream, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const last = streamWord(STREAM_WORDS - 1).trim()
+    // Live: the reply's newest words are drawn while the turn still runs,
+    // though it streamed more chunks and text than a message keeps.
+    if (!(await shows(run.page, last, STREAM_HOLD_MS + 20_000)))
+      failures.push(`while streaming, the window never showed the newest words (${last})`)
+    else if ((await pageText(run.page)).includes(fold(SAYS.streamEnd)))
+      failures.push("the newest words were drawn only after the turn ended")
+    // The sidebar closed and opened again draws the same reply, not an
+    // emptied one.
+    await run.page.keyboard.press(keys.toggleSidebar)
+    await sleep(400)
+    await run.page.keyboard.press(keys.toggleSidebar)
+    if (!(await shows(run.page, last, 10_000)))
+      failures.push("after the sidebar closed and opened, the newest words are gone")
+    let { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(run.page, SAYS.streamEnd, failures)
+    const whole = `${SAYS.stream}${text}${Array.from(
+      { length: STREAM_WORDS },
+      (_, index) => streamWord(index),
+    ).join("")} ${SAYS.streamEnd}`
+    const reply = (view) => {
+      const answer = view.messages.find((each) => each.executionId === turn?.executionId)
+      return {
+        answer,
+        said: (answer?.parts ?? []).map((part) => part.text ?? "").join(""),
+      }
+    }
+    // The main chat holds more than this reply, so its view may begin partway
+    // through it: what it must hold is the reply's end, the newest words.
+    const { said: newest } = reply(await run.client.conversation.read(run.main.id))
+    if (!newest || !whole.endsWith(newest))
+      failures.push(
+        `the main chat's read reply does not end with its newest words: ${JSON.stringify(newest.slice(-40))}`,
+      )
+    // A chat of this reply alone holds all of it: a fresh read, checked as the
+    // window checks a view, holds every word in order, joined into a few parts.
+    const conversationId = randomUUID()
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, text),
+    )
+    const alone = await settled(
+      run,
+      conversationId,
+      new Set(),
+      text,
+      "completed",
+      failures,
+    )
+    turn = alone.turn
+    const { answer, said } = reply(await run.client.conversation.read(conversationId))
+    if (said !== whole)
+      failures.push(
+        `the read reply is ${said.length} of ${whole.length} bytes, ending ${JSON.stringify(said.slice(-40))}`,
+      )
+    if ((answer?.parts.length ?? 0) > 4)
+      failures.push(`the reply is ${answer?.parts.length} parts, not joined`)
   },
 
   async reviews(run, step, failures) {

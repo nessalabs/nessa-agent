@@ -29,6 +29,7 @@ export const STRESS = {
   await: "stress await",
   watch: "stress watch",
   long: "stress long",
+  stream: "stress stream",
   window: "stress window",
   table: "stress table",
   trace: "stress trace",
@@ -73,6 +74,8 @@ export const SAYS = {
   backgroundFinished: "Background outcome received.",
   watched: "Watched: ",
   long: "Long answer: ",
+  stream: "Streamed: ",
+  streamEnd: "Stream finished.",
   window: "Window: ",
   table: "Tables: ",
   trace: "Traced: ",
@@ -108,6 +111,24 @@ export const TABLE_LINES = [
  * wait out their `waitMs`.
  */
 export const WATCH_CALLS = 12
+
+/**
+ * A `stream` turn's reply: `STREAM_WORDS` small chunks, as a provider streams
+ * a long answer a few characters at a time: 1,200 chunks, about 43 KB. That
+ * is more than 512 chunks and past the 32 KB a part's text was once held to on
+ * the wire, so a reply joined into one part longer than that still reaches
+ * the window whole. Each word names its place, so a check can see which was
+ * shown last.
+ */
+export const STREAM_WORDS = 1200
+/** The `index`th word of a `stream` reply, 36 bytes. */
+export const streamWord = (index) =>
+  ` w${String(index).padStart(4, "0")}${"y".repeat(30)}`
+/**
+ * How long a `stream` turn holds after its words, before its last sentence,
+ * for the window to be read while the turn is still live.
+ */
+export const STREAM_HOLD_MS = 8000
 
 /** How long a `trace` turn waits after each call but the last. */
 export const TRACE_PAUSE_MS = 400
@@ -259,6 +280,22 @@ export function stressScenario({
               ),
             ],
           },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.stream,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.stream,
+              "${prompt.text}",
+              ...Array.from({ length: STREAM_WORDS }, (_, index) => streamWord(index)),
+            ],
+          },
+          { do: "pause", ms: STREAM_HOLD_MS },
+          { do: "text", chunks: [" ", SAYS.streamEnd] },
           { do: "end" },
         ],
       },

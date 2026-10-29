@@ -842,6 +842,9 @@ while True:
             elif mode == "byte-generation":
                 for _ in range(4):
                     text("x" * (3 * 1024 * 1024))
+            elif mode == "burst":
+                for _ in range(10000):
+                    text("burst")
             else:
                 text("|".join(prior_history + [user_text]) if mode in ("resume-context", "resume-no-id") else user_text)
             stop_reason = "cancelled" if mode == "cancelled-once" and len(launches) == 1 else mode if mode in ("max_tokens", "max_turn_requests", "refusal", "cancelled") else "end_turn"

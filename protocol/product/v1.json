@@ -1211,9 +1211,9 @@
         "userText": {
           "type": "string",
           "minLength": 0,
-          "maxLength": 32768,
-          "x-utf8MaxBytes": 32768,
-          "description": "User input text; empty for a message of images alone."
+          "maxLength": 65536,
+          "x-utf8MaxBytes": 65536,
+          "description": "User input text, whole; empty for a message of images alone. Its only bound is the frame's."
         },
         "attachments": {
           "type": "array",
@@ -1270,7 +1270,7 @@
         },
         "parts": {
           "type": "array",
-          "maxItems": 512,
+          "maxItems": 4096,
           "items": { "$ref": "#/$defs/ConversationPart" },
           "description": "Provider observations in execution order; offsets address the retained SDK event sequence."
         },
@@ -3402,9 +3402,9 @@
         },
         "text": {
           "type": "string",
-          "maxLength": 32768,
-          "x-utf8MaxBytes": 32768,
-          "description": "Exact text fragment for text, thought, or local notice observations; empty for a tool call."
+          "maxLength": 65536,
+          "x-utf8MaxBytes": 65536,
+          "description": "Exact text for text, thought, or local notice observations; empty for a tool call. Adjacent streamed chunks of one kind are joined into one part, so its only bound is the frame's."
         },
         "toolId": {
           "type": "string",

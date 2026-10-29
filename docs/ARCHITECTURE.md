@@ -236,10 +236,8 @@ Two layouts, chosen in Settings › Workspace › Layout
 arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
 sidebar of channels under the Agents overview's entry, the chosen channel's
 session list (its pinned sessions first, then grouped Needs you, Running,
-Earlier; searchable; ⌥⌘S folds it — each waiting row a compact request card,
-answered from the list: `ui/session-list/list-request.tsx`, with `listAskIds`
-the one rule for which rows ask and what the window reads and answers for
-them),
+Earlier; searchable; ⌥⌘S folds it — a waiting row is a plain row, and what
+it asks is answered in its chat),
 and the panes. *Sessions in sidebar* (`ui/layouts/sessions-in-sidebar.tsx`)
 is one sidebar — search, the Agents overview's entry, then channels — where a
 channel discloses its newest sessions inline, with a quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns

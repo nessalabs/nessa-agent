@@ -159,6 +159,44 @@ async fn protocol_failures_and_output_overflow_close_owned_scope() {
     }
 }
 
+/// A burst of output larger than the event queue waits in the agent's pipe
+/// while a slow consumer keeps taking events; it does not fail the turn.
+#[tokio::test]
+async fn a_slow_consumer_keeps_a_burst_larger_than_the_queue_alive() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("burst", 16);
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "slow-reader").await;
+    let mut texts = 0;
+    while texts < 10_000 {
+        if let ExecutionUpdate::Message(chunk) = next(&mut opened).await {
+            assert_eq!(chunk.kind(), MessageKind::Text);
+            texts += 1;
+        }
+        // Slower than the agent writes, well inside the consumer's patience.
+        if texts % 100 == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    assert_eq!(
+        timeout(Duration::from_secs(10), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test]
 async fn maps_terminal_reasons_and_rejects_client_execution_requests() {
     let _process_slot = process_test_slot().await;
