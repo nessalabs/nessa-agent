@@ -44,7 +44,9 @@ removal identity and final pane count remain intact.
 - Independent second review: clean; independently ran **54/54** focused tests
   and four combinations of exclusions and failures.
 
-Full-matrix and CI results are recorded on [PR #1204](https://github.com/nessalabs/nessa-agent/pull/1204).
+The initial narrow repairs merged in [PR #1204](https://github.com/nessalabs/nessa-agent/pull/1204).
+The additional repairs, full-matrix report, and current CI results are recorded on
+[PR #1205](https://github.com/nessalabs/nessa-agent/pull/1205).
 
 ## Fixture surfaces
 
