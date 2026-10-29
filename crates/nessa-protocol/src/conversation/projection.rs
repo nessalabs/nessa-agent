@@ -38,7 +38,7 @@ use nessa_sdk::domain::agent_execution::leases::{
 use nessa_sdk::domain::agent_execution::prompts::MessageSender;
 use nessa_sdk::domain::agent_execution::tools::{McpTool, MAX_TOOL_INPUT_BYTES};
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
+    executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageChunk, MessageKind},
     permissions::{
         PendingQuestion, PendingReview, PermissionCancellationReasonView, PermissionEffect,
         PermissionReviewDeadline, PermissionScope, PermissionStateView, RefusalOutcome,
@@ -57,6 +57,8 @@ use uuid::Uuid;
 const MAX_MESSAGES: usize = 24;
 pub const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
+/// What a tool's output reads as once a view gave it up for room.
+const OUTPUT_CUT: &str = "[Output truncated]";
 /// Most artifacts the view lists: the newest, in the order they were recorded.
 pub const MAX_VIEW_ARTIFACTS: usize = 64;
 /// Most notes the view lists: the newest, in the order they were left.
@@ -312,6 +314,12 @@ pub struct Projection {
     history_accepted: bool,
     /// Where an MCP call's UI is looked up when the view is read.
     tool_uis: Arc<dyn McpToolUis>,
+    /// The event offsets of each execution that a steering message was
+    /// injected at, by target execution. Streamed text joins the part before
+    /// it only when no steering message falls between the two, so the person's
+    /// message stays where it was sent. Read from the whole history before any
+    /// record is projected: a steering record comes after the turn it steers.
+    steering_points: HashMap<String, Vec<usize>>,
 }
 pub fn clipped(value: &str, bytes: usize) -> String {
     let mut end = value.len().min(bytes);
@@ -319,6 +327,25 @@ pub fn clipped(value: &str, bytes: usize) -> String {
         end -= 1;
     }
     value[..end].to_owned()
+}
+/// The execution a steering record targets, and at which of its event
+/// offsets. Both are saved at admission, before the record is injected: text
+/// streamed in between must already split there. A steer never injected
+/// leaves a split that joins nothing apart.
+fn steering_point(record: &InvocationRecord) -> Option<(&str, usize)> {
+    let target = record
+        .scheduling
+        .iter()
+        .find_map(|event| event.target.as_ref())?;
+    Some((target.as_str(), record.target_event_offset?))
+}
+/// Every steering point in `records`, by target execution.
+fn steering_points(records: &[InvocationRecord]) -> HashMap<String, Vec<usize>> {
+    let mut points: HashMap<String, Vec<usize>> = HashMap::new();
+    for (target, offset) in records.iter().filter_map(steering_point) {
+        points.entry(target.to_owned()).or_default().push(offset);
+    }
+    points
 }
 fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
     match value {
@@ -714,6 +741,9 @@ impl Projection {
             unfinished_at_fold,
             history_accepted,
             tool_uis: Arc::new(NoMcpToolUis),
+            steering_points: snapshot
+                .map(|snapshot| steering_points(&snapshot.invocations))
+                .unwrap_or_default(),
             view: ConversationView {
                 selection: None,
                 approval_mode_change: None,
@@ -921,6 +951,8 @@ impl Projection {
                 if next.view.pending.len() < 64 {
                     next.view.pending.push(ConversationPending {
                         execution_id: id.as_str().into(),
+                        // A queued message's preview. Once it runs, its turn
+                        // shows all of it.
                         text: clipped(text, MAX_TEXT),
                         attachments: record
                             .request
@@ -1300,31 +1332,70 @@ impl Projection {
             if already {
                 continue;
             }
-            let retained = self.view.messages[index].retained_text;
-            let available = (MAX_TEXT * 2).saturating_sub(retained);
-            let bounded = clipped(&text, available);
-            if bounded.len() != text.len() {
-                self.view.truncated = true;
-            }
             let offset = self.view.messages[index].event_count.saturating_sub(1);
             let part = ConversationPart {
                 message_id: None,
                 offset,
                 kind: "local_notice".into(),
-                text: bounded,
+                text,
                 tool_id: String::new(),
                 notice_id,
                 notice_kind: HOOK_NOTICE.into(),
             };
-            let message = &mut self.view.messages[index];
-            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
-            {
-                message.retained_text += part.text.len();
-                message.parts.push(part);
-            } else {
-                self.view.truncated = true;
-            }
+            self.push_part(index, part);
         }
+    }
+
+    /// Adds `part` to the message at `index`, whole: a turn's text is never
+    /// cut here. Only the view's own bound for the wire gives any up.
+    fn push_part(&mut self, index: usize, part: ConversationPart) {
+        let message = &mut self.view.messages[index];
+        message.retained_text += part.text.len();
+        message.parts.push(part);
+    }
+
+    /// Whether a steering message was injected into `id` after the event at
+    /// `after` and at or before the one at `through`.
+    fn steered_between(&self, id: &str, after: usize, through: usize) -> bool {
+        self.steering_points
+            .get(id)
+            .is_some_and(|points| points.iter().any(|at| *at > after && *at <= through))
+    }
+
+    /// One streamed chunk of the turn at `index`, its event at `offset`. It
+    /// joins the part before it when that part is the same kind of text from
+    /// the same message with no steering message between: a reply streamed in
+    /// thousands of small chunks is one part, not thousands. Nothing of it is
+    /// cut.
+    fn stream(&mut self, index: usize, offset: usize, kind: &str, chunk: &MessageChunk) {
+        let id = self.view.messages[index].execution_id.clone();
+        let message = &self.view.messages[index];
+        let text = chunk.as_str();
+        let joins = message.parts.last().is_some_and(|last| {
+            last.kind == kind
+                && last.message_id.as_deref() == chunk.message_id()
+                && !self.steered_between(&id, last.offset, offset)
+        });
+        if joins {
+            let message = &mut self.view.messages[index];
+            if let Some(last) = message.parts.last_mut() {
+                last.text.push_str(text);
+                message.retained_text += text.len();
+            }
+            return;
+        }
+        self.push_part(
+            index,
+            ConversationPart {
+                message_id: chunk.message_id().map(str::to_owned),
+                offset,
+                kind: kind.into(),
+                text: text.to_owned(),
+                tool_id: String::new(),
+                notice_id: String::new(),
+                notice_kind: String::new(),
+            },
+        );
     }
 
     fn observe(&mut self, event: &ExecutionEvent) {
@@ -1360,12 +1431,6 @@ impl Projection {
             .retain(|pending| pending.execution_id != id);
         let offset = self.view.messages[index].event_count;
         self.view.messages[index].event_count += 1;
-        let retained_text = self.view.messages[index].retained_text;
-        let available = (MAX_TEXT * 2).saturating_sub(retained_text);
-        if matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().len() > available)
-        {
-            self.view.truncated = true;
-        }
         // Whether this turn heard the call before this report: its row may
         // since have been let go for room, but this is not its first report.
         let heard = match event.update() {
@@ -1376,20 +1441,15 @@ impl Projection {
             _ => false,
         };
         let part = match event.update() {
-            ExecutionUpdate::Message(chunk) => Some(ConversationPart {
-                message_id: chunk.message_id().map(str::to_owned),
-                offset,
-                kind: if chunk.kind() == MessageKind::Text {
+            ExecutionUpdate::Message(chunk) => {
+                let kind = if chunk.kind() == MessageKind::Text {
                     "text"
                 } else {
                     "thought"
-                }
-                .into(),
-                text: clipped(chunk.as_str(), available),
-                tool_id: String::new(),
-                notice_id: String::new(),
-                notice_kind: String::new(),
-            }),
+                };
+                self.stream(index, offset, kind, chunk);
+                None
+            }
             // One part per tool call, where it was first seen: a call's later
             // updates change its `tools` entry, not the turn's parts.
             ExecutionUpdate::Tool(update) => (!heard).then(|| ConversationPart {
@@ -1410,15 +1470,11 @@ impl Projection {
                     None
                 } else {
                     let text = deadline_notice(*effect, reason.as_str());
-                    let bounded = clipped(&text, available);
-                    if bounded.len() != text.len() {
-                        self.view.truncated = true;
-                    }
                     Some(ConversationPart {
                         message_id: None,
                         offset,
                         kind: "local_notice".into(),
-                        text: bounded,
+                        text,
                         tool_id: String::new(),
                         notice_id: permission.as_str().into(),
                         notice_kind: DEADLINE_NOTICE.into(),
@@ -1433,27 +1489,17 @@ impl Projection {
                     .iter()
                     .position(|part| same_notice(part, REVIEW_NOTICE, notice_id))
                 {
-                    let previous = self.view.messages[index].parts[position].text.len();
-                    let budget =
-                        (MAX_TEXT * 2).saturating_sub(retained_text.saturating_sub(previous));
-                    let bounded = clipped(&text, budget);
-                    if bounded.len() != text.len() {
-                        self.view.truncated = true;
-                    }
-                    let next = bounded.len();
-                    self.view.messages[index].parts[position].text = bounded;
-                    self.view.messages[index].retained_text = retained_text - previous + next;
+                    let message = &mut self.view.messages[index];
+                    message.retained_text =
+                        message.retained_text - message.parts[position].text.len() + text.len();
+                    message.parts[position].text = text;
                     None
                 } else {
-                    let bounded = clipped(&text, available);
-                    if bounded.len() != text.len() {
-                        self.view.truncated = true;
-                    }
                     Some(ConversationPart {
                         message_id: None,
                         offset,
                         kind: "local_notice".into(),
-                        text: bounded,
+                        text,
                         tool_id: String::new(),
                         notice_id: notice_id.into(),
                         notice_kind: REVIEW_NOTICE.into(),
@@ -1477,15 +1523,11 @@ impl Projection {
                         if already {
                             None
                         } else {
-                            let bounded = clipped(&text, available);
-                            if bounded.len() != text.len() {
-                                self.view.truncated = true;
-                            }
                             Some(ConversationPart {
                                 message_id: None,
                                 offset,
                                 kind: "local_notice".into(),
-                                text: bounded,
+                                text,
                                 tool_id: String::new(),
                                 notice_id,
                                 notice_kind: HOOK_NOTICE.into(),
@@ -1504,14 +1546,7 @@ impl Projection {
                     .or_default()
                     .insert(part.tool_id.clone());
             }
-            let message = &mut self.view.messages[index];
-            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
-            {
-                message.retained_text += part.text.len();
-                message.parts.push(part);
-            } else {
-                self.view.truncated = true;
-            }
+            self.push_part(index, part);
         }
         self.observe_interaction(event);
         match event.update() {
@@ -1765,6 +1800,12 @@ impl Projection {
     }
     fn record(&mut self, record: &InvocationRecord, restarted: bool) {
         let id = record.request.execution_id.as_str();
+        if let Some((target, offset)) = steering_point(record) {
+            let points = self.steering_points.entry(target.to_owned()).or_default();
+            if !points.contains(&offset) {
+                points.push(offset);
+            }
+        }
         let index = self.ensure_message(id);
         self.view.messages[index].steering_target = record
             .scheduling
@@ -1779,7 +1820,7 @@ impl Projection {
         self.view.messages[index].user_text = if internal {
             String::new()
         } else {
-            clipped(record.request.user_message.text_str(), MAX_TEXT)
+            record.request.user_message.text_str().to_owned()
         };
         self.view.messages[index].attachments = record
             .request
@@ -2063,7 +2104,17 @@ pub fn bound_view_within(
     // The binding bounds actual admitted ACP asks. Custom backends can
     // retain other valid histories, so the encoded display owner gives up
     // whole interactions with an explicit notice rather than cutting choices.
-    while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > limit {
+    // The size is kept as each step changes one entry, measuring only that
+    // entry: a view holding megabytes is not encoded whole at every step.
+    // Once the running size fits, the whole is measured once to be sure.
+    let mut size = encoded_len(&view);
+    loop {
+        if size <= limit {
+            size = encoded_len(&view);
+            if size <= limit {
+                break;
+            }
+        }
         // The structured result is optional display data. Preserve the history
         // and its text before giving up a message or interaction.
         if let Some(tool) = view
@@ -2071,13 +2122,17 @@ pub fn bound_view_within(
             .iter_mut()
             .find(|tool| tool.structured_content.is_some())
         {
+            let before = encoded_len(tool);
             tool.structured_content = None;
+            size = resized(size, before, encoded_len(tool));
             continue;
         }
         // So are the structured changes: the same text is in the details.
         if let Some(tool) = view.tools.iter_mut().find(|tool| !tool.changes.is_empty()) {
+            let before = encoded_len(tool);
             tool.changes.clear();
             tool.changes_cut = true;
+            size = resized(size, before, encoded_len(tool));
             continue;
         }
         // Only the interactions are left, and they are not to be given up:
@@ -2092,8 +2147,10 @@ pub fn bound_view_within(
             .iter_mut()
             .find(|handoff| !handoff.turns.is_empty())
         {
+            let before = encoded_len(fork);
             fork.turns.remove(0);
             fork.omitted_turns = fork.omitted_turns.saturating_add(1);
+            size = resized(size, before, encoded_len(fork));
             continue;
         }
         // Arguments are what an app is told its call with. They yield once
@@ -2108,9 +2165,26 @@ pub fn bound_view_within(
                     .as_ref()
                     .is_some_and(|mcp| mcp.arguments_json.is_some())
             }) {
+                let before = encoded_len(tool);
                 if let Some(mcp) = &mut tool.mcp {
                     mcp.arguments_json = None;
                 }
+                size = resized(size, before, encoded_len(tool));
+                continue;
+            }
+        }
+        // A tool's output is read on asking; the reply is what a person reads.
+        // With one turn left, outputs give way before its text does.
+        if view.messages.len() <= 1 {
+            if let Some(tool) = view
+                .tools
+                .iter_mut()
+                .find(|tool| tool.details.len() > OUTPUT_CUT.len())
+            {
+                let before = encoded_len(tool);
+                tool.details = OUTPUT_CUT.into();
+                size = resized(size, before, encoded_len(tool));
+                view.truncated = true;
                 continue;
             }
         }
@@ -2124,24 +2198,44 @@ pub fn bound_view_within(
                 .iter()
                 .position(|message| message.status != ConversationMessageStatus::Running)
                 .unwrap_or(0);
-            view.messages.remove(oldest);
+            size = removed(size, &view.messages.remove(oldest));
         } else if view
             .messages
             .first()
             .is_some_and(|message| !message.parts.is_empty())
         {
-            // The length leaves with the part. A returned view otherwise claims
-            // bytes for text it no longer contains.
-            // `the_text_budget_keeps_a_running_total`.
-            if let Some(removed) = view.messages[0].parts.pop() {
-                view.messages[0].retained_text -= removed.text.len();
+            // The oldest text gives way, as much of it as the view is over:
+            // the newest is what a person is reading. A part longer than
+            // that keeps its end. The length leaves with the text. A
+            // returned view otherwise claims bytes for text it no longer
+            // contains. `the_text_budget_keeps_a_running_total`.
+            // Only the part is measured, never the whole message: a long turn
+            // has many parts, and this runs on every read. A comma the running
+            // total misses is caught by the whole-view measure before a view
+            // is returned.
+            let message = &mut view.messages[0];
+            let excess = size - limit;
+            let part = &mut message.parts[0];
+            let before = encoded_len(part);
+            match encoded_prefix(&part.text, excess) {
+                Some(start) => {
+                    message.retained_text -= start;
+                    part.text.drain(..start);
+                    size = resized(size, before, encoded_len(part));
+                }
+                None => {
+                    message.retained_text -= part.text.len();
+                    size = removed(size, &message.parts.remove(0));
+                }
             }
         } else if let Some(message) = view
             .messages
             .first_mut()
             .filter(|message| !message.user_text.is_empty())
         {
+            let before = encoded_len(message);
             message.user_text = clipped(&message.user_text, message.user_text.len() / 2);
+            size = resized(size, before, encoded_len(message));
         } else if let Some(message) = view
             .messages
             .first_mut()
@@ -2151,21 +2245,23 @@ pub fn bound_view_within(
             // long; past the budget the view says it left some out rather
             // than break its bound. Whole interactions yield afterward
             // with an explicit display-limit notice.
+            let before = encoded_len(message);
             if message.files.pop().is_none() {
                 message.attachments.pop();
             }
+            size = resized(size, before, encoded_len(message));
         } else if !view.notes.is_empty() {
             // The oldest listed note yields once the transcript has nothing
             // left to give: the conversation still holds it.
-            view.notes.remove(0);
+            size = removed(size, &view.notes.remove(0));
         } else if !view.artifacts.is_empty() {
             // The oldest listed artifact yields once the transcript has
             // nothing left to give: the conversation still holds it.
-            view.artifacts.remove(0);
+            size = removed(size, &view.artifacts.remove(0));
         } else if !view.tools.is_empty() {
-            view.tools.remove(0);
+            size = removed(size, &view.tools.remove(0));
         } else if !view.pending.is_empty() {
-            view.pending.remove(0);
+            size = removed(size, &view.pending.remove(0));
             view.queue_complete = false;
         } else {
             // The reviews and questions listed are never given up: each entry
@@ -2175,6 +2271,40 @@ pub fn bound_view_within(
         }
     }
     view
+}
+
+/// The bytes `value` takes encoded.
+fn encoded_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+/// The shortest head of `text`, ending on a char boundary, whose JSON string
+/// encoding is at least `bytes` long; `None` when that takes all of it. An
+/// escaped character counts as its escape, so text full of quotes or control
+/// characters is not cut more than the view is over.
+fn encoded_prefix(text: &str, bytes: usize) -> Option<usize> {
+    let mut encoded = 0;
+    for (at, character) in text.char_indices() {
+        if encoded >= bytes {
+            return Some(at);
+        }
+        encoded += match character {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            character if u32::from(character) < 0x20 => 6,
+            character => character.len_utf8(),
+        };
+    }
+    None
+}
+
+/// A view's size after one of its entries went from `before` bytes to `after`.
+fn resized(size: usize, before: usize, after: usize) -> usize {
+    size.saturating_sub(before).saturating_add(after)
+}
+
+/// A view's size after `entry` left a list, with the comma beside it.
+fn removed<T: serde::Serialize>(size: usize, entry: &T) -> usize {
+    size.saturating_sub(encoded_len(entry).saturating_add(1))
 }
 
 /// Whether `view`'s transcript still has a message, part, or linked file a
