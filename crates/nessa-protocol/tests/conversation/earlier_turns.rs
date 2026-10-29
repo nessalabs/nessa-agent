@@ -362,6 +362,7 @@ fn a_queued_turn_that_gives_way_is_not_earlier() {
         files: Vec::new(),
         uploads: Vec::new(),
         app: None,
+        agent: None,
         mode: ConversationPendingMode::Queued,
     });
     let size = serde_json::to_vec(&view).unwrap().len();
