@@ -4,7 +4,7 @@ title: "stop active and queued work"
 kind: "flow"
 status: "mixed"
 summary: "Stop targets the captured turn: withdraw it from the queue or cancel it if active."
-sourceRevision: "a376e6d8980a254173327a43766992d9c2d80103"
+sourceRevision: "85f057b2f9947d1e54dcc596922665424dfd443a"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/app.tsx"
@@ -76,7 +76,15 @@ This page's source checkpoint covers the panel's captured target, the gateway's
 selection/order, the configuration default and the cited regression contracts at
 that revision. It is not a fresh admission-lock review, a process-cleanup proof,
 or executed browser/platform evidence for the integrated tree. Other state
-pages retain their own checkpoints.
+pages retain their own checkpoints. The recovery integration review checked the
+captured target, selected receipt order and recovered root actor again at this
+checkpoint. The Stop orchestration, mutation and SDK lifecycle files are unchanged
+from the published parent Stop head `92e18448be0a865aac89a7a80ede84452242e4e2`.
+Main's new earlier-history read is separate from Stop. Browser downloads were
+blocked by the environment policy. The [recovery evidence](../../../../../verification/desktop/evidence/parent-stop/recovery/README.md)
+separately records current system-Chromium results and earlier failures. This
+source checkpoint does not establish WebKit, Swift phone or hosted worker
+qualification.
 
 ## Further reading
 

@@ -1,0 +1,24 @@
+starting the dev server (pnpm desktop:dev)…
+warmed 1290 modules in 48414 ms
+ok    console [chromium columns]
+ok    content-visible [chromium columns]
+ok    reply-held [chromium columns]
+ok    stop-held [chromium columns]
+ok    content-visible [chromium sidebar]
+ok    reply-held [chromium sidebar]
+page.waitForFunction: Timeout 3000ms exceeded.
+    at settled (/workspace/nessa-agent/verification/desktop/scripts/lib/workspace.mjs:351:14)
+    at showSessionRows (/workspace/nessa-agent/verification/desktop/scripts/columns.mjs:293:11)
+    at async stop-held (/workspace/nessa-agent/verification/desktop/scripts/columns.mjs:1966:5)
+    at async file:///workspace/nessa-agent/verification/desktop/scripts/columns.mjs:2031:22
+    at async attempt (/workspace/nessa-agent/verification/desktop/scripts/lib/cli.mjs:369:20)
+    at async file:///workspace/nessa-agent/verification/desktop/scripts/columns.mjs:2020:11
+    at async withCleanup (/workspace/nessa-agent/verification/desktop/scripts/lib/browser.mjs:585:19)
+    at async withEngines (/workspace/nessa-agent/verification/desktop/scripts/lib/browser.mjs:620:5)
+    at async file:///workspace/nessa-agent/verification/desktop/scripts/columns.mjs:2006:3
+    at async main (/workspace/nessa-agent/verification/desktop/scripts/lib/run.mjs:23:5)
+    at async file:///workspace/nessa-agent/verification/desktop/scripts/columns.mjs:2000:1
+ERROR stop-held [chromium sidebar]
+        ! page.waitForFunction: Timeout 3000ms exceeded.
+wrote /tmp/nessa-981-evidence/columns-chromium.json
+columns: 6/7 held
