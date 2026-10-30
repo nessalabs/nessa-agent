@@ -139,3 +139,57 @@ async fn record_save_refuses_disagreeing_agent_origin_before_append_and_preserve
     drop(lease);
     storage.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn record_storage_restores_agent_origin_in_a_forks_copied_input() {
+    use nessa_sdk::application::agent_execution::{
+        permissions::ActionContext,
+        sessions::{HandoffId, HandoffKind, HandoffRecord},
+    };
+    use nessa_sdk::domain::agent_execution::prompts::{CarriedHistory, CarriedTurn};
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    storage.initialize().await.unwrap();
+    let id = SessionId::new("fork-origin-storage").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (opening, _) = opened(&id);
+    let actor = ActionContext::new("person", "desktop", "fork").unwrap();
+    let origin = source("8b547a4b-6974-49a4-b878-d13a9c031f16", "source-turn");
+    let handoff = HandoffRecord {
+        id: HandoffId::of_request(&actor),
+        kind: HandoffKind::Fork {
+            source: SessionId::new("original-chat").unwrap(),
+            history: CarriedHistory::new(
+                vec![
+                    CarriedTurn::new(Some("agent words"), Some("reply"), Some(origin.clone()))
+                        .unwrap(),
+                ],
+                0,
+            )
+            .unwrap(),
+        },
+        actor,
+        at_ms: 1,
+        after_execution: None,
+    };
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            vec![
+                SessionSaveUnit::new(vec![opening, SessionChange::Handoff(handoff.clone())])
+                    .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+    drop(lease);
+    let lease = storage.open_existing(id).await.unwrap().unwrap();
+    let loaded = lease.load().await.unwrap();
+    assert_eq!(loaded.snapshot().unwrap().handoffs, vec![handoff]);
+    assert_eq!(
+        loaded.snapshot().unwrap().carried_history().turns()[0].agent_source(),
+        Some(&origin)
+    );
+    drop(lease);
+    storage.shutdown().await.unwrap();
+}
