@@ -187,6 +187,9 @@ pub struct ProductRouteState {
     /// The web tunnel this run serves (`pairing.tunnel`, `server.reach`).
     /// `None` when it runs none.
     pub(crate) tunnel: Option<crate::tunnel::application::TunnelView>,
+    /// The hub's devices (`devices.list`). `None` answers
+    /// `devices_unavailable`.
+    pub(crate) devices: Option<Arc<crate::devices::application::Devices>>,
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
@@ -332,6 +335,7 @@ impl ProductRouteState {
             pairing: None,
             native_linking: None,
             tunnel: None,
+            devices: None,
             github: None,
             vault: None,
             vault_lease: None,
@@ -456,6 +460,15 @@ impl ProductRouteState {
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn with_tunnel(mut self, tunnel: crate::tunnel::application::TunnelView) -> Self {
         self.tunnel = Some(tunnel);
+        self
+    }
+
+    /// Register the hub's devices, which `devices.list` reads.
+    pub(crate) fn with_devices(
+        mut self,
+        devices: Arc<crate::devices::application::Devices>,
+    ) -> Self {
+        self.devices = Some(devices);
         self
     }
 

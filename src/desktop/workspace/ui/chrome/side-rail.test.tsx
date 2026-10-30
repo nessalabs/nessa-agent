@@ -2,7 +2,14 @@
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { RAIL_LOADING_DELAY_MS, RailView, railItems, SIDE_RAIL_WIDTH } from "./side-rail"
+import {
+  RAIL_LOADING_DELAY_MS,
+  RailContentProvider,
+  RailView,
+  railItems,
+  SIDE_RAIL_WIDTH,
+  type RailItem,
+} from "./side-rail"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -25,7 +32,8 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const files = railItems.find((item) => item.id === "files") ?? railItems[0]
+/** An item the composition gave no content. */
+const files: RailItem = { id: "files", name: "Files", icon: <svg /> }
 
 it("opens an item's view empty, and shows the loader only once a load runs past three seconds", async () => {
   const host = document.createElement("div")
@@ -69,4 +77,27 @@ it("delays the loader by three seconds", () => {
 
 it("fits the compact rail below the window bar on every host", () => {
   expect(SIDE_RAIL_WIDTH).toBe(64)
+})
+
+it("lists Agents and Devices only", () => {
+  expect(railItems.map((item) => item.id)).toEqual(["agents", "devices"])
+})
+
+it("shows the content the composition gave an item, with no loader", async () => {
+  const host = document.createElement("div")
+  const root = createRoot(host)
+  const devices = railItems.find((item) => item.id === "devices")
+  if (!devices) throw new Error("the rail has no Devices item")
+  await act(async () =>
+    root.render(
+      <RailContentProvider views={{ devices: <p data-content>Devices page</p> }}>
+        <RailView item={devices} />
+      </RailContentProvider>,
+    ),
+  )
+  expect(host.querySelector("[data-content]")?.textContent).toBe("Devices page")
+  await act(async () => vi.advanceTimersByTime(RAIL_LOADING_DELAY_MS))
+  expect(host.querySelector(".rail-view-loading")).toBeNull()
+  await act(async () => root.unmount())
+  expect(vi.getTimerCount()).toBe(0)
 })

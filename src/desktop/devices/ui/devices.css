@@ -1,0 +1,408 @@
+/* Devices: the side rail's page for the hub's machines (`devices-view.tsx`). */
+
+.devices-page {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  max-width: 1120px;
+  height: 100%;
+  flex-direction: column;
+  gap: 32px;
+  align-self: stretch;
+  margin: 0 auto;
+  padding: calc(var(--desktop-titlebar-height) + 16px) clamp(16px, 4vw, 48px) 64px;
+  overflow-y: auto;
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+}
+
+.devices-muted {
+  margin: 0;
+  color: var(--desktop-muted);
+}
+
+.devices-mono {
+  font-family: var(--nessa-font-mono);
+}
+
+.devices-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.devices-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.devices-heading h1 {
+  margin: 0;
+  font-size: var(--desktop-text-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+/* The window's button reset (`chrome.css`) is unlayered, so it outranks the
+   kit's ink; the filled action takes its ink back, as New channel's does. */
+.devices-page .devices-primary {
+  color: var(--nessa-button-inverse-ink, var(--background));
+}
+
+/* ——— The hub ——— */
+
+.devices-hub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 28px;
+  padding: 24px 28px;
+  border-radius: var(--desktop-radius-xl);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.devices-hub-figure {
+  width: 180px;
+}
+
+.devices-hub-title {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 160px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.devices-hub-title h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: var(--desktop-text-title);
+  font-weight: 600;
+}
+
+.devices-stats {
+  display: grid;
+  min-width: 0;
+  flex: 2 1 300px;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 20px;
+}
+
+.devices-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.devices-stat-label {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.devices-stat-value {
+  font-size: var(--desktop-text-display);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.devices-stat-value .devices-muted {
+  font-size: var(--desktop-text-footnote);
+  letter-spacing: 0;
+}
+
+/* ——— Sections of tiles ——— */
+
+.devices-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.devices-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.devices-section-head h2 {
+  margin: 0;
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+}
+
+.devices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.devices-tile {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--desktop-radius-lg);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition:
+    transform var(--desktop-fast) var(--desktop-ease),
+    background var(--desktop-fast) var(--desktop-ease);
+}
+
+button.devices-tile {
+  cursor: pointer;
+}
+
+button.devices-tile:hover {
+  background: var(--desktop-hover-strong);
+  transform: translateY(-1px);
+}
+
+button.devices-tile:focus-visible,
+.devices-back:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}
+
+.devices-stage {
+  display: flex;
+  height: 132px;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(
+    120% 90% at 50% 0%,
+    color-mix(in oklab, var(--foreground) 6%, transparent) 0%,
+    transparent 70%
+  );
+}
+
+.devices-tile-figure {
+  width: 144px;
+}
+
+.devices-tile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.devices-tile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.devices-tile-name {
+  overflow: hidden;
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devices-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+}
+
+.devices-tile-foot {
+  padding-top: 8px;
+  border-top: 1px solid var(--desktop-rim);
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+}
+
+.devices-tile-add {
+  min-height: 132px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--desktop-rim);
+  color: var(--desktop-muted);
+}
+
+.devices-tile-add:hover {
+  color: var(--foreground);
+}
+
+/* A status is a small dot beside its word, never the only way it is said. */
+.devices-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--desktop-faint);
+}
+
+.devices-dot:is([data-status="online"], [data-status="ready"]) {
+  background: var(--nessa-market-gain);
+}
+
+.devices-dot[data-status="draining"],
+.devices-dot[data-status="away"] {
+  background: var(--desktop-needs);
+}
+
+.devices-loading {
+  align-self: center;
+  margin-top: 64px;
+}
+
+/* ——— A device's page ——— */
+
+.devices-back {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: none;
+  color: var(--desktop-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.devices-back:hover {
+  color: var(--foreground);
+}
+
+.devices-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
+}
+
+.devices-detail-figure {
+  width: 200px;
+}
+
+.devices-detail-status {
+  font-size: var(--desktop-text-body);
+}
+
+.devices-detail-stats {
+  /* In the page's column its basis would be a height: it is its rows. */
+  flex: none;
+  padding: 20px 24px;
+  border-radius: var(--desktop-radius-lg);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.devices-facts {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border-radius: var(--desktop-radius-lg);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.devices-facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+}
+
+.devices-facts > div + div {
+  border-top: 1px solid var(--desktop-rim);
+}
+
+.devices-facts dt {
+  color: var(--desktop-muted);
+}
+
+.devices-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ——— Adding a computer ——— */
+
+.devices-add-page {
+  max-width: 720px;
+}
+
+.devices-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 22px;
+  border-radius: var(--desktop-radius-lg);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.devices-card h2 {
+  margin: 0;
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+}
+
+.devices-command {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--desktop-radius-sm);
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.devices-command code {
+  min-width: 0;
+  overflow-x: auto;
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-footnote);
+  white-space: nowrap;
+}
+
+.devices-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+:root[data-motion="reduced"] .devices-tile {
+  transition: none;
+}
+
+:root[data-motion="reduced"] button.devices-tile:hover {
+  transform: none;
+}

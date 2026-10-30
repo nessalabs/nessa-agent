@@ -286,6 +286,10 @@
       "params": null,
       "grant": "credential.manage"
     },
+    "devices.list": {
+      "params": null,
+      "grant": "server.read"
+    },
     "github.cancel": {
       "params": null,
       "grant": "credential.manage"

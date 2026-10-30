@@ -126,3 +126,73 @@ impl Drop for CloseOnDrop {
         self.0.close();
     }
 }
+
+/// The paired environments' connections, as `devices.list` reads them.
+pub(super) struct PeerWorkers(pub(super) Arc<PeerEnvironments>);
+
+impl crate::devices::application::LiveWorkers for PeerWorkers {
+    fn live(&self) -> Vec<crate::devices::application::LiveWorker> {
+        self.0
+            .workers()
+            .into_iter()
+            .map(|worker| crate::devices::application::LiveWorker {
+                peer: worker.peer,
+                serving: worker.load.map(|load| (load.leases, load.draining)),
+                machine: worker.machine,
+            })
+            .collect()
+    }
+}
+
+/// Each report a worker's connection carries is saved when its sighting is
+/// due, and its last when the connection ends: off the connection's task,
+/// which never waits on a save.
+pub(super) struct SavedSightings(pub(super) Arc<crate::devices::application::WorkerSightings>);
+
+impl crate::conversation::infrastructure::ssh_environment::Sightings for SavedSightings {
+    fn reported(
+        &self,
+        peer: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+        machine: &nessa_protocol::lease::MachineReport,
+    ) {
+        // As of its arrival: a save that runs late keeps the order the
+        // reports came in.
+        let now = self.0.now_ms();
+        let sightings = self.0.clone();
+        let machine = machine.clone();
+        tokio::spawn(async move { sightings.saw(peer, &machine, now).await });
+    }
+
+    fn left(
+        &self,
+        peer: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+        machine: nessa_protocol::lease::MachineReport,
+    ) {
+        let now = self.0.now_ms();
+        let sightings = self.0.clone();
+        tokio::spawn(async move { sightings.left(peer, &machine, now).await });
+    }
+}
+
+/// Which keys are paired, as the credential registry says now.
+pub(super) struct RegistryPaired {
+    pub(super) store: Arc<LocalCredentialStore>,
+    pub(super) audience: AudienceId,
+}
+
+impl crate::devices::application::PairedKeys for RegistryPaired {
+    fn paired(
+        &self,
+    ) -> Option<
+        std::collections::BTreeSet<nessa_sdk::domain::agent_execution::leases::PeerEnvironment>,
+    > {
+        let keys = self.store.paired_device_keys(&self.audience).ok()?;
+        Some(
+            keys.into_iter()
+                .map(|key| {
+                    nessa_sdk::domain::agent_execution::leases::PeerEnvironment::new(*key.bytes())
+                })
+                .collect(),
+        )
+    }
+}

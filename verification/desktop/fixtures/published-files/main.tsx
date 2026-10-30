@@ -254,6 +254,8 @@ const dependencies = createDesktopDependencies({
         auth: {} as AuthApi,
         github: {} as GithubApi,
         vault: {} as import("@nessa/client").VaultApi,
+        // The Devices page is not opened here.
+        devices: {} as import("@nessa/client").DevicesApi,
         attachments: desktopAttachments,
         agents: {} as AgentsApi,
       }),

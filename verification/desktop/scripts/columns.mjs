@@ -142,7 +142,7 @@ Checks, per engine, layout and size:
   rail-corner      the bottom-left toggle never moves as the rail or sidebar
                    toggles; "nessa Studio" stays clear in Agents and a full view
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
-  rail-loading     an item's view opens empty; still loading at 3 s it shows
+  rail-loading     Devices opens with no loader; still loading at 3 s it shows
                    only the kit's sweeping text, with no panel or border
   titlebar-steady  through a rail toggle the titlebar's controls stay between
                    where they were and where they land, every frame
@@ -682,19 +682,19 @@ const body = {
           "true"
         if (!now.rail && !roomy) continue
         if (!now.rail) await setRail(page, true)
-        await page.locator(selectorFor.railItem("notes")).click()
+        await page.locator(selectorFor.railItem("devices")).click()
         if (!now.rail) await setRail(page, false)
         await rest(page, size)
         const inView = await boxOf(page, css.studio)
         const viewToggle = await boxOf(page, css.sideRailToggle)
-        seen.push({ label: `${label}, Notes`, toggle: viewToggle, studio: inView })
+        seen.push({ label: `${label}, Devices`, toggle: viewToggle, studio: inView })
         if (inView?.join() !== studio?.join())
           failures.push(
             `${label}: "nessa Studio" is at [${inView}] in a full view, [${studio}] in Agents`,
           )
         if (viewToggle?.join() !== toggle.join())
           failures.push(
-            `${label}, Notes: the toggle is at [${viewToggle}], not [${toggle}]`,
+            `${label}, Devices: the toggle is at [${viewToggle}], not [${toggle}]`,
           )
         if (!now.rail) await setRail(page, true)
         await page.locator(selectorFor.railItem("agents")).click()
@@ -1609,7 +1609,7 @@ const body = {
       css.workspaceWindow,
     )
     if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
-    await page.locator(selectorFor.railItem("notes")).focus()
+    await page.locator(selectorFor.railItem("devices")).focus()
     // Narrowed until the rail is the column that gives way (`railFits`).
     const railAt = () =>
       page.evaluate(
@@ -1659,7 +1659,7 @@ const body = {
         [css.workspace, css.overview],
       )
     const before = await state()
-    await page.locator(selectorFor.railItem("notes")).click()
+    await page.locator(selectorFor.railItem("devices")).click()
     await rest(page, size)
     for (const key of [keys.toggleSidebar, keys.overview, keys.toggleSessionList])
       await page.keyboard.press(key)
@@ -1678,7 +1678,7 @@ const body = {
       }
     })
     const pluginToggles = []
-    for (const id of ["notes", "calendar", "browser", "files"]) {
+    for (const id of ["devices"]) {
       await page.locator(selectorFor.railItem(id)).click()
       const topToggle = page.locator(".workspace-titlebar button")
       await topToggle.click()
@@ -1704,7 +1704,7 @@ const body = {
       failures.push("plugin view exposes the workspace cards or controls above it")
     for (const [name, value] of Object.entries(before)) {
       if (under[name] !== value)
-        failures.push(`under Notes, ${name} became ${under[name]} (was ${value})`)
+        failures.push(`under Devices, ${name} became ${under[name]} (was ${value})`)
       if (after[name] !== value)
         failures.push(`back in Agents, ${name} is ${after[name]} (was ${value})`)
     }
@@ -1718,12 +1718,13 @@ const body = {
       css.workspaceWindow,
     )
     if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
-    const loader = () =>
+    const shown = () =>
       page.evaluate(() => {
         const view = document.querySelector(".rail-view")
-        const text = view?.querySelector(".rail-view-loading")
-        if (!view || !text) return { view: view !== null, text: null }
-        // Every box from the text up to the view: none may draw a frame.
+        if (!view) return { view: false }
+        const page = view.querySelector("[data-devices-page]")
+        const text = view.querySelector(".rail-view-loading")
+        // Every box from the loader up to the view: none may draw a frame.
         const framed = []
         for (let el = text; el && el !== view; el = el.parentElement) {
           const style = getComputedStyle(el)
@@ -1733,34 +1734,35 @@ const body = {
           )
             framed.push(el.className || el.tagName)
         }
-        const sweep = text.firstElementChild
         return {
           view: true,
-          text: text.textContent,
-          slot: text.getAttribute("data-slot"),
-          panel: view.querySelector('[data-slot="generating-surface"]') !== null,
+          page: page?.getAttribute("data-devices-page") ?? null,
+          text: text?.textContent ?? null,
+          slot: text?.getAttribute("data-slot") ?? null,
           framed,
-          sweeping: sweep ? sweep.getAnimations().length > 0 : false,
+          sweeping: text?.firstElementChild
+            ? text.firstElementChild.getAnimations().length > 0
+            : false,
           reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
         }
       })
-    await page.locator(selectorFor.railItem("files")).click()
-    const opened = await loader()
+    await page.locator(selectorFor.railItem("devices")).click()
+    const opened = await shown()
     await page.waitForTimeout(3300)
-    const late = await loader()
-    // Back to Agents, so the sweep stops before the next check.
+    const late = await shown()
+    // Back to Agents, so any sweep stops before the next check.
     await page.locator(selectorFor.railItem("agents")).click()
     const failures = []
-    if (!opened.view) failures.push("choosing Files drew no view")
+    if (!opened.view) failures.push("choosing Devices drew no view")
+    if (opened.page === null) failures.push("the Devices view drew no page")
     if (opened.text !== null)
       failures.push(`the view opened with a loader already: "${opened.text}"`)
-    if (late.text === null) failures.push("no loader 3.3 s after choosing Files")
-    else {
+    // Still loading at 3 s, it says so with the kit's text, unframed.
+    if (late.text !== null) {
       if (late.slot !== "loading-text")
         failures.push(`the loader is ${late.slot}, not the kit's LoadingText`)
-      if (!late.text.includes("Loading Files"))
+      if (!late.text.includes("Loading Devices"))
         failures.push(`the loader reads "${late.text}"`)
-      if (late.panel) failures.push("a generating-surface panel is drawn")
       if (late.framed.length)
         failures.push(`boxes around the text: ${late.framed.join(", ")}`)
       if (!late.reduced && !late.sweeping) failures.push("the text is not sweeping")

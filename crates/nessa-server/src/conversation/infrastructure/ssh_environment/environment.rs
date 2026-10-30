@@ -260,7 +260,15 @@ impl SshEnvironment {
     /// list changes when the connection is admitted and again when it ends,
     /// and each is said on `connections` once the change is made, so whoever
     /// it wakes reads the list as it is after it.
-    pub(super) async fn serve(&self, proof: DeviceConnectionProof, connection: LeaseConnection) {
+    /// `reported` is told each machine report the connection carries.
+    /// Answers whether the environment served and then left on its own:
+    /// not for a refused hello, nor for a connection whose key was revoked.
+    pub(super) async fn serve(
+        &self,
+        proof: DeviceConnectionProof,
+        connection: LeaseConnection,
+        reported: &(dyn Fn(nessa_protocol::lease::MachineReport) + Send + Sync),
+    ) -> bool {
         let Reach::Peer {
             serving,
             credentials,
@@ -268,7 +276,7 @@ impl SshEnvironment {
             ..
         } = &self.inner.reach
         else {
-            return;
+            return false;
         };
         let opened = HostLink::over(
             &self.inner.name(),
@@ -279,7 +287,7 @@ impl SshEnvironment {
         )
         .await;
         let Ok(link) = opened else {
-            return;
+            return false;
         };
         let proof = Arc::new(proof);
         let replaced = serving
@@ -296,10 +304,20 @@ impl SshEnvironment {
         let ended = link.ended();
         let revoked = self.inner.until_revoked(credentials.as_ref(), &proof);
         let drains = link.drains();
+        let mut machines = link.machines();
         tokio::pin!(ended, revoked, drains);
         let mut draining = false;
+        let mut reporting = true;
         loop {
             tokio::select! {
+                changed = machines.changed(), if reporting => match changed {
+                    Ok(()) => {
+                        if let Some(report) = machines.borrow_and_update().clone() {
+                            reported(report);
+                        }
+                    }
+                    Err(_) => reporting = false,
+                },
                 () = &mut ended => break,
                 () = &mut revoked => {
                     self.inner.revoke(&link);
@@ -315,6 +333,7 @@ impl SshEnvironment {
             }
         }
         moved(connections);
+        !link.revoked()
     }
 
     /// Revoke the connection it holds now, as a paired environment's is
@@ -330,6 +349,16 @@ impl SshEnvironment {
     /// Whether a connection to it serves leases now.
     pub(super) fn is_connected(&self) -> bool {
         self.reachable() == Some(true)
+    }
+
+    /// The latest report the machine behind its current connection sent,
+    /// whether or not that connection serves leases now: `None` with no
+    /// connection, or before one reported.
+    pub(super) fn machine(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        let Reach::Peer { serving, .. } = &self.inner.reach else {
+            return None;
+        };
+        served(serving).and_then(|served| served.link.machine())
     }
 
     /// What a paired environment's connection carries now, read off that

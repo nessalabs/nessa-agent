@@ -485,6 +485,12 @@ export { type VaultApi } from "./presentation/vault-api.js"
 export { NessaVaultError } from "./application/vault-error.js"
 export { VaultErrorCode, VaultState, type VaultStatus } from "./generated/product.js"
 
+export type { DevicesApi } from "./presentation/devices-api.js"
+export type {
+  DeviceMachine,
+  DeviceWorker,
+  DevicesListResult,
+} from "./generated/product.js"
 export type { BoatApi } from "./presentation/boat-api.js"
 export {
   BoatErrorCode,

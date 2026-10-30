@@ -1,4 +1,5 @@
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
+import { devicesGateway, type DevicesClient, type DevicesGateway } from "./devices"
 import { gatewayVault, type VaultSource } from "../vault"
 import type { VaultApi, BoatApi } from "@nessa/client"
 /**
@@ -123,6 +124,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly mcpServers: McpServersGateway | undefined
   /** Pairing and linked devices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly linkedDevices: LinkedDevicesGateway | undefined
+  /** The hub's machines, for the side rail's Devices; absent without a gateway. Provided by `main.tsx`. */
+  readonly devices: DevicesGateway | undefined
   /** Claude and Codex native-hook choices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly nativeHooks: NativeHooksGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
@@ -240,6 +243,7 @@ export function createDesktopDependencies(
     linkedDevices: source
       ? linkedDevicesGateway({ connected: () => source.connected(), after })
       : undefined,
+    devices: source ? devicesGateway({ connected: () => source.connected() }) : undefined,
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
@@ -294,6 +298,7 @@ export function createDesktopDependencies(
 
 /** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub and share sessions through. */
 type WindowGatewayClient = GatewayClient &
+  DevicesClient &
   GithubClient & { readonly vault: VaultApi; readonly boat: BoatApi } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
