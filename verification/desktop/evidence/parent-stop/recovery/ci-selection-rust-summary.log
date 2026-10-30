@@ -1,0 +1,91 @@
+Source: 85f057b2f9947d1e54dcc596922665424dfd443a; same Rust inputs as reviewed integration44.
+Command: CARGO_BUILD_JOBS=1 node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault
+Exit: 1
+38 binaries compiled; 14 started/completed; 24 unstarted when fail-fast queue stopped.
+Completed-binary totals: 7294 passed, 9 failed, 40 ignored. Unstarted binaries are not passes.
+Raw log SHA256: 9c9b064608de2e8ee4281738f904be4f84319903f03e48e9c01c6dc2c988732b
+Last complete summary per test binary (embedded child probes excluded by taking the final summary):
+[nessa-sdk application] test result: ok. 718 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 15.67s
+[nessa-sdk domain] test result: ok. 273 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+[nessa-sdk infrastructure] test result: ok. 74 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 141.75s
+[nessa-server backup_verifier] test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+[nessa-server backup_restore_plan] test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+[nessa-server native_enrollment] test result: ok. 121 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.12s
+[nessa-server nessa] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[nessa-server mcp_relay] test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+[nessa-server mcp_authorization_benchmark] test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[nessa-server nessa-backup-plan] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[nessa-server env_serve_binary] test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.93s
+[nessa-server credential_registry_refusal] test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+[nessa-server nessa_server] test result: FAILED. 4500 passed; 2 failed; 16 ignored; 0 measured; 0 filtered out; finished in 253.64s
+[nessa-sdk nessa_sdk] test result: FAILED. 1575 passed; 7 failed; 16 ignored; 0 measured; 0 filtered out; finished in 227.26s
+Failure details follow.
+[nessa-sdk nessa_sdk] failures:
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] ---- infrastructure::acp::tests::contracts::opencode::outer_deadline_reaps_active_acp_descendants_before_releasing_fixture_root stdout ----
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::acp::tests::contracts::opencode::outer_deadline_reaps_active_acp_descendants_before_releasing_fixture_root' (123768) panicked at crates/nessa-sdk/src/infrastructure/acp/../../../tests/infrastructure/acp/contracts/opencode.rs:118:14:
+[nessa-sdk nessa_sdk] harness process group cleanup is confirmed: CleanupUncertain
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] ---- infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child stdout ----
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child' (124177) panicked at crates/nessa-sdk/src/infrastructure/acp/../../../tests/infrastructure/acp/contracts/shutdown.rs:194:10:
+[nessa-sdk nessa_sdk] called `Result::unwrap()` on an `Err` value: CleanupUncertain
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] ---- infrastructure::process::tests::dropping_an_unconfirmed_process_retains_its_private_directory stdout ----
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::process::tests::dropping_an_unconfirmed_process_retains_its_private_directory' (125004) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:211:10:
+[nessa-sdk nessa_sdk] called `Result::unwrap()` on an `Err` value: CleanupUncertain
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] ---- infrastructure::process::tests::cancelled_directory_release_keeps_the_same_owned_task_for_retry stdout ----
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::process::tests::cancelled_directory_release_keeps_the_same_owned_task_for_retry' (125001) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:88:33:
+[nessa-sdk nessa_sdk] directory release completed before its barrier
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] ---- infrastructure::process::tests::failed_directory_release_is_retried_after_process_cleanup stdout ----
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::process::tests::failed_directory_release_is_retried_after_process_cleanup' (125023) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:142:5:
+[nessa-sdk nessa_sdk] the process cleanup was confirmed
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] ---- infrastructure::process::tests::panicking_cleanup_waiter_does_not_stop_later_cleanup stdout ----
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::process::tests::panicking_cleanup_waiter_does_not_stop_later_cleanup' (125026) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:288:9:
+[nessa-sdk nessa_sdk] caller waker
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::process::tests::panicking_cleanup_waiter_does_not_stop_later_cleanup' (125026) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:321:6:
+[nessa-sdk nessa_sdk] called `Result::unwrap()` on an `Err` value: CleanupUncertain
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] ---- infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed stdout ----
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] thread 'infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed' (125035) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:69:10:
+[nessa-sdk nessa_sdk] called `Result::unwrap()` on an `Err` value: CleanupUncertain
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] failures:
+[nessa-sdk nessa_sdk]     infrastructure::acp::tests::contracts::opencode::outer_deadline_reaps_active_acp_descendants_before_releasing_fixture_root
+[nessa-sdk nessa_sdk]     infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child
+[nessa-sdk nessa_sdk]     infrastructure::process::tests::cancelled_directory_release_keeps_the_same_owned_task_for_retry
+[nessa-sdk nessa_sdk]     infrastructure::process::tests::dropping_an_unconfirmed_process_retains_its_private_directory
+[nessa-sdk nessa_sdk]     infrastructure::process::tests::failed_directory_release_is_retried_after_process_cleanup
+[nessa-sdk nessa_sdk]     infrastructure::process::tests::panicking_cleanup_waiter_does_not_stop_later_cleanup
+[nessa-sdk nessa_sdk]     infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed
+[nessa-sdk nessa_sdk] 
+[nessa-sdk nessa_sdk] test result: FAILED. 1575 passed; 7 failed; 16 ignored; 0 measured; 0 filtered out; finished in 227.26s
+[nessa-server nessa_server] failures:
+[nessa-server nessa_server] 
+[nessa-server nessa_server] ---- agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout stdout ----
+[nessa-server nessa_server] 
+[nessa-server nessa_server] thread 'agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout' (128896) panicked at crates/nessa-server/src/agents/infrastructure/../../../tests/agents/codex.rs:95:79:
+[nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: CleanupUnconfirmed
+[nessa-server nessa_server] 
+[nessa-server nessa_server] ---- workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol stdout ----
+[nessa-server nessa_server] 
+[nessa-server nessa_server] thread 'workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol' (150498) panicked at crates/nessa-server/src/workspaces/../../tests/workspaces/provider_contract.rs:28:5:
+[nessa-server nessa_server] publish and pin the credential-free worker for this lease protocol before shipping
+[nessa-server nessa_server] 
+[nessa-server nessa_server] 
+[nessa-server nessa_server] failures:
+[nessa-server nessa_server]     agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout
+[nessa-server nessa_server]     workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol
+[nessa-server nessa_server] 
+[nessa-server nessa_server] test result: FAILED. 4500 passed; 2 failed; 16 ignored; 0 measured; 0 filtered out; finished in 253.64s
