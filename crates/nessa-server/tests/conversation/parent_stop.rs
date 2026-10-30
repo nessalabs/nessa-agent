@@ -3616,16 +3616,8 @@ async fn restored_report_successor(active: bool, person_command: Option<ReportPe
                 })
                 .await
                 .unwrap();
-            service.submit_as(
-                parent.clone(),
-                report.caller.clone(),
-                report.execution.clone(),
-                message(&format!("[Thread report] Thread {child_id} finished the turn you sent it (execution child): completed.\n\nIt gave no reply text.")),
-                SubmissionMode::Queue,
-                Writer::Person(Initiation::owner(), false),
-            ).await.unwrap();
             c.send(()).unwrap();
-            tokio::time::timeout(TURN_HOLD_HANG, async {
+            let (outcome, reply) = tokio::time::timeout(TURN_HOLD_HANG, async {
                 loop {
                     match service
                         .thread_turn_end(&child_id, &caller("inspect-child"), "child")
@@ -3634,22 +3626,36 @@ async fn restored_report_successor(active: bool, person_command: Option<ReportPe
                         crate::conversation::application::ThreadTurn::Unfinished => {
                             tokio::task::yield_now().await
                         }
-                        ended => {
-                            assert_eq!(
-                                ended,
-                                crate::conversation::application::ThreadTurn::Ended(
-                                    "completed",
-                                    None
-                                ),
-                                "legacy fixture represents the real child's exact result"
-                            );
-                            break;
+                        crate::conversation::application::ThreadTurn::Ended(outcome, reply) => {
+                            break (outcome, reply);
+                        }
+                        crate::conversation::application::ThreadTurn::Unreadable => {
+                            panic!("the legacy fixture's real child history must remain readable");
                         }
                     }
                 }
             })
             .await
             .unwrap();
+            assert_eq!(outcome, "completed");
+            let text = crate::conversation::application::service::report_text_for_test(
+                &child_id,
+                "child",
+                outcome,
+                reply,
+                usize::MAX,
+            );
+            service
+                .submit_as(
+                    parent.clone(),
+                    report.caller.clone(),
+                    report.execution.clone(),
+                    message(&text),
+                    SubmissionMode::Queue,
+                    Writer::Person(Initiation::owner(), false),
+                )
+                .await
+                .unwrap();
         } else {
             service
                 .report_thread_turn(child_id.clone(), "child".into(), report)
