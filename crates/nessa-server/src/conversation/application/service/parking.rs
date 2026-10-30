@@ -1,12 +1,19 @@
 //! Agents that sit idle with nobody watching are stopped, and their
 //! conversations stay open (issue #998, `docs/design/agent-parking.md`).
+//! One in a cloud workspace of its own is stopped once idle for
+//! `workspace_idle`, watched or not, unless a background command of it still
+//! runs; its VM then stops too, keeping its disk, and the next message
+//! resumes both.
 //!
 //! ```text
 //! every few seconds, for each live conversation:
-//!   busy, followed, or an app call waiting ──▶ touched now
-//!   untouched for park_after ──▶ take the submission lock
+//!   busy, or an app call waiting ──▶ touched now
+//!   in a cloud workspace: a background command running ──▶ touched now
+//!   elsewhere: followed ──▶ touched now
+//!   untouched for its limit (workspace_idle, or park_after) ──▶ take the submission lock
 //!     ──▶ the same checks again ──▶ suspend (lease ends idle) ──▶ slot released
-//! the next message ──▶ opens the conversation ──▶ session/resume
+//!     ──▶ in a cloud workspace: its connection let go, its VM stopped
+//! the next message ──▶ opens the conversation (resuming its VM) ──▶ session/resume
 //! an opening past the bound on live agents ──▶ the parkable one touched
 //!   longest ago is parked now (`make_room`)
 //! ```
@@ -40,13 +47,19 @@ const MOST_BETWEEN_SWEEPS: Duration = Duration::from_secs(15);
 const PARKS_AT_ONCE: usize = 64;
 
 impl ConversationService {
-    /// Park idle agents nobody watches until the gateway retires. Started
-    /// once by composition; does nothing when `park_after` is `None`.
+    /// Park idle agents until the gateway retires: those nobody watches
+    /// after `park_after`, when it is set, and those in a cloud workspace
+    /// after `workspace_idle`. Started once by composition; does nothing
+    /// when neither can be parked here.
     pub async fn run_parking(&self) {
-        let Some(park_after) = self.inner.limits.park_after else {
+        let park_after = self.inner.limits.park_after;
+        if park_after.is_none() && !self.inner.environment.has_workspaces() {
             return;
-        };
-        let between = (park_after / 4).clamp(Duration::from_millis(100), MOST_BETWEEN_SWEEPS);
+        }
+        let shortest = park_after.map_or(self.inner.limits.workspace_idle, |park_after| {
+            park_after.min(self.inner.limits.workspace_idle)
+        });
+        let between = (shortest / 4).clamp(Duration::from_millis(100), MOST_BETWEEN_SWEEPS);
         loop {
             tokio::select! {
                 () = tokio::time::sleep(between) => {}
@@ -55,13 +68,21 @@ impl ConversationService {
             if self.inner.retirement.get().is_some() {
                 return;
             }
-            self.park_idle(park_after).await;
+            self.sweep(park_after).await;
         }
     }
 
-    /// One look at every live conversation: touch those in use, and park
-    /// those untouched for `park_after`. Returns how many it parked.
+    /// One look at every live conversation, parking those nobody watches
+    /// that sat untouched for `park_after`, and those in a cloud workspace
+    /// for `workspace_idle`. Returns how many it parked.
     pub(super) async fn park_idle(&self, park_after: Duration) -> usize {
+        self.sweep(Some(park_after)).await
+    }
+
+    /// One look at every live conversation: touch those in use, and park
+    /// those untouched for their limit ([`Self::idle_limit`]). Returns how
+    /// many it parked.
+    pub(super) async fn sweep(&self, park_after: Option<Duration>) -> usize {
         let owners: Vec<(ConversationId, Arc<Slot>)> = self
             .inner
             .conversations
@@ -76,31 +97,72 @@ impl ConversationService {
             let Some(live) = settled(&slot) else {
                 continue;
             };
-            if !self.parkable(&id, &live).await {
-                slot.touch(now);
-            } else if slot.untouched_for(now) >= park_after {
-                due.push((id, slot));
+            match self.idle_limit(&id, &live, park_after).await {
+                Idle::InUse => slot.touch(now),
+                Idle::Never => {}
+                Idle::After(limit) => {
+                    if slot.untouched_for(now) >= limit {
+                        due.push((id, slot, limit));
+                    }
+                }
             }
         }
         stream::iter(due)
-            .map(|(id, slot)| async move { self.park(&id, slot, park_after).await })
+            .map(|(id, slot, limit)| async move { self.park(&id, slot, limit).await })
             .buffer_unordered(PARKS_AT_ONCE)
             .filter(|parked| std::future::ready(*parked))
             .count()
             .await
     }
 
-    /// Whether `live` could be parked now: attached, able to resume its
-    /// provider session, idle, nobody following it, and no app call of it
-    /// waiting on a review. An agent that cannot resume would lose its
-    /// session's context, so it is never parked. A permission review or a
-    /// question belongs to a running turn, so its agent is not idle.
-    async fn parkable(&self, id: &ConversationId, live: &LiveConversation) -> bool {
+    /// How long `live` must sit untouched to be parked by a sweep under
+    /// `park_after`. An agent that is attached, able to resume its provider
+    /// session, idle and with no app call waiting on a review may be parked;
+    /// one that cannot resume would lose its session's context, and a
+    /// permission review or a question belongs to a running turn. In a cloud
+    /// workspace of its own it waits `workspace_idle`, watched or not, while
+    /// no background command of it runs; elsewhere it waits `park_after`
+    /// while nobody follows it.
+    async fn idle_limit(
+        &self,
+        id: &ConversationId,
+        live: &LiveConversation,
+        park_after: Option<Duration>,
+    ) -> Idle {
+        if !self.could_park(live).await {
+            return Idle::InUse;
+        }
+        if self.inner.environment.in_workspace(id).await {
+            let running = self
+                .inner
+                .background_tasks
+                .get()
+                .is_some_and(|tasks| tasks.running_for(id));
+            return if running {
+                Idle::InUse
+            } else {
+                Idle::After(self.inner.limits.workspace_idle)
+            };
+        }
+        if self.inner.live_changes.followed(id) {
+            return Idle::InUse;
+        }
+        park_after.map_or(Idle::Never, Idle::After)
+    }
+
+    /// Whether `live` is in a state an agent may be parked in, whoever
+    /// watches it.
+    async fn could_park(&self, live: &LiveConversation) -> bool {
         live.agent.attachment_status().phase() == AttachmentPhase::Attached
             && live.agent.operation_capabilities().session_resume()
-            && !self.inner.live_changes.followed(id)
             && live.app_reviews.entries().is_empty()
             && live.agent.is_idle().await
+    }
+
+    /// Whether `live` could be parked now to make room: as a sweep would,
+    /// and with nobody following it.
+    async fn parkable(&self, id: &ConversationId, live: &LiveConversation) -> bool {
+        self.could_park(live).await && !self.inner.live_changes.followed(id)
     }
 
     /// Park `slot` if, under the conversation's submission lock, it is still
@@ -135,13 +197,22 @@ impl ConversationService {
         let Some(live) = settled(&slot) else {
             return false;
         };
-        let used = match when {
-            ParkWhen::IdleFor(park_after) => {
-                slot.untouched_for(self.inner.clock.unix_milliseconds()) < park_after
+        let now = self.inner.clock.unix_milliseconds();
+        let parkable = match when {
+            // The same limit again: its placement never changes, but whether
+            // it is watched, busy or running something may have.
+            ParkWhen::IdleFor(limit) => {
+                slot.untouched_for(now) >= limit
+                    && matches!(
+                        self.idle_limit(id, &live, Some(limit)).await,
+                        Idle::After(again) if slot.untouched_for(now) >= again
+                    )
             }
-            ParkWhen::UnusedSince(touched) => slot.touched.load(Ordering::SeqCst) > touched,
+            ParkWhen::UnusedSince(touched) => {
+                slot.touched.load(Ordering::SeqCst) <= touched && self.parkable(id, &live).await
+            }
         };
-        if used || !self.parkable(id, &live).await {
+        if !parkable {
             return false;
         }
         // A delete lets go of the lock once its tombstone is written, and
@@ -182,6 +253,17 @@ impl ConversationService {
             }
         }
     }
+}
+
+/// How long a live conversation must sit untouched before a sweep parks it.
+enum Idle {
+    /// In use now: touched.
+    InUse,
+    /// Never parked by a sweep: nobody watches it, and idle agents here are
+    /// not parked.
+    Never,
+    /// Parked once untouched this long.
+    After(Duration),
 }
 
 /// How long a conversation must have gone unused for [`ConversationService::park_held`]

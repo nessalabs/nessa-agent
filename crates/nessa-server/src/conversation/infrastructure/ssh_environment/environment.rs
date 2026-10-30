@@ -185,6 +185,26 @@ impl SshEnvironment {
         Arc::strong_count(&self.inner) == 1
     }
 
+    /// Let go of a workspace's connection while no lease is on it, so the
+    /// VM behind it may stop; the next lease connects again. Holding the
+    /// connection's lock while it looks, no lease starts on it meanwhile.
+    /// Answers whether nothing is held now; `false` for any other reach.
+    pub(crate) async fn let_go(&self) -> bool {
+        if !matches!(self.inner.reach, Reach::Workspace { .. }) {
+            return false;
+        }
+        let mut held = self.inner.link.lock().await;
+        let link = match held.as_ref() {
+            None => return true,
+            Some(link) if link.is_open() && !link.holds_nothing() => return false,
+            Some(_) => held.take().expect("looked at above"),
+        };
+        drop(held);
+        link.close();
+        link.ended().await;
+        true
+    }
+
     pub(crate) fn new(
         host: SshDestination,
         connector: Arc<dyn LeaseConnector>,

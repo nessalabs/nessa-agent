@@ -312,6 +312,9 @@ pub(crate) trait ThreadEnvironments: Send + Sync {
         &self,
         conversation: &ConversationId,
     ) -> Result<Arc<dyn Environment>, ConversationError>;
+    /// Stop `conversation`'s VM, keeping its disk, unless something still
+    /// uses it; the next opening resumes it. Answers whether it stopped one.
+    fn rest<'a>(&'a self, conversation: &'a ConversationId) -> EnvironmentFuture<'a, bool>;
 }
 pub(crate) const BOAT: &str = "boat:thread";
 /// Bound retained workspace environments independently of saved thread history.
@@ -526,6 +529,33 @@ impl Environments {
         match &self.placements {
             Some(placements) => Ok(placements.placement(conversation).await?),
             None => Ok(None),
+        }
+    }
+
+    /// Whether a conversation can run in a cloud workspace of its own here.
+    pub(crate) fn has_workspaces(&self) -> bool {
+        self.workspaces.is_some()
+    }
+
+    /// Whether `conversation` runs in a cloud workspace of its own
+    /// ([`BOAT`]), whose VM rests while its agent does
+    /// ([`Environments::rest`]).
+    pub(crate) async fn in_workspace(&self, conversation: &ConversationId) -> bool {
+        self.workspaces.is_some()
+            && matches!(self.placement(conversation).await, Ok(Some(name)) if name == BOAT)
+    }
+
+    /// Stop `conversation`'s VM, keeping its disk, once its agent has
+    /// stopped and nothing else uses the VM; the next message resumes it.
+    /// Nothing for a conversation that runs anywhere else.
+    pub(crate) async fn rest(&self, conversation: &ConversationId) {
+        if !self.in_workspace(conversation).await {
+            return;
+        }
+        if let Some(workspaces) = &self.workspaces {
+            if workspaces.rest(conversation).await {
+                tracing::info!(conversation_id = %conversation, "stopped the conversation's VM; its next message resumes it");
+            }
         }
     }
 

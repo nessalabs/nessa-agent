@@ -68,6 +68,30 @@ pub(crate) trait Provider: Send + Sync {
     /// Best effort rollback of a received creation receipt that could not be saved.
     /// Acceptance alone cannot be returned as confirmed cleanup.
     async fn remove(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure>;
+    /// Stop `vm`, keeping its disk: it costs nothing while stopped, and
+    /// [`Provider::connect`] resumes it.
+    async fn stop(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure>;
+}
+
+/// A thread's workspace in use: held by each runtime [`Workspaces::open`]
+/// hands out and by every stream it serves, so [`Workspaces::rest`] never
+/// stops a VM something still uses.
+type InUse = Arc<()>;
+
+/// What [`Workspaces::open`] hands out: the provider's runtime, holding the
+/// thread's workspace in use for as long as it, or a stream it served, is
+/// kept.
+struct HeldRuntime {
+    runtime: Arc<dyn WorkspaceRuntime>,
+    in_use: InUse,
+}
+#[async_trait]
+impl WorkspaceRuntime for HeldRuntime {
+    async fn serve(&self) -> Result<WorkspaceStream, Failure> {
+        let mut stream = self.runtime.serve().await?;
+        stream.owner = Box::new((stream.owner, self.in_use.clone()));
+        Ok(stream)
+    }
 }
 
 /// Recovery evidence is independent of assignment publication and UI observers.
@@ -103,6 +127,8 @@ pub(crate) struct Workspaces {
     assignments: Arc<dyn Assignments>,
     recovery: Arc<dyn RecoveryAudit>,
     locks: Arc<Mutex<BTreeMap<String, Weak<Mutex<()>>>>>,
+    /// Each thread's workspace while something uses it ([`InUse`]).
+    uses: Arc<std::sync::Mutex<BTreeMap<String, Weak<()>>>>,
     image: Option<String>,
 }
 impl Workspaces {
@@ -121,6 +147,7 @@ impl Workspaces {
             assignments,
             recovery,
             locks: Arc::default(),
+            uses: Arc::default(),
         }
     }
     fn record_recovery(&self, event: &RecoveryEvent) -> Result<(), Failure> {
@@ -154,6 +181,71 @@ impl Workspaces {
             .await
             .map_err(|_| Failure::ProvisioningUncertain)?
     }
+    /// Stop `thread`'s VM, keeping its disk, unless something still uses
+    /// it: a runtime [`Workspaces::open`] handed out, or a stream it served.
+    /// Ordered with opening under the thread's lock, so an open that comes
+    /// meanwhile either finds the VM stopped, and resumes it, or holds it in
+    /// use and keeps it running. Answers whether it stopped one.
+    pub(crate) async fn rest(&self, thread: ConversationId) -> Result<bool, Failure> {
+        let this = self.clone();
+        // Like an opening, a stop once asked is carried through by its own
+        // task, whoever stops waiting for it.
+        tokio::spawn(async move { this.rest_owned(thread).await })
+            .await
+            .map_err(|_| Failure::Provider)?
+    }
+    async fn rest_owned(&self, thread: ConversationId) -> Result<bool, Failure> {
+        let id = thread.to_string();
+        let lock = self.thread_lock(&id).await;
+        let _guard = lock.lock().await;
+        if self.in_use(&id) {
+            return Ok(false);
+        }
+        let Some(Assignment::Assigned {
+            thread: assigned,
+            vm,
+            image,
+            admission,
+        }) = self.assignments.read(&id).await?
+        else {
+            return Ok(false);
+        };
+        if assigned != id {
+            return Ok(false);
+        }
+        let connection = BoatConnection {
+            image,
+            environment: admission.name().into(),
+            ..self.settings.read().await?
+        };
+        self.provider.stop(&connection, &vm).await?;
+        Ok(true)
+    }
+    fn in_use(&self, thread: &str) -> bool {
+        let mut uses = self.uses.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        uses.retain(|_, used| used.strong_count() != 0);
+        uses.contains_key(thread)
+    }
+    /// `thread`'s workspace held in use, from now until the token goes.
+    fn hold(&self, thread: &str) -> InUse {
+        let mut uses = self.uses.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(held) = uses.get(thread).and_then(Weak::upgrade) {
+            return held;
+        }
+        let held = Arc::new(());
+        uses.insert(thread.to_owned(), Arc::downgrade(&held));
+        held
+    }
+    async fn thread_lock(&self, id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.locks.lock().await;
+        locks.retain(|_, lock| lock.strong_count() != 0);
+        let lock = locks
+            .get(id)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| Arc::new(Mutex::new(())));
+        locks.insert(id.to_owned(), Arc::downgrade(&lock));
+        lock
+    }
     async fn allocate(
         &self,
         thread: ConversationId,
@@ -161,17 +253,21 @@ impl Workspaces {
         channel: Option<ChannelId>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = thread.to_string();
-        let lock = {
-            let mut locks = self.locks.lock().await;
-            locks.retain(|_, lock| lock.strong_count() != 0);
-            let lock = locks
-                .get(&id)
-                .and_then(Weak::upgrade)
-                .unwrap_or_else(|| Arc::new(Mutex::new(())));
-            locks.insert(id.clone(), Arc::downgrade(&lock));
-            lock
-        };
+        let lock = self.thread_lock(&id).await;
         let _guard = lock.lock().await;
+        // Held from before the VM is reached until the runtime, and every
+        // stream it serves, is gone: a rest waiting on the lock sees it.
+        let in_use = self.hold(&id);
+        let runtime = self.allocate_held(&id, channel, provision).await?;
+        Ok(Arc::new(HeldRuntime { runtime, in_use }))
+    }
+    async fn allocate_held(
+        &self,
+        id: &str,
+        channel: Option<ChannelId>,
+        provision: bool,
+    ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        let id = id.to_owned();
         let mut connection = self.settings.read().await?;
         let scope = channel.map_or(VmLifetimeScope::Global, VmLifetimeScope::Channel);
         let lifetimes = self.runtime_settings.read(&scope).await?;

@@ -634,6 +634,12 @@ impl HostLink {
             .count()
     }
 
+    /// Whether no lease of any kind is on this connection: none asked, held,
+    /// ending, nor a command waiting for its end.
+    pub(crate) fn holds_nothing(&self) -> bool {
+        self.routes().leases.is_empty()
+    }
+
     /// The host no longer holds a credential to serve this gateway. No lease
     /// is admitted on this connection any more, nor a harness started or a
     /// file asked for (a command's `Run` still goes, and the host answers

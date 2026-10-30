@@ -21,6 +21,8 @@ use nessa_sdk::application::agent_execution::sessions::{
 use nessa_sdk::domain::agent_execution::{executions::ExecutionOutcome, sessions::SessionId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::sync::atomic::AtomicU64;
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -184,11 +186,53 @@ impl Fixture {
         Self::build_with_save_gate(park_after, images, live, None).await
     }
 
+    /// A conversation in a cloud workspace of its own, whose VM `rested`
+    /// records each rest of, parked once idle for [`LIMIT`] and here never
+    /// otherwise.
+    async fn in_workspace(rested: Arc<RestedWorkspaces>, placements: &Path) -> Self {
+        let placements =
+            Arc::new(crate::conversation::infrastructure::FilePlacements::new(placements.join("placements")).unwrap());
+        let environment = Environments::new(
+            crate::conversation::infrastructure::in_process_environment(),
+            BTreeMap::new(),
+            placements,
+        )
+        .with_workspaces(rested);
+        Self::build_in(
+            None,
+            false,
+            ConversationLimits::default().max_conversations,
+            None,
+            environment,
+            Some(crate::conversation::application::placement::BOAT),
+        )
+        .await
+    }
+
     async fn build_with_save_gate(
         park_after: Option<Duration>,
         images: bool,
         live: usize,
         save_gate: Option<Arc<CompletionSaveGate>>,
+    ) -> Self {
+        Self::build_in(
+            park_after,
+            images,
+            live,
+            save_gate,
+            crate::conversation::infrastructure::in_process_environment().into(),
+            None,
+        )
+        .await
+    }
+
+    async fn build_in(
+        park_after: Option<Duration>,
+        images: bool,
+        live: usize,
+        save_gate: Option<Arc<CompletionSaveGate>>,
+        environment: Environments,
+        placed: Option<&str>,
     ) -> Self {
         let provider = Arc::new(ProviderFactory::default());
         provider.session_resume.store(true, Ordering::SeqCst);
@@ -228,11 +272,12 @@ impl Fixture {
                     nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
                 ),
                 clock: clock.clone(),
-                environment: crate::conversation::infrastructure::in_process_environment().into(),
+                environment,
             },
             ConversationLimits {
                 park_after,
                 max_conversations: live,
+                workspace_idle: LIMIT,
                 ..ConversationLimits::default()
             },
             None,
@@ -243,7 +288,10 @@ impl Fixture {
             .create(
                 id.clone(),
                 caller("create"),
-                crate::conversation::application::RequestedConversation::default(),
+                crate::conversation::application::RequestedConversation {
+                    environment: placed.map(str::to_owned),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -519,6 +567,59 @@ async fn a_followed_conversation_is_not_parked() {
     fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
     fixture.service.shutdown().await.unwrap();
+}
+
+/// Cloud workspaces that run every conversation here, recording each rest.
+#[derive(Default)]
+struct RestedWorkspaces {
+    rested: StdMutex<Vec<ConversationId>>,
+}
+impl crate::conversation::application::ThreadEnvironments for RestedWorkspaces {
+    fn environment(
+        &self,
+        _: &ConversationId,
+    ) -> Result<Arc<dyn crate::conversation::application::Environment>, ConversationError> {
+        Ok(crate::conversation::infrastructure::in_process_environment())
+    }
+    fn rest<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+    ) -> crate::conversation::application::EnvironmentFuture<'a, bool> {
+        self.rested.lock().unwrap().push(conversation.clone());
+        Box::pin(async { true })
+    }
+}
+
+/// In a cloud workspace of its own, a window showing the conversation does
+/// not keep its agent: once idle for the workspace's limit it is parked and
+/// its VM stopped, and the next message opens it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workspace_conversation_rests_its_vm_once_idle_even_when_followed() {
+    let placements = tempfile::tempdir().unwrap();
+    let rested = Arc::new(RestedWorkspaces::default());
+    let fixture = Fixture::in_workspace(rested.clone(), placements.path()).await;
+    let follower = fixture.service.live_changes(&fixture.id);
+    fixture.turn("first").await;
+    fixture.wait_until_idle().await;
+    assert_eq!(fixture.service.sweep(None).await, 0, "not idle long enough");
+    fixture.wait(LIMIT * 2);
+    assert_eq!(fixture.service.sweep(None).await, 1, "followed, and parked");
+    assert!(fixture.slot().await.is_none());
+    let rested_once = tokio::time::timeout(BOUND, async {
+        while rested.rested.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(rested_once.is_ok(), "its VM was let rest");
+    assert_eq!(*rested.rested.lock().unwrap(), [fixture.id.clone()]);
+    // The next message opens it again.
+    fixture.turn("second").await;
+    assert!(fixture.slot().await.is_some());
+    drop(follower);
+    fixture.service.shutdown().await.unwrap();
+    // A gateway's own stop is not a rest.
+    assert_eq!(rested.rested.lock().unwrap().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

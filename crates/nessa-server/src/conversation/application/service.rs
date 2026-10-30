@@ -312,6 +312,10 @@ pub struct ConversationLimits {
     /// How long an idle agent nobody watches keeps running before it is
     /// parked (`service/parking.rs`); `None` never parks one.
     pub park_after: Option<Duration>,
+    /// How long an idle agent in a cloud workspace of its own keeps running,
+    /// watched or not, before it is parked and its VM stopped, while nothing
+    /// it started in the background runs (`service/parking.rs`).
+    pub workspace_idle: Duration,
 }
 impl ConversationLimits {
     /// Whether `text` is past what one message may say: the one bound a
@@ -321,6 +325,10 @@ impl ConversationLimits {
         text.len() > self.max_input_bytes
     }
 }
+/// How long a cloud thread's agent sits idle before its VM stops: the person
+/// has moved on, and nothing it runs in the background is left.
+pub const WORKSPACE_IDLE: Duration = Duration::from_secs(5 * 60);
+
 /// A small service's limits. The gateway does not use these: it passes
 /// `limits.liveConversations` from its configuration.
 impl Default for ConversationLimits {
@@ -329,6 +337,7 @@ impl Default for ConversationLimits {
             max_conversations: 32,
             max_input_bytes: 8192,
             park_after: None,
+            workspace_idle: WORKSPACE_IDLE,
         }
     }
 }
@@ -6898,6 +6907,9 @@ impl ConversationService {
                             if on_confirm == ConfirmedClose::ReleaseSlot {
                                 self.release_slot(id, &slot).await;
                             }
+                            if rests_workspace(cause) {
+                                self.rest_workspace(id);
+                            }
                         }
                         closed
                     }
@@ -6909,6 +6921,15 @@ impl ConversationService {
             }
             ready.await;
         }
+    }
+
+    /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
+    /// agent has stopped: nothing for a conversation that has none, nor
+    /// while anything still uses it. The next message resumes it.
+    fn rest_workspace(&self, id: &ConversationId) {
+        let service = self.clone();
+        let id = id.clone();
+        tokio::spawn(async move { service.inner.environment.rest(&id).await });
     }
 
     /// Close `live`'s agent under its lease for `cause`, on a task of its
@@ -6983,6 +7004,15 @@ impl ConversationService {
             }
         }
     }
+}
+
+/// Whether an agent's end lets its conversation's VM stop: parked idle
+/// (which an agent that closed its thread is, at once), or closed with its
+/// conversation. Not a suspend that opens it again at once (a handoff, an
+/// agent reopened for a message), nor a lost connection or the gateway's
+/// own stop, which the next opening picks up as it was.
+fn rests_workspace(cause: LeaseEndCause) -> bool {
+    matches!(cause, LeaseEndCause::Idle | LeaseEndCause::Closed)
 }
 
 /// What a pending-mode close did with the agent and its uploads.

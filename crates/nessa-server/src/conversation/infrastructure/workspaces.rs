@@ -105,4 +105,27 @@ impl ThreadEnvironments for ThreadWorkspaces {
         environments.insert(conversation.to_string(), environment.clone());
         Ok(environment)
     }
+    fn rest<'a>(&'a self, conversation: &'a ConversationId) -> EnvironmentFuture<'a, bool> {
+        Box::pin(async move {
+            let environment = self
+                .environments
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&conversation.to_string())
+                .cloned();
+            // Its connection goes first: while it is open the VM is in use.
+            if let Some(environment) = environment {
+                if !environment.let_go().await {
+                    return false;
+                }
+            }
+            match self.service.rest(conversation.clone()).await {
+                Ok(stopped) => stopped,
+                Err(error) => {
+                    tracing::warn!(conversation_id = %conversation, ?error, "the conversation's VM could not be stopped; it keeps running until its own time limit");
+                    false
+                }
+            }
+        })
+    }
 }
