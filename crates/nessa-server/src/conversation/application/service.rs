@@ -2917,10 +2917,19 @@ impl ConversationService {
                 }
                 return saved_result(&existing);
             }
+            // A control a restart or failed cleanup left pending is settled
+            // first, as a send settles it, rather than refusing every mode
+            // change until something else opens the conversation.
+            service.recover_mode_change(&id, &caller).await?;
+            service.recover_model_change(&id, &caller).await?;
             service.refuse_pending_model_change(&id, &caller).await?;
             if service.inner.metadata.pending_mode_change(&id).await?.is_some() {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
+            // Recovery may have applied a model change: read what it saved.
+            let record = load_conversation(service.inner.metadata.as_ref(), &id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
             let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
             let place = service.agent_place(&id).await?;
             service
