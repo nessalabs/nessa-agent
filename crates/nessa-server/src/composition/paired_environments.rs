@@ -155,12 +155,12 @@ impl crate::conversation::infrastructure::ssh_environment::Sightings for SavedSi
         peer: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
         machine: &nessa_protocol::lease::MachineReport,
     ) {
+        // As of its arrival: a save that runs late keeps the order the
+        // reports came in.
+        let now = self.0.now_ms();
         let sightings = self.0.clone();
         let machine = machine.clone();
-        tokio::spawn(async move {
-            let now = sightings.now_ms();
-            sightings.saw(peer, &machine, now).await;
-        });
+        tokio::spawn(async move { sightings.saw(peer, &machine, now).await });
     }
 
     fn left(
@@ -168,8 +168,9 @@ impl crate::conversation::infrastructure::ssh_environment::Sightings for SavedSi
         peer: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
         machine: nessa_protocol::lease::MachineReport,
     ) {
+        let now = self.0.now_ms();
         let sightings = self.0.clone();
-        tokio::spawn(async move { sightings.left(peer, &machine).await });
+        tokio::spawn(async move { sightings.left(peer, &machine, now).await });
     }
 }
 

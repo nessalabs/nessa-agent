@@ -1577,6 +1577,43 @@ async fn the_machine_is_reported_after_the_hello_and_each_interval() {
     assert_eq!(gateway.frame().await, report);
 }
 
+/// A machine whose read never comes back in time, as a disk that hangs.
+struct StuckMachine;
+impl crate::devices::application::MachineProbe for StuckMachine {
+    fn read(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        std::thread::sleep(
+            crate::devices::application::MACHINE_READ_LIMIT + Duration::from_secs(1),
+        );
+        None
+    }
+}
+
+/// A read that hangs is given up after its limit: the writer goes on, and
+/// a lease is answered, with no report sent.
+#[tokio::test]
+async fn a_machine_read_that_hangs_holds_the_writer_no_longer_than_its_limit() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = Gateway::reporting(
+        1 << 20,
+        Peer::Ssh,
+        MemoryGrants::none(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        None,
+        true,
+        timer.clone(),
+        Some(Arc::new(StuckMachine)),
+    );
+    assert_eq!(gateway.frame().await, hello());
+    let started = std::time::Instant::now();
+    gateway.granted(LEASE).await;
+    let waited = started.elapsed();
+    assert!(
+        waited < crate::devices::application::MACHINE_READ_LIMIT * 2,
+        "the lease waited {waited:?} behind the read"
+    );
+}
+
 impl FixedMachine {
     fn read_report(&self) -> FromEnvironment {
         use crate::devices::application::MachineProbe;

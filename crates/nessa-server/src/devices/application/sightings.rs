@@ -44,6 +44,9 @@ pub(crate) struct WorkerSightings {
     saved: Mutex<BTreeMap<PeerEnvironment, Sighting>>,
     /// Held across each write to the store, so writes land in turn.
     writing: Mutex<()>,
+    /// When each forgotten worker was forgotten: a sighting from before
+    /// then, saved late, would bring it back.
+    forgotten: Mutex<BTreeMap<PeerEnvironment, u64>>,
 }
 
 impl WorkerSightings {
@@ -57,6 +60,7 @@ impl WorkerSightings {
             clock,
             saved: Mutex::new(saved.into_iter().collect()),
             writing: Mutex::new(()),
+            forgotten: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -90,16 +94,27 @@ impl WorkerSightings {
         }
     }
 
-    /// `peer`'s connection ended, its last report `machine`: saved now.
-    pub(crate) async fn left(self: &Arc<Self>, peer: PeerEnvironment, machine: &MachineReport) {
-        self.keep(peer, machine, self.clock.now_ms()).await;
+    /// `peer`'s connection ended at `now`, its last report `machine`:
+    /// saved, as of then.
+    pub(crate) async fn left(
+        self: &Arc<Self>,
+        peer: PeerEnvironment,
+        machine: &MachineReport,
+        now: u64,
+    ) {
+        self.keep(peer, machine, now).await;
     }
 
     /// `peer` is no longer paired: its sighting is removed.
     pub(crate) async fn forget(self: &Arc<Self>, peer: PeerEnvironment) {
         let this = self.clone();
+        let now = self.clock.now_ms();
         let _ = tokio::task::spawn_blocking(move || {
             let _writing = this.writing.lock().unwrap_or_else(PoisonError::into_inner);
+            this.forgotten
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(peer, now);
             match this.store.remove(peer) {
                 Ok(()) => {
                     this.held().remove(&peer);
@@ -118,11 +133,17 @@ impl WorkerSightings {
         };
         let _ = tokio::task::spawn_blocking(move || {
             let _writing = this.writing.lock().unwrap_or_else(PoisonError::into_inner);
-            if this
+            let older = this
                 .held()
                 .get(&peer)
-                .is_some_and(|held| held.seen_ms > sighting.seen_ms)
-            {
+                .is_some_and(|held| held.seen_ms > sighting.seen_ms);
+            let forgotten = this
+                .forgotten
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&peer)
+                .is_some_and(|at| sighting.seen_ms <= *at);
+            if older || forgotten {
                 return;
             }
             match this.store.save(peer, &sighting) {

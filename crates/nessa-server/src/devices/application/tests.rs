@@ -242,8 +242,9 @@ async fn a_connection_that_ends_saves_its_last_sighting_now() {
     sightings
         .saw(peer(1), &report("build-box", 100), 1_000)
         .await;
-    fixture.clock.0.store(1_500, Ordering::SeqCst);
-    sightings.left(peer(1), &report("build-box", 300)).await;
+    sightings
+        .left(peer(1), &report("build-box", 300), 1_500)
+        .await;
     assert_eq!(
         sightings.saved(),
         vec![(
@@ -279,12 +280,15 @@ async fn a_worker_no_longer_paired_is_forgotten_unless_it_is_connected() {
             },
         ));
     }
-    // 2 is connected though its pairing is gone: its connection ends on
-    // its own; until then it is listed.
-    *fixture.live.0.lock().unwrap() = vec![(peer(2), None, None)];
+    // 2 serves though its pairing is gone: its connection ends on its own;
+    // until then it is listed. 4's connection already ended: it goes.
+    *fixture.live.0.lock().unwrap() = vec![
+        (peer(2), Some((0, false)), None),
+        (peer(4), None, Some(report("box", 100))),
+    ];
     // Unreadable, nothing is forgotten.
     let devices = fixture.devices(None);
-    assert_eq!(devices.list().await.workers.len(), 3);
+    assert_eq!(devices.list().await.workers.len(), 4);
     *fixture.paired.0.lock().unwrap() = Some(BTreeSet::from([peer(1)]));
     let listed: Vec<_> = devices
         .list()
@@ -293,7 +297,8 @@ async fn a_worker_no_longer_paired_is_forgotten_unless_it_is_connected() {
         .into_iter()
         .map(|worker| worker.peer)
         .collect();
-    assert_eq!(listed, vec![peer(1), peer(2)]);
+    // Online first.
+    assert_eq!(listed, vec![peer(2), peer(1)]);
     let kept: Vec<_> = fixture
         .store
         .saved
@@ -328,4 +333,20 @@ async fn the_list_names_at_most_its_bound_online_first_and_counts_the_rest() {
     // Then the most recently seen of the rest.
     let last = u8::try_from(total).unwrap();
     assert_eq!(list.workers[1].peer, peer(last));
+}
+
+#[tokio::test]
+async fn a_forgotten_worker_is_not_brought_back_by_a_save_from_before() {
+    let fixture = Fixture::new();
+    let sightings = fixture.sightings();
+    sightings.saw(peer(1), &report("box", 100), 1_000).await;
+    fixture.clock.0.store(2_000, Ordering::SeqCst);
+    sightings.forget(peer(1)).await;
+    // Its connection's end, saved late, is from before it was forgotten.
+    sightings.left(peer(1), &report("box", 100), 1_900).await;
+    assert!(sightings.saved().is_empty());
+    assert!(fixture.store.saved.lock().unwrap().is_empty());
+    // Paired and seen again later, it is kept again.
+    sightings.saw(peer(1), &report("box", 100), 2_100).await;
+    assert_eq!(sightings.saved().len(), 1);
 }

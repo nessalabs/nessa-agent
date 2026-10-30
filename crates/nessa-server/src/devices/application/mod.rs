@@ -8,6 +8,8 @@ mod sightings;
 
 pub(crate) use machine::{read_machine, MachineProbe};
 #[cfg(test)]
+pub(crate) use machine::MACHINE_READ_LIMIT;
+#[cfg(test)]
 use sightings::SAVE_EVERY_MS;
 pub(crate) use sightings::{Sighting, SightingStore, WorkerSightings};
 
@@ -160,16 +162,18 @@ impl Devices {
         paired: Option<BTreeSet<PeerEnvironment>>,
     ) -> Vec<Worker> {
         let now = self.sightings.now_ms();
+        // A worker whose connection serves was admitted as paired now; any
+        // other the registry no longer pairs is forgotten, saved or not.
+        let unpaired =
+            |peer: &PeerEnvironment| paired.as_ref().is_some_and(|paired| !paired.contains(peer));
+        let serving: BTreeSet<PeerEnvironment> = live
+            .iter()
+            .filter(|worker| worker.serving.is_some())
+            .map(|worker| worker.peer)
+            .collect();
         let mut workers: BTreeMap<PeerEnvironment, Worker> = BTreeMap::new();
         for (peer, sighting) in self.sightings.saved() {
-            // A connected worker was admitted as paired; one that is off
-            // and paired no longer is forgotten.
-            let connected = live.iter().any(|worker| worker.peer == peer);
-            if !connected
-                && paired
-                    .as_ref()
-                    .is_some_and(|paired| !paired.contains(&peer))
-            {
+            if !serving.contains(&peer) && unpaired(&peer) {
                 self.sightings.forget(peer).await;
                 continue;
             }
@@ -202,6 +206,8 @@ impl Devices {
                         machine: machine.or(saved.and_then(|saved| saved.machine)),
                     }
                 }
+                // Gone and no longer paired: forgotten above, not listed.
+                (None, _) if unpaired(&worker.peer) => continue,
                 // Connected but not serving, or gone: what was saved, or
                 // its last report if none was.
                 (None, machine) => saved.unwrap_or(Worker {

@@ -79,7 +79,8 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
       ])
       if (!live) return
       setRead((last) => ({
-        hub: list.ok ? (list.value.hub ? hubCard(list.value.hub) : null) : last.hub,
+        // A list that could not read the hub this time keeps the last one.
+        hub: list.ok && list.value.hub ? hubCard(list.value.hub) : (last.hub ?? null),
         workers: list.ok ? sortWorkers(list.value.workers.map(workerCard)) : last.workers,
         omitted: list.ok ? list.value.omitted : last.omitted,
         listening: list.ok ? list.value.listening : last.listening,
