@@ -1,0 +1,27 @@
+{
+  "sourceRevision": "8784ec316f3e28693191b2af14bf64310d8b06ee",
+  "leaseProtocol": "a8e6fff6643172a9",
+  "nessaSha256": "7f6eba3f89b80831f8b8defef130f50d0c62814439bf15eaabe0010321c1fede",
+  "nessaBytes": 145569368,
+  "supervisorSha256Prefix": "afe8510c",
+  "buildProfile": "dev, dependency opt-level=0, debug=0, incremental=0, stripped",
+  "target": "x86_64-unknown-linux-gnu",
+  "seedImage": "bsh_1WtCS3oK4SWwNbdpOnBXzFPq_PwIT1aGCwnJSQHWakU",
+  "replaced": ["/opt/nessa/bin/nessa", "/opt/nessa/BUILD.json", "/opt/nessa/Cargo.lock"],
+  "image": "bsh_tu8vxzXBBQhMDD8tkFO1pUy9pY4lKRXxGrl1mp-PAu4",
+  "share": "shr_7774989b794a1704",
+  "snapshot": "nessa-worker-a8e6fff6-8784ec3-linux-x64",
+  "snapshotBytes": 1197621248,
+  "cleanClone": {
+    "protocolMatched": true,
+    "checksumMatched": true,
+    "buildSourceAbsent": true,
+    "knownPersonalCredentialPathsAbsent": true
+  },
+  "ownedVMsDeleted": [
+    { "id": "bx_9a5hedfb", "role": "builder", "confirmedAbsent": true },
+    { "id": "bx_xpgfb7x7", "role": "seed", "confirmedAbsent": true },
+    { "id": "bx_j84vcz9r", "role": "check", "confirmedAbsent": true }
+  ],
+  "deletionOperationPrefixes": ["bdop_17ea326b", "bdop_8801c534", "bdop_7b25a664"]
+}

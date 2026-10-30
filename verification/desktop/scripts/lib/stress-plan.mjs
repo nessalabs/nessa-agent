@@ -145,6 +145,10 @@ export const KNOBS = {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
   },
+  devices: {
+    default: 1,
+    what: "times a paired worker is shown in the side rail's Devices with its machine, opened, offered by Add a computer's commands, and kept as offline with when it was last seen once it stops",
+  },
   tunnels: {
     default: 1,
     what: "times the web tunnel is turned on in Settings, kept across a gateway restart, dialed through by a paired worker, and turned off",
@@ -261,6 +265,7 @@ export function plan(knobs) {
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.devices, () => ({ kind: "devices" }))
   add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))

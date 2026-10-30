@@ -3824,6 +3824,7 @@ dependencies = [
  "shepherd",
  "socket2",
  "subtle",
+ "sysinfo",
  "tar",
  "tempfile",
  "time",

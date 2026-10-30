@@ -79,8 +79,8 @@ use futures_util::FutureExt;
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
-    GrantRefusal, GrantedTerms, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
-    Unavailability, COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
+    GrantRefusal, GrantedTerms, MachineReport, PublishRefusal, Sandbox, StagedArtifact,
+    ToEnvironment, Unavailability, COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
@@ -269,6 +269,18 @@ struct Routes {
     /// The host said it is stopping (`Draining`), or refused a lease as
     /// draining: it admits nothing new on this connection.
     draining: Drains,
+    /// What the host last said its machine is and how busy
+    /// (`FromEnvironment::Machine`); `None` until it says.
+    machine: Reports,
+}
+
+/// The host's latest machine report, for whoever waits to learn it.
+struct Reports(watch::Sender<Option<MachineReport>>);
+
+impl Default for Reports {
+    fn default() -> Self {
+        Self(watch::channel(None).0)
+    }
 }
 
 /// Whether the host said it is stopping, for whoever waits to learn it.
@@ -587,6 +599,17 @@ impl HostLink {
     /// no new lease here, though those it holds still end through it.
     pub(crate) fn is_draining(&self) -> bool {
         *self.routes().draining.0.borrow()
+    }
+
+    /// What the host last said its machine is and how busy, on this
+    /// connection; `None` before it says, or when it never does.
+    pub(crate) fn machine(&self) -> Option<MachineReport> {
+        self.routes().machine.0.borrow().clone()
+    }
+
+    /// Wakes each time the host reports its machine on this connection.
+    pub(crate) fn machines(&self) -> watch::Receiver<Option<MachineReport>> {
+        self.routes().machine.0.subscribe()
     }
 
     /// Answers once the host said it is stopping on this connection: from
@@ -1661,6 +1684,12 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         // Only proof the host is still there: its arrival already reset the
         // demux's silence bound, and nothing waits on it.
         FromEnvironment::Keepalive => Routed::Done,
+        // Shown, never acted on; one out of its bounds is not kept.
+        FromEnvironment::Machine { report } if report.is_bounded() => {
+            routes.machine.0.send_replace(Some(report));
+            Routed::Done
+        }
+        FromEnvironment::Machine { .. } => Routed::Dropped,
         FromEnvironment::Draining => {
             routes.draining.0.send_replace(true);
             Routed::Done
@@ -2106,6 +2135,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Hello { .. } => "hello",
         FromEnvironment::Unavailable { .. } => "unavailable",
         FromEnvironment::Keepalive => "keepalive",
+        FromEnvironment::Machine { .. } => "machine",
         FromEnvironment::Draining => "draining",
         FromEnvironment::Granted { .. } => "granted",
         FromEnvironment::Refused { .. } => "refused",

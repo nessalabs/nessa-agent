@@ -5,9 +5,11 @@
  */
 import { LoadingText } from "@nessa-ui/react/loading-text"
 import {
+  createContext,
   type CSSProperties,
   type ReactElement,
   type ReactNode,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -57,50 +59,13 @@ export const railItems: readonly RailItem[] = [
     ),
   },
   {
-    id: "notes",
-    name: "Notes",
+    id: "devices",
+    name: "Devices",
     icon: svg(
       <>
-        <path d="M5 4h10l4 4v12H5z" />
-        <path className="g-line" d="M8.5 12h7M8.5 15.5h4.5" />
-      </>,
-    ),
-  },
-  {
-    id: "calendar",
-    name: "Calendar",
-    icon: svg(
-      <>
-        <rect x="4" y="5.5" width="16" height="14.5" rx="2.5" />
-        <path className="g-page" d="M4 10h16" />
-        <path className="g-ring" d="M8.5 3.5v4M15.5 3.5v4" />
-      </>,
-    ),
-  },
-  {
-    id: "browser",
-    name: "Browser",
-    // A page reaches the window's edges; Settings stays a ⌘, away.
-    studio: false,
-    icon: svg(
-      <>
-        <circle cx="12" cy="12" r="8.5" />
-        <g className="g-globe">
-          <path d="M3.5 12h17M12 3.5c2.6 2.4 2.6 14.6 0 17M12 3.5c-2.6 2.4-2.6 14.6 0 17" />
-        </g>
-      </>,
-    ),
-  },
-  {
-    id: "files",
-    name: "Files",
-    icon: svg(
-      <>
-        <path
-          className="g-back"
-          d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"
-        />
-        <path className="g-lid" d="M3.5 11h17" />
+        <rect className="g-screen" x="2.5" y="4.5" width="13" height="10" rx="1.8" />
+        <path d="M6.5 18.5h5M9 14.5v4" />
+        <rect className="g-phone" x="17.5" y="8" width="4" height="11" rx="1.2" />
       </>,
     ),
   },
@@ -206,16 +171,38 @@ export function SideRailButton({
 export const RAIL_LOADING_DELAY_MS = 3000
 
 /**
+ * What each item's view shows, by item id, given by the window's
+ * composition: the workspace draws the rail and knows no item's content.
+ */
+const RailContent = createContext<Readonly<Record<string, ReactNode>>>({})
+
+export function RailContentProvider({
+  views,
+  children,
+}: {
+  views: Readonly<Record<string, ReactNode>>
+  children: ReactNode
+}) {
+  return <RailContent.Provider value={views}>{children}</RailContent.Provider>
+}
+
+/**
  * An item's full-window view. It covers the workspace from its first frame —
- * no fade that lets the panes show through — and stays empty while the item
- * loads; only a load still going after `RAIL_LOADING_DELAY_MS` shows the
- * loading animation. The items have no content yet, so for now that is what
- * each one shows.
+ * no fade that lets the panes show through — and shows the content the
+ * composition gave for the item. One with none stays empty while it loads;
+ * only a load still going after `RAIL_LOADING_DELAY_MS` shows the loading
+ * animation.
  */
 export function RailView({ item }: { item: RailItem }) {
+  const content = useContext(RailContent)[item.id]
   return (
-    <section key={item.id} className="rail-view" aria-label={item.name}>
-      <RailLoading name={item.name} />
+    <section
+      key={item.id}
+      className="rail-view"
+      aria-label={item.name}
+      data-rail-view-item={item.id}
+    >
+      {content ?? <RailLoading name={item.name} />}
     </section>
   )
 }

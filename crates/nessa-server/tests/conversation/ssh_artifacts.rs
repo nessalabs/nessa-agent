@@ -369,6 +369,7 @@ impl LeaseConnector for Connector {
                 policy: Arc::new(
                     crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
                 ),
+                machine: None,
             },
             Runners {
                 harnesses: host.launcher.clone(),

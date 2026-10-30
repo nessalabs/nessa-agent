@@ -6,11 +6,15 @@ import { useWindowTooltips } from "../adapters/use-window-tooltips"
 import { useDriftInEffect } from "../adapters/window-preferences"
 import { useWorkspaceLayoutPreference } from "../adapters/workspace-layout-preference"
 import { SettingsHost, useSettingsOpening } from "../settings"
-import { SessionsInSidebar, ThreeColumns } from "../workspace"
+import { DevicesView } from "../devices"
+import { RailContentProvider, SessionsInSidebar, ThreeColumns } from "../workspace"
 import { useWorkspaceSelector } from "../workspace/adapters/store/hooks"
 import { selectFailure } from "../workspace/adapters/store/selectors"
 import { startupFailureCode } from "../workspace/ui/startup-failure"
 import { StartupFallback } from "./startup-fallback"
+
+/** What the side rail's items show, beside Agents (the workspace itself). */
+const railViews = { devices: <DevicesView /> }
 
 /**
  * The window: the workspace in the layout chosen in Settings › Workspace ›
@@ -47,11 +51,13 @@ export function DesktopWindow({
         className="desktop-window-under"
         inert={settings.open || startup !== null || undefined}
       >
-        {layout === "sidebar" ? (
-          <SessionsInSidebar {...props} />
-        ) : (
-          <ThreeColumns {...props} />
-        )}
+        <RailContentProvider views={railViews}>
+          {layout === "sidebar" ? (
+            <SessionsInSidebar {...props} />
+          ) : (
+            <ThreeColumns {...props} />
+          )}
+        </RailContentProvider>
       </div>
       <SettingsHost
         {...props}

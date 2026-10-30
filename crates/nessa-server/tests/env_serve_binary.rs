@@ -5,8 +5,8 @@
 #![cfg(unix)]
 
 use nessa_protocol::lease::{
-    decode, encode, Cleanup, Data, FromEnvironment, GrantRefusal, GrantedTerms, Sandbox,
-    ToEnvironment, Unavailability,
+    decode, encode, Cleanup, Data, FromEnvironment, GrantRefusal, GrantedTerms, MachineReport,
+    Sandbox, ToEnvironment, Unavailability,
 };
 use std::{
     collections::BTreeMap,
@@ -54,6 +54,8 @@ struct Serving {
     child: Child,
     input: Option<ChildStdin>,
     frames: mpsc::Receiver<FromEnvironment>,
+    /// The latest machine report the environment sent.
+    machine: Option<MachineReport>,
 }
 
 fn serve(root: &Path) -> Serving {
@@ -79,6 +81,7 @@ fn serve_by(mut command: Command, root: &Path) -> Serving {
         child,
         input,
         frames,
+        machine: None,
     }
 }
 
@@ -106,10 +109,36 @@ impl Serving {
         input.flush().unwrap();
     }
 
-    fn next(&self) -> FromEnvironment {
-        self.frames
-            .recv_timeout(Duration::from_secs(20))
-            .expect("the environment answers")
+    /// The next frame that answers the gateway. A machine report may come
+    /// between any two, on its own clock, so it is kept aside, not returned.
+    fn next(&mut self) -> FromEnvironment {
+        loop {
+            match self
+                .frames
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the environment answers")
+            {
+                FromEnvironment::Machine { report } => self.machine = Some(report),
+                frame => return frame,
+            }
+        }
+    }
+
+    /// The environment's machine report: the latest kept, or the next to
+    /// come. Asked once nothing else is due, since it drops other frames.
+    fn machine(&mut self) -> MachineReport {
+        if let Some(report) = self.machine.take() {
+            return report;
+        }
+        loop {
+            if let FromEnvironment::Machine { report } = self
+                .frames
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the environment reports its machine")
+            {
+                return report;
+            }
+        }
     }
 
     /// The gateway's stream ends; the environment ends what it held and exits.
@@ -249,6 +278,12 @@ fn a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger() {
             ..
         }
     ));
+    // Between the gateway's frames, the host reports the machine it is.
+    let machine = serving.machine();
+    assert!(
+        !machine.hostname.is_empty() && machine.cpus > 0,
+        "{machine:?}"
+    );
     serving.finish();
     let kinds: Vec<_> = ledger(root.path())
         .iter()
@@ -302,7 +337,7 @@ fn a_lease_held_when_the_gateways_stream_ends_is_ended_as_lost_and_accounted_aft
 fn a_host_with_no_agents_configured_says_so_after_its_hello() {
     let root = tempfile::tempdir().unwrap();
     nessa_local_storage::create_directory(&root.path().join("ci").join("auth")).unwrap();
-    let serving = serve(root.path());
+    let mut serving = serve(root.path());
     assert!(matches!(
         serving.next(),
         FromEnvironment::Hello { protocol, .. } if protocol == nessa_server::env::LEASE_PROTOCOL
@@ -362,7 +397,7 @@ fn this_build_installs_on_a_host_without_it_and_then_serves_there() {
     let answer = String::from_utf8(output.stdout).unwrap();
     assert_eq!(Upload::parse(&answer), Some(Upload::Installed), "{answer}");
     assert_eq!(probe(home.path()), Probe::Present);
-    let serving = serve_by(
+    let mut serving = serve_by(
         on_host(home.path(), &serve_command(&[&digest])),
         root.path(),
     );
