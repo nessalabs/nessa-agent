@@ -1,4 +1,5 @@
 import { BoatProvider } from "./settings/ui/boat-row"
+import { DevicesProvider } from "./devices"
 import { VaultProvider, nativeVault } from "../vault"
 import { hasNativeHost } from "../host"
 import { nativeAgentApiKeys } from "../onboarding/adapters/agent-api-key"
@@ -206,33 +207,35 @@ createRoot(container).render(
                 <DesktopIconFamilyProvider>
                   <McpServersProvider gateway={dependencies.mcpServers}>
                     <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                      <ClipboardProvider write={writeClipboardText}>
-                        <SiteIconProvider render={faviconSiteIcon}>
-                          <HeldFilesProvider
-                            read={dependencies.heldFiles}
-                            save={saveFile}
-                          >
-                            <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                              <PermissionRulesProvider
-                                gateway={dependencies.permissionRules}
-                              >
-                                <BoatProvider gateway={dependencies.boat}>
-                                  <GithubProvider
-                                    gateway={dependencies.github}
-                                    avatar={githubAvatar}
-                                  >
-                                    <DesktopWindow
-                                      hostKind={host.kind}
-                                      browserSurface={host.kind === "browser"}
-                                      inspectable={import.meta.env.DEV}
-                                    />
-                                  </GithubProvider>
-                                </BoatProvider>
-                              </PermissionRulesProvider>
-                            </NativeHooksProvider>
-                          </HeldFilesProvider>
-                        </SiteIconProvider>
-                      </ClipboardProvider>
+                      <DevicesProvider gateway={dependencies.devices}>
+                        <ClipboardProvider write={writeClipboardText}>
+                          <SiteIconProvider render={faviconSiteIcon}>
+                            <HeldFilesProvider
+                              read={dependencies.heldFiles}
+                              save={saveFile}
+                            >
+                              <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                                <PermissionRulesProvider
+                                  gateway={dependencies.permissionRules}
+                                >
+                                  <BoatProvider gateway={dependencies.boat}>
+                                    <GithubProvider
+                                      gateway={dependencies.github}
+                                      avatar={githubAvatar}
+                                    >
+                                      <DesktopWindow
+                                        hostKind={host.kind}
+                                        browserSurface={host.kind === "browser"}
+                                        inspectable={import.meta.env.DEV}
+                                      />
+                                    </GithubProvider>
+                                  </BoatProvider>
+                                </PermissionRulesProvider>
+                              </NativeHooksProvider>
+                            </HeldFilesProvider>
+                          </SiteIconProvider>
+                        </ClipboardProvider>
+                      </DevicesProvider>
                     </LinkedDevicesProvider>
                   </McpServersProvider>
                 </DesktopIconFamilyProvider>

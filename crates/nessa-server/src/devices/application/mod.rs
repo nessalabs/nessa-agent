@@ -6,7 +6,9 @@ mod machine;
 mod sightings;
 
 pub(crate) use machine::MachineProbe;
-pub(crate) use sightings::{Sighting, SightingStore, WorkerSightings, SAVE_EVERY_MS};
+#[cfg(test)]
+use sightings::SAVE_EVERY_MS;
+pub(crate) use sightings::{Sighting, SightingStore, WorkerSightings};
 
 use nessa_protocol::lease::MachineReport;
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;

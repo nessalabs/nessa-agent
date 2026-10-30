@@ -493,7 +493,7 @@ async function untilTurn(run, conversationId, at, ready, seconds = 60) {
           ? view.messages[at]
           : view.messages.find((each) => each.userText === at.text)
       if (turn && ready(turn, view)) return { view, turn }
-    } catch (error) {
+    } catch {
       // A read across a restart fails; the next one is on the new client.
       log(`read ${conversationId}: ${error.message}`)
     }
@@ -513,7 +513,7 @@ async function untilView(run, conversationId, ready, seconds = 60) {
     try {
       view = await readWithReviews(run.client, conversationId)
       if (ready(view)) return { view }
-    } catch (error) {
+    } catch {
       log(`read ${conversationId}: ${error.message}`)
     }
     await sleep(200)
@@ -901,7 +901,7 @@ async function choose(page, conversationId, label) {
     try {
       await more.click({ timeout: 2_000 })
       break
-    } catch (error) {
+    } catch {
       if (Date.now() > end) throw error
     }
   }
@@ -1091,7 +1091,7 @@ async function settled(run, conversationId, seen, text, status, failures, second
         turn = carried(view, seen, text) ?? turn
       if (turn && ended(turn) && !(turn.status === "cancelled" && status !== "cancelled"))
         break
-    } catch (error) {
+    } catch {
       log(`read ${conversationId}: ${error.message}`)
     }
     await sleep(200)
@@ -3146,7 +3146,7 @@ const steps = {
         try {
           const { lease } = await followedOnce(run, conversationId)
           return lease?.state === "ended" ? lease : null
-        } catch (error) {
+        } catch {
           log(`view ${conversationId}: ${explain(error)}`)
           return null
         }
@@ -3207,6 +3207,158 @@ const steps = {
         if (run.evidence)
           writeFileSync(join(run.evidence, `worker-${each.label}.log`), each.log())
         await each.close()
+      }
+      owner?.close()
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+    }
+  },
+
+  async devices(run, step, failures) {
+    // A worker dials the native listener, off until a step turns it on.
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    // With evidence asked for, each page is photographed as it is checked.
+    const photograph = (label) =>
+      run.evidence
+        ? run.page
+            .screenshot({
+              path: join(run.evidence, `devices-${run.engine}-${label}.png`),
+            })
+            .catch(() => {})
+        : Promise.resolve()
+    let worker
+    let owner
+    try {
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      worker = await startWorker({
+        owner,
+        address: run.nativeAddress,
+        agent: run.stack.agent,
+        launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+        label: `devices${step.index}`,
+        connected: async (name) =>
+          (await offers(run, (environments) => environments.includes(name))).includes(
+            name,
+          ),
+      })
+      const id = worker.name.slice("peer:".length)
+      // The gateway's list names the worker with the machine it reported
+      // over its lease link, as the window reads it.
+      const listed = await waitFor(async () => {
+        const { workers } = await run.client.devices.list()
+        const found = workers.find((each) => each.environment === worker.name)
+        return found?.state === "online" && found.machine ? found : null
+      }, 30_000)
+      if (!listed) {
+        failures.push(`devices.list never named ${worker.name} online with its machine`)
+        return
+      }
+      if (!(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0))
+        failures.push(`the worker reported ${JSON.stringify(listed.machine)}`)
+      await run.exclusive(async () => {
+        const page = run.page
+        await setSideRail(page, true, failures)
+        if (failures.length) return
+        await page.locator('[data-rail-item="devices"]').click()
+        const tile = page.locator(`[data-devices-worker="${id}"]`)
+        if (
+          !(await waitFor(
+            async () => (await page.$("[data-devices-hub]")) !== null,
+            10_000,
+          ))
+        )
+          failures.push("the Devices view drew no hub card")
+        for (const stat of ["CPU", "Memory", "Disk"])
+          if (
+            (await page
+              .locator(`[data-devices-hub] [data-devices-stat="${stat}"]`)
+              .count()) !== 1
+          )
+            failures.push(`the hub card has no ${stat}`)
+        const online = await waitFor(async () => {
+          const text = (await tile.count()) ? await tile.innerText() : ""
+          return text.includes(listed.machine.hostname) &&
+            text.includes("Online") &&
+            text.includes("CPU")
+            ? text
+            : null
+        }, 15_000)
+        if (!online) {
+          failures.push(
+            `the worker's tile reads ${JSON.stringify(await tile.allInnerTexts())}`,
+          )
+          return
+        }
+        await photograph("list")
+        // The filled action's words stand out from its fill.
+        const ink = await page
+          .locator('[data-devices-action="add"]')
+          .evaluate((button) => {
+            const style = getComputedStyle(button)
+            return { fill: style.backgroundColor, ink: style.color }
+          })
+        if (ink.fill === ink.ink)
+          failures.push(`Add a computer is drawn ${ink.ink} on ${ink.fill}`)
+        // Its own page: its load, never the agents it runs.
+        await tile.click()
+        const detail = page.locator('[data-devices-page="worker"]')
+        await detail.waitFor({ timeout: 5_000 })
+        for (const stat of ["Agents", "CPU", "Memory", "Disk"])
+          if ((await detail.locator(`[data-devices-stat="${stat}"]`).count()) !== 1)
+            failures.push(`the worker's page has no ${stat}`)
+        if ((await detail.innerText()).includes("Running here"))
+          failures.push("the worker's page lists what runs there")
+        await photograph("worker")
+        await detail.locator('[data-devices-action="back"]').click()
+        // Add a computer: a code and the two commands that use it.
+        await page.locator('[data-devices-action="add"]').click()
+        const add = page.locator('[data-devices-page="add"]')
+        const shown = await waitFor(
+          async () => (await add.locator("[data-devices-command]").count()) === 2,
+          10_000,
+        )
+        const lines = await add.locator("[data-devices-command] code").allInnerTexts()
+        if (
+          !shown ||
+          !lines[0]?.startsWith("nessa env enroll ") ||
+          !lines[1]?.startsWith("nessa env dial ")
+        )
+          failures.push(`Add a computer shows ${JSON.stringify(lines)}`)
+        await photograph("add")
+        await add.locator('[data-devices-action="back"]').click()
+      })
+      if (failures.length) return
+      // Stopped, it stays listed, offline, with when it was last seen.
+      if (!(await worker.stop("SIGTERM", 30_000)))
+        failures.push(`worker ${worker.label} did not drain and exit within 30 s`)
+      await run.exclusive(async () => {
+        const page = run.page
+        const tile = page.locator(`[data-devices-worker="${id}"]`)
+        const offline = await waitFor(async () => {
+          const text = (await tile.count()) ? await tile.innerText() : ""
+          return text.includes("Offline") && text.includes("Last seen") ? text : null
+        }, 15_000)
+        if (!offline)
+          failures.push(
+            `the stopped worker's tile reads ${JSON.stringify(await tile.allInnerTexts())}`,
+          )
+        await photograph("offline")
+        await page.locator('[data-rail-item="agents"]').click()
+        await setSideRail(page, false, failures)
+      })
+    } finally {
+      if (worker) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+        await worker.close()
       }
       owner?.close()
       await run.exclusive(async () => {
@@ -3325,7 +3477,7 @@ const steps = {
     let thrown = null
     try {
       if (on) await throughTunnel()
-    } catch (error) {
+    } catch {
       thrown = error
     }
     let kept = null
@@ -3687,7 +3839,7 @@ const steps = {
           try {
             await owner.conversation.webhookCursor(conversationId, credential)
             return true
-          } catch (error) {
+          } catch {
             if (error.code !== "invalid_request") throw error
             lastRefusal = error
             return false
@@ -3738,7 +3890,7 @@ const steps = {
       try {
         if (shared)
           await owner.conversation.unshare(conversationId, run.stack.webhookCredential)
-      } catch (error) {
+      } catch {
         failures.push(`webhook grant cleanup failed: ${error.message}`)
       } finally {
         owner.close()
@@ -4314,7 +4466,7 @@ const steps = {
       try {
         await run.client.conversation.read(conversationId)
         return false
-      } catch (error) {
+      } catch {
         return error?.code === "conversation_deleted"
       }
     }, 60_000)

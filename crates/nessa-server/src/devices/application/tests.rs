@@ -33,15 +33,14 @@ impl MachineProbe for Probe {
     }
 }
 
-struct Live(
-    Mutex<
-        Vec<(
-            PeerEnvironment,
-            Option<(usize, bool)>,
-            Option<MachineReport>,
-        )>,
-    >,
+/// Each worker: its key, what it serves, its report.
+type Connection = (
+    PeerEnvironment,
+    Option<(usize, bool)>,
+    Option<MachineReport>,
 );
+
+struct Live(Mutex<Vec<Connection>>);
 impl LiveWorkers for Live {
     fn live(&self) -> Vec<LiveWorker> {
         self.0
