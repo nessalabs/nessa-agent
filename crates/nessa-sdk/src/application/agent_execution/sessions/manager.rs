@@ -800,23 +800,31 @@ impl SessionManager {
         // fingerprint still matches. A context-only mismatch (S6) and a
         // provider that starts elsewhere open new context, recorded below.
         let fresh = self.open_fresh_context.load(Ordering::Relaxed);
-        let restore = if fresh {
-            None
-        } else {
+        let (restore, admitted_before) = {
             let evidence = self.evidence.lock().await;
             let snapshot = evidence.observed().expect("prepared session evidence");
-            snapshot
-                .provider_context
-                .recorded()
-                .cloned()
-                .filter(|saved| {
-                    provider.restores_saved_context(
-                        saved,
-                        snapshot
-                            .provider_context
-                            .has_admitted_work(snapshot.invocations.len()),
-                    )
-                })
+            let restore = if fresh {
+                None
+            } else {
+                snapshot
+                    .provider_context
+                    .recorded()
+                    .cloned()
+                    .filter(|saved| {
+                        provider.restores_saved_context(
+                            saved,
+                            snapshot
+                                .provider_context
+                                .has_admitted_work(snapshot.invocations.len()),
+                        )
+                    })
+            };
+            // Admission while open waits belongs to this opening even if the
+            // input is withdrawn before native context publication (C11).
+            (
+                restore,
+                super::validation::terminal_prefix(&snapshot.invocations),
+            )
         };
         let opening = catch_unwind(AssertUnwindSafe(|| {
             provider.open(ProviderOpenRequest::new(
@@ -1009,10 +1017,7 @@ impl SessionManager {
             {
                 before.clone()
             } else {
-                ProviderContext::recorded_after(
-                    session.id().clone(),
-                    super::validation::terminal_prefix(&snapshot.invocations),
-                )
+                ProviderContext::recorded_after(session.id().clone(), admitted_before)
             };
             if before != after {
                 changes.push(SessionChange::ProviderContext { before, after });

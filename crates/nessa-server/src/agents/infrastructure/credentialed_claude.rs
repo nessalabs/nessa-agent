@@ -3,6 +3,8 @@
 //! Its injected source runs blocking keychain reads off the async executor. An
 //! unavailable or malformed store fails the open before a provider process can
 //! be started. Composition selection remains outside this adapter.
+//! Native-context classification delegates through the credential-free Claude
+//! configuration; its query does not read the credential source.
 //!
 //! Deleting Claude's own record of a session launches Claude the same way, with
 //! the credential read at that launch, over the binding's own deletion
@@ -174,6 +176,15 @@ impl ProviderSessionDeleter for CredentialedClaudeProvider {
 }
 
 impl AgentProvider for CredentialedClaudeProvider {
+    fn restores_saved_context(&self, saved: &ExecutionSessionId, has_invocations: bool) -> bool {
+        // Classification uses only immutable configuration. A configuration
+        // failure cannot authorize reset; opening reports its typed failure.
+        self.configured(self.config.clone())
+            .map_or(true, |provider| {
+                provider.restores_saved_context(saved, has_invocations)
+            })
+    }
+
     fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
         HarnessHostIdentity::local()
     }
@@ -294,7 +305,13 @@ mod tests {
         },
         infrastructure::clock::RuntimeClock,
     };
-    use std::sync::{mpsc, Mutex};
+    use std::{
+        path::Path,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Mutex,
+        },
+    };
     use tokio::sync::oneshot;
 
     struct Credentials(Result<Option<(AgentCredentialKind, Vec<u8>)>, AgentCredentialFailure>);
@@ -326,9 +343,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn the_credential_wrapper_reports_the_mode_it_launches() {
-        let root = tempfile::tempdir().unwrap();
+    fn fixture_provider(
+        root: &Path,
+        credentials: Arc<dyn AgentCredentialSource>,
+    ) -> CredentialedClaudeProvider {
         let text = ModalitiesDto {
             text: true,
             image: false,
@@ -360,7 +378,7 @@ mod tests {
             runtime_environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),
             open_credentials: Default::default(),
-            workspace: root.path().into(),
+            workspace: root.into(),
             tools_enabled: true,
             mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
@@ -386,8 +404,7 @@ mod tests {
             "Be concise.",
         )])
         .unwrap();
-        let credentials = Arc::new(Credentials(Ok(None)));
-        let provider = CredentialedClaudeProvider::new(
+        CredentialedClaudeProvider::new(
             config,
             model,
             TokenLimits::new(100_000, 32_000).unwrap(),
@@ -396,8 +413,15 @@ mod tests {
             credentials,
         )
         .unwrap()
-        .with_approval_mode(ApprovalMode::Auto)
-        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_credential_wrapper_reports_the_mode_it_launches() {
+        let root = tempfile::tempdir().unwrap();
+        let credentials = Arc::new(Credentials(Ok(None)));
+        let provider = fixture_provider(root.path(), credentials)
+            .with_approval_mode(ApprovalMode::Auto)
+            .unwrap();
         assert_eq!(provider.approval_mode(), Some(ApprovalMode::Auto));
         let context = provider
             .model_change_context()
@@ -419,6 +443,186 @@ mod tests {
         let store = provider.traces().unwrap();
         assert!(Arc::ptr_eq(&store, &first.traces().unwrap()));
         assert!(Arc::ptr_eq(&store, &second.traces().unwrap()));
+    }
+
+    struct CountingCredentials {
+        reads: AtomicUsize,
+        failure: Option<AgentCredentialFailure>,
+    }
+    impl AgentCredentialSource for CountingCredentials {
+        fn read(&self, _: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.failure.map_or(Ok(None), Err)
+        }
+    }
+
+    #[test]
+    fn context_restoration_delegates_without_reading_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let saved = ExecutionSessionId::new("saved-native-context").unwrap();
+        for failure in [None, Some(AgentCredentialFailure::Unavailable)] {
+            let credentials = Arc::new(CountingCredentials {
+                reads: AtomicUsize::new(0),
+                failure,
+            });
+            let provider = fixture_provider(root.path(), credentials.clone());
+            let claude = provider.configured(provider.config.clone()).unwrap();
+            for admitted in [false, true] {
+                assert_eq!(claude.restores_saved_context(&saved, admitted), admitted);
+                assert_eq!(
+                    provider.restores_saved_context(&saved, admitted),
+                    claude.restores_saved_context(&saved, admitted)
+                );
+            }
+            assert_eq!(credentials.reads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn invalid_context_configuration_cannot_authorize_native_history_reset() {
+        let root = tempfile::tempdir().unwrap();
+        let credentials = Arc::new(CountingCredentials {
+            reads: AtomicUsize::new(0),
+            failure: None,
+        });
+        let mut provider = fixture_provider(root.path(), credentials.clone());
+        provider.config.event_capacity = 0;
+        assert!(matches!(
+            provider.configured(provider.config.clone()),
+            Err(AgentError::Configuration(_))
+        ));
+        let saved = ExecutionSessionId::new("saved-native-context").unwrap();
+        for admitted in [false, true] {
+            assert!(provider.restores_saved_context(&saved, admitted));
+        }
+        assert_eq!(credentials.reads.load(Ordering::SeqCst), 0);
+    }
+
+    /// Reuse the SDK's local Claude ACP contract fixture rather than defining a
+    /// second native protocol. Its system-prompt mode checks this wrapper's
+    /// instructions; removing its empty record models Claude not persisting an
+    /// unused context. No credential or real Claude process is needed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unused_credentialed_claude_context_reopens_without_native_history() {
+        use nessa_sdk::{
+            application::agent_execution::{
+                agents::{Agent, AttachmentRequest},
+                permissions::ActionContext,
+                sessions::{SessionManager, SessionStorage},
+            },
+            domain::agent_execution::{prompts::SystemPromptBuilder, sessions::SessionId},
+            infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock},
+        };
+
+        fn actor(request: &str) -> ActionContext {
+            ActionContext::new("fixture-host", "fixture-tests", request).unwrap()
+        }
+        async fn attach(
+            provider: Arc<CredentialedClaudeProvider>,
+            storage: Arc<RecordStorage>,
+            id: SessionId,
+            request: &str,
+        ) -> Agent {
+            let manager = SessionManager::open(
+                Some(id),
+                storage,
+                Arc::new(RuntimeMessageCommitClock::new()),
+            )
+            .await
+            .unwrap();
+            let agent = Agent::prepare(
+                provider,
+                manager,
+                Arc::new(crate::conversation_test_support::AcceptingAudit),
+            )
+            .await
+            .unwrap();
+            let authorization = agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(actor(request)))
+                .unwrap();
+            agent
+                .start_attachment(authorization)
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            agent
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let credentials = Arc::new(CountingCredentials {
+            reads: AtomicUsize::new(0),
+            failure: None,
+        });
+        let template = fixture_provider(root.path(), credentials.clone());
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../nessa-sdk/tests/infrastructure/acp/contracts/fixtures/claude_acp_test_handler.py",
+        );
+        assert!(fixture.is_file(), "the shared SDK ACP fixture is present");
+        let mut config = template.config.clone();
+        config.executable = ExecutableUseSnapshot::unmanaged("/usr/bin/python3".into());
+        config.arguments = vec![fixture.into_os_string(), "system-prompt".into()];
+        let prompt = SystemPromptBuilder::new()
+            .text(
+                PromptSource::new(PromptSourceKind::Core, "nessa/system").unwrap(),
+                "Core instructions.",
+            )
+            .text(
+                PromptSource::new(PromptSourceKind::Plugin, "reviewer").unwrap(),
+                "\nPlugin instructions.",
+            )
+            .build()
+            .unwrap();
+        let provider = Arc::new(
+            CredentialedClaudeProvider::new(
+                config,
+                template.model,
+                TokenLimits::new(900, 100).unwrap(),
+                template.audit,
+                prompt,
+                credentials.clone(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(credentials.reads.load(Ordering::SeqCst), 0);
+        let storage_root = tempfile::tempdir().unwrap();
+        let path = storage_root.path().join("sessions");
+        let id = SessionId::new("credentialed-unused-context").unwrap();
+        let storage = Arc::new(RecordStorage::new(&path).unwrap());
+        let first = attach(provider.clone(), storage.clone(), id.clone(), "open-first").await;
+        let before = first.session_manager().snapshot().await.unwrap();
+        assert!(before.invocations.is_empty());
+        assert_eq!(before.provider_context.admission_watermark(), Some(0));
+        assert_eq!(credentials.reads.load(Ordering::SeqCst), 1);
+        first.close(actor("close-first")).await.unwrap();
+        drop(first);
+        storage.shutdown().await.unwrap();
+        std::fs::remove_file(root.path().join("saved-session")).unwrap();
+
+        let storage = Arc::new(RecordStorage::new(&path).unwrap());
+        let second = attach(provider, storage.clone(), id, "open-second").await;
+        let after = second.session_manager().snapshot().await.unwrap();
+        assert!(after.invocations.is_empty());
+        assert_eq!(after.provider_context.admission_watermark(), Some(0));
+        assert_ne!(
+            after.provider_context.recorded(),
+            before.provider_context.recorded()
+        );
+        assert!(!root.path().join("resume-observed").exists());
+        assert!(!root.path().join("prompt-observed").exists());
+        let native: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("saved-session")).unwrap())
+                .unwrap();
+        assert_eq!(native["history"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
+            "2"
+        );
+        assert_eq!(credentials.reads.load(Ordering::SeqCst), 2);
+        second.close(actor("close-second")).await.unwrap();
+        drop(second);
+        storage.shutdown().await.unwrap();
     }
 
     #[test]

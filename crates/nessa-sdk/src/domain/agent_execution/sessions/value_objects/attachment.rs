@@ -28,8 +28,10 @@ pub enum ProviderContext {
 impl ProviderContext {
     /// Publish a native context and the retained invocation prefix preceding it.
     ///
-    /// `admitted_before` counts invocations, not provider observations. Zero is
-    /// conservative: any retained invocation then requires native restoration.
+    /// `admitted_before` counts invocations, not provider observations. Capture
+    /// it before awaiting fresh native opening; later admission remains counted
+    /// even when it settles before context publication. Zero is conservative:
+    /// any retained invocation then requires native restoration.
     /// Storage admission validates this boundary against the retained history;
     /// constructing the value alone does not establish a valid checkpoint.
     pub fn recorded_after(id: ExecutionSessionId, admitted_before: usize) -> Self {
@@ -88,13 +90,16 @@ impl ProviderContext {
     /// `previous` is the context being replaced. `namespace_changed` records a
     /// provider identity or handoff change in this same atomic decision. A
     /// native ID reused without that evidence cannot advance its watermark.
-    /// Zero remains a conservative boundary; a positive new boundary must equal
-    /// the current terminal prefix. An existing boundary is preserved on resume.
-    /// A context with admitted work cannot be cleared because observations are absent.
+    /// A fresh context preserves the terminal-prefix boundary captured before
+    /// awaiting its opening. That boundary may be below the terminal prefix at
+    /// publication when later admitted work has already settled. Retained evidence
+    /// validates the boundary against the current prefix; it does not reconstruct
+    /// opening time. An existing boundary is preserved on resume. A context with
+    /// admitted work cannot be cleared because observations are absent.
     ///
     /// # Errors
     /// Returns [`ProviderContextAdmissionError`] for malformed retained counts,
-    /// an arbitrary positive boundary, or an unauthorized same-context reset.
+    /// a boundary skipping pending work, or an unauthorized same-context reset.
     pub fn validate_transition(
         &self,
         previous: &Self,
@@ -103,18 +108,17 @@ impl ProviderContext {
         namespace_changed: bool,
     ) -> Result<(), ProviderContextAdmissionError> {
         self.validate_admission(invocation_count, terminal_prefix)?;
-        let Some(watermark) = self.admission_watermark() else {
+        if self.admission_watermark().is_none() {
             return if previous.has_admitted_work(invocation_count) {
                 Err(ProviderContextAdmissionError::InvalidTransition)
             } else {
                 Ok(())
             };
-        };
-        if self.recorded() == previous.recorded() && !namespace_changed {
-            if self.admission_watermark() != previous.admission_watermark() {
-                return Err(ProviderContextAdmissionError::InvalidTransition);
-            }
-        } else if watermark != 0 && watermark != terminal_prefix {
+        }
+        if self.recorded() == previous.recorded()
+            && !namespace_changed
+            && self.admission_watermark() != previous.admission_watermark()
+        {
             return Err(ProviderContextAdmissionError::InvalidTransition);
         }
         Ok(())

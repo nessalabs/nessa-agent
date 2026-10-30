@@ -38,12 +38,26 @@ fn custom_snapshot_refuses_out_of_range_and_pending_prefix_watermarks() {
 }
 
 #[test]
-fn fresh_context_publication_requires_the_current_terminal_prefix() {
+fn fresh_context_publication_preserves_an_earlier_captured_terminal_prefix() {
+    use crate::domain::agent_execution::sessions::ProviderContextAdmissionError;
+    // Opening began after `first`. Later work became terminal while it waited.
+    let captured = context("new-context", 1);
     let saved = snapshot(vec![
         turn("first", text(), Vec::new()),
         turn("second", text(), Vec::new()),
     ]);
-    for watermark in [0, 2] {
+    assert_eq!(terminal_prefix(&saved.invocations), 2);
+    let mut continuation = Continuation::restore(Some(saved.clone())).unwrap();
+    continuation
+        .apply_unit(&[SessionChange::ProviderContext {
+            before: saved.provider_context.clone(),
+            after: captured.clone(),
+        }])
+        .unwrap();
+    let published = continuation.snapshot.unwrap();
+    assert_eq!(published.provider_context, captured);
+    assert!(published.provider_context.has_admitted_work(2));
+    for watermark in 0..=2 {
         let mut continuation = Continuation::restore(Some(saved.clone())).unwrap();
         continuation
             .apply_unit(&[SessionChange::ProviderContext {
@@ -52,15 +66,19 @@ fn fresh_context_publication_requires_the_current_terminal_prefix() {
             }])
             .unwrap();
     }
-    let mut continuation = Continuation::restore(Some(saved.clone())).unwrap();
-    assert!(matches!(
-        continuation.apply_unit(&[SessionChange::ProviderContext {
-            before: saved.provider_context.clone(),
-            after: context("new-context", 1),
-        }]),
-        Err(StorageError::Corrupt(_))
-    ));
-    assert_eq!(continuation.snapshot.unwrap(), saved);
+    for watermark in [3, usize::MAX] {
+        let mut continuation = Continuation::restore(Some(saved.clone())).unwrap();
+        assert_eq!(
+            continuation.apply_unit(&[SessionChange::ProviderContext {
+                before: saved.provider_context.clone(),
+                after: context("new-context", watermark),
+            }]),
+            Err(StorageError::Corrupt(
+                ProviderContextAdmissionError::InvalidWatermark.to_string(),
+            )),
+        );
+        assert_eq!(continuation.snapshot.unwrap(), saved);
+    }
 }
 
 #[test]

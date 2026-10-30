@@ -1,6 +1,8 @@
 # Durable sessions and resume — implementation plan
 
-Status: proposed; no implementation or verification is claimed by this document.
+Status: #1164 implementation is present in draft PR #1214; qualification is
+ongoing. The three dependent sections remain proposed. Verification is recorded
+separately from the design, and this plan does not claim merge readiness.
 One branch (`codex/durable-sessions-resume`) and one draft PR cover #1164,
 #1003, #762 and #934. The latter three wait for #981 to merge before dependent
 source changes. #1164 is independent. Do not import #981's branch or alter its
@@ -24,8 +26,7 @@ constant space per retained context, with no per-open registry or background tas
 
 ## #1164 ordering design
 
-Representation to settle in the independent design review: retain the native ID
-and an admission watermark in one context value. Publish it through the existing
+Retain the native ID and an admission watermark in one immutable context value. Publish it through the existing
 ProviderContext semantic change and checkpoint mapping. Do not infer it from
 handoff events, provider observations, audit availability or adapter-specific files.
 Custom snapshot adapters must retain the same evidence and pass the same
@@ -33,9 +34,20 @@ restoration validation as the built-in record/checkpoint adapters.
 
 A watermark cannot simply skip every invocation present when a context opens:
 previously queued work can dispatch later without growing the invocation list.
-Only a terminal prefix can be certified as preceding fresh-context admission;
-any pending/admitted work must conservatively require restoration even after it
-settles. Reattachment of the same context preserves its watermark. A fresh open
+Capture the terminal-prefix boundary under the evidence lock before awaiting
+fresh provider opening. Publish that captured value with the new context. Any
+input admitted during opening remains beyond the boundary, including one that
+is withdrawn and becomes terminal before opening returns. A publication-time
+terminal-prefix calculation would erase that admission (C11). Already-terminal
+work before the opening starts may be excluded; pending work at that point may
+not. Reattachment of the same context preserves its watermark.
+
+The terminal prefix can grow while opening waits. Semantic/custom-snapshot
+validation therefore permits a conservative watermark at or before the current
+terminal prefix, rather than requiring equality to the prefix at publication.
+Same-ID resets still require the existing namespace evidence, and clearing an
+admitted context remains refused. The manager owns the captured opening boundary;
+a later producer cannot infer the opening time from a final checkpoint alone. A fresh open
 cannot erase evidence merely because a provider reuses a native ID.
 
 | Row | Ordering | Expected behavior / regression |
@@ -50,6 +62,8 @@ cannot erase evidence merely because a provider reuses a native ID.
 | C8 | Custom snapshot or checkpoint reopen | Watermark survives; malformed/out-of-range evidence fails before provider open. |
 | C9 | Same-context reattach or reused native ID on fresh open | Reattach preserves prior boundary; fresh publication cannot turn already admitted work into unused work. |
 | C10 | Additional old-context event or native resume failure | Neither event absence nor error shape changes admission evidence. |
+| C11 | Input admitted during held fresh opening, then withdrawn before context publication | Retain the pre-open boundary; cancellation does not erase the admission. Publishing a conservative watermark below the now-grown terminal prefix is valid. |
+| C12 | Composed local Claude uses the credential wrapper and LeaseFence | The wrapper delegates restoration classification to its validated Claude configuration without reading credentials or launching a process. Unused context opens fresh; admitted context still requires resume. |
 
 ```mermaid
 sequenceDiagram
@@ -71,6 +85,14 @@ sequenceDiagram
         Provider-->>Manager: restored or typed failure
     end
 ```
+
+The composed local gateway reaches Claude through `CredentialedClaudeProvider`
+and `LeaseFence`. Both wrappers must preserve the provider-owned restoration
+query. The credential wrapper uses its validated credential-free configuration
+for that pure query; it must not copy Claude's admission boolean rule or read a
+credential as a precondition. If that configuration cannot be reconstructed,
+requiring resume is conservative; the actual open reports the typed configuration
+failure. This does not authorize reset from a configuration error.
 
 Storage policy is [one current contract](../../CODING_STANDARDS.md#one-current-contract):
 update codecs, consumers and fixtures together, without compatibility aliases,

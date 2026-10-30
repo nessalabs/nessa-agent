@@ -131,23 +131,33 @@ fn repeated_native_context_preserves_its_admission_boundary() {
 }
 
 #[test]
-fn replacement_uses_current_prefix_or_conservative_zero() {
+fn replacement_preserves_opening_boundary_after_terminal_prefix_grows() {
     use nessa_sdk::domain::agent_execution::sessions::ProviderContextAdmissionError;
     let previous =
         ProviderContext::recorded_after(ExecutionSessionId::new("old-native").unwrap(), 0);
-    for watermark in [0, 3] {
+    let captured =
+        ProviderContext::recorded_after(ExecutionSessionId::new("new-native").unwrap(), 1);
+    assert_eq!(captured.validate_transition(&previous, 1, 1, false), Ok(()));
+    assert_eq!(captured.validate_transition(&previous, 3, 3, false), Ok(()));
+    assert_eq!(captured.admission_watermark(), Some(1));
+    assert!(captured.has_admitted_work(3));
+    for watermark in 0..=3 {
         let next = ProviderContext::recorded_after(
             ExecutionSessionId::new("new-native").unwrap(),
             watermark,
         );
         assert_eq!(next.validate_transition(&previous, 3, 3, false), Ok(()));
     }
-    let arbitrary =
-        ProviderContext::recorded_after(ExecutionSessionId::new("new-native").unwrap(), 1);
-    assert_eq!(
-        arbitrary.validate_transition(&previous, 3, 3, false),
-        Err(ProviderContextAdmissionError::InvalidTransition),
-    );
+    for (watermark, count, prefix) in [(4, 3, 3), (2, 3, 1), (1, 2, 3)] {
+        let impossible = ProviderContext::recorded_after(
+            ExecutionSessionId::new("new-native").unwrap(),
+            watermark,
+        );
+        assert_eq!(
+            impossible.validate_transition(&previous, count, prefix, false),
+            Err(ProviderContextAdmissionError::InvalidWatermark),
+        );
+    }
 }
 
 #[test]
