@@ -30,6 +30,7 @@ export const STRESS = {
   delegate: "stress delegate",
   parentStop: "stress parent stop",
   ownedChild: "stress owned child",
+  ownedSeed: "stress owned seed",
   await: "stress await",
   watch: "stress watch",
   long: "stress long",
@@ -577,7 +578,7 @@ export function stressScenario({
             tool: "send_message",
             arguments: {
               threadId: "${thread.threadId}",
-              message: when === STRESS.parentStop ? STRESS.ownedChild : STRESS.wait,
+              message: when === STRESS.parentStop ? STRESS.ownedSeed : STRESS.wait,
             },
             save: "sent",
           },
@@ -588,6 +589,10 @@ export function stressScenario({
           { do: "wait-cancel" },
         ],
       })),
+      {
+        when: STRESS.ownedSeed,
+        steps: [{ do: "text", chunks: ["Owned child seed completed"] }, { do: "end" }],
+      },
       {
         when: STRESS.limit,
         steps: [{ do: "usage-limit" }],

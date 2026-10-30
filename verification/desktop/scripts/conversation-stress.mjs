@@ -2182,26 +2182,45 @@ const steps = {
     )
     const childIds = owned(parent.turn)
     if (!childIds || parent.turn?.status !== "running") {
-      failures.push("the parent did not identify its running owned execution")
+      failures.push("the parent did not identify its owned child seed")
       return
     }
     run.owned.add(childIds[1])
-    const child = await untilTurn(
+    const seedExecution = childIds[2]
+    const seed = await untilTurn(
       run,
       childIds[1],
       0,
-      (turn) =>
-        turn.executionId === childIds[2] && turn.status === "running" && owned(turn),
+      (turn) => turn.executionId === seedExecution && turn.status === "completed",
+    )
+    if (
+      !seed.turn ||
+      seed.turn.agent?.conversationId !== run.main.id ||
+      seed.turn.agent.executionId !== parent.turn.executionId
+    ) {
+      failures.push("the child seed lost its exact agent origin")
+      return
+    }
+    const childText = prompt(run, STRESS.ownedChild, step)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(childIds[1], childText),
+    )
+    const child = await untilTurn(
+      run,
+      childIds[1],
+      { text: childText },
+      (turn) => turn.status === "running" && owned(turn),
     )
     const grandchildIds = owned(child.turn)
     if (
       !grandchildIds ||
       child.turn?.status !== "running" ||
-      child.turn.executionId !== childIds[2]
+      child.turn.agent !== undefined
     ) {
       failures.push("the child did not identify its running owned execution")
       return
     }
+    childIds[2] = child.turn.executionId
     run.owned.add(grandchildIds[1])
     const grandchild = await untilTurn(
       run,
@@ -2219,6 +2238,19 @@ const steps = {
     await expectShown(run.page, SAYS.owned, failures)
     if (!(await stopShown(run.page))) {
       failures.push("the parent did not offer Stop while its descendants ran")
+      return
+    }
+    const reportQueued = await waitFor(async () => {
+      const view = await run.client.conversation.read(run.main.id)
+      return view.messages.some(
+        (turn) =>
+          turn.agent?.conversationId === childIds[1] &&
+          turn.agent.executionId === seedExecution &&
+          turn.status === "queued",
+      )
+    }, 30_000)
+    if (!reportQueued) {
+      failures.push("the child's completed seed report was not queued before parent Stop")
       return
     }
     const beforeStop = await seenTurns(run, run.main.id)

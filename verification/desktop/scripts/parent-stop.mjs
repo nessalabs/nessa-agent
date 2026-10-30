@@ -41,7 +41,11 @@ const tool = (name, args) => ({
   tool: name,
   arguments: args,
 })
-const status = (view) => view.messages.at(-1)?.status
+const status = (view, execution) =>
+  (execution
+    ? view.messages.find((turn) => turn.executionId === execution)
+    : view.messages.at(-1)
+  )?.status
 const running = (view) => ["running", "queued"].includes(status(view))
 
 await main(
@@ -75,11 +79,15 @@ await main(
           when: run.marker,
           steps: [
             tool("create_thread", { requestId: "child" }),
-            tool("send_message", {
-              threadId: run.child,
-              message: `CHILD-${run.child}`,
-              requestId: "work",
-            }),
+            ...(cascade
+              ? [
+                  tool("send_message", {
+                    threadId: run.child,
+                    message: `SEED-${run.child}`,
+                    requestId: "work",
+                  }),
+                ]
+              : []),
             tool("send_message", {
               threadId: run.unrelated,
               message: `UNRELATED-${run.unrelated}`,
@@ -88,6 +96,10 @@ await main(
             text(run.marker),
             { do: "wait-cancel" },
           ],
+        },
+        {
+          when: `SEED-${run.child}`,
+          steps: [text("CHILD SEED COMPLETED"), { do: "end" }],
         },
         {
           when: `CHILD-${run.child}`,
@@ -140,13 +152,30 @@ await main(
               },
             )
             const unrelatedExecution = unrelatedStart.turn.executionId
-            await agentTurn(stack.client, run.parent, run.marker, {
+            const parentStart = await agentTurn(stack.client, run.parent, run.marker, {
               agent: options.agent,
               create: true,
               seconds: 60,
               ready: (_, turn) =>
                 turn.parts.some((part) => part.text?.includes(run.marker)),
             })
+            // Agent-origin input cannot relay agent tools. A genuine person
+            // starts the child's grandchild-creation turn in the owned lifetime.
+            const childStart = await agentTurn(
+              stack.client,
+              run.child,
+              `CHILD-${run.child}`,
+              {
+                agent: options.agent,
+                seconds: 60,
+                ready: (_, turn) =>
+                  turn.parts.some((part) => part.text?.includes("CHILD WAITING")),
+              },
+            )
+            if (childStart.turn.agent)
+              throw new Error("the child setup turn was not person-authored")
+            const parentExecution = parentStart.turn.executionId
+            const childExecution = childStart.turn.executionId
             const descendants = await waitFor(async () => {
               try {
                 const child = await stack.client.conversation.read(run.child)
@@ -165,6 +194,34 @@ await main(
             if (!descendants)
               throw new CannotRun(
                 "owned child and grandchild did not reach their waiting turns",
+              )
+            const grandchildExecution = descendants.grandchild.messages.at(-1).executionId
+            const grandchildAuthor = descendants.grandchild.messages.at(-1).agent
+            if (
+              grandchildAuthor?.conversationId !== run.child ||
+              grandchildAuthor.executionId !== childExecution
+            )
+              throw new Error("the grandchild lost its exact child-turn author")
+            const seed = childStart.view.messages.find(
+              (turn) => turn.userText === `SEED-${run.child}`,
+            )
+            const beforeStop = cascade
+              ? await waitFor(async () => {
+                  const view = await stack.client.conversation.read(run.parent)
+                  return seed &&
+                    view.messages.some(
+                      (turn) =>
+                        turn.agent?.conversationId === run.child &&
+                        turn.agent.executionId === seed.executionId &&
+                        turn.status === "queued",
+                    )
+                    ? view
+                    : null
+                }, 30_000)
+              : await stack.client.conversation.read(run.parent)
+            if (!beforeStop || beforeStop.messages.length !== (cascade ? 2 : 1))
+              throw new CannotRun(
+                "the exact parent and optional seed report were not ready before Stop",
               )
             const { conversations } = await stack.client.conversation.list({})
             const title = conversations.find(
@@ -193,9 +250,10 @@ await main(
               const parent = await stack.client.conversation.read(run.parent)
               const child = await stack.client.conversation.read(run.child)
               const grandchild = await stack.client.conversation.read(run.grandchild)
-              return status(parent) === "cancelled" &&
+              return status(parent, parentExecution) === "cancelled" &&
                 (!cascade ||
-                  (status(child) === "cancelled" && status(grandchild) === "cancelled"))
+                  (status(child, childExecution) === "cancelled" &&
+                    status(grandchild, grandchildExecution) === "cancelled"))
                 ? { parent, child, grandchild }
                 : null
             }, 30_000)
@@ -206,9 +264,15 @@ await main(
             // Observe delivery retries without submitting another person command.
             await sleep(1500)
             const after = await stack.client.conversation.read(run.parent)
+            const childAfter = await stack.client.conversation.read(run.child)
+            const grandchildAfter = await stack.client.conversation.read(run.grandchild)
             const unrelated = await stack.client.conversation.read(run.unrelated)
             const failures = []
-            if (after.messages.length !== 1 || status(after) !== "cancelled")
+            if (
+              after.messages.length !== beforeStop.messages.length ||
+              status(after, parentExecution) !== "cancelled" ||
+              after.messages.some((turn) => turn.status !== "cancelled")
+            )
               failures.push(
                 `parent restarted: ${after.messages.length} turns, ${status(after)}`,
               )
@@ -228,9 +292,22 @@ await main(
               )
             if (!cascade && (!running(stopped.child) || !running(stopped.grandchild)))
               failures.push("override stopped an owned descendant")
+            if (
+              cascade &&
+              [childAfter, grandchildAfter].some(
+                (view) =>
+                  !view.queueComplete ||
+                  view.messages.some(
+                    (turn) => turn.status === "running" || turn.status === "queued",
+                  ),
+              )
+            )
+              failures.push("a report restarted or queued work in a stopped descendant")
             for (const [name, view] of Object.entries({
               ...stopped,
               parent: after,
+              child: childAfter,
+              grandchild: grandchildAfter,
               unrelated,
             }))
               writeView(dir, `views/${engine}-${name}.json`, view)
@@ -279,9 +356,10 @@ await main(
               layout: "columns",
               seen: {
                 parentTurns: after.messages.length,
-                parent: status(after),
-                child: status(stopped.child),
-                grandchild: status(stopped.grandchild),
+                parent: status(after, parentExecution),
+                child: status(stopped.child, childExecution),
+                grandchild: status(stopped.grandchild, grandchildExecution),
+                childAuthor: "person",
                 unrelated: unrelatedActive?.status ?? null,
                 unrelatedQueued,
                 observationMs: 1500,

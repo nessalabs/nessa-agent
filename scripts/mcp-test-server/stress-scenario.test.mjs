@@ -12,7 +12,7 @@ test("stress requests the actual harness's usage-limit frame", () => {
 test("recursive Stop creates owned work through the selected server and waits for cancellation", async () => {
   const scenario = parseScenario(stressScenario())
   for (const [phrase, message] of [
-    [STRESS.parentStop, STRESS.ownedChild],
+    [STRESS.parentStop, STRESS.ownedSeed],
     [STRESS.ownedChild, STRESS.wait],
   ]) {
     const calls = []
@@ -58,4 +58,9 @@ test("recursive Stop creates owned work through the selected server and waits fo
     { do: "text", chunks: [SAYS.waiting] },
     { do: "wait-cancel" },
   ])
+  assert.deepEqual(
+    turnFor(scenario, STRESS.ownedSeed).steps,
+    [{ do: "text", chunks: ["Owned child seed completed"] }, { do: "end" }],
+    "the agent-authored seed must not relay agent tools; person admission starts ownedChild",
+  )
 })
