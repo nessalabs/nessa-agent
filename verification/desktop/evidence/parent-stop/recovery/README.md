@@ -1,45 +1,111 @@
 # Parent Stop recovery integration
 
-**Status: latest main integrated; qualification in progress; not merge-ready.**
-Functional source: `50bef867f45f9cb99fa27d798210e8e6a1dfe901`, including main
-`f08de87e40f2897df57556ad24adad66a82bf308` (#1194). A fresh independent review
-of the committed integration and fixtures reported no findings. It did not
-certify runtime/platform gates or the whole historical PR.
+**Status: local qualification complete except the shipping image guard; corrected hosted qualification pending publication; not merge-ready.**
+Current corrections: `027f430cbbe630c0ebfa62fa800eeabfe9f1eaee`, including main
+`f08de87e40f2897df57556ad24adad66a82bf308` (#1194). Independent reviews of the
+committed integration and each correction found no issues. These are scoped
+source reviews, not certification of the whole historical PR or platform gates.
 
-Current frontend tests passed **5510/5510** at6d6; frontend source/package/test
-inputs are unchanged through50. Current MCP/browser helper tests passed **789**,
-zero failures and one existing skip (790 total). TypeScript and architecture
-tests passed. All **38 binaries** in the exact eight-package CI selection now
-compile with `CARGO_INCREMENTAL=0` (as observed in hosted CI) and one compiler
-job. Runtime tests are pending at this publication checkpoint. The task-local
-child reaper supplies normal orphan reaping only for this command's descendants;
-the earlier bare-container failures are not relabeled as passes.
+The final local unit/integration selection at `027f430cb` completed all **38
+binaries**: **8493 passed, 1 failed, 41 ignored**. The sole failure is the
+unchanged shipping worker-image guard. All four corrected legacy report cases,
+the restored admission-order regression, typed Agent replay rejection, and the
+seven service cases from the earlier failed run passed in this complete rerun.
+This records a new qualification result; it does not infer the old failure's
+cause. The task-local subreaper reaped 23 adopted descendants and preserved the
+failed command status. The rebuilt selection used standard profiles and took
+13m50s; the server library passed 4506 and failed only that guard in 251.89s.
+
+Strict Clippy for all eight CI packages and all targets passed at `027f430cb`,
+with standard profiles, `CARGO_INCREMENTAL=0` and one compiler job. Fresh frontend
+qualification passed **5510/5510**; MCP/browser helpers passed **789**, with one
+existing skip. Their inputs are unchanged from their recorded source checkpoints.
+All **74 doctests** for the eight CI packages passed separately after the guard
+stopped the main runner. The canonical SDK Rustdoc check passed with `-D warnings`.
+TypeScript, architecture tests and the configured architecture checker passed.
+The first architecture-check invocation lacked Cargo on PATH; its failed log and
+the configured successful retry are both retained.
+
+**Earlier integrated-source failure record:** the same eight-package selection
+completed all **38 binaries** at `50bef867f`:
+**8482 passed, 12 failed, 41 ignored**. The server library accounts for all 12 failures:
+four legacy report fixtures expected no reply instead of the real child's saved
+reply, seven other service cases failed in this concurrent full run, and the
+shipping worker-image guard failed as expected. All seven other cases passed
+unchanged in isolated diagnostics (18 handoff tests and three exact tests).
+Those diagnostic passes do not relabel the full run or establish its load cause.
+The legacy fixtures now use the real completed child result and existing report
+formatter; the complete corrected rerun is recorded above. The actual
+production lock inversion failed its exact regression with an admission-cycle
+assertion in 5.12s (exit 101); the original source was restored and verified clean.
+The restored-order positive regression passed in that full selection.
+The task-local subreaper reaped 22 adopted descendants and preserved the command's
+failure status. Earlier bare-container failures remain separate failed evidence.
+
+Current integrated-source production Chromium records:
+
+- Parent Stop default/override and console checks: **4/4**.
+- Focused stress: **9/9**, including two parent Stops, typed await, thread
+  delegation, handoff and final settlement.
+- Codex/Terra parent Stop on the rebuilt `027f430cb` binary: **4/4**.
+- The first focused Terra stress preflight could not run: its default Full
+  scenario requires Ask/Auto/Full, but this Linux model advertises Ask only.
+  This remains unrun, not passed. The existing documented `ask-only` profile
+  passed **11/11**, including Full refusal and denied Ask permission, two parent
+  Stops, delegation, typed await and handoff. The capability guard is unchanged.
+- Smoke across columns/sidebar layouts: **17/17**.
+- Changed content, held-reply and held-Stop checks at 760x700 in both layouts:
+  **7/7**.
+
+Current parent Stop captures: [default cascade](parent-stop-chromium-default.png)
+and [explicit override](parent-stop-chromium-override.png). The capture run passed
+**4/4** on the rebuilt candidate.
+
+These use the already-installed Chromium 151 and an immutable gateway binary
+built from `50bef867f`. Browser runner/frontend inputs and gateway behavior are unchanged by the later
+unused-import cleanup and legacy unit-fixture correction. No alternate browser
+download was attempted. Hosted [run 40990262102](https://github.com/nessalabs/nessa-agent/actions/runs/40990262102) at `f09246860` passed frontend, gateway contract,
+desktop release compile, SDK domain coverage and the scripted gateway aggregate
+in both pinned browsers. Its three platform jobs failed strict Clippy on the
+same unused import, now removed. The entire browser/stress job passed, including
+the default 57/57 stress and separate focused checks. Windows server-other passed
+2248 with seven ignores. The Windows conversation partition completed
+1394 passes, four legacy-fixture failures and six ignores. Its repaired admission
+test and typed Agent replay rejection both passed. That CI attempt completed
+with eight passing jobs and five failures including its aggregate. Corrected
+hosted qualification is pending publication.
 
 The integrated source retains typed agent origin, Cedar's agent/owner boundary,
 exact Stop selection and supervised report admission. Canonical person-command
 chains cannot acknowledge a report through the legacy Person fallback. Legacy
-collision fixtures explicitly seed old Person history; a new regression rejects
-Agent-to-Person re-authorship with identical actor, identity and text.
+collision fixtures explicitly seed old Person history; the new regression
+rejects Agent-to-Person re-authorship with identical actor, identity and text.
+Recursive fixtures drive grandchild creation from genuine person admission to
+the child; agent seeds invoke no relay tools. Default Stop withdraws the exact
+queued seed report; later genuine person input releases only its exact typed
+source while the original withdrawal remains final. Override checks observe the
+same captured descendant executions after the full observation window.
 
-Recursive browser/stress fixtures now drive grandchild creation from genuine
-person admission to the owned child. Agent seeds invoke no relay tools. Default
-Stop also withdraws an exact queued seed report; later release must match that
-seed's typed source and leave the original withdrawal final. Override checks
-use the exact captured descendant executions after the full observation window.
-Current-source runtime/browser and fresh Windows qualification remain pending.
-
-The shipping image guard is unchanged. Its source-calculated fingerprint remains
-`91fd4c70b61e3d05`, while the existing shipping pin is `b6e4f48aa694ce08`.
-Boat access was not attempted. The precise parent-owned existing-account setup
+The shipping image guard and pin are unchanged. The ordered 43-source fingerprint
+calculation at `027f430cb` remains `91fd4c70b61e3d05`, while the shipping pin is
+`b6e4f48aa694ce08`. Boat was not contacted. The precise existing-account setup
 request remains below. Custom WebKit geometry and native Swift phone
-qualification remain unrun locally.
+qualification remain unrun locally. State-page metadata, sources, links and Git
+checkpoints validate. The standalone read-only Nessa Docs renderer at
+`c0bc0627611b100ab71a96cc6fe2fb65f1a014d8` accepted 141 pages with zero issues.
+All three charts on the two changed pages rendered in installed Chromium; full
+source checkpoints and Health were checked with no browser errors. The changed
+preparation chart also responds to Fit. These are scoped page checks, not a
+whole-renderer/browser-platform certification. The owned renderer exited cleanly.
+The pages retain their reviewed `50bef867f` checkpoint because the later correction
+changes only an unused import and unit-fixture setup, not modeled behavior.
 
-Two typed-main server-test compilation attempts were OOM-killed (first alongside
-frontend tests, then alone). Neither ran tests. The compiler cache mode then
-matched observed CI; only13GiB of task-created incremental cache was removed,
-preserving executables, libraries, source and logs. The subsequent full build
-succeeded without another OOM kill. Failure excerpts and current checkpoint
-details are retained in `provenance-*-failure.log` and `provenance-checkpoint.json`.
+Two earlier typed-main compilation attempts were OOM-killed; neither ran tests.
+Only 13 GiB of this task's generated incremental cache was removed. Source,
+executables, libraries and logs were retained. Matching observed hosted CI's
+nonincremental mode then compiled all 38 binaries and completed strict Clippy
+without a new OOM kill. Failure excerpts, distinct checkpoints and scoped reviews
+are retained beside this file.
 
 **Historical pre-provenance checkpoint:** parent had just merged main `f08de87e40f2897df57556ad24adad66a82bf308`
 (#1194). Incorporation and qualification of that new main are pending. Results
@@ -172,6 +238,27 @@ repositories, secret files or environment contents; owner-default credential
 profile, proxy AI credentials disabled. Existing incompatible environment settings
 are refused rather than silently widened. This is a setup request, not evidence
 that access or a binding exists.
+
+The existing provider's dedicated-environment posture is:
+
+```json
+{
+  "safeForThirdParties": false,
+  "passAgentsCredentials": true,
+  "passGithub": false,
+  "passSecrets": false,
+  "passSandboxCredentials": false,
+  "envContents": "",
+  "secretFiles": [],
+  "repositories": [],
+  "credentialProfileId": null,
+  "proxyAiCredentials": false
+}
+```
+
+This is read from `workspaces/infrastructure/boat.rs`; no provider request or
+credential inspection was performed. The selected environment still has the
+original restricted network policy and no bound secrets.
 
 Read-only build provenance is in `docs/adr/todo/1160-boat-workspaces.md` and
 `verification/desktop/evidence/vault/phone-worker-release-receipt.json`. The alpha

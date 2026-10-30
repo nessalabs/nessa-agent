@@ -1,0 +1,15 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-10-30T03:05:31.560Z",
+  "finished": "2026-10-30T03:06:00.114Z",
+  "results": [
+    {
+      "name": "conversation-stress",
+      "cannotRun": true,
+      "error": "could not run: full scenario is incompatible with gpt-5.6-terra: advertised [\"ask\"], required [\"ask\",\"auto\",\"full\"]",
+      "failures": [],
+      "ok": false
+    }
+  ]
+}
