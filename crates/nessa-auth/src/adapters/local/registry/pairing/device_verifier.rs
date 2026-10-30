@@ -8,7 +8,7 @@ use crate::{
             AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential,
         },
     },
-    domain::{AudienceId, CredentialId},
+    domain::{pairing::DeviceKey, AudienceId, CredentialId},
 };
 /// Credential verifier borrowing possession evidence from one live native TLS transport.
 /// Raw credential IDs are accepted only with the transport's private proof and exact key binding.
@@ -24,6 +24,25 @@ impl LocalCredentialStore {
         proof: &'a DeviceConnectionProof,
     ) -> DeviceCredentialVerifier<'a> {
         DeviceCredentialVerifier { store: self, proof }
+    }
+}
+impl LocalCredentialStore {
+    /// Every key that holds some active (unrevoked) device credential for
+    /// `audience` now: the binding rule [`DeviceCredentialVerifier`] applies
+    /// to one proved key, asked of every credential. It authenticates
+    /// nothing; it says which paired devices are still paired.
+    pub fn paired_device_keys(&self, audience: &AudienceId) -> Result<Vec<DeviceKey>, AccessError> {
+        self.with_published_registry(|registry| {
+            let mut keys = Vec::new();
+            for credential in &registry.credentials {
+                match bound_key(registry, credential, audience) {
+                    Ok(key) if !keys.contains(&key) => keys.push(key),
+                    Ok(_) | Err(AccessError::InvalidCredential) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(keys)
+        })
     }
 }
 impl DeviceCredentialVerifier<'_> {
@@ -95,6 +114,18 @@ fn bound_to_proof(
     audience: &AudienceId,
     proof: &DeviceConnectionProof,
 ) -> Result<(), AccessError> {
+    if bound_key(registry, credential, audience)? != proof.key() {
+        return Err(AccessError::InvalidCredential);
+    }
+    Ok(())
+}
+/// The key `credential` is bound to, while it is an active device
+/// credential for `audience` whose pairing a key claimed.
+fn bound_key(
+    registry: &Registry,
+    credential: &StoredCredential,
+    audience: &AudienceId,
+) -> Result<DeviceKey, AccessError> {
     if credential.metadata.audience_id != audience.as_str()
         || credential.metadata.revoked_at.is_some()
     {
@@ -114,11 +145,8 @@ fn bound_to_proof(
         .restore(&registry.transitions)
         .map_err(|_| AccessError::Unavailable)?;
     // Registry validation also makes an unrevoked device credential Active.
-    if record
+    record
         .claim_binding()
-        .is_none_or(|(_, key)| key != proof.key())
-    {
-        return Err(AccessError::InvalidCredential);
-    }
-    Ok(())
+        .map(|(_, key)| key)
+        .ok_or(AccessError::InvalidCredential)
 }

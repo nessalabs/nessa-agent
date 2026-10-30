@@ -65,6 +65,7 @@
  */
 export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
 export { ThreeColumns } from "./ui/layouts/three-columns"
+export { RailContentProvider } from "./ui/chrome/side-rail"
 export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
 export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace, paintedRoom } from "./adapters/dom/measure"

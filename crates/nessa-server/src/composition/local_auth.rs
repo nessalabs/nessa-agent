@@ -584,7 +584,26 @@ pub(super) async fn product_state(
             product = product.with_tunnel(tunnel.view());
         }
     }
-    let (listener_environments, connected_environments) = environment_peers.unzip();
+    let (listener_environments, connected_environments, paired_workers) = match environment_peers {
+        Some((listener, connected, workers)) => (Some(listener), Some(connected), Some(workers)),
+        None => (None, None, None),
+    };
+    // The hub's devices: this machine, and the paired environments when any
+    // may dial in. Without them only saved sightings are listed.
+    let (live_workers, sightings) = match paired_workers {
+        Some((live, sightings)) => (Some(live), sightings),
+        None => (
+            None,
+            Arc::new(worker_sightings(&conversation_root(namespace))),
+        ),
+    };
+    product = product.with_devices(Arc::new(crate::devices::application::Devices::new(
+        Arc::new(crate::devices::infrastructure::SystemMachine::new(
+            namespace.to_path_buf(),
+        )),
+        live_workers,
+        sightings,
+    )));
     let native = match native {
         Some((prepared, commands, peers)) => {
             product = product.with_pairing(Arc::new(commands)).with_peers(peers);
@@ -771,6 +790,17 @@ struct BuiltConversations {
 type PairedParts = (
     Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
     crate::product::ConnectedEnvironments,
+    PairedWorkers,
+);
+
+/// The paired environments' connections, which keys are paired, and their
+/// saved sightings, for `devices.list`.
+type PairedWorkers = (
+    (
+        Arc<dyn crate::devices::application::LiveWorkers>,
+        Arc<dyn crate::devices::application::PairedKeys>,
+    ),
+    Arc<crate::devices::application::WorkerSightings>,
 );
 
 /// What `config.json` says about conversations besides their agents.
@@ -1117,6 +1147,16 @@ pub(super) fn receiver_journal(namespace: &Path) -> std::path::PathBuf {
 /// is not in this directory.
 pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
+}
+
+/// Each paired environment's last sighting, `<conversations>/workers`.
+fn worker_sightings(root: &Path) -> crate::devices::application::WorkerSightings {
+    crate::devices::application::WorkerSightings::new(
+        Arc::new(crate::devices::infrastructure::FileSightings::new(
+            root.join("workers"),
+        )),
+        Arc::new(crate::devices::infrastructure::SystemWallClock),
+    )
 }
 
 #[cfg(unix)]
@@ -1680,7 +1720,9 @@ fn environments(
     serving: Option<ServingAuth>,
     organization: crate::conversation::application::OrganizationBudgets,
 ) -> Result<(Environments, Option<PairedParts>), RunError> {
-    use super::paired_environments::{ListenerEnvironments, RegistryServing};
+    use super::paired_environments::{
+        ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
+    };
     use crate::conversation::infrastructure::{
         ssh_environment::{
             DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
@@ -1702,19 +1744,29 @@ fn environments(
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         )
     };
+    let sightings = Arc::new(worker_sightings(root));
+    let paired_keys = serving.as_ref().map(|serving| {
+        Arc::new(RegistryPaired {
+            store: serving.store.clone(),
+            audience: serving.audience.clone(),
+        }) as Arc<dyn crate::devices::application::PairedKeys>
+    });
     let peers = match (serving, &audit) {
-        (Some(serving), Some(audit)) => Some(Arc::new(PeerEnvironments::new(
-            Arc::new(RegistryServing {
-                store: serving.store,
-                policy: serving.policy,
-                clock: Arc::new(SystemClock),
-                gateway: serving.gateway,
-                audience: serving.audience,
-            }),
-            audit.clone(),
-            SshTimings::default(),
-            organization,
-        ))),
+        (Some(serving), Some(audit)) => Some(Arc::new(
+            PeerEnvironments::new(
+                Arc::new(RegistryServing {
+                    store: serving.store,
+                    policy: serving.policy,
+                    clock: Arc::new(SystemClock),
+                    gateway: serving.gateway,
+                    audience: serving.audience,
+                }),
+                audit.clone(),
+                SshTimings::default(),
+                organization,
+            )
+            .with_sightings(Arc::new(SavedSightings(sightings.clone()))),
+        )),
         _ => None,
     };
     if let (false, Some(audit)) = (hosts.is_empty(), &audit) {
@@ -1751,9 +1803,13 @@ fn environments(
             .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
         environments = environments.with_commands(Arc::new(evaluator));
     }
-    let paired = peers.map(|peers| {
+    let paired = peers.zip(paired_keys).map(|(peers, paired_keys)| {
         let connected = peers.clone();
         let changes = peers.connections();
+        let workers: PairedWorkers = (
+            (Arc::new(PeerWorkers(peers.clone())), paired_keys),
+            sightings,
+        );
         (
             Arc::new(ListenerEnvironments(peers))
                 as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
@@ -1774,6 +1830,7 @@ fn environments(
                         .collect()
                 }),
             },
+            workers,
         )
     });
     Ok((environments, paired))

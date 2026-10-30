@@ -101,6 +101,7 @@ flate2 = "1"
 tar = "0.4"
 # Parsing a pinned archive URL, rather than matching on its spelling.
 url = "2"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
 # Already built for cedar-policy. The example client refuses an acknowledged
 # watch identity outside the schema-published pattern; tests match minted
