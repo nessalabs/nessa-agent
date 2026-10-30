@@ -14,7 +14,12 @@ use nessa_sdk::domain::agent_execution::leases::LeaseRefusal;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
+
+/// The longest wait between two asks to let a resting thread's connection
+/// go: 1 + 2 + 4 + 8 + 16 seconds in all.
+const LET_GO_PATIENCE: Duration = Duration::from_secs(16);
 
 pub(crate) struct ThreadWorkspaces {
     pub(crate) service: Arc<Workspaces>,
@@ -116,10 +121,19 @@ impl ThreadEnvironments for ThreadWorkspaces {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(&conversation.to_string())
                 .cloned();
-            // Its connection goes first: while it is open the VM is in use.
+            // Its connection goes first: while anything holds it the VM is
+            // in use. What the stopped agent held is let go as its tasks
+            // wind down, so it is asked again for half a minute; a thread
+            // opened again meanwhile keeps it, and its own rest comes later.
             if let Some(environment) = environment {
-                if !environment.let_go().await {
-                    return false;
+                let mut wait = Duration::from_secs(1);
+                while !environment.let_go().await {
+                    if wait > LET_GO_PATIENCE {
+                        tracing::warn!(conversation_id = %conversation, "the conversation's connection is still in use; its VM keeps running");
+                        return false;
+                    }
+                    tokio::time::sleep(wait).await;
+                    wait *= 2;
                 }
             }
             match self.service.rest(conversation.clone()).await {

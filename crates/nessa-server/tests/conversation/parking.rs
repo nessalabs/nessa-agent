@@ -617,7 +617,10 @@ async fn a_workspace_conversation_rests_its_vm_once_idle_even_when_followed() {
     })
     .await;
     assert!(rested_once.is_ok(), "its VM was let rest");
-    assert_eq!(*rested.rested.lock().unwrap(), [fixture.id.clone()]);
+    assert_eq!(
+        *rested.rested.lock().unwrap(),
+        std::slice::from_ref(&fixture.id)
+    );
     // The next message opens it again.
     fixture.turn("second").await;
     assert!(fixture.slot().await.is_some());
@@ -659,6 +662,41 @@ async fn an_agent_that_closed_its_thread_is_parked_once_idle() {
     assert_eq!(fixture.service.sweep(None).await, 0);
     assert!(fixture.slot().await.is_some());
     drop(follower);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// A message that arrives after the agent closed its thread, before the
+/// sweep, is new work: the thread is open again and not parked under it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_after_close_thread_keeps_the_thread_open() {
+    let fixture = Fixture::new(None).await;
+    fixture.service.close_after_turn(&fixture.id).await.unwrap();
+    fixture.turn("more").await;
+    assert_eq!(fixture.service.sweep(None).await, 0);
+    assert!(fixture.slot().await.is_some());
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// `close_thread` is refused, not answered as closing, for a thread that is
+/// not open or whose agent could never be parked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn close_thread_is_refused_where_it_would_do_nothing() {
+    let fixture = Fixture::new(None).await;
+    let elsewhere = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    assert!(matches!(
+        fixture.service.close_after_turn(&elsewhere).await,
+        Err(ConversationError::Unavailable)
+    ));
+    fixture
+        .provider
+        .session_resume
+        .store(false, Ordering::SeqCst);
+    fixture.turn("first").await;
+    assert!(matches!(
+        fixture.service.close_after_turn(&fixture.id).await,
+        Err(ConversationError::AgentUnsupported)
+    ));
+    assert_eq!(fixture.service.sweep(None).await, 0);
     fixture.service.shutdown().await.unwrap();
 }
 

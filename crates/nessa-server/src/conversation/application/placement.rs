@@ -497,9 +497,10 @@ impl Environments {
 
     /// Record where a conversation about to be created runs: on `requested`,
     /// which must be a configured host or a connected paired environment,
-    /// or here. A paired environment or the pool asked for with none of it
-    /// online places it in a cloud workspace of its own instead, when a
-    /// cloud account is connected.
+    /// or here. The pool (any paired computer) asked for with none online
+    /// places it in a cloud workspace of its own instead, when a cloud
+    /// account is connected. One computer asked for by name never moves:
+    /// the person chose where it runs.
     pub(crate) async fn place(
         &self,
         conversation: &ConversationId,
@@ -507,7 +508,7 @@ impl Environments {
     ) -> Result<(), ConversationError> {
         let mut requested = requested;
         if let Some(name) = requested {
-            let worker = name == POOL || PeerEnvironment::parse(name).is_ok();
+            let pool = name == POOL;
             let known = name == BOAT && self.workspaces.is_some()
                 || name == POOL && self.bindings.is_some() && self.pool_serves()
                 || match PeerEnvironment::parse(name) {
@@ -518,12 +519,12 @@ impl Environments {
                     Err(_) => self.hosts.contains_key(name),
                 };
             if !known {
-                // A computer asked for, with none of them online: it runs in
-                // a cloud workspace of its own instead, where one can be
-                // had, rather than not at all.
+                // Any computer asked for, with none online: it runs in a
+                // cloud workspace of its own instead, where one can be had,
+                // rather than not at all.
                 match &self.workspaces {
-                    Some(workspaces) if worker && workspaces.available().await => {
-                        tracing::info!(conversation_id = %conversation, asked = name, "no computer asked for is online; the conversation runs in a cloud workspace");
+                    Some(workspaces) if pool && workspaces.available().await => {
+                        tracing::info!(conversation_id = %conversation, asked = name, "no paired computer is online; the conversation runs in a cloud workspace");
                         requested = Some(BOAT);
                     }
                     _ => return Err(ConversationError::EnvironmentNotConfigured),

@@ -528,8 +528,13 @@ function WorkerPage({
             <section className="devices-disks" aria-label="Disks" data-devices-disks>
               <h2>Disks</h2>
               <div className="devices-stats">
-                {worker.disks.map((disk) => (
-                  <Stat key={disk.mount} label={disk.mount} usage={disk.usage} />
+                {worker.disks.map((disk, index) => (
+                  // Mounts are cut to 128 bytes, so two may read the same.
+                  <Stat
+                    key={`${index}:${disk.mount}`}
+                    label={disk.mount}
+                    usage={disk.usage}
+                  />
                 ))}
               </div>
             </section>

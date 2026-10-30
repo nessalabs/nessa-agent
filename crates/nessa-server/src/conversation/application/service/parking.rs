@@ -48,11 +48,14 @@ const PARKS_AT_ONCE: usize = 64;
 
 impl ConversationService {
     /// `id`'s agent closed its own thread (`close_thread`): once its turn
-    /// ends it is parked, watched or not, and a thread in a cloud workspace
-    /// stops its VM with it. The next message opens it again.
+    /// ends, and no background command of it runs, it is parked, watched or
+    /// not, and a thread in a cloud workspace stops its VM with it. The next
+    /// message opens it again.
     ///
     /// # Errors
-    /// [`ConversationError::Unavailable`] when it is not open now.
+    /// [`ConversationError::Unavailable`] when it is not open now, and
+    /// [`ConversationError::AgentUnsupported`] when its agent cannot resume
+    /// its session, so it is never parked.
     pub async fn close_after_turn(&self, id: &ConversationId) -> Result<(), ConversationError> {
         let slot = self
             .inner
@@ -62,6 +65,10 @@ impl ConversationService {
             .get(id)
             .cloned()
             .ok_or(ConversationError::Unavailable)?;
+        let live = settled(&slot).ok_or(ConversationError::Unavailable)?;
+        if !live.agent.operation_capabilities().session_resume() {
+            return Err(ConversationError::AgentUnsupported);
+        }
         slot.closing.store(true, Ordering::SeqCst);
         tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");
         Ok(())
@@ -92,6 +99,7 @@ impl ConversationService {
     /// One look at every live conversation, parking those nobody watches
     /// that sat untouched for `park_after`, and those in a cloud workspace
     /// for `workspace_idle`. Returns how many it parked.
+    #[cfg(test)]
     pub(super) async fn park_idle(&self, park_after: Duration) -> usize {
         self.sweep(Some(park_after)).await
     }
@@ -150,18 +158,20 @@ impl ConversationService {
         if !self.could_park(live).await {
             return Idle::InUse;
         }
-        // Its agent closed its thread: parked now that it is idle.
-        if slot.closing.load(Ordering::SeqCst) {
-            return Idle::After(Duration::ZERO);
-        }
-        if self.inner.environment.in_workspace(id).await {
-            let running = self
-                .inner
-                .background_tasks
-                .get()
-                .is_some_and(|tasks| tasks.running_for(id));
+        // Whether a command it started still runs is the task owner's to
+        // say: while one does, the thread is in use, closed or not.
+        let running = self
+            .inner
+            .background_tasks
+            .get()
+            .is_some_and(|tasks| tasks.running_for(id));
+        let closing = slot.closing.load(Ordering::SeqCst);
+        if closing || self.inner.environment.in_workspace(id).await {
             return if running {
                 Idle::InUse
+            } else if closing {
+                // Its agent closed its thread: parked now that it is idle.
+                Idle::After(Duration::ZERO)
             } else {
                 Idle::After(self.inner.limits.workspace_idle)
             };

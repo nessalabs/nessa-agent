@@ -185,10 +185,13 @@ impl SshEnvironment {
         Arc::strong_count(&self.inner) == 1
     }
 
-    /// Let go of a workspace's connection while no lease is on it, so the
-    /// VM behind it may stop; the next lease connects again. Holding the
-    /// connection's lock while it looks, no lease starts on it meanwhile.
-    /// Answers whether nothing is held now; `false` for any other reach.
+    /// Let go of a workspace's connection while nothing uses it, so the VM
+    /// behind it may stop; the next lease connects again. In use is a lease
+    /// on it, or anyone else holding it at all: an opening holds the link
+    /// from `link()` until its grant is recorded, and each lease, host and
+    /// command holds it until it ends. A new opening takes the lock this
+    /// holds while it looks. Answers whether nothing is held now; `false`
+    /// for any other reach.
     pub(crate) async fn let_go(&self) -> bool {
         if !matches!(self.inner.reach, Reach::Workspace { .. }) {
             return false;
@@ -196,7 +199,7 @@ impl SshEnvironment {
         let mut held = self.inner.link.lock().await;
         let link = match held.as_ref() {
             None => return true,
-            Some(link) if link.is_open() && !link.holds_nothing() => return false,
+            Some(link) if !link.holds_nothing() || Arc::strong_count(link) > 1 => return false,
             Some(_) => held.take().expect("looked at above"),
         };
         drop(held);

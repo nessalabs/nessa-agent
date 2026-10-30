@@ -3983,8 +3983,10 @@ impl ConversationService {
             let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
-            // A message is use: an agent is not parked from under it.
+            // A message is use: an agent is not parked from under it, and
+            // a thread its agent closed is open again for this new work.
             owner.touch(service.inner.clock.unix_milliseconds());
+            owner.closing.store(false, Ordering::SeqCst);
             // Opened again at most once for this message: by the stuck agent
             // it found, or by one that failed while it was being checked.
             let mut reopened = false;

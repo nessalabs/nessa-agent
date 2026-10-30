@@ -140,9 +140,13 @@ export function devicesGateway(options: {
         const workers = [...first.workers]
         let next = first.next
         for (let pages = 1; next !== undefined && pages < MAX_PAGES; pages += 1) {
-          const page = await client.devices.list(next)
+          const after: string = next
+          const page = await client.devices.list(after)
           workers.push(...page.workers)
           next = page.next
+          // Pages go forward by key: one that does not would read the same
+          // workers again, so the read ends there as one cut short.
+          if (next !== undefined && next <= after) break
         }
         return {
           ...(first.hub ? { hub: first.hub } : {}),

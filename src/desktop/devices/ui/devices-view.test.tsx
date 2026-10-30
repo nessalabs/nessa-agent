@@ -338,9 +338,9 @@ it("lets other computers reach a hub with linking off, then makes a new code", a
 })
 
 it("turns linking on at a loopback address chosen by hand, then says to change it", async () => {
-  let listening: string | undefined
+  const hub: { listening?: string } = {}
   const { gateway, calls } = fakeGateway({
-    list: async () => ({ ok: true, value: { ...listed, listening } }),
+    list: async () => ({ ok: true, value: { ...listed, listening: hub.listening } }),
   })
   const { host, root } = await mount(gateway)
   await act(async () =>
@@ -350,7 +350,7 @@ it("turns linking on at a loopback address chosen by hand, then says to change i
   await act(async () =>
     (host.querySelector('[data-devices-action="reach"]') as HTMLElement).click(),
   )
-  listening = "127.0.0.1:47700"
+  hub.listening = "127.0.0.1:47700"
   await act(async () => vi.advanceTimersByTime(1_000))
   for (let i = 0; i < 3; i += 1) await act(async () => {})
   expect(calls.filter((call) => call === "pair")).toHaveLength(2)

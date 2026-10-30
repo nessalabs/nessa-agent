@@ -159,12 +159,8 @@ impl crate::conversation::application::ThreadEnvironments for Cloud {
 }
 
 #[tokio::test]
-async fn with_no_computer_online_a_conversation_runs_in_the_cloud_when_it_can() {
-    for (connected, asked) in [
-        (true, POOL.to_owned()),
-        (true, worker(1).name()),
-        (false, POOL.to_owned()),
-    ] {
+async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can() {
+    for (connected, asked) in [(true, POOL.to_owned()), (false, POOL.to_owned())] {
         let root = tempfile::tempdir().unwrap();
         let workers = Arc::new(Workers::default());
         let environments = Environments::new(
@@ -197,6 +193,25 @@ async fn with_no_computer_online_a_conversation_runs_in_the_cloud_when_it_can() 
             ));
         }
     }
+    // One computer asked for by name, offline, stays refused: the person
+    // chose where it runs.
+    let root = tempfile::tempdir().unwrap();
+    let environments = Environments::new(
+        in_process_environment(),
+        BTreeMap::new(),
+        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+    )
+    .with_peers(
+        Arc::new(Workers::default()),
+        Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
+    )
+    .with_workspaces(Arc::new(Cloud(true)));
+    assert!(matches!(
+        environments
+            .place(&conversation(), Some(&worker(1).name()))
+            .await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
     // A host the configuration does not name is never sent to the cloud.
     let root = tempfile::tempdir().unwrap();
     let environments = Environments::new(

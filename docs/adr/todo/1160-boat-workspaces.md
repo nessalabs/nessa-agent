@@ -137,8 +137,8 @@ The prebuilt Boat image supports Claude and Codex; OpenCode remains Local in thi
 The local gateway must remain reachable and its vault unlocked to provision new
 VMs. Provider subscriptions must be connected in Boat. VMs have a one-hour runtime
 TTL; alpha does not renew long-running turns or provide a cloud wake endpoint.
-A thread idle for 5 minutes with no background command running, or one whose
-agent called `close_thread`, is parked and its VM stopped (Boat archives it,
+A thread idle for 5 minutes, or one whose agent called `close_thread`, is
+parked and its VM stopped (Boat archives it,
 disk kept); the next message resumes the VM, and Nessa never deletes it
 (`docs/design/agent-parking.md`). Boat controls stopped-data retention. Closing a
 chat stops its harness, but preserves its workspace VM/files. Disconnecting Boat

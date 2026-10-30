@@ -45,4 +45,19 @@ describe("devicesGateway list", () => {
     expect(asked).toHaveLength(MAX_PAGES)
     expect(read.ok && read.value.more).toBe(true)
   })
+
+  it("stops when a page does not go forward, as one cut short", async () => {
+    const asked: (string | undefined)[] = []
+    const devices = {
+      list: async (after?: string) => {
+        asked.push(after)
+        return { workers: [worker(1)], next: worker(1).environment }
+      },
+    }
+    const connected = { devices } as unknown as DevicesClient
+    const read = await devicesGateway({ connected: async () => connected }).list()
+    expect(asked).toEqual([undefined, worker(1).environment])
+    expect(read.ok && read.value.workers).toEqual([worker(1), worker(1)])
+    expect(read.ok && read.value.more).toBe(true)
+  })
 })
