@@ -2288,6 +2288,56 @@ async fn a_paired_environment_reports_its_machine_and_its_departure_keeps_it() {
     );
 }
 
+/// A revoked worker is forgotten, not seen leaving: its connection's end
+/// is not told, so no sighting saved as of then outlives the forgetting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_paired_environment_is_not_told_as_departing() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start_with(
+        &directory.path().join("a"),
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
+    let mut host = Host::open(&directory.path().join("e"), e.pin);
+    host.machine = Some(Arc::new(BuildBox));
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let served = tokio::spawn(async move { host.serve(from_gateway, to_gateway).await });
+    tokio::time::timeout(WAIT, async {
+        while a.departed.reported.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the report is told");
+    a.revoke(&e);
+    let _ = tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends");
+    a.until_connected(e.peer, false).await;
+    // Room for a departure, were one told.
+    tokio::time::sleep(RECHECK).await;
+    assert!(a.departed.left.lock().unwrap().is_empty());
+}
+
 /// A code file as a container's secret holds it: the display form and a
 /// line end.
 fn code_file(directory: &Path, name: &str, code: &ManualCode) -> std::path::PathBuf {

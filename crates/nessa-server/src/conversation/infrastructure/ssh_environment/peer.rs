@@ -169,8 +169,12 @@ impl PeerEnvironments {
                 sightings.reported(peer, &machine);
             }
         };
-        environment.serve(proof, connection, &reported).await;
-        if let (Some(sightings), Some(machine)) = (&self.sightings, environment.machine()) {
+        // A revoked key's worker is forgotten, not seen leaving: saved as
+        // of its end, it would outlive the forgetting.
+        let left = environment.serve(proof, connection, &reported).await;
+        if let (true, Some(sightings), Some(machine)) =
+            (left, &self.sightings, environment.machine())
+        {
             sightings.left(peer, machine);
         }
     }

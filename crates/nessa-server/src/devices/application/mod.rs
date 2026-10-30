@@ -6,9 +6,9 @@
 mod machine;
 mod sightings;
 
-pub(crate) use machine::{read_machine, MachineProbe};
 #[cfg(test)]
 pub(crate) use machine::MACHINE_READ_LIMIT;
+pub(crate) use machine::{read_machine, MachineProbe};
 #[cfg(test)]
 use sightings::SAVE_EVERY_MS;
 pub(crate) use sightings::{Sighting, SightingStore, WorkerSightings};

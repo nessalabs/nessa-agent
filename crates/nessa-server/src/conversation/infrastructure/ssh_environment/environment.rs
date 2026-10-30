@@ -261,12 +261,14 @@ impl SshEnvironment {
     /// and each is said on `connections` once the change is made, so whoever
     /// it wakes reads the list as it is after it.
     /// `reported` is told each machine report the connection carries.
+    /// Answers whether the environment served and then left on its own:
+    /// not for a refused hello, nor for a connection whose key was revoked.
     pub(super) async fn serve(
         &self,
         proof: DeviceConnectionProof,
         connection: LeaseConnection,
         reported: &(dyn Fn(nessa_protocol::lease::MachineReport) + Send + Sync),
-    ) {
+    ) -> bool {
         let Reach::Peer {
             serving,
             credentials,
@@ -274,7 +276,7 @@ impl SshEnvironment {
             ..
         } = &self.inner.reach
         else {
-            return;
+            return false;
         };
         let opened = HostLink::over(
             &self.inner.name(),
@@ -285,7 +287,7 @@ impl SshEnvironment {
         )
         .await;
         let Ok(link) = opened else {
-            return;
+            return false;
         };
         let proof = Arc::new(proof);
         let replaced = serving
@@ -331,6 +333,7 @@ impl SshEnvironment {
             }
         }
         moved(connections);
+        !link.revoked()
     }
 
     /// Revoke the connection it holds now, as a paired environment's is
