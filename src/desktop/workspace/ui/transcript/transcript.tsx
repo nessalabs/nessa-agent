@@ -35,6 +35,7 @@ import { Message } from "./message"
 import { QuestionCard } from "./question-card"
 import { type Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
+import { useTranscriptViewPreference } from "../../adapters/storage/transcript-view-preference"
 import "./transcript.css"
 import { readFailureCopy } from "../failure-copy"
 import { followTranscriptEnd, watchToolDisclosure } from "./tool-disclosure"
@@ -160,6 +161,7 @@ export const Transcript = memo(function Transcript({
   )
   const failure = useRememberedValue(sessionId, liveFailure)
   const model = useRememberedSession(sessionId)?.model
+  const [view] = useTranscriptViewPreference()
   const provider = signInProvider(transcript?.agent)
   const recoveryShown =
     provider !== undefined &&
@@ -390,6 +392,7 @@ export const Transcript = memo(function Transcript({
         // The library can picture one screen of this. The workspace's copy
         // leaves the body out (`split-panes-drag.ts`).
         data-split-scroll
+        data-transcript-view={view}
       >
         <div className="workspace-transcript-inner">
           <TranscriptHeading
@@ -434,6 +437,7 @@ export const Transcript = memo(function Transcript({
               sessionId={sessionId}
               message={message}
               isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
+              view={view}
             />
           ))}
           {usageLimit?.usageLimit ? (
@@ -457,7 +461,7 @@ export const Transcript = memo(function Transcript({
               {transcript.interactionNotice}
             </p>
           ) : null}
-          <LiveRow activity={transcript?.activity ?? null} after={messages} />
+          <LiveRow activity={transcript?.activity ?? null} after={messages} view={view} />
           {(transcript?.questions ?? []).map((question) => (
             <QuestionCard
               key={JSON.stringify([

@@ -1797,6 +1797,18 @@ says why where the conversations would be.
   (`shownActivity` in `model/transcript.ts`). Chromium in the PR job; WebKit with the stress load run. The trace itself is
   nessa_ui's `ToolTrace`, with its own story checks (`Instant`, `LongLabel`).
 
+- [ ] **The transcript can be read compact: only what was said, with no tool
+  runs, and one quiet line while the agent works.**
+  _Check:_ `conversation-stress.mjs`'s `transcriptView` step (knob
+  `transcriptViews`): Compact is chosen under Transcript in the pane's "…"
+  menu, then the scripted agent makes the `trace` turn's calls. While it
+  works, the transcript draws no tool run and exactly one live row, which
+  reads "Working" and names none of the calls. Once it ends, the reply shows,
+  no run does, and the gateway's view still keeps every call. After a reload
+  the transcript is still compact (the choice is remembered in the webview's
+  storage, one for every pane); choosing Detailed draws the turn's run folded
+  as "Ran 3 tools". The views are `model/transcript-view.ts`.
+
 ### Onboarding readiness recovery
 
 `node verification/desktop/scripts/onboarding-readiness.mjs` drives the real

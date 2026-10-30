@@ -327,6 +327,10 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M10 4v12M5.75 10h1.5M12.75 10h1.5" />
     </>,
   ),
+  // The transcript with its tool runs, set in under what the agent said.
+  transcriptDetailed: drawn(<path d="M4 5h12M7 8.5h9M7 12h9M4 15.5h8" />),
+  // The transcript as only what was said.
+  transcriptCompact: drawn(<path d="M4 6h12M4 10h12M4 14h8" />),
   picture: drawn(
     <>
       {pane}

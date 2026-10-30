@@ -1,4 +1,5 @@
 import {
+  AlignLeft,
   Archive,
   ArrowLeft,
   ArrowRight,
@@ -36,6 +37,7 @@ import {
   Info,
   LayoutPanelLeft,
   List,
+  ListTree,
   Lock,
   Maximize2,
   Minimize2,
@@ -157,6 +159,8 @@ export const lucideIcons: DesktopIconFamily = {
   moveUp: lucide(ArrowUpToLine),
   moveDown: lucide(ArrowDownToLine),
   evenOut: lucide(StretchHorizontal),
+  transcriptDetailed: lucide(ListTree),
+  transcriptCompact: lucide(AlignLeft),
   picture: lucide(Image),
   nightScene: lucide(Moon),
   position: lucide(Move),

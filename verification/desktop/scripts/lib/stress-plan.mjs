@@ -137,6 +137,10 @@ export const KNOBS = {
     default: 1,
     what: "turns whose tool calls the window draws as a waterfall, with their times and input kept by the gateway",
   },
+  transcriptViews: {
+    default: 1,
+    what: "trace turns read in the compact transcript, chosen from the pane menu: only the reply and one Working line show, and the choice outlasts a reload",
+  },
   notices: {
     default: 1,
     what: "reviews waiting in a conversation the window does not show: the host's notice opens it and is taken back once answered",
@@ -259,6 +263,7 @@ export function plan(knobs) {
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.traces, () => ({ kind: "trace" }))
+  add(knobs.transcriptViews, () => ({ kind: "transcriptView" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
   add(knobs.tunnels, () => ({ kind: "tunnel" }))
