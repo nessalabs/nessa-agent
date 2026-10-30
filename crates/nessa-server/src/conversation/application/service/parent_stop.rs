@@ -25,9 +25,8 @@ use nessa_sdk::application::agent_execution::commands::{
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::StorageError;
-use nessa_sdk::domain::agent_execution::{
-    executions::ExecutionId,
-    subagents::{LifetimeState, OwnershipSnapshot, MAX_READ_PAGE},
+use nessa_sdk::domain::agent_execution::subagents::{
+    LifetimeState, OwnershipSnapshot, MAX_READ_PAGE,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
