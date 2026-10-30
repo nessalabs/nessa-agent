@@ -31,7 +31,7 @@ pub(crate) use durable_audit::DurableEnvironmentAudit;
 pub(crate) use environment::{SshEnvironment, SshTimings};
 pub(crate) use install::HostInstaller;
 pub(crate) use open_ssh::OpenSshConnector;
-pub(crate) use peer::{PeerEnvironments, ServingCredentials};
+pub(crate) use peer::{Departures, PeerEnvironments, ServingCredentials};
 
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_environment.rs"]

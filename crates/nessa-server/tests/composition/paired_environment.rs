@@ -79,6 +79,8 @@ struct Gateway {
     owner: String,
     commands: PairingOwnerCommands,
     peers: Arc<PeerEnvironments>,
+    /// Each connection that ended having reported its machine.
+    departed: Arc<Departed>,
     /// Holds the next ask of whether a key serves, once armed.
     gate: Arc<Gate>,
     native: SocketAddr,
@@ -106,6 +108,16 @@ impl ServingCredentials for Gate {
             }
             self.inner.serves(proof).await
         })
+    }
+}
+
+/// Records each departure [`PeerEnvironments`] tells of.
+#[derive(Default)]
+struct Departed(std::sync::Mutex<Vec<(PeerEnvironment, nessa_protocol::lease::MachineReport)>>);
+
+impl crate::conversation::infrastructure::ssh_environment::Departures for Departed {
+    fn left(&self, peer: PeerEnvironment, machine: nessa_protocol::lease::MachineReport) {
+        self.0.lock().unwrap().push((peer, machine));
     }
 }
 
@@ -178,12 +190,17 @@ impl Gateway {
             entered: Notify::new(),
             released: Notify::new(),
         });
-        let peers = Arc::new(PeerEnvironments::new(
-            gate.clone(),
-            DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock)).unwrap(),
-            timings,
-            budgets,
-        ));
+        let departed = Arc::new(Departed::default());
+        let peers = Arc::new(
+            PeerEnvironments::new(
+                gate.clone(),
+                DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock))
+                    .unwrap(),
+                timings,
+                budgets,
+            )
+            .with_departures(departed.clone()),
+        );
         let prepared = prepared.with_environments(Arc::new(ListenerEnvironments(peers.clone())));
         let state = ProductRouteState::new(
             ResourceId::new(gateway.clone()).unwrap(),
@@ -215,6 +232,7 @@ impl Gateway {
             owner,
             commands,
             peers,
+            departed,
             gate,
             native,
             running: Some(start(bound, failure)),
@@ -343,6 +361,8 @@ struct Host {
     timer: Arc<dyn crate::timer::Timer>,
     /// Asks it to drain, as `env dial`'s signal does.
     drain: Arc<watch::Sender<bool>>,
+    /// What it reports of its machine; nothing unless a test says.
+    machine: Option<Arc<dyn crate::devices::application::MachineProbe>>,
 }
 
 impl Host {
@@ -371,6 +391,7 @@ impl Host {
             ledger_path: workspace.join("leases.jsonl"),
             timer: Arc::new(TokioTimer::new()),
             drain: Arc::new(watch::channel(false).0),
+            machine: None,
             peer: Peer::Gateway { pin },
             grants: Arc::new(FileGrants::new(&workspace)),
             ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
@@ -415,6 +436,7 @@ impl Host {
                 policy: Arc::new(
                     crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
                 ),
+                machine: self.machine.clone(),
             },
             Runners {
                 harnesses: self.launcher.clone(),
@@ -2158,6 +2180,83 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
         .await
         .expect("the revoked environment's serving ends")
         .unwrap();
+}
+
+struct BuildBox;
+impl crate::devices::application::MachineProbe for BuildBox {
+    fn read(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        Some(nessa_protocol::lease::MachineReport {
+            hostname: "build-box".into(),
+            os: "linux".into(),
+            os_version: "24.04".into(),
+            arch: "x86_64".into(),
+            cpus: 8,
+            cpu_permille: 610,
+            memory_total_bytes: 32,
+            memory_used_bytes: 8,
+            disk_total_bytes: 100,
+            disk_used_bytes: 40,
+        })
+    }
+}
+
+/// A paired environment reports its machine over its lease connection: the
+/// gateway lists it serving with that report, and once the connection ends
+/// it is told the last report, to keep.
+#[tokio::test]
+async fn a_paired_environment_reports_its_machine_and_its_departure_keeps_it() {
+    use crate::devices::application::MachineProbe;
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
+    let mut host = Host::open(&directory.path().join("e"), e.pin);
+    host.machine = Some(Arc::new(BuildBox));
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let served = tokio::spawn(async move { host.serve(from_gateway, to_gateway).await });
+    let reported = tokio::time::timeout(WAIT, async {
+        loop {
+            let workers = a.peers.workers();
+            if let Some(worker) = workers.iter().find(|worker| worker.peer == e.peer) {
+                if worker.machine.is_some() {
+                    return (worker.load, worker.machine.clone());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the machine is reported");
+    assert_eq!(reported.0.map(|load| load.leases), Some(0));
+    assert_eq!(reported.1, BuildBox.read());
+    assert!(a.departed.0.lock().unwrap().is_empty());
+
+    served.abort();
+    tokio::time::timeout(WAIT, async {
+        while a.departed.0.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the departure is told");
+    assert_eq!(
+        *a.departed.0.lock().unwrap(),
+        vec![(e.peer, BuildBox.read().unwrap())]
+    );
 }
 
 /// A code file as a container's secret holds it: the display form and a

@@ -126,3 +126,33 @@ impl Drop for CloseOnDrop {
         self.0.close();
     }
 }
+
+/// The paired environments' connections, as `devices.list` reads them.
+pub(super) struct PeerWorkers(pub(super) Arc<PeerEnvironments>);
+
+impl crate::devices::application::LiveWorkers for PeerWorkers {
+    fn live(&self) -> Vec<crate::devices::application::LiveWorker> {
+        self.0
+            .workers()
+            .into_iter()
+            .map(|worker| crate::devices::application::LiveWorker {
+                peer: worker.peer,
+                serving: worker.load.map(|load| (load.leases, load.draining)),
+                machine: worker.machine,
+            })
+            .collect()
+    }
+}
+
+/// A connection that ends saves its worker's last sighting.
+pub(super) struct SightingDepartures(pub(super) Arc<crate::devices::application::WorkerSightings>);
+
+impl crate::conversation::infrastructure::ssh_environment::Departures for SightingDepartures {
+    fn left(
+        &self,
+        peer: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+        machine: nessa_protocol::lease::MachineReport,
+    ) {
+        self.0.left(peer, &machine);
+    }
+}

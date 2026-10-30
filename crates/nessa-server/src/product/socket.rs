@@ -2009,6 +2009,15 @@ async fn dispatch_authorized(
                 },
             )
         }
+        "devices.list" => {
+            if frame.params != json!({}) {
+                return failure(&frame.id, "invalid_request");
+            }
+            let Some(devices) = state.devices.as_ref() else {
+                return failure(&frame.id, "devices_unavailable");
+            };
+            success(&frame.id, &device_list(devices.list().await))
+        }
         "server.health" => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
@@ -2513,6 +2522,38 @@ async fn close_session<S: Sink<Message> + Unpin>(
 #[cfg(test)]
 pub(crate) use tests::host_fixture::HostProductFixture;
 
+/// `devices.list`'s answer, in the protocol's words.
+fn device_list(
+    list: crate::devices::application::DeviceList,
+) -> nessa_protocol::product::generated::DevicesListResult {
+    use nessa_protocol::product::generated::{DeviceMachine, DeviceWorker, DevicesListResult};
+    let machine = |report: nessa_protocol::lease::MachineReport| DeviceMachine {
+        hostname: report.hostname,
+        os: report.os,
+        os_version: report.os_version,
+        arch: report.arch,
+        cpus: u64::from(report.cpus),
+        cpu_permille: u64::from(report.cpu_permille),
+        memory_total_bytes: report.memory_total_bytes,
+        memory_used_bytes: report.memory_used_bytes,
+        disk_total_bytes: report.disk_total_bytes,
+        disk_used_bytes: report.disk_used_bytes,
+    };
+    DevicesListResult {
+        hub: list.hub.map(machine),
+        workers: list
+            .workers
+            .into_iter()
+            .map(|worker| DeviceWorker {
+                environment: worker.peer.name(),
+                state: worker.state.as_str().to_owned(),
+                agents: u64::try_from(worker.agents).unwrap_or(u64::MAX),
+                machine: worker.machine.map(machine),
+                last_seen_ms: worker.last_seen_ms,
+            })
+            .collect(),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::super::state::SessionSettings;
@@ -4635,6 +4676,97 @@ mod tests {
         );
         status.send_replace(TunnelStatus::Failed(TunnelFailure::NotReady));
         assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+    }
+
+    /// `devices.list` answers the hub's machine and every worker, in the
+    /// protocol's words, under `server.read`; a gateway that lists no
+    /// devices says so.
+    #[tokio::test]
+    async fn devices_list_names_the_hub_and_its_workers() {
+        use crate::devices::application::{
+            Devices, LiveWorker, LiveWorkers, MachineProbe, WorkerSightings,
+        };
+        use crate::devices::infrastructure::{FileSightings, SystemWallClock};
+        use nessa_protocol::lease::MachineReport;
+        use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+        fn report(hostname: &str) -> MachineReport {
+            MachineReport {
+                hostname: hostname.into(),
+                os: "macos".into(),
+                os_version: "26.1".into(),
+                arch: "aarch64".into(),
+                cpus: 12,
+                cpu_permille: 230,
+                memory_total_bytes: 48,
+                memory_used_bytes: 14,
+                disk_total_bytes: 1000,
+                disk_used_bytes: 400,
+            }
+        }
+        struct Hub;
+        impl MachineProbe for Hub {
+            fn read(&self) -> Option<MachineReport> {
+                Some(report("studio"))
+            }
+        }
+        struct One;
+        impl LiveWorkers for One {
+            fn live(&self) -> Vec<LiveWorker> {
+                vec![LiveWorker {
+                    peer: PeerEnvironment::new([0xab; PeerEnvironment::KEY_BYTES]),
+                    serving: Some((4, false)),
+                    machine: Some(report("build-box")),
+                }]
+            }
+        }
+        let (state, _authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let OutgoingMessage::Response(refused) =
+            dispatch(&state, &session, request("1", "devices.list")).await
+        else {
+            panic!("response expected")
+        };
+        assert_eq!(refused.error.unwrap().code, "devices_unavailable");
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = state.with_devices(Arc::new(Devices::new(
+            Arc::new(Hub),
+            Some(Arc::new(One)),
+            Arc::new(WorkerSightings::new(
+                Arc::new(FileSightings::new(directory.path().join("workers"))),
+                Arc::new(SystemWallClock),
+            )),
+        )));
+        let OutgoingMessage::Response(answer) =
+            dispatch(&state, &session, request("2", "devices.list")).await
+        else {
+            panic!("response expected")
+        };
+        assert!(answer.ok);
+        let mut payload = answer.payload.unwrap();
+        let seen = payload["workers"][0]["lastSeenMs"].take();
+        assert!(seen.as_u64().is_some_and(|seen| seen > 0), "{seen}");
+        let machine = |hostname: &str| {
+            json!({
+                "hostname": hostname, "os": "macos", "osVersion": "26.1",
+                "arch": "aarch64", "cpus": 12, "cpuPermille": 230,
+                "memoryTotalBytes": 48, "memoryUsedBytes": 14,
+                "diskTotalBytes": 1000, "diskUsedBytes": 400,
+            })
+        };
+        assert_eq!(
+            payload,
+            json!({
+                "hub": machine("studio"),
+                "workers": [{
+                    "environment": format!("peer:{}", "ab".repeat(32)),
+                    "state": "online",
+                    "agents": 4,
+                    "machine": machine("build-box"),
+                    "lastSeenMs": null,
+                }],
+            })
+        );
     }
 
     #[tokio::test]

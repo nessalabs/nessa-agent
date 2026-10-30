@@ -332,6 +332,16 @@ impl SshEnvironment {
         self.reachable() == Some(true)
     }
 
+    /// The latest report the machine behind its current connection sent,
+    /// whether or not that connection serves leases now: `None` with no
+    /// connection, or before one reported.
+    pub(super) fn machine(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        let Reach::Peer { serving, .. } = &self.inner.reach else {
+            return None;
+        };
+        served(serving).and_then(|served| served.link.machine())
+    }
+
     /// What a paired environment's connection carries now, read off that
     /// connection: `None` with none that serves leases.
     pub(super) fn load(&self) -> Option<WorkerLoad> {

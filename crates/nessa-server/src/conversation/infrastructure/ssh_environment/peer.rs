@@ -51,6 +51,7 @@ use crate::conversation::application::{
     Environment, EnvironmentFuture, OrganizationBudgets, PairedEnvironments, WorkerLoad,
 };
 use nessa_auth::application::{pairing::DeviceConnectionProof, ports::AccessError};
+use nessa_protocol::lease::MachineReport;
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use std::{
     collections::BTreeMap,
@@ -72,6 +73,19 @@ pub(crate) trait ServingCredentials: Send + Sync {
     ) -> EnvironmentFuture<'a, Result<bool, AccessError>>;
 }
 
+/// Told when a paired environment's connection ends, with the last report
+/// its machine sent on it. Implemented in composition.
+pub(crate) trait Departures: Send + Sync {
+    fn left(&self, peer: PeerEnvironment, machine: MachineReport);
+}
+
+/// One paired environment as [`PeerEnvironments::workers`] reads it.
+pub(crate) struct PeerWorker {
+    pub(crate) peer: PeerEnvironment,
+    pub(crate) load: Option<WorkerLoad>,
+    pub(crate) machine: Option<MachineReport>,
+}
+
 /// This gateway's paired environments, one per key, made when it first
 /// dials in.
 pub(crate) struct PeerEnvironments {
@@ -85,6 +99,7 @@ pub(crate) struct PeerEnvironments {
     /// environment moves it as its connection is admitted, ends, or is
     /// revoked.
     connections: watch::Sender<u64>,
+    departures: Option<Arc<dyn Departures>>,
 }
 
 impl PeerEnvironments {
@@ -101,7 +116,15 @@ impl PeerEnvironments {
             budgets,
             peers: Mutex::new(BTreeMap::new()),
             connections: watch::Sender::new(0),
+            departures: None,
         }
+    }
+
+    /// Tell `departures` each time a connection that reported its machine
+    /// ends.
+    pub(crate) fn with_departures(mut self, departures: Arc<dyn Departures>) -> Self {
+        self.departures = Some(departures);
+        self
     }
 
     /// Wakes each time which paired environments are connected may have
@@ -130,7 +153,8 @@ impl PeerEnvironments {
         to_environment: Box<dyn AsyncWrite + Send + Unpin>,
         keep: Box<dyn Send>,
     ) {
-        let environment = self.peer(PeerEnvironment::new(*proof.key().bytes()));
+        let peer = PeerEnvironment::new(*proof.key().bytes());
+        let environment = self.peer(peer);
         let connection = LeaseConnection {
             mcp_relay: None,
             from_environment,
@@ -139,6 +163,25 @@ impl PeerEnvironments {
             artifacts: ArtifactTransport::Frames,
         };
         environment.serve(proof, connection).await;
+        if let (Some(departures), Some(machine)) = (&self.departures, environment.machine()) {
+            departures.left(peer, machine);
+        }
+    }
+
+    /// Every paired environment that has dialed in since this gateway
+    /// started, as it stands now: what its connection carries (`None` with
+    /// none that serves leases) and the latest report its machine sent.
+    pub(crate) fn workers(&self) -> Vec<PeerWorker> {
+        self.peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(peer, environment)| PeerWorker {
+                peer: *peer,
+                load: environment.load(),
+                machine: environment.machine(),
+            })
+            .collect()
     }
 
     fn peer(&self, peer: PeerEnvironment) -> Arc<SshEnvironment> {

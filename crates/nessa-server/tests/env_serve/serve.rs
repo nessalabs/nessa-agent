@@ -418,6 +418,31 @@ impl Gateway {
         runs_commands: bool,
         timer: Arc<dyn Timer>,
     ) -> Self {
+        Self::reporting(
+            buffer,
+            peer,
+            grants,
+            ledger,
+            outbox,
+            inbox,
+            runs_commands,
+            timer,
+            None,
+        )
+    }
+    /// [`Self::through`], reporting this machine as `machine` reads it.
+    #[allow(clippy::too_many_arguments, reason = "a test harness's one builder")]
+    fn reporting(
+        buffer: usize,
+        peer: Peer,
+        grants: Arc<MemoryGrants>,
+        ledger: Arc<MemoryLedger>,
+        outbox: Arc<dyn ArtifactOutbox>,
+        inbox: Option<Arc<dyn ArtifactInbox>>,
+        runs_commands: bool,
+        timer: Arc<dyn Timer>,
+        machine: Option<Arc<dyn crate::devices::application::MachineProbe>>,
+    ) -> Self {
         let (gateway, environment) = duplex(buffer);
         let (environment_in, environment_out) = split(environment);
         let stopped = Arc::new(AtomicUsize::new(0));
@@ -443,6 +468,7 @@ impl Gateway {
                 policy: Arc::new(
                     crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
                 ),
+                machine,
             },
             Runners {
                 harnesses: launcher.clone(),
@@ -1498,6 +1524,66 @@ async fn keepalives_keep_a_quiet_gateway_served() {
             cleanup: Cleanup::Confirmed { forced: false },
         }
     );
+}
+
+struct FixedMachine;
+impl crate::devices::application::MachineProbe for FixedMachine {
+    fn read(&self) -> Option<nessa_protocol::lease::MachineReport> {
+        Some(nessa_protocol::lease::MachineReport {
+            hostname: "build-box".into(),
+            os: "linux".into(),
+            os_version: "24.04".into(),
+            arch: "x86_64".into(),
+            cpus: 8,
+            cpu_permille: 610,
+            memory_total_bytes: 32,
+            memory_used_bytes: 8,
+            disk_total_bytes: 100,
+            disk_used_bytes: 40,
+        })
+    }
+}
+
+/// A host with a machine to report says what it is right after its hello,
+/// then once each report interval, in place of the keepalive a quiet link
+/// would carry; a frame sent in between is not followed by another report.
+#[tokio::test]
+async fn the_machine_is_reported_after_the_hello_and_each_interval() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = Gateway::reporting(
+        1 << 20,
+        Peer::Ssh,
+        MemoryGrants::none(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        None,
+        true,
+        timer.clone(),
+        Some(Arc::new(FixedMachine)),
+    );
+    assert_eq!(gateway.frame().await, hello());
+    let report = FixedMachine.read_report();
+    assert_eq!(gateway.frame().await, report);
+    // A frame before the interval has passed is answered alone.
+    let before = timer.waits().len();
+    gateway.granted(LEASE).await;
+    // Quiet for the interval: the report goes in place of the keepalive.
+    let quiet = timer
+        .started(|index, wait| {
+            index >= before && wait.deadline == wait.started + KEEPALIVE_INTERVAL
+        })
+        .await;
+    timer.advance_to(quiet.deadline);
+    assert_eq!(gateway.frame().await, report);
+}
+
+impl FixedMachine {
+    fn read_report(&self) -> FromEnvironment {
+        use crate::devices::application::MachineProbe;
+        FromEnvironment::Machine {
+            report: self.read().unwrap(),
+        }
+    }
 }
 
 /// What a lease's own end is still recording is that end's to answer: an

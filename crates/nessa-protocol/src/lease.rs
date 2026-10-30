@@ -25,6 +25,7 @@
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
 //! environment ── Keepalive ──▶ gateway   (when idle KEEPALIVE_INTERVAL)
+//! environment ── Machine{report} ──▶ gateway   (after Hello, then every MACHINE_REPORT_INTERVAL)
 //! environment ── Published{lease, artifact, request: None, file} ──▶ gateway   (no bytes)
 //!   gateway ── sftp read of the file's outbox path ──▶ environment   (the artifact channel)
 //!   or, on a connection with nothing beside it (a paired one):
@@ -719,6 +720,66 @@ pub enum ToEnvironment {
     },
 }
 
+/// How often an environment says what its machine is doing, busy or idle
+/// ([`FromEnvironment::Machine`]).
+pub const MACHINE_REPORT_INTERVAL: Duration = Duration::from_secs(15);
+
+/// The most bytes of a [`MachineReport`]'s host name or operating system
+/// version; a longer one is cut by its sender at a character boundary.
+pub const MAX_MACHINE_TEXT_BYTES: usize = 128;
+
+/// A machine as its environment describes it: what it is, and how busy it
+/// is at the moment it was read. Every figure is the sender's word, shown to
+/// the person and never used to decide anything.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineReport {
+    /// The machine's host name, at most [`MAX_MACHINE_TEXT_BYTES`].
+    pub hostname: String,
+    /// `macos`, `linux`, `windows` or another `std::env::consts::OS`.
+    pub os: String,
+    /// The operating system's version, at most [`MAX_MACHINE_TEXT_BYTES`];
+    /// empty when not known.
+    pub os_version: String,
+    /// `std::env::consts::ARCH`: `aarch64`, `x86_64` …
+    pub arch: String,
+    /// Logical processors.
+    pub cpus: u32,
+    /// Processor use across all of them, in tenths of a percent, 0 to 1000.
+    pub cpu_permille: u32,
+    /// Memory installed, in bytes.
+    pub memory_total_bytes: u64,
+    /// Memory in use, in bytes.
+    pub memory_used_bytes: u64,
+    /// Size of the disk holding the environment's data, in bytes.
+    pub disk_total_bytes: u64,
+    /// Bytes in use on that disk.
+    pub disk_used_bytes: u64,
+}
+
+impl MachineReport {
+    /// `text` cut to [`MAX_MACHINE_TEXT_BYTES`] at a character boundary.
+    pub fn bounded(text: &str) -> String {
+        let mut end = text.len().min(MAX_MACHINE_TEXT_BYTES);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text[..end].to_owned()
+    }
+
+    /// Whether every field is within its bound and each used figure within
+    /// its total. A report that is not is dropped by its reader.
+    pub fn is_bounded(&self) -> bool {
+        self.hostname.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.os.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.os_version.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.arch.len() <= MAX_MACHINE_TEXT_BYTES
+            && self.cpu_permille <= 1000
+            && self.memory_used_bytes <= self.memory_total_bytes
+            && self.disk_used_bytes <= self.disk_total_bytes
+    }
+}
+
 /// What an environment sends a gateway after its [`Hello`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -740,6 +801,14 @@ pub enum FromEnvironment {
     /// Nothing else to say: the environment is still there. Sent when its
     /// side was idle for [`KEEPALIVE_INTERVAL`].
     Keepalive,
+    /// What the machine is and how busy it is now: sent once after the
+    /// hello and again every [`MACHINE_REPORT_INTERVAL`], busy or idle, so
+    /// the gateway can show its devices. It also says the environment is
+    /// still there, as [`Self::Keepalive`] does.
+    Machine {
+        /// See [`MachineReport`].
+        report: MachineReport,
+    },
     /// The environment is stopping: it admits no lease from now on, and
     /// ends each it holds with [`EndingCause::Drained`]. Said once, before
     /// any of those endings, so the gateway sends new work elsewhere rather
@@ -917,9 +986,11 @@ impl FromEnvironment {
     /// The lease the frame names, if it names one.
     pub fn lease(&self) -> Option<&str> {
         match self {
-            Self::Hello { .. } | Self::Unavailable { .. } | Self::Keepalive | Self::Draining => {
-                None
-            }
+            Self::Hello { .. }
+            | Self::Unavailable { .. }
+            | Self::Keepalive
+            | Self::Draining
+            | Self::Machine { .. } => None,
             Self::Granted { lease, .. }
             | Self::Refused { lease, .. }
             | Self::StartFailed { lease, .. }

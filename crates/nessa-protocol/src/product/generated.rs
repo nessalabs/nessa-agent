@@ -2631,6 +2631,38 @@ pub struct PairingTunnelResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceMachine {
+    pub hostname: String,
+    pub os: String,
+    pub os_version: String,
+    pub arch: String,
+    pub cpus: u64,
+    pub cpu_permille: u64,
+    pub memory_total_bytes: u64,
+    pub memory_used_bytes: u64,
+    pub disk_total_bytes: u64,
+    pub disk_used_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceWorker {
+    pub environment: String,
+    pub state: String,
+    pub agents: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<DeviceMachine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_ms: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesListResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub: Option<DeviceMachine>,
+    pub workers: Vec<DeviceWorker>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerReachResult {
     #[serde(deserialize_with = "Option::deserialize")]
     pub tunnel: Option<String>,
@@ -3973,6 +4005,7 @@ pub mod product_method {
     pub const GITHUB_LIVE_EVENTS: &str = "github.liveEvents";
     pub const GITHUB_STATUS: &str = "github.status";
     pub const GITHUB_CONNECT: &str = "github.connect";
+    pub const DEVICES_LIST: &str = "devices.list";
     pub const GITHUB_CANCEL: &str = "github.cancel";
     pub const GITHUB_DISCONNECT: &str = "github.disconnect";
     pub const PEER_ENROLL: &str = "peer.enroll";
@@ -4197,7 +4230,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 104
+                items.len() <= 105
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4292,6 +4325,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "github.liveEvents",
     "github.status",
     "github.connect",
+    "devices.list",
     "github.cancel",
     "github.disconnect",
     "peer.enroll",
@@ -4344,7 +4378,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "agents.subscribe"
         | "agents.unsubscribe"
         | "agents.installOptions"
-        | "phone.endpoint" => Some("server.read"),
+        | "phone.endpoint"
+        | "devices.list" => Some("server.read"),
         "credential.issue"
         | "credential.list"
         | "credential.revoke"

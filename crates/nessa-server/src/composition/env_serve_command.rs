@@ -20,6 +20,7 @@
 use super::{agent::launch_environment, runtime_config::RuntimeConfig};
 use crate::{
     core::RunError,
+    devices::{application::MachineProbe, infrastructure::SystemMachine},
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
@@ -98,6 +99,8 @@ pub(super) struct Composed {
     sockets: std::path::PathBuf,
     lock: ServeLock,
     timer: Arc<dyn Timer>,
+    /// This machine, reported to each gateway it serves.
+    machine: Arc<dyn MachineProbe>,
 }
 
 impl Composed {
@@ -126,6 +129,7 @@ impl Composed {
                 peer,
                 grants: self.grants.clone(),
                 policy: self.policy.clone(),
+                machine: Some(self.machine.clone()),
             },
             Runners {
                 harnesses: self.launcher.clone(),
@@ -229,6 +233,7 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         sockets,
         lock,
         timer: Arc::new(TokioTimer::new()),
+        machine: Arc::new(SystemMachine::new(auth.clone())),
     })
 }
 

@@ -113,13 +113,14 @@ use super::fetches::{ArtifactInbox, LeaseFetches, NoInbox};
 use super::grants::{admit_agent, admit_command, PeerGrants};
 use super::lease_policy::LeasePolicyEvaluator;
 use super::wire::{write_frame, FrameStream};
+use crate::devices::application::MachineProbe;
 use crate::env_serve::domain::{NotGranted, Peer};
 use crate::timer::{timeout, within, Moment, Timer};
 use nessa_protocol::lease::{
     decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome,
     FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
-    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
-    SILENCE_LIMIT,
+    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MACHINE_REPORT_INTERVAL,
+    MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -485,6 +486,9 @@ pub(crate) struct Serving {
     pub(crate) peer: Peer,
     pub(crate) grants: Arc<dyn PeerGrants>,
     pub(crate) policy: Arc<dyn LeasePolicyEvaluator>,
+    /// What this machine is and how busy, reported to the gateway after the
+    /// hello and every [`MACHINE_REPORT_INTERVAL`]; `None` reports nothing.
+    pub(crate) machine: Option<Arc<dyn MachineProbe>>,
 }
 
 /// Serve one gateway, `serving`'s peer, until its stream ends, then end
@@ -514,7 +518,7 @@ pub(crate) async fn serve<R, W>(
         harnesses: launcher,
         commands,
     } = runners;
-    let (frames, mut writer) = start_writer(output, timer.clone());
+    let (frames, mut writer) = start_writer(output, timer.clone(), serving.machine.clone());
     let _ = frames
         .send(FromEnvironment::Hello {
             build: build.into(),
@@ -636,28 +640,69 @@ pub(crate) async fn serve<R, W>(
 fn start_writer<W>(
     mut output: W,
     timer: Arc<dyn Timer>,
+    machine: Option<Arc<dyn MachineProbe>>,
 ) -> (mpsc::Sender<FromEnvironment>, JoinHandle<()>)
 where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     let (sender, mut receiver) = mpsc::channel::<FromEnvironment>(OUTPUT_QUEUE);
     let writer = tokio::spawn(async move {
+        // The machine is reported only after the hello, which is always the
+        // first frame, then whenever a report is due, busy or idle.
+        let mut reported: Option<Moment> = None;
+        let mut started = false;
         loop {
             // Idle for a keepalive interval: the gateway is told this side is
-            // still there, which a network gone silent cannot tell it.
+            // still there, which a network gone silent cannot tell it. A
+            // machine report says so too, and takes its place when one is due.
             let frame = match timeout(&*timer, KEEPALIVE_INTERVAL, receiver.recv()).await {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(_) => FromEnvironment::Keepalive,
             };
+            let due = |reported: Option<Moment>| {
+                reported.is_none_or(|at| timer.now() >= at + MACHINE_REPORT_INTERVAL)
+            };
+            let frame = match (&frame, &machine) {
+                (FromEnvironment::Keepalive, Some(probe)) if started && due(reported) => {
+                    reported = Some(timer.now());
+                    report(probe).await.unwrap_or(frame)
+                }
+                _ => frame,
+            };
             if let Err(error) = write_frame(&mut output, &frame).await {
                 tracing::warn!(%error, "a lease frame could not be written to the gateway");
                 break;
+            }
+            started = true;
+            let Some(probe) = &machine else { continue };
+            if !due(reported) {
+                continue;
+            }
+            reported = Some(timer.now());
+            if let Some(frame) = report(probe).await {
+                if let Err(error) = write_frame(&mut output, &frame).await {
+                    tracing::warn!(%error, "a lease frame could not be written to the gateway");
+                    break;
+                }
             }
         }
         let _ = output.shutdown().await;
     });
     (sender, writer)
+}
+
+/// The machine as `probe` reads it, read off the runtime: `None` when it
+/// cannot be read.
+async fn report(probe: &Arc<dyn MachineProbe>) -> Option<FromEnvironment> {
+    let probe = probe.clone();
+    let report = tokio::task::spawn_blocking(move || probe.read())
+        .await
+        .ok()
+        .flatten()?;
+    report
+        .is_bounded()
+        .then_some(FromEnvironment::Machine { report })
 }
 
 /// One harness running under a lease.
