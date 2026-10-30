@@ -4149,7 +4149,7 @@ mod tests {
     }
 
     #[test]
-    fn an_abandoned_cancellation_leaves_no_provider_evidence() {
+    fn an_abandoned_cancellation_retains_admission_without_provider_observations() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(open_recorded(), 0, 0)))
@@ -4177,13 +4177,17 @@ mod tests {
             before: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
             after: ProviderContext::Absent,
         };
+        let admitted = fold.snapshot().unwrap().clone();
         fold.apply(&one_unit(&fold, &[clear], 3)).unwrap();
+        // Abandoned observations do not erase the earlier accepted input.
+        // Its context cannot be cleared merely because no provider event remains.
         assert!(matches!(
             fold.snapshot().unwrap().provider_context,
-            ProviderContext::Absent
+            ProviderContext::Recorded(_)
         ));
         assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
-        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.unreadable().len(), 2);
+        assert_eq!(fold.snapshot(), Some(&admitted));
         fold.committed.assert_retained_accounting();
     }
 
