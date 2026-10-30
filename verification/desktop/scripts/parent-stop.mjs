@@ -290,7 +290,11 @@ await main(
               failures.push(
                 `unowned report-watch target retained ${unrelatedQueued} of its queued turns`,
               )
-            if (!cascade && (!running(stopped.child) || !running(stopped.grandchild)))
+            if (
+              !cascade &&
+              (status(childAfter, childExecution) !== "running" ||
+                status(grandchildAfter, grandchildExecution) !== "running")
+            )
               failures.push("override stopped an owned descendant")
             if (
               cascade &&
@@ -357,8 +361,8 @@ await main(
               seen: {
                 parentTurns: after.messages.length,
                 parent: status(after, parentExecution),
-                child: status(stopped.child, childExecution),
-                grandchild: status(stopped.grandchild, grandchildExecution),
+                child: status(childAfter, childExecution),
+                grandchild: status(grandchildAfter, grandchildExecution),
                 childAuthor: "person",
                 unrelated: unrelatedActive?.status ?? null,
                 unrelatedQueued,
