@@ -2,6 +2,18 @@
 
 import { acpRecords } from "./acp-recording.mjs"
 
+/** Compare projected origin identity; matching words convey no authority. */
+export function hasAgentSource(turn, source) {
+  return (
+    typeof source?.conversationId === "string" &&
+    source.conversationId.length > 0 &&
+    typeof source?.executionId === "string" &&
+    source.executionId.length > 0 &&
+    turn?.agent?.conversationId === source.conversationId &&
+    turn?.agent?.executionId === source.executionId
+  )
+}
+
 const isPrompt = ({ direction, frame }) =>
   direction === "to-agent" && frame.method === "session/prompt"
 

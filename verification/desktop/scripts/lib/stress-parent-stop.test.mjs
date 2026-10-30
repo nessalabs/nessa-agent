@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { parentRestarted, parentStopCheckpoint } from "./stress-parent-stop.mjs"
+import {
+  hasAgentSource,
+  parentRestarted,
+  parentStopCheckpoint,
+} from "./stress-parent-stop.mjs"
 import { record } from "../../../../scripts/mcp-test-server/acp-recorder.mjs"
 
 const prompt = (sessionId, text) =>
@@ -13,6 +17,21 @@ const prompt = (sessionId, text) =>
     },
   }) + "\n"
 const text = "stress parent stop r14 s1"
+
+test("report words cannot substitute for the exact originating conversation and turn", () => {
+  const expected = { conversationId: "owned-child", executionId: "seed" }
+  assert.equal(hasAgentSource({ agent: expected }, expected), true)
+  for (const agent of [
+    undefined,
+    { conversationId: "another-child", executionId: "seed" },
+    { conversationId: "owned-child", executionId: "later-cancellation" },
+  ])
+    assert.equal(
+      hasAgentSource({ agent, userText: "the exact same report words" }, expected),
+      false,
+    )
+  assert.equal(hasAgentSource({}, {}), false)
+})
 const recording = prompt("earlier-engine", text) + prompt("parent", text)
 const checkpoint = parentStopCheckpoint(recording, text)
 const before = new Set(["selected"])

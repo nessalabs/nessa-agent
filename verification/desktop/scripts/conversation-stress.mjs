@@ -305,7 +305,11 @@ import {
   observeAccessRefusals,
   reviewAnswerAcknowledged,
 } from "./lib/stress-review-answers.mjs"
-import { parentRestarted, parentStopCheckpoint } from "./lib/stress-parent-stop.mjs"
+import {
+  hasAgentSource,
+  parentRestarted,
+  parentStopCheckpoint,
+} from "./lib/stress-parent-stop.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
@@ -2195,8 +2199,10 @@ const steps = {
     )
     if (
       !seed.turn ||
-      seed.turn.agent?.conversationId !== run.main.id ||
-      seed.turn.agent.executionId !== parent.turn.executionId
+      !hasAgentSource(seed.turn, {
+        conversationId: run.main.id,
+        executionId: parent.turn.executionId,
+      })
     ) {
       failures.push("the child seed lost its exact agent origin")
       return
@@ -2235,6 +2241,15 @@ const steps = {
       failures.push("the grandchild never reached its running waiting turn")
       return
     }
+    if (
+      !hasAgentSource(grandchild.turn, {
+        conversationId: childIds[1],
+        executionId: child.turn.executionId,
+      })
+    ) {
+      failures.push("the grandchild lost its exact child-turn author")
+      return
+    }
     await expectShown(run.page, SAYS.owned, failures)
     if (!(await stopShown(run.page))) {
       failures.push("the parent did not offer Stop while its descendants ran")
@@ -2244,9 +2259,10 @@ const steps = {
       const view = await run.client.conversation.read(run.main.id)
       return view.messages.some(
         (turn) =>
-          turn.agent?.conversationId === childIds[1] &&
-          turn.agent.executionId === seedExecution &&
-          turn.status === "queued",
+          hasAgentSource(turn, {
+            conversationId: childIds[1],
+            executionId: seedExecution,
+          }) && turn.status === "queued",
       )
     }, 30_000)
     if (!reportQueued) {

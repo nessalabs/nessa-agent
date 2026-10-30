@@ -16,6 +16,7 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
+import { hasAgentSource } from "./lib/stress-parent-stop.mjs"
 import { css, composerControls } from "./lib/selectors.mjs"
 
 const meta = {
@@ -196,24 +197,37 @@ await main(
                 "owned child and grandchild did not reach their waiting turns",
               )
             const grandchildExecution = descendants.grandchild.messages.at(-1).executionId
-            const grandchildAuthor = descendants.grandchild.messages.at(-1).agent
             if (
-              grandchildAuthor?.conversationId !== run.child ||
-              grandchildAuthor.executionId !== childExecution
+              !hasAgentSource(descendants.grandchild.messages.at(-1), {
+                conversationId: run.child,
+                executionId: childExecution,
+              })
             )
               throw new Error("the grandchild lost its exact child-turn author")
             const seed = childStart.view.messages.find(
               (turn) => turn.userText === `SEED-${run.child}`,
             )
+            if (
+              cascade &&
+              (seed?.status !== "completed" ||
+                !hasAgentSource(seed, {
+                  conversationId: run.parent,
+                  executionId: parentExecution,
+                }))
+            )
+              throw new Error(
+                "the completed child seed lost its exact parent-turn author",
+              )
             const beforeStop = cascade
               ? await waitFor(async () => {
                   const view = await stack.client.conversation.read(run.parent)
                   return seed &&
                     view.messages.some(
                       (turn) =>
-                        turn.agent?.conversationId === run.child &&
-                        turn.agent.executionId === seed.executionId &&
-                        turn.status === "queued",
+                        hasAgentSource(turn, {
+                          conversationId: run.child,
+                          executionId: seed.executionId,
+                        }) && turn.status === "queued",
                     )
                     ? view
                     : null
@@ -223,6 +237,14 @@ await main(
               throw new CannotRun(
                 "the exact parent and optional seed report were not ready before Stop",
               )
+            const seedReportExecution = cascade
+              ? beforeStop.messages.find((turn) =>
+                  hasAgentSource(turn, {
+                    conversationId: run.child,
+                    executionId: seed.executionId,
+                  }),
+                )?.executionId
+              : null
             const { conversations } = await stack.client.conversation.list({})
             const title = conversations.find(
               (row) => row.conversationId === run.parent,
@@ -342,8 +364,13 @@ await main(
                 return view.messages.some(
                   (turn) =>
                     turn.userText.startsWith(`[Thread report] Thread ${run.child} `) &&
-                    turn.status === "completed",
-                )
+                    turn.status === "completed" &&
+                    turn.executionId !== seedReportExecution &&
+                    hasAgentSource(turn, {
+                      conversationId: run.child,
+                      executionId: seed.executionId,
+                    }),
+                ) && status(view, seedReportExecution) === "cancelled"
                   ? view
                   : null
               }, 30_000)
