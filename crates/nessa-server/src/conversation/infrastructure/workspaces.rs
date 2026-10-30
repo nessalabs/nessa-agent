@@ -105,6 +105,9 @@ impl ThreadEnvironments for ThreadWorkspaces {
         environments.insert(conversation.to_string(), environment.clone());
         Ok(environment)
     }
+    fn available(&self) -> EnvironmentFuture<'_, bool> {
+        Box::pin(async move { self.service.settings.read().await.is_ok() })
+    }
     fn rest<'a>(&'a self, conversation: &'a ConversationId) -> EnvironmentFuture<'a, bool> {
         Box::pin(async move {
             let environment = self

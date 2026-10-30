@@ -581,6 +581,9 @@ impl crate::conversation::application::ThreadEnvironments for RestedWorkspaces {
     ) -> Result<Arc<dyn crate::conversation::application::Environment>, ConversationError> {
         Ok(crate::conversation::infrastructure::in_process_environment())
     }
+    fn available(&self) -> crate::conversation::application::EnvironmentFuture<'_, bool> {
+        Box::pin(async { true })
+    }
     fn rest<'a>(
         &'a self,
         conversation: &'a ConversationId,
