@@ -186,6 +186,7 @@ impl Provider for BoatProvider {
             vm,
             self.relay_socket.clone(),
             self.relay_program.clone(),
+            root.clone(),
         )
         .await?;
         Ok(Arc::new(super::runtime::BoatRuntime { access }))
