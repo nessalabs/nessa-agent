@@ -39,6 +39,10 @@ export { MessageImages } from "./ui/message-images"
 export { PublishedFiles } from "./ui/published-files"
 export { heldFileReader } from "./adapters/gateway/held-files"
 export { shownNote } from "./adapters/gateway/notes"
+// Staging an image into a conversation: every surface that sends one uploads it here.
+export { stageImage } from "./adapters/gateway/stage-image"
+export { sha256Digest } from "./adapters/browser/sha256"
+export { AttachmentStagingError } from "./application/ports"
 export { monotonicWallClock } from "./adapters/browser/wall-clock"
 export {
   HeldFileReadError,
