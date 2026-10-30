@@ -268,7 +268,7 @@ wait for a thread owner whose reader is queued behind an export writer.
 | Ordering | Required result | Regression |
 | --- | --- | --- |
 | Recovery reader, export writer and scheduled delivery compete | Recovery queues for thread admission before requesting its reader; all three owners settle within the existing five-second test bound | `recovery_export_and_scheduled_delivery_share_one_admission_order` |
-| An ordinary command waits for thread admission before supervised Stop, then export queues | Stop waits for thread admission before requesting its reader; submission and export settle, and Stop retains its exact receipt and single cancellation | `owned_stop_export_and_submission_share_one_admission_order` |
+| An ordinary command waits for thread admission before supervised Stop, then export queues | Stop waits for thread admission before requesting its reader; export acquires within the unchanged five-second cycle bound, before disk-backed command completion. Both commands then settle under the fixture's existing `TURN_HOLD_HANG` ceiling, sharing one completion deadline; Stop retains its exact receipt and single cancellation | `owned_stop_export_and_submission_share_one_admission_order` |
 | The outer Stop caller disconnects while its supervisor waits for thread admission | The original supervisor reaches provider cancellation before any replacement command; the existing export admission drain then joins its physical command completion before retry reads the actor and receipt without cancelling twice | `owned_stop_export_and_submission_share_one_admission_order`, lost-caller case |
 
 The guards retain their existing lifetimes. Recovery keeps its weak live handle

@@ -4031,9 +4031,21 @@ fn owned_stop_export_and_submission_share_one_admission_order() {
             assert!(futures_util::poll!(&mut export).is_pending());
             drop(initial_thread);
             drop(initial_reader);
+            let stalled = tokio::time::timeout(bound, async {
+                drop(export.as_mut().await.unwrap());
+            })
+            .await
+            .is_err();
+            // Only the test-owned writer is cancelled. Both production owners
+            // finish their real cleanup before the negative control fails.
+            drop(export);
+            // The cycle proof ends at writer acquisition, before receipt I/O.
+            // Reuse the fixture's qualified Windows hang ceiling for all real
+            // command completion, without resetting it between nested waits.
+            let completion_deadline = tokio::time::Instant::now() + TURN_HOLD_HANG;
             let mut stop_result = None;
             let mut submit_result = None;
-            let stalled = tokio::time::timeout(bound, async {
+            tokio::time::timeout_at(completion_deadline, async {
                 futures_util::join!(
                     async {
                         stop_result = Some((&mut stop).await);
@@ -4041,40 +4053,23 @@ fn owned_stop_export_and_submission_share_one_admission_order() {
                     async {
                         submit_result = Some(submission.as_mut().await);
                     },
-                    async {
-                        drop(export.as_mut().await.unwrap());
-                    },
                 );
             })
             .await
-            .is_err();
-            // Only the test-owned writer is cancelled. Both production owners
-            // finish their real cleanup before the negative control fails.
-            drop(export);
-            if stalled {
-                tokio::time::timeout(bound, async {
-                    futures_util::join!(
-                        async {
-                            if stop_result.is_none() {
-                                stop_result = Some((&mut stop).await);
-                            }
-                        },
-                        async {
-                            if submit_result.is_none() {
-                                submit_result = Some(submission.as_mut().await);
-                            }
-                        },
-                    );
-                })
-                .await
-                .expect("cancelling the test writer releases actual owners");
-            }
+            .unwrap_or_else(|_| {
+                panic!(
+                    "command completion after export: stop_finished={} submit_finished={} provider_cancels={:?}",
+                    stop_result.is_some(),
+                    submit_result.is_some(),
+                    provider.cancel_turns.lock().unwrap()
+                )
+            });
             drop(stop);
             drop(submission);
             let observed = stop_result.unwrap();
             let receipt = if caller_lost {
                 assert!(observed.unwrap_err().is_cancelled());
-                tokio::time::timeout(bound, async {
+                tokio::time::timeout_at(completion_deadline, async {
                     while provider.cancel_turns.lock().unwrap().is_empty() {
                         tokio::task::yield_now().await;
                     }
@@ -4084,13 +4079,13 @@ fn owned_stop_export_and_submission_share_one_admission_order() {
                 // Provider cancellation begins before the command lease is
                 // released. Join the actual admitted owner, rather than race
                 // its final save with a retry that correctly reports Busy.
-                let completed = tokio::time::timeout(bound, service.hold_for_export())
+                let completed = tokio::time::timeout_at(completion_deadline, service.hold_for_export())
                     .await
                     .unwrap()
                     .unwrap();
                 drop(completed);
-                tokio::time::timeout(
-                    bound,
+                tokio::time::timeout_at(
+                    completion_deadline,
                     service.stop_command(
                         storage.clone(),
                         parent.clone(),
@@ -4127,7 +4122,7 @@ fn owned_stop_export_and_submission_share_one_admission_order() {
             assert!(service.inner.thread_admission.try_lock().is_ok());
             assert!(service.inner.admission.try_write().is_ok());
             drop(held);
-            tokio::time::timeout(bound, retire(service, storage, metadata))
+            tokio::time::timeout_at(completion_deadline, retire(service, storage, metadata))
                 .await
                 .unwrap();
             assert!(
