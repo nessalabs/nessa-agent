@@ -20,7 +20,9 @@ use nessa_sdk::application::agent_execution::sessions::{
 };
 use nessa_sdk::domain::agent_execution::{executions::ExecutionOutcome, sessions::SessionId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+#[cfg(unix)]
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::Mutex as StdMutex;
@@ -189,6 +191,7 @@ impl Fixture {
     /// A conversation in a cloud workspace of its own, whose VM `rested`
     /// records each rest of, parked once idle for [`LIMIT`] and here never
     /// otherwise.
+    #[cfg(unix)]
     async fn in_workspace(rested: Arc<RestedWorkspaces>, placements: &Path) -> Self {
         let placements = Arc::new(
             crate::conversation::infrastructure::FilePlacements::new(placements.join("placements"))
@@ -572,10 +575,12 @@ async fn a_followed_conversation_is_not_parked() {
 }
 
 /// Cloud workspaces that run every conversation here, recording each rest.
+#[cfg(unix)]
 #[derive(Default)]
 struct RestedWorkspaces {
     rested: StdMutex<Vec<ConversationId>>,
 }
+#[cfg(unix)]
 impl crate::conversation::application::ThreadEnvironments for RestedWorkspaces {
     fn environment(
         &self,
@@ -598,6 +603,7 @@ impl crate::conversation::application::ThreadEnvironments for RestedWorkspaces {
 /// In a cloud workspace of its own, a window showing the conversation does
 /// not keep its agent: once idle for the workspace's limit it is parked and
 /// its VM stopped, and the next message opens it again.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_workspace_conversation_rests_its_vm_once_idle_even_when_followed() {
     let placements = tempfile::tempdir().unwrap();

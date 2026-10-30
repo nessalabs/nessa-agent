@@ -394,7 +394,7 @@ mod local_golden_tests;
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) use placement::ThreadEnvironments;
 pub(crate) use placement::{BOAT, MAX_RETAINED_ENVIRONMENTS};
 

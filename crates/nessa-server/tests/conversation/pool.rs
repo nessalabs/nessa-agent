@@ -137,8 +137,10 @@ async fn the_pool_is_placed_on_only_while_a_worker_serves_and_is_not_draining() 
     assert!(pool.environments.named(POOL).is_none());
 }
 
+#[cfg(unix)]
 /// A cloud account connected or not, for [`Environments::with_workspaces`].
 struct Cloud(bool);
+#[cfg(unix)]
 impl crate::conversation::application::ThreadEnvironments for Cloud {
     fn environment(
         &self,
@@ -158,6 +160,7 @@ impl crate::conversation::application::ThreadEnvironments for Cloud {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can() {
     for (connected, asked) in [(true, POOL.to_owned()), (false, POOL.to_owned())] {
