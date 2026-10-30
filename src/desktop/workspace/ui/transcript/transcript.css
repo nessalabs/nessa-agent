@@ -440,6 +440,15 @@
     translate var(--desktop-base) var(--desktop-out);
 }
 
+/* It floats over words, so its hover and press tint the solid face rather than replace it. */
+.desktop-icon-button.workspace-jump:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--foreground) 8%, var(--popover));
+}
+
+.desktop-icon-button.workspace-jump:active {
+  background: color-mix(in oklab, var(--foreground) 11%, var(--popover));
+}
+
 .desktop-icon-button.workspace-jump[data-hidden] {
   opacity: 0;
   pointer-events: none;

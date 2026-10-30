@@ -5070,10 +5070,46 @@ async function readBackToStart(run, phrase, step, failures) {
     )
   if (shown.omitted) failures.push("the long conversation says some content is not shown")
   log(`long conversation read back to its first turn in ${pages} pages`)
+  // Away from the end, the way back floats over words: solid at rest and
+  // under the pointer, so nothing shows through it.
+  const jump = scroller
+    .locator("xpath=..")
+    .getByRole("button", { name: "Jump to Latest" })
+  const faces = []
+  faces.push(await jump.evaluate((button) => getComputedStyle(button).backgroundColor))
+  await jump.hover()
+  // Its colour eases in, so wait for the hovered face rather than read mid-way.
+  await waitFor(
+    async () =>
+      (await jump.evaluate((button) => getComputedStyle(button).backgroundColor)) !==
+      faces[0],
+    2_000,
+  )
+  faces.push(await jump.evaluate((button) => getComputedStyle(button).backgroundColor))
+  await run.page.mouse.move(0, 0)
+  for (const [state, face] of [
+    ["at rest", faces[0]],
+    ["hovered", faces[1]],
+  ])
+    if (!opaque(face))
+      failures.push(`Jump to Latest shows the words through it ${state} (${face})`)
   // Back at the end, where the person writes next.
   await scroller.evaluate((element) => {
     element.scrollTop = element.scrollHeight
   })
+}
+
+/**
+ * Whether a computed colour has no transparency: `rgba(…, a)` or a modern
+ * `fn(… / a)` below 1, or `transparent`, lets what is behind show through.
+ */
+function opaque(color) {
+  if (color === "transparent") return false
+  const alpha =
+    /\/\s*([\d.]+%?)\s*\)$/.exec(color)?.[1] ??
+    /^rgba\([^)]*,\s*([\d.]+)\s*\)$/.exec(color)?.[1]
+  if (alpha === undefined) return true
+  return alpha.endsWith("%") ? Number.parseFloat(alpha) >= 100 : Number(alpha) >= 1
 }
 
 /** A menu row's height in nessa_ui's menu recipe, at the default scale. */
