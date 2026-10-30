@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Nessa shows live output while saving conversation records in small batches."
 parent: "sdk"
-sourceRevision: "32b4d2ec9cd9638151d7d39a3d0f38243ef64416"
+sourceRevision: "6f3747e6b7189965d06368944319dc21ebe2508b"
 sources:
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -13,8 +13,15 @@ sources:
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/semantic.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/validation.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/authorship.rs"
+  - "crates/nessa-sdk/src/application/agent_execution/sessions/handoffs.rs"
+  - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/carried_history.rs"
+  - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/agent_source.rs"
+  - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/handoffs.rs"
+  - "crates/nessa-sdk/src/infrastructure/acp/executions/prompt_content.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/records.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/sessions/manager.rs"
+  - "crates/nessa-sdk/tests/application/agent_execution/agents/handoffs.rs"
+  - "crates/nessa-sdk/tests/infrastructure/session_storage/authorship.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/streaming_persistence.rs"
 diagramLinks: {}
 ---
@@ -61,14 +68,26 @@ its source conversation and execution in its saved initiation, from which its
 message sender is reconstructed. Submission and restoration both require the
 sender and initiation to name the same source. The gateway can therefore resume the
 same provider session with tool output while omitting that input from user bubbles.
-The save and restoration states above stay the same. This review covers the new
-sender facts and their snapshot agreement. The source changes since the prior
-checkpoint affect admission and restoration validation; the record writer,
-streaming boundaries and provider restoration protocol are unchanged. The codec
-regression covers valid agent and internal input, plus records claiming both
-agent and internal or app origins. The session-manager regression crosses valid
-source identities before admission and on restore. Runtime results are recorded
-on PR #1194; this source checkpoint alone does not claim those checks passed.
+The save and restoration states above stay the same. Their shared input
+constructor checks sender/initiation agreement before incremental retention as
+well as during restoration. A contradictory public save is refused before append;
+its writer binding and prior history stay unchanged.
+
+## Agent origin in copied history
+
+A fork or provider switch keeps an earlier input's typed agent source alongside
+its text and final reply. That source survives handoff storage, reaches the new
+model as historical origin, and labels the copied input in the transcript. The
+new turn uses its own initiation; historical origin supplies no owner authority.
+Text and turn bounds still apply, retained accounting includes source identity,
+and frame checks count the serialized origin.
+
+This review covers provenance admission, incremental folding, copied history and
+restoration since the prior checkpoint. The record writer, streaming boundaries
+and provider restoration protocol are unchanged. Public storage regressions
+cover rejection without append and reopening a fork with its source intact;
+provider-switch/fork and prompt regressions cover dispatch and frame accounting.
+The checkpoint records source review, not platform or browser qualification.
 
 ## Further reading
 
