@@ -87,6 +87,7 @@ export {
   gatewaySource,
   type GatewayClient,
   type GatewaySource,
+  type ImageBytes,
 } from "./adapters/gateway/gateway-source"
 export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
 export { channelGateway } from "./adapters/gateway/channel-gateway"

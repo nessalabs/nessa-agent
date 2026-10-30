@@ -48,6 +48,7 @@ import {
   heldFileReader,
   HeldFileReadError,
   monotonicWallClock,
+  sha256Digest,
   type HeldFileReader,
 } from "../conversation"
 import {
@@ -107,6 +108,7 @@ import {
   sampleWidgetSession,
   type GatewayClient,
   type GatewaySource,
+  type ImageBytes,
   type SharingClient,
   type WindowPublishClient,
   type WorkspaceDependencies,
@@ -333,13 +335,19 @@ function gatewayWorkspace(
   reviewNotices: HostNotices | undefined,
 ): GatewaySource<WindowGatewayClient> {
   const onReviewWaiting = reviewWaiting(reviewNotices)
-  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting })
+  // A pasted image's bytes are behind its object URL; Web Crypto names them.
+  const imageBytes: ImageBytes = {
+    bytes: async (url) => (await fetch(url)).blob(),
+    digest: sha256Digest,
+  }
+  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting, imageBytes })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)
   const source: GatewaySource<WindowGatewayClient> = gatewaySource({
     connect,
     clock,
     onReviewWaiting,
+    imageBytes,
     apps: gatewayApps({
       registry,
       mcpApps: {

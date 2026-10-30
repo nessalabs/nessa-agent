@@ -71,6 +71,7 @@ import {
   setOption,
 } from "./scripted-frames.mjs"
 import {
+  promptImages,
   promptText,
   runSteps,
   turnFor,
@@ -477,7 +478,7 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
       agent,
       sessionId,
       saved: new Map([
-        ["prompt", { text, id: randomUUID() }],
+        ["prompt", { text, id: randomUUID(), images: promptImages(blocks) }],
         ["configuration", { model: session.values.model }],
         // Asked only by a turn that says them: git is not run for every turn.
         ...(JSON.stringify(matched.steps).includes("${credentials.")

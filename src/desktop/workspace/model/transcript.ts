@@ -2,6 +2,7 @@ import type { ModelControl } from "./model-choice"
 import type { ModelRef } from "./workspace-index"
 import type { FailureDiagnostic } from "./failure"
 import type { SessionAccess } from "./access"
+import type { DraftImage } from "./draft-images"
 /**
  * A session's conversation: messages from the person and the agent, what the
  * agent is doing now, and the approvals it is waiting on, if any. The agent's
@@ -234,6 +235,13 @@ export interface TurnMessage {
    * (`ui/message`, #390); absent when the person wrote it.
    */
   readonly app?: MessageApp
+  /**
+   * The images the person put on a message sent from this window, while it
+   * waits in the outbox: drawn from the bytes the window holds, and uploaded
+   * with each attempt to send it. Once the conversation holds the message,
+   * its `attachments` part names them by the gateway's reference instead.
+   */
+  readonly localImages?: readonly DraftImage[]
   readonly note?: never
 }
 

@@ -1,5 +1,6 @@
 import { memo } from "react"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
+import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 import {
   PublishedFiles,
   MessageImages,
@@ -24,6 +25,7 @@ import { ChatPill } from "./chat-pill"
 import { AgentProse, RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
+import type { DraftImage } from "../../model/draft-images"
 
 /**
  * Who wrote a message of the person's on their behalf: the app's tool, from
@@ -136,9 +138,16 @@ export const Message = memo(function Message({
                 <RichText text={part.text} />
               </p>
             ) : part.kind === "attachments" ? (
-              <MessageImages key={index} content={part.content} />
+              <MessageImages
+                key={index}
+                content={part.content}
+                conversationId={sessionId}
+              />
             ) : null,
           )}
+          {message.localImages?.length ? (
+            <LocalImages images={message.localImages} />
+          ) : null}
         </div>
         {message.terminal ? <TurnTerminalMark terminal={message.terminal} /> : null}
       </div>
@@ -257,3 +266,25 @@ function MessageWidget({ sessionId, widget }: { sessionId: string; widget: Widge
 }
 
 /** Why a message did not reach the agent, and the two ways on: send it again, or let it go. */
+
+/**
+ * The images on a message this window sent and its conversation does not hold
+ * yet, drawn from the bytes the window holds, as the tiles the conversation's
+ * own reference will draw once it does (`MessageImages`).
+ */
+function LocalImages({ images }: { images: readonly DraftImage[] }) {
+  return (
+    <ul
+      aria-label={images.length === 1 ? "1 attachment" : `${images.length} attachments`}
+      // The pasted copy, drawn until the conversation holds the message.
+      data-local-images=""
+      className="nessa-message-images m-0 flex list-none flex-wrap gap-1.5 p-0 [&:not(:first-child)]:mt-2"
+    >
+      {images.map((image) => (
+        <li key={image.id} title={image.name} className="inline-flex">
+          <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+        </li>
+      ))}
+    </ul>
+  )
+}

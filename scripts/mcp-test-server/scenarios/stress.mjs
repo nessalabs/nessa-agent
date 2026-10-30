@@ -37,6 +37,7 @@ export const STRESS = {
   stream: "stress stream",
   window: "stress window",
   table: "stress table",
+  paste: "stress paste",
   trace: "stress trace",
   github: "stress github",
   githubRead: "stress repository read",
@@ -86,6 +87,7 @@ export const SAYS = {
   streamEnd: "Stream finished.",
   window: "Window: ",
   table: "Tables: ",
+  paste: "Images: ",
   trace: "Traced: ",
   github: "GitHub: ",
   githubRead: "GitHub repository: ",
@@ -310,6 +312,17 @@ export function stressScenario({
                 (_, index) => ` ${index} ${"x".repeat(longChunkBytes)}`,
               ),
             ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        // Says which images the agent was handed, then the prompt.
+        when: STRESS.paste,
+        steps: [
+          {
+            do: "text",
+            chunks: [SAYS.paste, "${prompt.images}", " for ", "${prompt.text}"],
           },
           { do: "end" },
         ],

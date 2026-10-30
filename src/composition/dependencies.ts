@@ -2,7 +2,7 @@ import { gatewayAgentInstallations } from "../onboarding/adapters/agent-installa
 import { FOLLOW_RETRY_MS, gatewayEffects } from "../conversation/adapters/gateway/effects"
 import { followAgentChoices } from "../panel/adapters/agent-choices"
 import { createAttachmentResources } from "../panel/adapters/attachment-resources"
-import { sha256Digest } from "../panel/adapters/sha256"
+import { sha256Digest } from "../conversation/adapters/browser/sha256"
 import {
   nativeCredentialSource,
   nativeGatewayEndpointSource,

@@ -175,6 +175,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         githubs: "0",
         channels: "0",
         webhooks: "0",
+        pastes: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",

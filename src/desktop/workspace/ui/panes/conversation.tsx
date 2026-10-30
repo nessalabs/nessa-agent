@@ -22,6 +22,7 @@ import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
 import { useComposerAccess } from "./composer-access"
+import { useComposerImages } from "./composer-images"
 import "./conversation.css"
 
 /** The docked composer is always a card; only a home opens into a page. */
@@ -58,7 +59,9 @@ function useComposerActions(sessionId: string) {
   const canChangeModel = useRememberedValue(sessionId, canChangeLive)
   const send = useCallback(
     (text: string) =>
-      void dispatch(sendMessage({ sessionId, text, initiator: "person" })),
+      void dispatch(
+        sendMessage({ sessionId, text, initiator: "person", withImages: true }),
+      ),
     [dispatch, sessionId],
   )
   const changeModel = useCallback(
@@ -109,6 +112,7 @@ export const PaneHome = memo(function PaneHome({
   const { changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   const access = useComposerAccess(sessionId)
+  const images = useComposerImages(sessionId)
 
   return (
     <Home
@@ -116,6 +120,7 @@ export const PaneHome = memo(function PaneHome({
       onSend={onSend}
       onModelChange={changeModel}
       access={access}
+      images={images}
       text={text}
       onTextChange={onTextChange}
       // Docked as a conversation's composer is, where the pane is small (`conversation.css`).
@@ -169,6 +174,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { text, onTextChange } = useComposerText(sessionId)
   const stop = useStop(sessionId)
   const access = useComposerAccess(sessionId)
+  const images = useComposerImages(sessionId)
   const modelChoiceLive = useWorkspaceSelector((state) =>
     entry(state.workspace.modelChoices, sessionId),
   )
@@ -226,6 +232,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         onSend={modelBusy ? undefined : send}
         onStop={stop}
         access={access}
+        images={images}
         // In a conversation the field is a reply, and says so in fewer words than the home's question.
         placeholder="Reply…"
       />
