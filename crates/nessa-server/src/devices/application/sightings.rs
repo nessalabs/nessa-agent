@@ -95,7 +95,8 @@ impl WorkerSightings {
     }
 
     /// `peer`'s connection ended at `now`, its last report `machine`:
-    /// saved, as of then.
+    /// saved, as of then. Workers connect only to a Unix gateway.
+    #[cfg(any(unix, test))]
     pub(crate) async fn left(
         self: &Arc<Self>,
         peer: PeerEnvironment,

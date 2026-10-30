@@ -6,7 +6,7 @@
 mod machine;
 mod sightings;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use machine::MACHINE_READ_LIMIT;
 pub(crate) use machine::{read_machine, MachineProbe};
 #[cfg(test)]
