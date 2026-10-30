@@ -359,7 +359,8 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
             .unwrap(),
         receipt
     );
-    let context = ProviderContext::Recorded(ExecutionSessionId::new("extended-context").unwrap());
+    let context =
+        ProviderContext::recorded_after(ExecutionSessionId::new("extended-context").unwrap(), 0);
     let changed_context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
         after: context,
@@ -1106,8 +1107,9 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
         queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("saved-context").unwrap(),
+            0,
         ),
         invocations: vec![InvocationRecord {
             target_event_offset: None,
@@ -1238,8 +1240,9 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             queue_history,
             id: SessionId::new("conversation").unwrap(),
             provider: provider.identity(),
-            provider_context: ProviderContext::Recorded(
+            provider_context: ProviderContext::recorded_after(
                 ExecutionSessionId::new("saved-context").unwrap(),
+                0,
             ),
             invocations: vec![InvocationRecord {
                 target_event_offset: None,

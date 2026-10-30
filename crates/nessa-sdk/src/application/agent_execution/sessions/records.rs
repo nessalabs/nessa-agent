@@ -412,13 +412,45 @@ impl continuation::Continuation {
         changes: &[SessionChange],
         undo: &mut Vec<ChangeUndo>,
     ) -> Result<(), RefusedChange> {
+        // Only preceding identity evidence in this unit can authorize a reset
+        // when a different provider namespace returns the same native ID.
+        let mut namespace_changed = false;
+        let mut context_provider = None;
         for (index, change) in changes.iter().enumerate() {
             let before_snapshot =
                 super::retained::touched(self.snapshot.as_ref(), change, &self.positions, false);
             let id = affected_execution(change).cloned();
             let before_derived = self.derived_touched(id.as_ref());
             undo.push(ChangeUndo::Allocation(AllocationUndo { id }));
-            let result = self.stage_change(change, undo);
+            let changes_namespace = match change {
+                SessionChange::ProviderIdentityChanged { .. } => true,
+                SessionChange::Handoff(record) => {
+                    matches!(record.kind, super::HandoffKind::Switch { .. })
+                }
+                _ => false,
+            };
+            // Ordinary streaming units retain no extra provider identity copy.
+            if changes_namespace && !namespace_changed {
+                context_provider = self
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.provider.clone());
+            }
+            let net_namespace_changed = namespace_changed
+                && self.snapshot.as_ref().map(|snapshot| &snapshot.provider)
+                    != context_provider.as_ref();
+            let result = self.stage_change(change, undo, net_namespace_changed);
+            if result.is_ok() {
+                if changes_namespace {
+                    namespace_changed = true;
+                } else if matches!(
+                    change,
+                    SessionChange::Opened { .. } | SessionChange::ProviderContext { .. }
+                ) {
+                    namespace_changed = false;
+                    context_provider = None;
+                }
+            }
             let after_snapshot = super::retained::touched(
                 self.snapshot.as_ref(),
                 change,
@@ -483,6 +515,7 @@ impl continuation::Continuation {
         &mut self,
         change: &SessionChange,
         undo: &mut Vec<ChangeUndo>,
+        namespace_changed: bool,
     ) -> Result<(), StorageError> {
         let Self {
             snapshot: candidate,
@@ -510,6 +543,7 @@ impl continuation::Continuation {
                     return Err(corrupt("session was opened twice"));
                 }
                 provider_evidence.validate(context)?;
+                context.validate_admission(0, 0).map_err(corrupt)?;
                 undo.push(ChangeUndo::Opened);
                 *candidate = Some(SessionSnapshot {
                     model_change: None,
@@ -877,6 +911,14 @@ impl continuation::Continuation {
                         "provider context revision does not match prior value",
                     ));
                 }
+                after
+                    .validate_transition(
+                        before,
+                        snapshot.invocations.len(),
+                        super::validation::terminal_prefix(&snapshot.invocations),
+                        namespace_changed,
+                    )
+                    .map_err(corrupt)?;
                 // Earlier observations are not checked against `after`: each
                 // cancellation names the context in force at its own fact,
                 // which was checked when that fact was staged.

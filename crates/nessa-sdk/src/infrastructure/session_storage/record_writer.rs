@@ -637,7 +637,7 @@ mod tests {
         let next = writer.readable_snapshot().unwrap().binding().clone();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         let second = records::fold_changes(Some(&first), std::slice::from_ref(&context)).unwrap();
         writer
@@ -762,8 +762,9 @@ mod tests {
         }];
         let mut context = ProviderContext::Absent;
         for save in 0..600 {
-            let after = ProviderContext::Recorded(
+            let after = ProviderContext::recorded_after(
                 ExecutionSessionId::new(format!("remote-{save}")).unwrap(),
+                0,
             );
             changes.push(SessionChange::ProviderContext {
                 before: context.clone(),

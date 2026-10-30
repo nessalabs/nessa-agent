@@ -326,7 +326,9 @@ pub trait AgentProvider: Send + Sync {
     /// opened `saved` (another machine than the one that did) says no:
     /// attaching then opens new context and records it in place of the
     /// saved one, rather than asking to restore what is not there.
-    /// `has_invocations` says whether this SDK history has admitted any work.
+    /// `has_invocations` says whether the current native context has admitted
+    /// work, as established by the retained context admission watermark. Earlier
+    /// terminal history from another context does not count; pending work does.
     /// Providers that do not persist an uninvoked session may decline its
     /// restoration; attachment records the replacement context. A history
     /// with admitted work must not be treated as an unused context.

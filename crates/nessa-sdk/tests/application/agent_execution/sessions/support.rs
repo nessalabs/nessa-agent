@@ -92,7 +92,10 @@ pub(super) fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         current_configuration: None,
         id: SessionId::new("session").unwrap(),
         provider: ProviderIdentity::new("provider", "model", "").unwrap(),
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap()),
+        provider_context: ProviderContext::recorded_after(
+            ExecutionSessionId::new("provider").unwrap(),
+            0,
+        ),
         invocations,
         queue_history: Vec::new(),
         lease: None,

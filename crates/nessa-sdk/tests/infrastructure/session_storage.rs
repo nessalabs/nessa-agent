@@ -397,7 +397,8 @@ fn child_record_source_server_probe() {
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).unwrap();
         if input.trim() == "append" {
-            let context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+            let context =
+                ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
             let change = SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
                 after: context,

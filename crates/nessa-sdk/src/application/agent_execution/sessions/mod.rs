@@ -31,6 +31,10 @@
 //! ```
 //! Arrows show coordination and retained evidence. Provider-private execution
 //! state stays with the provider; snapshots never replay prompts automatically.
+//! ProviderContext retains the native ID and admission watermark in one value.
+//! Fresh publication excludes only the already-terminal invocation prefix;
+//! pending admissions count even when they precede attachment completion.
+//! Semantic changes and checkpoints validate this same boundary.
 //! CommittedTranscript -> records::continuation -> reversible records transitions
 //!                     -> validation::observations + retention::intervals
 //!                     -> existing domain history/queue and live controller limits

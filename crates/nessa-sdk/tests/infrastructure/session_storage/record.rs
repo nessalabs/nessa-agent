@@ -359,7 +359,7 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
     assert_eq!(restored_binding.generation(), 1);
     let context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
-        after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
     };
     let SessionSaveBackend::Record {
         stream,
@@ -598,13 +598,17 @@ async fn late_invalid_unit_never_appends_valid_prefix() {
     let binding = initial_receipt.next().clone();
     let context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
-        after: ProviderContext::Recorded(ExecutionSessionId::new("valid-prefix-context").unwrap()),
+        after: ProviderContext::recorded_after(
+            ExecutionSessionId::new("valid-prefix-context").unwrap(),
+            0,
+        ),
     };
     let candidate = SessionSnapshot {
         model_change: None,
         current_configuration: None,
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("valid-prefix-context").unwrap(),
+            0,
         ),
         ..initial.clone()
     };

@@ -17,6 +17,8 @@ use super::{
     settlement::Settlement,
     tools::corrupt,
 };
+#[cfg(test)]
+use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::{
     application::agent_execution::{
         providers::{
@@ -25,10 +27,7 @@ use crate::{
         },
         sessions::{ProviderContext, SessionChange, SessionSaveUnit, StorageError},
     },
-    domain::agent_execution::{
-        executions::ExecutionId,
-        sessions::{ExecutionSessionId, SessionId},
-    },
+    domain::agent_execution::{executions::ExecutionId, sessions::SessionId},
 };
 use serde::de::{DeserializeSeed, Deserializer, Error, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -184,7 +183,7 @@ enum WireChange<E = Event> {
     Opened {
         id: String,
         provider: Provider,
-        context: Option<String>,
+        context: Option<super::context::Context>,
     },
     InputAccepted {
         metadata: Box<Metadata>,
@@ -217,8 +216,8 @@ enum WireChange<E = Event> {
         local_outcome: Option<Outcome>,
     },
     ProviderContext {
-        before: Option<String>,
-        after: Option<String>,
+        before: Option<super::context::Context>,
+        after: Option<super::context::Context>,
     },
     ProviderIdentityChanged {
         before: Provider,
@@ -239,18 +238,6 @@ struct WireBatch<C = WireChange> {
     #[serde(rename = "schemaVersion")]
     schema_version: u64,
     changes: Vec<C>,
-}
-
-fn encode_context(value: &ProviderContext) -> Option<String> {
-    value.recorded().map(|id| id.as_str().into())
-}
-
-fn decode_context(value: Option<String>) -> Result<ProviderContext, StorageError> {
-    value
-        .map(ExecutionSessionId::new)
-        .transpose()
-        .map_err(corrupt)
-        .map(|value| value.map_or(ProviderContext::Absent, ProviderContext::Recorded))
 }
 
 fn encode_result(
@@ -280,7 +267,7 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
                     model_id: provider.model_id().into(),
                     context: provider.context().into(),
                 },
-                context: encode_context(context),
+                context: super::context::encode(context),
             },
             SessionChange::InputAccepted(record) => Self::InputAccepted {
                 metadata: Box::new(Metadata::from(record.as_ref())),
@@ -337,8 +324,8 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
                 local_outcome: local_outcome.map(Into::into),
             },
             SessionChange::ProviderContext { before, after } => Self::ProviderContext {
-                before: encode_context(before),
-                after: encode_context(after),
+                before: super::context::encode(before),
+                after: super::context::encode(after),
             },
             SessionChange::ProviderIdentityChanged { before, after } => {
                 Self::ProviderIdentityChanged {
@@ -371,7 +358,7 @@ impl TryFrom<WireChange> for SessionChange {
             } => Self::Opened {
                 id: SessionId::new(id).map_err(corrupt)?,
                 provider: provider.decode()?,
-                context: decode_context(context)?,
+                context: super::context::decode(context)?,
             },
             WireChange::InputAccepted {
                 metadata,
@@ -432,8 +419,8 @@ impl TryFrom<WireChange> for SessionChange {
                 local_outcome: local_outcome.map(Into::into),
             },
             WireChange::ProviderContext { before, after } => Self::ProviderContext {
-                before: decode_context(before)?,
-                after: decode_context(after)?,
+                before: super::context::decode(before)?,
+                after: super::context::decode(after)?,
             },
             WireChange::ProviderIdentityChanged { before, after } => {
                 Self::ProviderIdentityChanged {
@@ -758,7 +745,8 @@ mod tests {
             decode_one(&bytes, &ProviderContext::Absent),
             Err(StorageError::Corrupt(_))
         ));
-        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         assert!(matches!(
             decode_one(&bytes, &context).unwrap(),
             SessionChange::ProviderObservation(next) if next == event
@@ -771,7 +759,8 @@ mod tests {
             McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent,
             MAX_MCP_ARGUMENTS_BYTES, MAX_MCP_NAME_BYTES,
         };
-        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         let tool = |update| {
             ExecutionEvent::new(
                 ExecutionId::new("one").unwrap(),
@@ -874,7 +863,8 @@ mod tests {
 
     #[test]
     fn semantic_observation_refuses_an_empty_message_identity() {
-        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         let event = ExecutionEvent::new(
             ExecutionId::new("one").unwrap(),
             ExecutionUpdate::Message(
@@ -1402,7 +1392,8 @@ mod tests {
             .map(SessionChange::ProviderObservation)
             .collect();
         let bytes = encode_batch(&changes).unwrap();
-        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         let restored = decode_batch(&bytes, &context).unwrap();
         let restored: Vec<_> = restored
             .into_iter()
@@ -1444,7 +1435,8 @@ mod tests {
         .unwrap();
         let event = declined_event(stopped);
         let bytes = encode_one(&SessionChange::ProviderObservation(event.clone())).unwrap();
-        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         let SessionChange::ProviderObservation(restored) = decode_one(&bytes, &context).unwrap()
         else {
             panic!("decoded fact remains an observation");
@@ -1540,7 +1532,8 @@ mod tests {
             "changes": [body]
         }))
         .unwrap();
-        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         assert!(matches!(
             decode_one(&bytes, &context),
             Err(StorageError::Corrupt(_))
@@ -1563,7 +1556,8 @@ mod tests {
     #[test]
     fn grouped_changes_update_context_before_decoding_later_observations() {
         let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
-        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let context =
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         let event = ExecutionEvent::new(
             ExecutionId::new("one").unwrap(),
             ExecutionUpdate::Message(MessageChunk::text("chunk")),

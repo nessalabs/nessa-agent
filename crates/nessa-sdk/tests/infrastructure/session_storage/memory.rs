@@ -36,7 +36,7 @@ fn opening(id: &SessionId, name: &str) -> (SessionSaveUnit, SessionSnapshot) {
 }
 
 fn context(prior: &SessionSnapshot, name: &str) -> (SessionSaveUnit, SessionSnapshot) {
-    let context = ProviderContext::Recorded(ExecutionSessionId::new(name).unwrap());
+    let context = ProviderContext::recorded_after(ExecutionSessionId::new(name).unwrap(), 0);
     let change = SessionChange::ProviderContext {
         before: prior.provider_context.clone(),
         after: context.clone(),

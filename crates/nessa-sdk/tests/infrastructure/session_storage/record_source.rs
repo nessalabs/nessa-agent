@@ -46,7 +46,7 @@ async fn restored_checkpoint_accepts_real_same_generation_extension() {
     assert_eq!(first.next().base(), 2);
     let context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
-        after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
     };
     let second = lease
         .save_changes(
@@ -84,13 +84,16 @@ async fn restored_checkpoint_accepts_real_same_generation_extension() {
     let mut restored =
         TranscriptFold::restore(scope.clone(), 4, &uninterrupted.checkpoint().unwrap()).unwrap();
     let suffix = SessionChange::ProviderContext {
-        before: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-        after: ProviderContext::Recorded(ExecutionSessionId::new("later").unwrap()),
+        before: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
+        after: ProviderContext::recorded_after(ExecutionSessionId::new("later").unwrap(), 0),
     };
     let final_snapshot = SessionSnapshot {
         model_change: None,
         current_configuration: None,
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("later").unwrap()),
+        provider_context: ProviderContext::recorded_after(
+            ExecutionSessionId::new("later").unwrap(),
+            0,
+        ),
         ..initial.clone()
     };
     let extended = lease

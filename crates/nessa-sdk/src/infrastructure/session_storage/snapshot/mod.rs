@@ -16,6 +16,7 @@ mod agent_source;
 mod artifacts;
 mod cancellation;
 pub(super) mod checkpoint;
+mod context;
 pub(super) mod decode;
 mod errors;
 mod handoffs;

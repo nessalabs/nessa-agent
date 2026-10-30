@@ -648,8 +648,9 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
         queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("saved-context").unwrap(),
+            0,
         ),
         invocations: vec![InvocationRecord {
             target_event_offset: None,

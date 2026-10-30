@@ -680,18 +680,11 @@ impl SessionManager {
                     *self.switching.lock().expect("switch") = Some((actor.clone(), *at_ms));
                     None
                 } else {
-                    let restores = snapshot.provider_context.recorded().is_some_and(|saved| {
-                        provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
-                    });
-                    if restores {
-                        self.open_fresh_context.store(true, Ordering::Relaxed);
-                        None
-                    } else {
-                        Some(SessionChange::ProviderIdentityChanged {
-                            before: snapshot.provider.clone(),
-                            after: identity.clone(),
-                        })
-                    }
+                    // A different restoration fingerprint selects a fresh native
+                    // context. Publish both facts together only after open succeeds,
+                    // including when the previous context was never invoked.
+                    self.open_fresh_context.store(true, Ordering::Relaxed);
+                    None
                 }
             }
             _ => None,
@@ -819,7 +812,12 @@ impl SessionManager {
                 .recorded()
                 .cloned()
                 .filter(|saved| {
-                    provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
+                    provider.restores_saved_context(
+                        saved,
+                        snapshot
+                            .provider_context
+                            .has_admitted_work(snapshot.invocations.len()),
+                    )
                 })
         };
         let opening = catch_unwind(AssertUnwindSafe(|| {
@@ -1003,7 +1001,21 @@ impl SessionManager {
                 .expect("prepared session evidence")
                 .provider_context
                 .clone();
-            let after = ProviderContext::Recorded(session.id().clone());
+            let snapshot = evidence.observed().expect("prepared session evidence");
+            // A resumed context keeps its original admission boundary. A fresh
+            // open returning the same native ID in the same provider namespace
+            // is also conservative: ID reuse cannot erase admitted work.
+            let after = if restore.is_some()
+                || (before.recorded() == Some(session.id())
+                    && snapshot.provider.name() == provider.identity().name())
+            {
+                before.clone()
+            } else {
+                ProviderContext::recorded_after(
+                    session.id().clone(),
+                    super::validation::terminal_prefix(&snapshot.invocations),
+                )
+            };
             if before != after {
                 changes.push(SessionChange::ProviderContext { before, after });
             }

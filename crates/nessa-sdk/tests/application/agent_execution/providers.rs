@@ -182,7 +182,10 @@ pub(super) async fn provider_agent_with_review(
         queue_history: Vec::new(),
         id: id.clone(),
         provider: provider.identity(),
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("fixture").unwrap()),
+        provider_context: ProviderContext::recorded_after(
+            ExecutionSessionId::new("fixture").unwrap(),
+            0,
+        ),
         invocations: vec![InvocationRecord {
             target_event_offset: None,
             submission: SubmissionMode::Immediate,

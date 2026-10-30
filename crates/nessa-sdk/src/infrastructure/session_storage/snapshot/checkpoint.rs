@@ -15,7 +15,7 @@ use crate::application::agent_execution::{
     executions::{ExecutionRequest, SubmissionMode},
     permissions::ActionContext,
     providers::ProviderIdentity,
-    sessions::SubmissionAcknowledgement,
+    sessions::{ProviderContext, SubmissionAcknowledgement},
 };
 #[cfg(test)]
 use crate::domain::agent_execution::{
@@ -24,10 +24,10 @@ use crate::domain::agent_execution::{
 };
 use crate::{
     application::agent_execution::sessions::{
-        InvocationRecord, InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord,
-        SessionSnapshot, StorageError,
+        InvocationRecord, InvocationSchedulingEvent, QueueHistoryRecord, SessionSnapshot,
+        StorageError,
     },
-    domain::agent_execution::sessions::{ExecutionSessionId, SessionId},
+    domain::agent_execution::sessions::SessionId,
 };
 use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 
@@ -41,7 +41,7 @@ pub(crate) struct Snapshot {
 struct SnapshotCodec<I, Q> {
     id: String,
     provider: Provider,
-    context: Option<String>,
+    context: Option<super::context::Context>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_change: Option<super::semantic::SavedModelChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,10 +84,7 @@ impl Serialize for SnapshotRef<'_> {
                 model_id: value.provider.model_id().into(),
                 context: value.provider.context().into(),
             },
-            context: value
-                .provider_context
-                .recorded()
-                .map(|id| id.as_str().to_owned()),
+            context: super::context::encode(&value.provider_context),
             invocations: InvocationList(&value.invocations),
             queue_history: QueueList(&value.queue_history),
             lease: value.lease.as_ref().map(SavedLease::from),
@@ -146,11 +143,7 @@ impl Serialize for QueueList<'_> {
 impl Snapshot {
     pub(crate) fn decode(self) -> Result<SessionSnapshot, StorageError> {
         let value = self.value;
-        let context = value
-            .context
-            .map(ExecutionSessionId::new)
-            .transpose()
-            .map_err(corrupt)?;
+        let context = super::context::decode(value.context)?;
         let mut invocations = Vec::with_capacity(value.invocations.len());
         for saved in value.invocations {
             let mut record = saved.metadata.decode()?;
@@ -160,7 +153,7 @@ impl Snapshot {
                 .map(SchedulingEvent::decode)
                 .collect::<Result<_, _>>()?;
             for event in saved.events {
-                if context.is_none() {
+                if context.recorded().is_none() {
                     return Err(corrupt("checkpoint observation has no provider context"));
                 }
                 record.events.push(event.decode(
@@ -181,7 +174,7 @@ impl Snapshot {
                 .transpose()?,
             id: SessionId::new(value.id).map_err(corrupt)?,
             provider: value.provider.decode()?,
-            provider_context: context.map_or(ProviderContext::Absent, ProviderContext::Recorded),
+            provider_context: context,
             invocations,
             queue_history: value
                 .queue_history
