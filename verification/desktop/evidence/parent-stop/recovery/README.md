@@ -1,18 +1,54 @@
 # Parent Stop recovery integration
 
-**Status: conflicts resolved and published; qualification incomplete; not merge-ready.**
-The current local Stop E2E rerun passed. Current hosted Ubuntu CI fails the
-unmatched shipping image guard, which is retained. Local container cleanup
-failures and their narrow diagnostics remain recorded below.
+**Status: latest main integrated; qualification in progress; not merge-ready.**
+Functional source: `50bef867f45f9cb99fa27d798210e8e6a1dfe901`, including main
+`f08de87e40f2897df57556ad24adad66a82bf308` (#1194). A fresh independent review
+of the committed integration and fixtures reported no findings. It did not
+certify runtime/platform gates or the whole historical PR.
 
-**Pre-provenance checkpoint:** parent has now merged main `f08de87e40f2897df57556ad24adad66a82bf308`
+Current frontend tests passed **5510/5510** at6d6; frontend source/package/test
+inputs are unchanged through50. Current MCP/browser helper tests passed **789**,
+zero failures and one existing skip (790 total). TypeScript and architecture
+tests passed. All **38 binaries** in the exact eight-package CI selection now
+compile with `CARGO_INCREMENTAL=0` (as observed in hosted CI) and one compiler
+job. Runtime tests are pending at this publication checkpoint. The task-local
+child reaper supplies normal orphan reaping only for this command's descendants;
+the earlier bare-container failures are not relabeled as passes.
+
+The integrated source retains typed agent origin, Cedar's agent/owner boundary,
+exact Stop selection and supervised report admission. Canonical person-command
+chains cannot acknowledge a report through the legacy Person fallback. Legacy
+collision fixtures explicitly seed old Person history; a new regression rejects
+Agent-to-Person re-authorship with identical actor, identity and text.
+
+Recursive browser/stress fixtures now drive grandchild creation from genuine
+person admission to the owned child. Agent seeds invoke no relay tools. Default
+Stop also withdraws an exact queued seed report; later release must match that
+seed's typed source and leave the original withdrawal final. Override checks
+use the exact captured descendant executions after the full observation window.
+Current-source runtime/browser and fresh Windows qualification remain pending.
+
+The shipping image guard is unchanged. Its source-calculated fingerprint remains
+`91fd4c70b61e3d05`, while the existing shipping pin is `b6e4f48aa694ce08`.
+Boat access was not attempted. The precise parent-owned existing-account setup
+request remains below. Custom WebKit geometry and native Swift phone
+qualification remain unrun locally.
+
+Two typed-main server-test compilation attempts were OOM-killed (first alongside
+frontend tests, then alone). Neither ran tests. The compiler cache mode then
+matched observed CI; only13GiB of task-created incremental cache was removed,
+preserving executables, libraries, source and logs. The subsequent full build
+succeeded without another OOM kill. Failure excerpts and current checkpoint
+details are retained in `provenance-*-failure.log` and `provenance-checkpoint.json`.
+
+**Historical pre-provenance checkpoint:** parent had just merged main `f08de87e40f2897df57556ad24adad66a82bf308`
 (#1194). Incorporation and qualification of that new main are pending. Results
 below belong to the explicitly named earlier revisions and do not qualify its
 typed agent provenance/Cedar integration. Local verification corrections are
 committed through `fda398c1d9548d9013b012577870bea3e01e9df3`; only the older
 checkpoint `93599d3` is published at this point.
 
-Latest source reviewed: `85f057b2f9947d1e54dcc596922665424dfd443a`, adding main
+Earlier source reviewed: `85f057b2f9947d1e54dcc596922665424dfd443a`, adding main
 `833896496b5eed420f71c160c72f5388a0caa846` after the initial integration below.
 The follow-up merge retains both main's `promptImages` and the parent Stop
 fixture's `ScriptedUsageLimitError`. Its scenario tests passed 34/34, and the
@@ -166,7 +202,7 @@ inference, retained files across resume/restart, scoped MCP/delegation and clean
 Preserve owned VM IDs and require provider-confirmed absence. The parent owns that
 operation and the previously approved spending scope; no such operation ran here.
 
-## Latest source verification updates
+## Source85 verification updates (before mainf08)
 
 At source85, the complete frontend suite passed **5506/5506** across428 files
 with normal filesystem ownership. Current TypeScript, lint, formatting and

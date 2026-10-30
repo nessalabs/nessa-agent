@@ -4,7 +4,7 @@ title: "stop active and queued work"
 kind: "flow"
 status: "mixed"
 summary: "Stop targets the captured turn: withdraw it from the queue or cancel it if active."
-sourceRevision: "85f057b2f9947d1e54dcc596922665424dfd443a"
+sourceRevision: "50bef867f45f9cb99fa27d798210e8e6a1dfe901"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/app.tsx"
@@ -13,9 +13,12 @@ sources:
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-server/src/conversation/application/service/mutation.rs"
   - "crates/nessa-server/src/conversation/application/service/parent_stop.rs"
+  - "crates/nessa-server/src/conversation/application/service/thread_report_admission.rs"
+  - "crates/nessa-server/src/conversation/application/service/thread_reports.rs"
   - "crates/nessa-server/src/composition/runtime_config.rs"
   - "crates/nessa-server/tests/conversation/parent_stop/confirmed_recovery.rs"
   - "verification/desktop/scripts/parent-stop.mjs"
+  - "verification/desktop/scripts/lib/stress-parent-stop.mjs"
   - "crates/nessa-server/tests/conversation/mutation_commands.rs"
   - "src/conversation/application/usecases/control-failure.ts"
   - "src/conversation/adapters/store/control-failure.test.ts"
@@ -64,6 +67,14 @@ Unrelated conversations are outside that selection. The namespace setting
 `subagents.stopChildrenOnParentStop: false` selects parent-only scope; it does
 not close the descendant lifetimes or change their permissions.
 
+Reports retain their typed child-conversation and watched-execution origin while
+the mutation receipt keeps its original caller. Legacy Person-shaped report
+history remains readable, but a canonical person-command receipt anywhere in
+its continuation chain excludes that work from report capture and acknowledgement.
+Only later genuine person admission releases a stopped report; an agent's input
+does not carry that authority. Cedar's restriction on agent-initiated relay tools
+remains in force.
+
 The [parent Stop browser check](../../../../../verification/desktop/scripts/parent-stop.mjs)
 drives the window Stop button and the explicit override. The
 [recovery regressions](../../../../../crates/nessa-server/tests/conversation/parent_stop/confirmed_recovery.rs)
@@ -78,9 +89,12 @@ that revision. It is not a fresh admission-lock review, a process-cleanup proof,
 or executed browser/platform evidence for the integrated tree. Other state
 pages retain their own checkpoints. The recovery integration review checked the
 captured target, selected receipt order and recovered root actor again at this
-checkpoint. The Stop orchestration, mutation and SDK lifecycle files are unchanged
-from the published parent Stop head `92e18448be0a865aac89a7a80ede84452242e4e2`.
-Main's new earlier-history read is separate from Stop. Browser downloads were
+checkpoint, including main's typed agent provenance alongside the existing
+report admission guard. The fixture starts its nested delegation from a genuine
+person turn, correlates seed/grandchild/report origins exactly, and observes
+the override's captured executions through the full observation window. The
+five-second admission regression now isolates writer acquisition from receipt
+completion; fresh Windows qualification is still required. Browser downloads were
 blocked by the environment policy. The [recovery evidence](../../../../../verification/desktop/evidence/parent-stop/recovery/README.md)
 separately records current system-Chromium results and earlier failures. This
 source checkpoint does not establish WebKit, Swift phone or hosted worker

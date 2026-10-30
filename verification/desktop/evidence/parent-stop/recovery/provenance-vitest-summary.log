@@ -1,0 +1,10 @@
+ ✓ src/conversation/ui/work-selection.test.ts (2 tests) 8ms
+ ✓ src/desktop/workspace/model/overview/request.test.ts (2 tests) 4ms
+ ✓ src/panel/application/link-notice.test.ts (3 tests) 5ms
+ ✓ src/onboarding/adapters/linger.test.ts (1 test) 4ms
+
+ Test Files  428 passed (428)
+      Tests  5510 passed (5510)
+   Start at  01:34:20
+   Duration  359.35s (transform 41.17s, setup 1.68s, collect 282.38s, tests 124.18s, environment 167.62s, prepare 39.15s)
+
