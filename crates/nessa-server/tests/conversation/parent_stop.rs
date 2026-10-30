@@ -4105,15 +4105,18 @@ fn owned_stop_export_and_submission_share_one_admission_order() {
             );
             assert_eq!(receipt.outcome(), Some(MutationOutcome::Cancelled));
             assert!(submit_result.unwrap().is_ok());
-            let retry = service
-                .stop_command(
+            let retry = tokio::time::timeout_at(
+                completion_deadline,
+                service.stop_command(
                     storage.clone(),
                     parent.clone(),
                     caller("order-stop"),
                     "order-parent".into(),
-                )
-                .await
-                .unwrap();
+                ),
+            )
+            .await
+            .expect("receipt replay completes within the original completion deadline")
+            .unwrap();
             assert_eq!(retry, receipt, "the original Stop receipt is retained");
             assert_eq!(
                 provider.cancel_turns.lock().unwrap().as_slice(),
