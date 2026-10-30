@@ -487,6 +487,7 @@ export { VaultErrorCode, VaultState, type VaultStatus } from "./generated/produc
 
 export type { DevicesApi } from "./presentation/devices-api.js"
 export type {
+  DeviceDisk,
   DeviceMachine,
   DeviceWorker,
   DevicesListResult,

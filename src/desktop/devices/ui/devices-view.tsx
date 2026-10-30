@@ -54,10 +54,10 @@ export function DevicesProvider({
 interface Read {
   readonly hub?: HubCard | null
   readonly workers?: readonly WorkerCard[]
-  /** Workers past the list's bound, not listed. */
-  readonly omitted?: number
-  /** Where the hub's native listener is bound; absent while linking is off. */
-  readonly listening?: string
+  /** More workers than one read follows; those past it are not shown. */
+  readonly more?: boolean
+  /** Where the hub's native listener is bound; `null` while linking is off. */
+  readonly listening?: string | null
   readonly cloud?: CloudState | null
   readonly linked?: readonly LinkedDevice[] | null
   /** The last read of the list failed. */
@@ -82,8 +82,8 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
         // A list that could not read the hub this time keeps the last one.
         hub: list.ok && list.value.hub ? hubCard(list.value.hub) : (last.hub ?? null),
         workers: list.ok ? sortWorkers(list.value.workers.map(workerCard)) : last.workers,
-        omitted: list.ok ? list.value.omitted : last.omitted,
-        listening: list.ok ? list.value.listening : last.listening,
+        more: list.ok ? list.value.more : last.more,
+        listening: list.ok ? (list.value.listening ?? null) : last.listening,
         cloud: cloud.ok ? cloud.value : null,
         linked: linked.ok ? linked.value : null,
         unreachable: !list.ok,
@@ -122,6 +122,7 @@ export function DevicesView() {
         gateway={gateway}
         hubName={devices.hub?.name}
         listening={devices.listening}
+        onReached={devices.reload}
         onDone={() => {
           devices.reload()
           setPage({ kind: "list" })
@@ -246,11 +247,9 @@ function DevicesList({
                 <span>Add a computer</span>
               </button>
             </div>
-            {read.omitted ? (
-              <p className="devices-muted" data-devices-omitted>
-                {read.omitted === 1
-                  ? "1 more computer, not shown"
-                  : `${read.omitted} more computers, not shown`}
+            {read.more ? (
+              <p className="devices-muted" data-devices-more>
+                More computers than these work for the hub; they are not shown.
               </p>
             ) : null}
           </section>
@@ -315,7 +314,7 @@ function Stat({ label, usage }: { label: string; usage: Usage }) {
   const id = useId()
   return (
     <div className="devices-stat" data-devices-stat={label}>
-      <span className="devices-stat-label" id={id}>
+      <span className="devices-stat-label" id={id} title={label}>
         {label}
       </span>
       <span className="devices-stat-value">
@@ -524,6 +523,16 @@ function WorkerPage({
               <Stat label="Memory" usage={worker.memory} />
               <Stat label="Disk" usage={worker.disk} />
             </div>
+          ) : null}
+          {worker.disks ? (
+            <section className="devices-disks" aria-label="Disks" data-devices-disks>
+              <h2>Disks</h2>
+              <div className="devices-stats">
+                {worker.disks.map((disk) => (
+                  <Stat key={disk.mount} label={disk.mount} usage={disk.usage} />
+                ))}
+              </div>
+            </section>
           ) : null}
           <dl className="devices-facts">
             <div>

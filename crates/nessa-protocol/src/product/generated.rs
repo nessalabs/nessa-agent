@@ -2642,6 +2642,15 @@ pub struct DeviceMachine {
     pub memory_used_bytes: u64,
     pub disk_total_bytes: u64,
     pub disk_used_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disks: Option<Vec<DeviceDisk>>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceDisk {
+    pub mount: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2662,7 +2671,14 @@ pub struct DevicesListResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listening: Option<String>,
     pub workers: Vec<DeviceWorker>,
-    pub omitted: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

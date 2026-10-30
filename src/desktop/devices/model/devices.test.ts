@@ -106,9 +106,31 @@ describe("devices model", () => {
     expect(summary("Studio", [one])).toBe(
       "Studio is your hub. 1 of 1 computer online, 4 agents on them.",
     )
-    // Past the list's bound, the rest still count toward the total.
-    expect(summary("Studio", [one], 70)).toBe(
-      "Studio is your hub. 1 of 71 computers online, 4 agents on them.",
-    )
+  })
+
+  it("names each volume of a serving computer with more than one", () => {
+    const disks = [
+      { mount: "/", totalBytes: 1024 * GB, usedBytes: 256 * GB },
+      { mount: "/data", totalBytes: 1024 * GB, usedBytes: 256 * GB },
+    ]
+    const card = workerCard({
+      environment,
+      state: "online",
+      agents: 0,
+      machine: { ...machine, disks },
+    })
+    expect(card.disks?.map((disk) => [disk.mount, disk.usage.value, disk.usage.of])).toEqual([
+      ["/", "256 GB", "of 1 TB"],
+      ["/data", "256 GB", "of 1 TB"],
+    ])
+    // One volume is the disk figure already; offline shows no usage at all.
+    expect(
+      workerCard({ environment, state: "online", agents: 0, machine: { ...machine, disks: [disks[0]!] } })
+        .disks,
+    ).toBeUndefined()
+    expect(
+      workerCard({ environment, state: "offline", agents: 0, machine: { ...machine, disks } })
+        .disks,
+    ).toBeUndefined()
   })
 })

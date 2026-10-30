@@ -103,8 +103,11 @@
 }
 
 .devices-stat-label {
+  overflow: hidden;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .devices-stat-value {
@@ -314,6 +317,23 @@ button.devices-tile:focus-visible,
   border-radius: var(--desktop-radius-lg);
   background: var(--desktop-pane-fill);
   box-shadow: var(--desktop-card-rim);
+}
+
+.devices-disks {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 24px;
+  border-radius: var(--desktop-radius-lg);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.devices-disks h2 {
+  margin: 0;
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
 }
 
 .devices-facts {

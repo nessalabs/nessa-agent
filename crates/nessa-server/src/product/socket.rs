@@ -2010,13 +2010,23 @@ async fn dispatch_authorized(
             )
         }
         "devices.list" => {
-            if frame.params != json!({}) {
+            let Ok(params) = serde_json::from_value::<
+                nessa_protocol::product::generated::DevicesListParams,
+            >(frame.params.clone()) else {
                 return failure(&frame.id, "invalid_request");
-            }
+            };
+            let Ok(after) = params
+                .after
+                .as_deref()
+                .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::parse)
+                .transpose()
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
             let Some(devices) = state.devices.as_ref() else {
                 return failure(&frame.id, "devices_unavailable");
             };
-            success(&frame.id, &device_list(devices.list().await))
+            success(&frame.id, &device_list(devices.list(after).await))
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -2526,7 +2536,9 @@ pub(crate) use tests::host_fixture::HostProductFixture;
 fn device_list(
     list: crate::devices::application::DeviceList,
 ) -> nessa_protocol::product::generated::DevicesListResult {
-    use nessa_protocol::product::generated::{DeviceMachine, DeviceWorker, DevicesListResult};
+    use nessa_protocol::product::generated::{
+        DeviceDisk, DeviceMachine, DeviceWorker, DevicesListResult,
+    };
     let machine = |report: nessa_protocol::lease::MachineReport| DeviceMachine {
         hostname: report.hostname,
         os: report.os,
@@ -2538,6 +2550,17 @@ fn device_list(
         memory_used_bytes: report.memory_used_bytes,
         disk_total_bytes: report.disk_total_bytes,
         disk_used_bytes: report.disk_used_bytes,
+        disks: Some(
+            report
+                .disks
+                .into_iter()
+                .map(|disk| DeviceDisk {
+                    mount: disk.mount,
+                    total_bytes: disk.total_bytes,
+                    used_bytes: disk.used_bytes,
+                })
+                .collect(),
+        ),
     };
     DevicesListResult {
         hub: list.hub.map(machine),
@@ -2556,7 +2579,7 @@ fn device_list(
                 last_seen_ms: worker.last_seen_ms,
             })
             .collect(),
-        omitted: u64::try_from(list.omitted).unwrap_or(u64::MAX),
+        next: list.next.map(|peer| peer.name()),
     }
 }
 #[cfg(test)]
@@ -4706,6 +4729,11 @@ mod tests {
                 memory_used_bytes: 14,
                 disk_total_bytes: 1000,
                 disk_used_bytes: 400,
+                disks: vec![nessa_protocol::lease::MachineDisk {
+                    mount: "/".into(),
+                    total_bytes: 1000,
+                    used_bytes: 400,
+                }],
             }
         }
         struct Hub;
@@ -4763,6 +4791,7 @@ mod tests {
                 "arch": "aarch64", "cpus": 12, "cpuPermille": 230,
                 "memoryTotalBytes": 48, "memoryUsedBytes": 14,
                 "diskTotalBytes": 1000, "diskUsedBytes": 400,
+                "disks": [{"mount": "/", "totalBytes": 1000, "usedBytes": 400}],
             })
         };
         assert_eq!(
@@ -4776,9 +4805,22 @@ mod tests {
                     "machine": machine("build-box"),
                     "lastSeenMs": null,
                 }],
-                "omitted": 0,
             })
         );
+
+        // A page after the last worker is empty; a malformed `after` is refused.
+        let mut after = request("3", "devices.list");
+        after.params = json!({"after": format!("peer:{}", "ff".repeat(32))});
+        let OutgoingMessage::Response(page) = dispatch(&state, &session, after).await else {
+            panic!("response expected")
+        };
+        assert_eq!(page.payload.unwrap()["workers"], json!([]));
+        let mut bad = request("4", "devices.list");
+        bad.params = json!({"after": "peer:zz"});
+        let OutgoingMessage::Response(refused) = dispatch(&state, &session, bad).await else {
+            panic!("response expected")
+        };
+        assert_eq!(refused.error.unwrap().code, "invalid_request");
     }
 
     #[tokio::test]
