@@ -230,6 +230,9 @@ while True:
                 result(msg["id"], {"sessionId": "different-session", **configs()})
                 continue
         else:
+            if mode == "uninvoked-context" and (root / "hold-new-context").exists():
+                record("new-context-waiting", session)
+                stdin_lines.wait_for_file("release-new-context")
             if mode in ("new-session-stall", "slow-launch-session-stall"):
                 record("new-session-wait", session)
                 time.sleep(20)

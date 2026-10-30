@@ -1,4 +1,4 @@
-//! Pure reasons for beginning a provider attachment.
+//! Attachment causes and retained native-context admission evidence.
 
 use super::ExecutionSessionId;
 use std::{error::Error, fmt};

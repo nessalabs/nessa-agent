@@ -251,7 +251,7 @@ impl AgentProvider for ClaudeAcpProvider {
     fn restores_saved_context(&self, _: &ExecutionSessionId, has_invocations: bool) -> bool {
         // Claude persists native context on its first prompt, not session/new.
         // An untouched context can be replaced without dropping admitted work.
-        // Used histories still require a successful native resume.
+        // Used current contexts still require a successful native resume.
         has_invocations
     }
     fn approval_mode(&self) -> Option<ApprovalMode> {

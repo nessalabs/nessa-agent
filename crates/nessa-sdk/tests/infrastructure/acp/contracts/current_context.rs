@@ -46,13 +46,13 @@ async fn open(
     storage_path: &Path,
     id: &SessionId,
     switching: bool,
-) -> Result<Agent, AgentError> {
+) -> Result<(Agent, Arc<RecordStorage>), AgentError> {
     // Reconstruct the adapter as well as the native process: a previous
     // in-memory snapshot cannot provide the admission watermark on reopen.
     let storage = Arc::new(RecordStorage::new(storage_path).unwrap());
     let mut manager = SessionManager::open(
         Some(id.clone()),
-        storage,
+        storage.clone(),
         Arc::new(RuntimeMessageCommitClock::new()),
     )
     .await
@@ -64,7 +64,13 @@ async fn open(
             at_ms: 5,
         });
     }
-    attached_agent(provider, manager).await
+    match attached_agent(provider, manager).await {
+        Ok(agent) => Ok((agent, storage)),
+        Err(error) => {
+            storage.shutdown().await.unwrap();
+            Err(error)
+        }
+    }
 }
 
 fn count(root: &Path, name: &str) -> usize {
@@ -90,7 +96,7 @@ async fn current_context_survives_cold_reopen(switching: bool, used: bool) {
     let storage_root = tempfile::tempdir().unwrap();
     let storage_path = storage_root.path().join("sessions");
     let id = SessionId::new("current-context-admission").unwrap();
-    let first = open(prior.clone(), &storage_path, &id, false)
+    let (first, first_storage) = open(prior.clone(), &storage_path, &id, false)
         .await
         .unwrap();
     assert_eq!(
@@ -105,6 +111,7 @@ async fn current_context_survives_cold_reopen(switching: bool, used: bool) {
     let old = first.session_manager().snapshot().await.unwrap();
     first.close(close_action()).await.unwrap();
     drop(first);
+    first_storage.shutdown().await.unwrap();
     assert_eq!(count(root.path(), "prompt-count"), 1);
 
     if !switching {
@@ -115,7 +122,7 @@ async fn current_context_survives_cold_reopen(switching: bool, used: bool) {
     }
     let current = Arc::new(provider(config, &model));
     assert_ne!(prior.identity(), current.identity());
-    let second = open(current.clone(), &storage_path, &id, switching)
+    let (second, second_storage) = open(current.clone(), &storage_path, &id, switching)
         .await
         .unwrap();
     let fresh = second.session_manager().snapshot().await.unwrap();
@@ -147,7 +154,8 @@ async fn current_context_survives_cold_reopen(switching: bool, used: bool) {
     let before_restart = second.session_manager().snapshot().await.unwrap();
     second.close(close_action()).await.unwrap();
     drop(second);
-    let third = open(current.clone(), &storage_path, &id, false)
+    second_storage.shutdown().await.unwrap();
+    let (third, third_storage) = open(current.clone(), &storage_path, &id, false)
         .await
         .unwrap();
     let restored = third.session_manager().snapshot().await.unwrap();
@@ -184,6 +192,7 @@ async fn current_context_survives_cold_reopen(switching: bool, used: bool) {
     }
     third.close(close_action()).await.unwrap();
     drop(third);
+    third_storage.shutdown().await.unwrap();
 
     if used {
         // A failed native resume does not authorize context replacement, and
@@ -202,6 +211,7 @@ async fn current_context_survives_cold_reopen(switching: bool, used: bool) {
         assert_eq!(saved.handoffs, restored.handoffs);
         assert_eq!(count(root.path(), "new-session-count"), 2);
         assert_eq!(count(root.path(), "prompt-count"), 2);
+        storage.shutdown().await.unwrap();
     }
 }
 
@@ -223,4 +233,110 @@ async fn unused_fingerprint_changed_claude_context_reopens_without_replaying_old
 #[tokio::test]
 async fn used_fingerprint_changed_claude_context_requires_exact_native_history_after_restart() {
     current_context_survives_cold_reopen(false, true).await;
+}
+
+/// An input saved while the native session is opening belongs to that session,
+/// even though the invocation list already contains it at context publication.
+#[tokio::test]
+async fn admission_while_fresh_context_opens_still_requires_native_resume_after_settlement() {
+    let _process_slot = process_test_slot().await;
+    let (root, mut config, model) = test_acp_configuration("uninvoked-context", 16);
+    config.environment.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        "/fixture/pending-context-a".into(),
+    );
+    let original = Arc::new(provider(config.clone(), &model));
+    let storage_root = tempfile::tempdir().unwrap();
+    let storage_path = storage_root.path().join("sessions");
+    let id = SessionId::new("admission-during-native-open").unwrap();
+    let (first, first_storage) = open(original, &storage_path, &id, false).await.unwrap();
+    assert_eq!(
+        first
+            .invoke(
+                prompt("old-context-input"),
+                Submitter::owner(close_action())
+            )
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    let old = first.session_manager().snapshot().await.unwrap();
+    first.close(close_action()).await.unwrap();
+    drop(first);
+    first_storage.shutdown().await.unwrap();
+
+    config.environment.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        "/fixture/pending-context-b".into(),
+    );
+    let current = Arc::new(provider(config, &model));
+    let storage = Arc::new(RecordStorage::new(&storage_path).unwrap());
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        current.clone(),
+        manager,
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    std::fs::write(root.path().join("hold-new-context"), "hold").unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    wait_for_file(&root, "new-context-waiting").await;
+
+    let receipt = promptly(agent.enqueue(
+        prompt("admitted-during-open"),
+        Submitter::owner(close_action()),
+    ))
+    .await
+    .unwrap();
+    let waiting = agent.session_manager().snapshot().await.unwrap();
+    assert_eq!(waiting.invocations.len(), 2);
+    assert_eq!(waiting.invocations[0], old.invocations[0]);
+    assert!(waiting.invocations[1].result.is_none());
+    assert_eq!(waiting.provider_context, old.provider_context);
+    assert_eq!(count(root.path(), "prompt-count"), 1);
+    assert!(!root.path().join("prompt-before-release").exists());
+
+    std::fs::write(root.path().join("release-new-context"), "release").unwrap();
+    promptly(attachment.wait()).await.unwrap();
+    assert_eq!(
+        promptly(receipt.wait()).await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    let used = agent.session_manager().snapshot().await.unwrap();
+    assert_eq!(used.provider_context.admission_watermark(), Some(1));
+    assert!(used
+        .provider_context
+        .has_admitted_work(used.invocations.len()));
+    assert_ne!(
+        used.provider_context.recorded(),
+        old.provider_context.recorded()
+    );
+    assert_eq!(count(root.path(), "new-session-count"), 2);
+    assert_eq!(count(root.path(), "prompt-count"), 2);
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    storage.shutdown().await.unwrap();
+
+    let (restored, restored_storage) = open(current, &storage_path, &id, false).await.unwrap();
+    let after = restored.session_manager().snapshot().await.unwrap();
+    assert_eq!(after.provider_context, used.provider_context);
+    assert_eq!(after.invocations, used.invocations);
+    assert_eq!(count(root.path(), "new-session-count"), 2);
+    assert_eq!(count(root.path(), "prompt-count"), 2);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("resume-observed")).unwrap(),
+        used.provider_context.recorded().unwrap().as_str()
+    );
+    restored.close(close_action()).await.unwrap();
+    drop(restored);
+    restored_storage.shutdown().await.unwrap();
 }

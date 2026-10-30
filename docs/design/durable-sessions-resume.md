@@ -86,13 +86,18 @@ source settlement, owed-turn decision and successor admission under the existing
 decision owner, rather than releasing the scheduler between decision and
 accept_work. Avoid recursive acquisition when extracting the already-owned
 admission path. Persisted evidence, not a caller's successful wait, decides the
-winner. Do not hold an application lock across unrelated provider work.
+winner. `resume_turn_at` currently calls private `accept_work` directly, whereas
+public enqueue supervises owned admission. A scheduler-lock extraction alone
+does not establish caller-loss safety: transfer one owned task over source
+settlement, successor save and receipt publication, or preserve a resumable
+source if cancellation precedes that transfer. Force caller drop at both source
+and successor saves. Do not hold an application lock across unrelated provider work.
 
 | Row | Ordering | Expected regression |
 | --- | --- | --- |
-| R1 | Resume reaches decision before decline | Exactly one successor; decline reports the existing typed losing result. |
+| R1 | Resume reaches decision before decline | Exactly one successor; a losing decline preserves idempotent `Ok(())` without recording `NotResumed`. |
 | R2 | Decline wins before successor admission | No successor, including after normal restore. Reproduce the paused source-save/pre-polled waiter trigger from #1003. |
-| R3 | Both wait on decision / both ready | One linearized winner, preserving original source and successor identities. |
+| R3 | Both wait on decision / both ready | One persisted decision, preserving original source and successor identities. A losing resume returns `Resumed::NotOwed`; multiple successful API returns do not imply multiple decisions. |
 | R4 | Audit or save fails on either path | Preserve typed failure and retry evidence; never acknowledge a decision whose required sink failed. |
 | R5 | Caller drops before/after ownership transfer | Owned admission completes or stays explicitly unresolved; retry neither duplicates nor resurrects declined work. |
 | R6 | Resume, decline or restore retries after decision | Same decision, bounded retained ownership, no second dispatch. |
@@ -127,17 +132,34 @@ in the CI package selection. Public API moves update callers and Rustdoc togethe
 
 ## After #981: metadata admission (#934)
 
-Proposed stronger contract: a review candidate must carry metadata version
-evidence belonging to the authoritative conversation metadata publication
-boundary. Final whole-candidate admission validates that evidence alongside the
-existing authority and board generations, without another Cedar evaluation.
+Proposed stronger contract: selected metadata must coexist with the final
+authority snapshot. Admission is defined at that authority snapshot, conditional
+on subsequent metadata-token validation and final board/visibility validation;
+it does not promise currency at a later socket write or simultaneous final token
+checks. A candidate retains metadata and an opaque token read atomically from
+its owning store: catalogue incarnation, conversation identity and persistent
+row change_revision. Final ordering is authority read, metadata-token validation,
+then the existing synchronous board/visibility check, then admission. Moving
+the board check before awaited metadata validation would open a new race. No
+second Cedar evaluation or global lock is introduced.
 Deletion publishes its tombstone/version before waiting on inventory; the
 candidate loaded before deletion must therefore lose admission even if board
 cleanup is still pending. A deletion after final admission may coexist with
 delivery of the already admitted response, consistent with ADR0010.
 
-This is a proposed decision, to be checked against the actual store ports and
-publication locks after #981. A second independent metadata reread alone is not
+Current source evidence: `review_notice_selection.rs::execute` loads metadata,
+then authority, then calls Cedar and audit. `product/socket.rs::forward_review_notices`
+finally reads authority and checks the board. `LocalConversationStore::record_deletion`
+already advances conversations.change_revision atomically with the first tombstone.
+Cedar receives organization/owner/deleted only: organization and owner are
+immutable, deletion has no reversal, create retains tombstones, and revision
+allocation fails instead of wrapping. Incarnation distinguishes database
+replacement. Metadata reader must expose this token, which selection currently
+discards. Custom adapters must supply equivalent atomic reads, monotonic tokens
+and incarnation semantics. Deduplicate retained tokens per conversation within
+the existing review-set bound; retain no locks across Cedar/audit/capacity waits.
+
+This is a proposed decision, to be checked against merged source after #981. A second independent metadata reread alone is not
 a coherent boundary. If the owning store cannot supply the proposed boundary,
 write down the limitation and resolve the design before implementing a claim of
 atomicity.
@@ -151,6 +173,8 @@ atomicity.
 | M5 | After final admission | Previously admitted response may finish; no claim of metadata currency at socket write. |
 | M6 | Unchanged live metadata / authority / board | Eligible notice remains deliverable, with exact correlation and audit evidence. |
 | M7 | Audit fails, caller disconnects, cleanup competes | Existing bounded publisher ownership and typed failure rules remain enforced. |
+| M8 | Visibility changes while metadata-token validation awaits | Final board/visibility check rejects stale candidates. |
+| M9 | Foreign conversation, stale revision, replaced store incarnation | Token validation refuses ABA/foreign evidence; unchanged valid source still publishes. |
 
 ## Verification and checkpoints
 

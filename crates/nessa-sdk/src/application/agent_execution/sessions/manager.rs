@@ -642,11 +642,9 @@ impl SessionManager {
         let compacted = saved;
         let identity = provider.identity();
         // A different provider name or model is refused before launch (S1,
-        // S2). A fingerprint change where the saved context is not restored
-        // here is saved now (S5): the next open still cannot resume it. A
-        // fingerprint change where it would be resumed is not saved yet (S6).
-        // attach opens a new native session and writes the new fingerprint
-        // with that session's id. docs/design/restoration-fingerprint.md.
+        // S2). Fingerprint changes (S5/S6) defer publication until attach opens
+        // a new native session. Its ID, admission watermark and fingerprint
+        // commit together. docs/design/restoration-fingerprint.md.
         self.open_fresh_context.store(false, Ordering::Relaxed);
         *self.switching.lock().expect("switch") = None;
         let intent = self.handoff.get_mut().expect("handoff intent").take();
