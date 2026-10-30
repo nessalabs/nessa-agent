@@ -20,7 +20,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::{
     agent_execution::{
-        executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
+        executions::{ExecutionId, Initiator, MessageChunk, MessageId, MessageKind},
         permissions::{
             PermissionEffect, PermissionId, PermissionReviewDeadline, PermissionToolClass,
             RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
@@ -521,6 +521,7 @@ impl From<&InvocationRecord> for Metadata {
             user_app: match value.request.user_message.sender() {
                 MessageSender::Person | MessageSender::Internal => None,
                 MessageSender::App(app) => Some(app.into()),
+                MessageSender::Agent(_) => None,
             },
             user_internal: matches!(value.request.user_message.sender(), MessageSender::Internal),
             user_app_model_context: value
@@ -700,6 +701,18 @@ impl Provider {
 }
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
+        let initiation = self.initiation.decode()?;
+        // Agent sender origin has one stored owner: the initiation. Internal
+        // input and app messages cannot also claim that agent origin.
+        let sender = match (initiation.initiator(), self.user_internal, self.user_app) {
+            (Initiator::Agent(source), false, None) => MessageSender::Agent(source.clone()),
+            (Initiator::Agent(_), _, _) | (_, true, Some(_)) => {
+                return Err(corrupt("input has two senders"))
+            }
+            (_, false, None) => MessageSender::Person,
+            (_, true, None) => MessageSender::Internal,
+            (_, false, Some(app)) => MessageSender::App(app.decode()?),
+        };
         Ok(InvocationRecord {
             decline: self.decline.map(SavedDecline::decode).transpose()?,
             cancellation_delivery: self
@@ -737,12 +750,7 @@ impl Metadata {
                         .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?
-                .sent_by(match (self.user_internal, self.user_app) {
-                    (false, None) => MessageSender::Person,
-                    (true, None) => MessageSender::Internal,
-                    (false, Some(app)) => MessageSender::App(app.decode()?),
-                    (true, Some(_)) => return Err(corrupt("input has two senders")),
-                })
+                .sent_by(sender)
                 .with_app_model_context(
                     self.user_app_model_context
                         .into_iter()
@@ -754,7 +762,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
-            initiation: self.initiation.decode()?,
+            initiation,
             notes: self
                 .notes
                 .into_iter()

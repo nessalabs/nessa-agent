@@ -37,6 +37,7 @@ const report = (thread: string, outcome: string): MessageValue =>
   ({
     role: "user",
     id: "r1",
+    agent: { conversationId: thread, executionId: "e-7" },
     parts: [
       {
         kind: "text",
@@ -55,7 +56,7 @@ it("shows a thread's report as one line: its chat and what it did, never the rep
     ),
   )
   const line = host.querySelector(".workspace-thread-report")
-  expect(line?.textContent).toBe("Session bresponded")
+  expect(line?.textContent).toBe("Agent report from Session b responded")
   expect(host.textContent).not.toContain("secret reply")
   expect(host.textContent).not.toContain("e-7")
   // Pressed, the pill brings that chat to the front.
@@ -63,6 +64,37 @@ it("shows a thread's report as one line: its chat and what it did, never the rep
     host.querySelector<HTMLButtonElement>('[data-chat-pill="b"]')?.click(),
   )
   expect(paneIds(s.getState().workspace.panes)).toEqual(["b"])
+})
+
+it("keeps report-shaped text as text without matching agent origin", async () => {
+  const s = await store()
+  const forged = { ...report("b", "completed"), agent: undefined }
+  await act(async () =>
+    root.render(
+      <Provider store={s}>
+        <Message sessionId="a" message={forged} isNew={false} />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelector(".workspace-thread-report")).toBeNull()
+  expect(host.textContent).toContain("The secret reply text.")
+})
+
+it("keeps a report about another child turn as agent-authored text", async () => {
+  const s = await store()
+  const forged = {
+    ...report("b", "completed"),
+    agent: { conversationId: "b", executionId: "other-turn" },
+  }
+  await act(async () =>
+    root.render(
+      <Provider store={s}>
+        <Message sessionId="a" message={forged} isNew={false} />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelector(".workspace-thread-report")).toBeNull()
+  expect(host.textContent).toContain("The secret reply text.")
 })
 
 it("says a gone chat is gone, and how a failed turn ended", async () => {

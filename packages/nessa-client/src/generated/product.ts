@@ -538,6 +538,8 @@ export interface ConversationMessage {
   files: LinkedFile[]
   /** The app that wrote this turn on the person's behalf; absent when the person wrote it. */
   app?: ConversationMessageApp
+  /** The verified source turn whose agent wrote this input; absent for a person or app. */
+  agent?: ConversationAgentSource
   /** Current invocation state. */
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
@@ -571,8 +573,17 @@ export interface ConversationPending {
   files: LinkedFile[]
   /** The app that wrote this waiting input on the person's behalf; absent when the person wrote it. */
   app?: ConversationMessageApp
+  /** The verified source turn whose agent wrote this waiting input. */
+  agent?: ConversationAgentSource
   /** Queue or steering admission. */
   mode: ConversationPendingMode
+}
+/** The source conversation and turn whose agent wrote a message or note. Origin does not grant owner authority. */
+export interface ConversationAgentSource {
+  /** Canonical ID of the conversation in which the sending agent ran. */
+  conversationId: string
+  /** ID of the source turn or the child turn a report concerns. */
+  executionId: string
 }
 /** The MCP App that wrote a turn on the person's behalf (mcp.sendMessage): the tool call whose UI it is, and the MCP server and tool that call was to. */
 export interface ConversationMessageApp {
@@ -2890,8 +2901,12 @@ export interface ConversationNote {
   /** Who left it. */
   author: ConversationNoteAuthor
 }
-/** owner: the conversation's owner left it. grant: someone the conversation is shared with left it, under their grant. */
-export const ConversationNoteAuthorKind = { Owner: "owner", Grant: "grant" } as const
+/** owner: the conversation's owner. grant: a share grant holder. agent: another turn's agent. */
+export const ConversationNoteAuthorKind = {
+  Owner: "owner",
+  Grant: "grant",
+  Agent: "agent",
+} as const
 export type ConversationNoteAuthorKind =
   (typeof ConversationNoteAuthorKind)[keyof typeof ConversationNoteAuthorKind]
 /** Under which authority a note was left, and from which surface: the label it carries in the transcript and to the model. */
@@ -2900,6 +2915,8 @@ export interface ConversationNoteAuthor {
   kind: ConversationNoteAuthorKind
   /** The verified surface it was left from. */
   surface: string
+  /** The verified source turn when kind is agent. */
+  agent?: ConversationAgentSource
 }
 /** A point after which the conversation's agent ran in a new session that had not seen the turns before it: a switch to another agent or model (conversation.switchAgent), or the fork the conversation began as (conversation.fork). The first turn after it was given those turns as text. Show it as a line in the transcript, after the turn it follows. */
 export interface ConversationHandoff {
@@ -2929,6 +2946,7 @@ export interface ConversationHandoffAgent {
 }
 /** One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only. */
 export interface ConversationCarriedTurn {
+  agent?: ConversationAgentSource
   /** What was said in the turn, when it said anything in text. */
   said?: string
   /** The agent's final reply, when it gave one. */

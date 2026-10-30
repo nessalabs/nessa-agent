@@ -75,6 +75,7 @@
 //! evidence.
 
 mod app_sources;
+mod authorship;
 pub use app_sources::UnknownApp;
 mod artifacts;
 pub(crate) mod attachment;

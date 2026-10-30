@@ -338,11 +338,21 @@ const TurnRow = React.memo(function TurnRow({
     >
       <ChatBubble>
         {turn.from === "user" ? (
-          <MessageContentView
-            content={turn.content}
-            conversationId={conversationId}
-            onOpenPaste={onOpenPaste}
-          />
+          <>
+            {turn.agent ? (
+              <p data-message-agent={turn.agent.conversationId}>
+                Sent by an agent in chat{" "}
+                <bdi title={turn.agent.conversationId}>
+                  {turn.agent.conversationId.slice(0, 8)}
+                </bdi>
+              </p>
+            ) : null}
+            <MessageContentView
+              content={turn.content}
+              conversationId={conversationId}
+              onOpenPaste={onOpenPaste}
+            />
+          </>
         ) : (
           <MessageMarkdown streaming={streaming}>{turn.text}</MessageMarkdown>
         )}

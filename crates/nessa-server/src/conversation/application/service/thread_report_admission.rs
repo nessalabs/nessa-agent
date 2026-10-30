@@ -127,12 +127,22 @@ pub(super) fn is_report_record(
         "[Thread report] Thread {} finished the turn you sent it (execution {}): ",
         pending.child, pending.execution
     );
+    let source_matches = match record.request.user_message.sender() {
+        MessageSender::Agent(source) => {
+            source.conversation() == pending.child.to_string()
+                && source.execution().as_str() == pending.execution.as_str()
+        }
+        // Retain reports persisted before typed agent authorship. Canonical
+        // person-command receipts are excluded separately during Stop capture.
+        MessageSender::Person => true,
+        _ => false,
+    };
     pending
         .report
         .caller
         .actor()
         .is_ok_and(|actor| actor == record.actor)
-        && record.request.user_message.sender() == &MessageSender::Person
+        && source_matches
         && record.request.user_message.text_str().starts_with(&header)
         && record.request.user_message.images().is_empty()
         && record.request.user_message.files().is_empty()

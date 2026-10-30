@@ -270,6 +270,8 @@ export const css = {
   // The line where a conversation's agent ran on in a new session
   // (src/desktop/workspace/ui/transcript/message.tsx); data-handoff is switch or fork
   handoffLine: '[data-role="handoff"]',
+  threadReport: '[data-role="thread-report"]',
+  chatPill: "[data-chat-pill]",
   thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
   thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
   thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',

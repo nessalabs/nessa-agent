@@ -10,7 +10,7 @@ use crate::application::agent_execution::sessions::{
     SessionSnapshot,
 };
 use crate::domain::agent_execution::{
-    executions::{ExecutionId, GrantInitiator, QueueOrderChange},
+    executions::{AgentSource, ExecutionId, GrantInitiator, QueueOrderChange},
     leases::LeaseId,
     permissions::PermissionOption,
     prompts::{
@@ -97,6 +97,7 @@ pub(super) enum Shape {
     Initiation,
     Initiator,
     Grant,
+    Agent,
     Event,
     Update,
     Scheduling,
@@ -154,7 +155,8 @@ impl Shape {
             | Self::Error
             | Self::Initiation
             | Self::Initiator
-            | Self::Grant => KEY_BYTES,
+            | Self::Grant
+            | Self::Agent => KEY_BYTES,
             Self::GroupCheckpoint | Self::SaveIdentity | Self::FixedBytes(_) | Self::Number => 0,
             _ => LARGE_STRING,
         }
@@ -217,6 +219,7 @@ impl Shape {
             (HandoffFork, "history") => Carried,
             (Carried, "turns") => CarriedTurns,
             (CarriedTurn, "said" | "reply") => Text(CarriedTurn::MAX_PART_BYTES),
+            (CarriedTurn, "agent") => Agent,
             (Invocation, "metadata") => Metadata,
             (Invocation, "scheduling") => Scheduling,
             (Invocation, "events") => Events,
@@ -257,8 +260,11 @@ impl Shape {
             (Initiation, "initiator") => Initiator,
             (Initiation, "tools") => Text(KEY_BYTES),
             (Initiator, "Grant") => Grant,
+            (Initiator, "Agent") => Agent,
             (Grant, "grant") => Text(GrantInitiator::MAX_GRANT_BYTES),
             (Grant, "policy_revision") => Number,
+            (Agent, "conversation") => Text(AgentSource::MAX_CONVERSATION_BYTES),
+            (Agent, "execution") => Text(ExecutionId::MAX_BYTES),
             (_, "projection") => FinalizedComponents,
             (FinalizedComponent, "Operation") => Error,
             (FinalizedComponent, "PermissionDeliveryAndAudit") => Generic,
@@ -402,13 +408,14 @@ impl Shape {
             HandoffFork => matches!(key, "source" | "history"),
             Carried => matches!(key, "turns" | "omitted"),
             HandoffSwitch => matches!(key, "before" | "after"),
-            CarriedTurn => matches!(key, "said" | "reply"),
+            CarriedTurn => matches!(key, "said" | "reply" | "agent"),
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
             Initiation => matches!(key, "initiator" | "tools"),
-            Initiator => key == "Grant",
+            Initiator => matches!(key, "Grant" | "Agent"),
             Grant => matches!(key, "grant" | "policy_revision"),
+            Agent => matches!(key, "conversation" | "execution"),
             StorageError => matches!(
                 key,
                 "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"

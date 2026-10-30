@@ -31,6 +31,16 @@ when {
   principal.commandHosts.contains(resource.name)
 };
 
+// An agent-authored turn does not inherit command authority from the person
+// whose conversation received it. Keep the denial in Cedar so both listing
+// and running a command receive the same policy decision and reason.
+@id("command.agent_host")
+forbid (
+  principal is Nessa::Agent,
+  action in [Nessa::Action::"command.host", Nessa::Action::"command.run"],
+  resource is Nessa::Host
+);
+
 // With an allow-list, only a program named bare, by a name on it. The host
 // finds a bare name only in absolute search directories outside its
 // workspace, so a file the agent wrote under an allowed name is not run, and

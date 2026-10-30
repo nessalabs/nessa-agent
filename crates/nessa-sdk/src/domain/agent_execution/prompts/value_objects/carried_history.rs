@@ -1,21 +1,23 @@
 #![deny(missing_docs)]
 
-use crate::domain::agent_execution::ExecutionError;
+use crate::domain::agent_execution::{executions::AgentSource, ExecutionError};
 
 /// One earlier turn of a conversation, as a native session that never saw it
 /// is given it: what was said, and what the agent said last in reply.
 ///
-/// It is text alone. Tool steps, images and files stay in the conversation's
+/// The input keeps its agent origin when present. Tool steps, images and files stay in the conversation's
 /// records and are not carried.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CarriedTurn {
     said: Option<Box<str>>,
     reply: Option<Box<str>>,
+    agent_source: Option<AgentSource>,
 }
 impl CarriedTurn {
     /// Most UTF-8 bytes of either part: what was said, or the reply.
     pub const MAX_PART_BYTES: usize = 8 * 1024;
 
+    /// `agent_source` identifies the agent that wrote the input, when one did.
     /// A turn of `said` and `reply`, each within [`Self::MAX_PART_BYTES`].
     ///
     /// # Errors
@@ -29,21 +31,30 @@ impl CarriedTurn {
     /// ```
     /// use nessa_sdk::domain::agent_execution::prompts::CarriedTurn;
     ///
-    /// let turn = CarriedTurn::new(Some("Plot May"), Some("Done: may.png"))?;
+    /// let turn = CarriedTurn::new(Some("Plot May"), Some("Done: may.png"), None)?;
     /// assert_eq!(turn.said(), Some("Plot May"));
     /// assert_eq!(turn.reply(), Some("Done: may.png"));
-    /// assert!(CarriedTurn::new(Some(" "), None).is_err());
+    /// assert!(CarriedTurn::new(Some(" "), None, None).is_err());
     /// # Ok::<(), nessa_sdk::domain::agent_execution::ExecutionError>(())
     /// ```
-    pub fn new(said: Option<&str>, reply: Option<&str>) -> Result<Self, ExecutionError> {
+    pub fn new(
+        said: Option<&str>,
+        reply: Option<&str>,
+        agent_source: Option<AgentSource>,
+    ) -> Result<Self, ExecutionError> {
         let said = part(said, "carried turn text")?;
         let reply = part(reply, "carried turn reply")?;
         if said.is_none() && reply.is_none() {
             return Err(ExecutionError::EmptyValue("carried turn"));
         }
-        Ok(Self { said, reply })
+        Ok(Self {
+            said,
+            reply,
+            agent_source,
+        })
     }
 
+    /// Retain `agent_source` as the input origin while clipping only text.
     /// A turn of `said` and `reply`, each cut at a character boundary to
     /// [`Self::MAX_PART_BYTES`] when it is longer; `None` when neither holds
     /// text that is not blank. How a turn read from a conversation's records
@@ -53,18 +64,26 @@ impl CarriedTurn {
     /// use nessa_sdk::domain::agent_execution::prompts::CarriedTurn;
     ///
     /// let long = "é".repeat(CarriedTurn::MAX_PART_BYTES);
-    /// let turn = CarriedTurn::clipped(Some(&long), None).expect("a turn");
+    /// let turn = CarriedTurn::clipped(Some(&long), None, None).expect("a turn");
     /// assert!(turn.said().expect("said").len() <= CarriedTurn::MAX_PART_BYTES);
-    /// assert!(CarriedTurn::clipped(None, Some("  ")).is_none());
+    /// assert!(CarriedTurn::clipped(None, Some("  "), None).is_none());
     /// ```
-    pub fn clipped(said: Option<&str>, reply: Option<&str>) -> Option<Self> {
+    pub fn clipped(
+        said: Option<&str>,
+        reply: Option<&str>,
+        agent_source: Option<AgentSource>,
+    ) -> Option<Self> {
         let clip = |text: Option<&str>| {
             text.map(str::trim)
                 .filter(|text| !text.is_empty())
                 .map(|text| Box::from(cut(text, Self::MAX_PART_BYTES)))
         };
         let (said, reply) = (clip(said), clip(reply));
-        (said.is_some() || reply.is_some()).then_some(Self { said, reply })
+        (said.is_some() || reply.is_some()).then_some(Self {
+            said,
+            reply,
+            agent_source,
+        })
     }
 
     /// What was said in the turn, when it said anything in text.
@@ -74,6 +93,19 @@ impl CarriedTurn {
     /// What the agent said last in reply, when it said anything.
     pub fn reply(&self) -> Option<&str> {
         self.reply.as_deref()
+    }
+    /// Verified source of the input when another turn's agent wrote it.
+    /// This is provenance and grants no authority to the receiving session.
+    pub fn agent_source(&self) -> Option<&AgentSource> {
+        self.agent_source.as_ref()
+    }
+    /// Variable bytes retained for text and agent identity.
+    pub fn payload_bytes(&self) -> usize {
+        self.text_bytes().saturating_add(
+            self.agent_source
+                .as_ref()
+                .map_or(0, AgentSource::payload_bytes),
+        )
     }
     /// Bytes of text the turn holds, both parts together.
     pub fn text_bytes(&self) -> usize {
@@ -107,7 +139,7 @@ impl CarriedHistory {
     /// use nessa_sdk::domain::agent_execution::prompts::{CarriedHistory, CarriedTurn};
     ///
     /// let turns: Vec<_> = (0..300)
-    ///     .map(|n| CarriedTurn::new(Some(&format!("turn {n}")), None).unwrap())
+    ///     .map(|n| CarriedTurn::new(Some(&format!("turn {n}")), None, None).unwrap())
     ///     .collect();
     /// let history = CarriedHistory::newest(2, turns);
     /// assert_eq!(history.turns().len(), CarriedHistory::MAX_TURNS);
@@ -171,6 +203,10 @@ impl CarriedHistory {
     /// with no earlier turns.
     pub fn is_empty(&self) -> bool {
         self.turns.is_empty() && self.omitted == 0
+    }
+    /// Variable bytes retained for text and each copied input's agent identity.
+    pub fn payload_bytes(&self) -> usize {
+        self.turns.iter().map(CarriedTurn::payload_bytes).sum()
     }
     /// Bytes of text carried, every turn's parts together.
     pub fn text_bytes(&self) -> usize {

@@ -1654,6 +1654,7 @@ impl ConversationService {
             principal,
             prompt,
         ) = if let Some(invocation) = observed_invocation {
+            let agent_authored = matches!(invocation.initiation.initiator(), Initiator::Agent(_));
             let (initiation, grant_id, policy_revision, tools_checked) =
                 initiation_fields(&invocation.initiation);
             (
@@ -1664,10 +1665,12 @@ impl ConversationService {
                 policy_revision,
                 tools_checked,
                 invocation.actor.principal_id().to_owned(),
-                Some(continuation_prompt(
-                    invocation.request.user_message.text_str(),
-                    self.inner.limits.max_input_bytes,
-                )),
+                (!agent_authored).then(|| {
+                    continuation_prompt(
+                        invocation.request.user_message.text_str(),
+                        self.inner.limits.max_input_bytes,
+                    )
+                }),
             )
         } else {
             (
@@ -2707,6 +2710,9 @@ pub(crate) fn continuation_initiation(
     if row.initiation == "owner" {
         return Ok(Initiation::owner());
     }
+    if row.initiation != "grant" {
+        return Err(ConversationError::InvalidInput);
+    }
     let grant = GrantInitiator::new(
         row.grant_id.clone().unwrap_or_default(),
         row.policy_revision.unwrap_or(0),
@@ -2787,6 +2793,7 @@ pub(crate) fn initiation_fields(
             Some(grant.policy_revision()),
             initiation.tools() == ToolChecking::Checked,
         ),
+        Initiator::Agent(_) => ("agent".into(), None, None, false),
     }
 }
 

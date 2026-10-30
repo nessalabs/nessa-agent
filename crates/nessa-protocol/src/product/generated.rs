@@ -633,6 +633,8 @@ pub struct ConversationMessage {
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     pub status: ConversationMessageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -661,7 +663,15 @@ pub struct ConversationPending {
     pub files: Vec<LinkedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     pub mode: ConversationPendingMode,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAgentSource {
+    pub conversation_id: String,
+    pub execution_id: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3114,12 +3124,15 @@ pub enum ConversationNoteAuthorKind {
     Owner,
     #[serde(rename = "grant")]
     Grant,
+    #[serde(rename = "agent")]
+    Agent,
 }
 impl ConversationNoteAuthorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Owner => "owner",
             Self::Grant => "grant",
+            Self::Agent => "agent",
         }
     }
 }
@@ -3128,6 +3141,8 @@ impl ConversationNoteAuthorKind {
 pub struct ConversationNoteAuthor {
     pub kind: ConversationNoteAuthorKind,
     pub surface: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3156,6 +3171,8 @@ pub struct ConversationHandoffAgent {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationCarriedTurn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1121,6 +1121,7 @@ impl ConversationService {
         tokio::spawn(async move {
             let _admission = service.inner.thread_admission.clone().lock_owned().await;
             let caller = source.caller();
+            let author = source.author().map_err(MutationFailure::Target)?;
             let live = service
                 .resolve(source.conversation(), &caller)
                 .await
@@ -1144,7 +1145,7 @@ impl ConversationService {
                     storage,
                     target,
                     caller,
-                    Initiation::owner(),
+                    Initiation::agent(author),
                     false,
                     execution,
                     message,

@@ -158,7 +158,10 @@ pub async fn note_candidates(
     id: &ConversationId,
     notes: &[NoteRecord],
 ) -> NoteCandidates {
-    let conversation = if notes.iter().any(|note| note.author != Initiator::Owner) {
+    let conversation = if notes
+        .iter()
+        .any(|note| matches!(note.author, Initiator::Grant(_)))
+    {
         load_conversation(conversations, id).await.ok().flatten()
     } else {
         None
@@ -168,6 +171,7 @@ pub async fn note_candidates(
     for note in notes {
         let allowed = match &note.author {
             Initiator::Owner => Some(true),
+            Initiator::Agent(_) => Some(true),
             Initiator::Grant(grant) => match verdicts
                 .iter()
                 .find(|(receiver, _)| *receiver == grant.grant())

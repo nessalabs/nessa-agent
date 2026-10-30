@@ -3752,6 +3752,63 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
     go.send(()).unwrap();
 }
 
+#[tokio::test]
+async fn an_agent_authored_turn_cannot_list_or_run_an_owner_command_host() {
+    use nessa_sdk::domain::agent_execution::executions::{AgentSource, ExecutionId};
+
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let (go, gate) = oneshot::channel();
+    *harness.provider.execution_gate.lock().unwrap() = Some(gate);
+    let source = AgentSource::new(
+        "00000000-0000-4000-8000-000000000002",
+        ExecutionId::new("source-turn").unwrap(),
+    )
+    .unwrap();
+    harness
+        .service
+        .submit_as(
+            harness.id.clone(),
+            caller("agent-turn"),
+            "agent-turn".into(),
+            SubmittedMessage {
+                text: "from an agent".into(),
+                ..Default::default()
+            },
+            SubmissionMode::Queue,
+            super::service::Writer::Agent(source),
+        )
+        .await
+        .unwrap();
+    harness.provider.execution_started.notified().await;
+
+    let listed = harness
+        .service
+        .list_environments(&harness.id)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, HERE);
+    assert!(!listed[0].commands);
+    assert_eq!(
+        harness.run(command("devbox", &["ls"], "agent-call")).await,
+        Ok(CommandAnswer::Refused(
+            CommandRefusal::EnvironmentNotGranted
+        ))
+    );
+    assert_eq!(host.granted.load(Ordering::SeqCst), 0);
+    assert!(harness.saved_commands().iter().any(|record| matches!(
+        record,
+        LeaseRecord::CommandRefused {
+            refusal: CommandRefusal::EnvironmentNotGranted,
+            ..
+        }
+    )));
+    go.send(()).unwrap();
+}
+
 /// A conversation service on a gateway with two hosts the policy grants
 /// commands on: `devbox`, which takes commands, and `agentbox`, which runs
 /// agents only. What `agents.list`'s `commandHosts` is read from, for the

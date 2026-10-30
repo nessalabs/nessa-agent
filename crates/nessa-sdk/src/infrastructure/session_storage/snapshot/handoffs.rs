@@ -7,7 +7,7 @@
 //!
 //! One shape serves the semantic stream and the checkpoint. A checkpoint
 //! without handoffs writes none.
-use super::{permissions::Actor, records::Provider, tools::corrupt};
+use super::{agent_source::WireAgentSource, permissions::Actor, records::Provider, tools::corrupt};
 use crate::application::agent_execution::sessions::{
     HandoffId, HandoffKind, HandoffRecord, StorageError,
 };
@@ -48,6 +48,8 @@ struct WireHistory {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireTurn {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<WireAgentSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     said: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +71,7 @@ impl From<&HandoffRecord> for WireHandoff {
                             .turns()
                             .iter()
                             .map(|turn| WireTurn {
+                                agent: turn.agent_source().map(Into::into),
                                 said: turn.said().map(Into::into),
                                 reply: turn.reply().map(Into::into),
                             })
@@ -99,8 +102,12 @@ impl WireHandoff {
                             .turns
                             .into_iter()
                             .map(|turn| {
-                                CarriedTurn::new(turn.said.as_deref(), turn.reply.as_deref())
-                                    .map_err(corrupt)
+                                CarriedTurn::new(
+                                    turn.said.as_deref(),
+                                    turn.reply.as_deref(),
+                                    turn.agent.map(WireAgentSource::decode).transpose()?,
+                                )
+                                .map_err(corrupt)
                             })
                             .collect::<Result<_, _>>()?,
                         history.omitted,
@@ -155,8 +162,19 @@ mod tests {
                 source: SessionId::new("source").unwrap(),
                 history: CarriedHistory::new(
                     vec![
-                        CarriedTurn::new(Some("plot May"), Some("done")).unwrap(),
-                        CarriedTurn::new(None, Some("only a reply")).unwrap(),
+                        CarriedTurn::new(
+                            Some("plot May"),
+                            Some("done"),
+                            Some(
+                                crate::domain::agent_execution::executions::AgentSource::new(
+                                    "8b547a4b-6974-49a4-b878-d13a9c031f16",
+                                    ExecutionId::new("source-turn").unwrap(),
+                                )
+                                .unwrap(),
+                            ),
+                        )
+                        .unwrap(),
+                        CarriedTurn::new(None, Some("only a reply"), None).unwrap(),
                     ],
                     4,
                 )
@@ -228,6 +246,15 @@ mod tests {
             let mut changed = wire.clone();
             changed[key] = value;
             cases.push((key, changed));
+        }
+        for agent in [
+            serde_json::json!({"conversation":"not-a-uuid", "execution":"source-turn"}),
+            serde_json::json!({"conversation":"8b547a4b-6974-49a4-b878-d13a9c031f16", "execution":""}),
+            serde_json::json!({"conversation":"8b547a4b-6974-49a4-b878-d13a9c031f16", "execution":"x".repeat(ExecutionId::MAX_BYTES+1)}),
+        ] {
+            let mut changed = wire.clone();
+            changed["kind"]["Fork"]["history"]["turns"][0]["agent"] = agent;
+            cases.push(("invalid copied agent", changed));
         }
         let mut blank = wire.clone();
         blank["kind"]["Fork"]["history"]["turns"] = serde_json::json!([{ "said": " " }]);

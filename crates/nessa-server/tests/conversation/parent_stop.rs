@@ -23,7 +23,7 @@ use nessa_sdk::application::agent_execution::subagents::{
 };
 use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, Resumption};
 use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseId, LeaseRefusal, LeaseTerms};
-use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
+use nessa_sdk::domain::agent_execution::prompts::{MessageSender, PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::subagents::{
     HostActor, Initiator, LifetimeCause, LifetimeState, OwnershipEvidence, OwnershipMeaning,
     OwnershipSnapshot, SpawnProgress,
@@ -857,6 +857,22 @@ async fn queued_child_report_is_retained_across_stop_restart_and_only_person_wor
         .unwrap();
     let live = service.resolve(&parent, &caller("read")).await.unwrap();
     let history = live.agent.session_manager().snapshot().await.unwrap();
+    let automated_record = history
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == "automated-parent-message")
+        .unwrap();
+    let automated_author = source(&automated, "other-agent", "automated-send")
+        .author()
+        .unwrap();
+    assert_eq!(
+        automated_record.request.user_message.sender(),
+        &MessageSender::Agent(automated_author.clone())
+    );
+    assert_eq!(
+        automated_record.initiation,
+        Initiation::agent(automated_author)
+    );
     {
         let _admission = service.inner.thread_admission.clone().lock_owned().await;
         assert!(

@@ -7,7 +7,7 @@
 //! which runs no invocation, asks for a look too. The look reads the child's
 //! saved invocations: a watched execution whose settlement is saved, or that
 //! was injected into a turn (its scheduling `target`) whose settlement is
-//! saved, is finished, and its report is queued into the parent as an owner
+//! saved, is finished, and its report is queued into the parent as an agent
 //! turn under the caller the parent's own send was admitted with. Each look
 //! checks every waiting caller may still view the thread; one refused, or a
 //! thread gone, drops that caller's reports. With ownership composed, a report
@@ -40,7 +40,7 @@ use nessa_sdk::application::agent_execution::{
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionOutcome, InvocationStage, MessageKind, Resumption,
+    AgentSource, ExecutionId, ExecutionOutcome, InvocationStage, MessageKind, Resumption,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -213,6 +213,7 @@ impl Drop for Delivering {
 /// left the registry. Its saved copy stays until it is delivered.
 struct Taken {
     child: ConversationId,
+    watched_execution: String,
     report: ThreadReport,
     text: String,
     delivering: Delivering,
@@ -433,6 +434,7 @@ impl ThreadReports {
                 );
             taken.push(Taken {
                 child: child.clone(),
+                watched_execution: watch.execution.clone(),
                 report: watch.report.clone(),
                 text,
                 delivering: Delivering {
@@ -959,6 +961,21 @@ impl ConversationService {
         let text = taken.text.clone();
         let retain_for_stop =
             self.inner.ownership.get().is_some() && self.inner.thread_reports.store.get().is_some();
+        let pending = PendingReport {
+            child: taken.child.clone(),
+            execution: taken.watched_execution.clone(),
+            report: report.clone(),
+        };
+        let author = match ExecutionId::new(taken.watched_execution.clone())
+            .and_then(|execution| AgentSource::new(taken.child.to_string(), execution))
+        {
+            Ok(author) => author,
+            Err(error) => {
+                tracing::warn!(%error, "a thread report has invalid author identity");
+                self.settle_saved(&taken.child, &report.execution).await;
+                return;
+            }
+        };
         let mut delay = DELIVERY_RETRY_FIRST;
         loop {
             if self.inner.retirement.get().is_some() {
@@ -987,13 +1004,9 @@ impl ConversationService {
                     &report.execution,
                     history,
                     |record| {
-                        let matches = report
-                            .caller
-                            .actor()
-                            .is_ok_and(|actor| actor == record.actor)
-                            && record.request.user_message.text_str() == text
-                            && record.request.user_message.images().is_empty()
-                            && record.request.user_message.files().is_empty();
+                        let matches =
+                            super::thread_report_admission::is_report_record(&pending, record)
+                                && record.request.user_message.text_str() == text;
                         if !matches {
                             previously_cancelled = true;
                         }
@@ -1066,6 +1079,7 @@ impl ConversationService {
                         },
                         SubmissionMode::Queue,
                         Writer::ThreadReport {
+                            source: author.clone(),
                             _admission: admission.clone(),
                         },
                     )

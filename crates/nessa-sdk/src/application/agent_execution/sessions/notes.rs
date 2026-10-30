@@ -256,6 +256,7 @@ impl NoteRecord {
         let author = match self.author {
             Initiator::Owner => NoteAuthor::Owner,
             Initiator::Grant(_) => NoteAuthor::Grant,
+            Initiator::Agent(_) => NoteAuthor::Agent,
         };
         NoteContext::new(author, self.actor.surface_id(), self.text.as_str())
             .map_err(|error| corrupt(&error.to_string()))
@@ -310,6 +311,7 @@ fn same_authority(left: &Initiator, right: &Initiator) -> bool {
     match (left, right) {
         (Initiator::Owner, Initiator::Owner) => true,
         (Initiator::Grant(left), Initiator::Grant(right)) => left.grant() == right.grant(),
+        (Initiator::Agent(left), Initiator::Agent(right)) => left == right,
         _ => false,
     }
 }

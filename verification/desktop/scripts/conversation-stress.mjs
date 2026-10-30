@@ -3653,6 +3653,69 @@ const steps = {
     else {
       await expectShown(run.page, SAYS.report, failures)
       await reportLine(run, report, failures)
+      // Copy through the person's Fork command; the report keeps its author
+      // in the saved handoff, copied transcript and the next model's history.
+      const listed = new Set(
+        (await run.client.conversation.list({})).conversations.map(
+          (each) => each.conversationId,
+        ),
+      )
+      await choose(run.page, run.main.id, "Fork")
+      const forkId = await waitFor(async () => {
+        const { conversations } = await run.client.conversation.list({})
+        return conversations.find((each) => !listed.has(each.conversationId))
+          ?.conversationId
+      }, 15_000)
+      if (!forkId) {
+        failures.push("the agent-report conversation never forked")
+        return
+      }
+      run.checked.push(forkId)
+      const forked = await run.client.conversation.read(forkId)
+      const copied = forked.handoffs
+        .flatMap((each) => each.turns ?? [])
+        .find((each) => each.said === report.userText)
+      if (
+        copied?.agent?.conversationId !== report.agent?.conversationId ||
+        copied?.agent?.executionId !== report.agent?.executionId
+      )
+        failures.push("the fork's saved report lost its agent origin")
+      const line = run.page
+        .locator(css.focusedPane)
+        .locator(css.threadReport)
+        .filter({
+          has: run.page.locator(
+            `${css.chatPill}[data-chat-pill="${report.agent?.conversationId}"]`,
+          ),
+        })
+        .first()
+      if (
+        !(await line
+          .waitFor({ state: "visible", timeout: 15_000 })
+          .then(() => true)
+          .catch(() => false))
+      )
+        failures.push("the copied report lost its agent label in the fork")
+      else if (run.evidence)
+        await line.screenshot({
+          path: join(run.evidence, `fork-agent-report-${run.engine}.png`),
+        })
+      const inFork = prompt(run, STRESS.reply, step, " after agent report fork")
+      const forkSeen = await send(run, forkId, inFork, failures, new Set())
+      const { turn: next } = await settled(
+        run,
+        forkId,
+        forkSeen,
+        inFork,
+        "completed",
+        failures,
+      )
+      const reply = (next?.parts ?? []).map((part) => part.text ?? "").join("")
+      if (!reply.includes(`"agent":${JSON.stringify(report.agent)}`))
+        failures.push(
+          "the fork's first model input lost the copied report's typed agent origin",
+        )
+      await openStressConversation(run.page, run.main.id, run.main.title)
     }
   },
 
@@ -3663,18 +3726,21 @@ const steps = {
     if (!turn) return
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
     const found = new RegExp(`${SAYS.awaited}([0-9a-f-]+): (.*)`, "s").exec(said)
-    const reply = `${SAYS.echo}${STRESS.reply} awaited by the parent`
     if (!found) {
       failures.push(
         `the await turn did not say what it waited for: ${said.slice(0, 160)}`,
       )
       return
     }
-    if (!found[2].startsWith(reply))
+    const agentReply = `${SAYS.echo}Agent-authored input`
+    if (
+      !found[2].startsWith(agentReply) ||
+      !found[2].includes(`${STRESS.reply} awaited by the parent`)
+    )
       failures.push(
         `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
       )
-    const expected = fold(`${SAYS.awaited}${found[1]}: ${reply}`)
+    const expected = fold(`${SAYS.awaited}${found[1]}: ${found[2]}`)
     const shown = await waitFor(async () => {
       const lines = await run.page
         .locator(`${css.focusedPane} .workspace-message[data-role="agent"] p:visible`)
@@ -5343,7 +5409,14 @@ async function reportLine(run, report, failures) {
     failures.push(`the report did not name its thread: ${report.userText.slice(0, 120)}`)
     return
   }
-  const line = run.page.locator('[data-role="thread-report"]').filter({
+  const watchedTurn = /\(execution ([^)]+)\):/.exec(report.userText)?.[1]
+  if (
+    !watchedTurn ||
+    report.agent?.conversationId !== thread ||
+    report.agent.executionId !== watchedTurn
+  )
+    failures.push("the thread report did not retain its child agent as the author")
+  const line = run.page.locator(css.threadReport).filter({
     has: run.page.locator(`[data-chat-pill="${thread}"]`),
   })
   const shown = await line
@@ -5357,8 +5430,16 @@ async function reportLine(run, report, failures) {
   }
   const title = await titleOf(run, thread)
   const said = (await line.first().innerText()).replace(/\s+/g, " ").trim()
-  if (!said.includes(title) || !said.endsWith("responded"))
-    failures.push(`the report line reads "${said}", not "${title} responded"`)
+  if (
+    !said.startsWith("Agent report from ") ||
+    !said.includes(title) ||
+    !said.endsWith("responded")
+  )
+    failures.push(`the report line does not name its agent: "${said}"`)
+  if (run.evidence)
+    await line.first().screenshot({
+      path: join(run.evidence, `thread-report-${run.engine}.png`),
+    })
   if (
     /finished the turn you sent it|execution /.test(
       await run.page.locator(css.pane).first().innerText(),

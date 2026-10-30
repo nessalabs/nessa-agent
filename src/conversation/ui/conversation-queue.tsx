@@ -75,7 +75,7 @@ export function ConversationQueue({
                   id={turn.executionId}
                   // A waiting message of images alone still needs a name to be
                   // reordered or removed by.
-                  itemLabel={messageLabel(turn.text, turn.attachments.length)}
+                  itemLabel={`${turn.agent ? "Agent: " : ""}${messageLabel(turn.text, turn.attachments.length)}`}
                   showHandle={
                     gatewayAvailable &&
                     !conversation.controlPending &&
@@ -131,6 +131,7 @@ export function ConversationQueue({
                   }
                 >
                   <span>
+                    {turn.agent ? "Agent: " : null}
                     {messageLabel(turn.text, turn.attachments.length)}
                     {turn.mode === "steering" && (
                       <span className="block text-xs text-muted-foreground">

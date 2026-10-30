@@ -10,8 +10,8 @@ one mechanism:
 - The SDK history records a *handoff* (`SessionChange::Handoff`,
   `sessions/handoffs.rs`): a switch names the provider identity before and
   after it; a fork names the conversation it was copied from and the copied
-  turns (`CarriedHistory`: what was said and the agent's final reply, text
-  only, newest first within its bounds).
+  turns (`CarriedHistory`: input text with its agent origin when present, and
+  the agent's final reply, kept within the text and turn bounds).
 - The first turn after the latest handoff *takes* it
   (`InvocationRecord.handoff`). At dispatch that turn is given the turns
   before it, the fork's copy and then the conversation's own, as one JSON
@@ -21,7 +21,8 @@ one mechanism:
 - The view lists each handoff (`ConversationView.handoffs`,
   `ConversationHandoff::of`), and every transcript draws it as one line
   (`TranscriptDivider`): a switch after the turn it followed, a fork's copied
-  turns first and its line after them.
+  turns first and its line after them. Copied agent input retains its source
+  label, including a report pill whose heading agrees with that source.
 
 The SDK history is the one authority for whether a handoff happened. The
 gateway's own record of a switch, its journal, only says what was asked and
@@ -155,7 +156,8 @@ is pending is refused `request_conflict` (`store.rs`,
 | H5 | Only the first turn after the latest handoff takes it | `only_the_first_turn_after_the_latest_handoff_takes_it` |
 | H6 | A saved handoff out of place, or taken twice, is corrupt | `a_saved_handoff_out_of_place_or_taken_twice_is_corrupt`, `a_stored_handoff_its_rules_refuse_is_corrupt` |
 | H7 | The fold records a handoff and a failed unit takes it back; a checkpoint keeps it | `the_fold_records_a_switch_and_a_failed_unit_takes_it_back`, `a_checkpoint_keeps_its_handoffs_and_the_turns_that_took_them` |
-| H8 | Cleanup-only preparation before provider preparation leaves its pending switch available; cleanup afterward preserves the selected fresh context and original switch actor/time without changing durable identity, context or handoffs | `lease_record_preparation_preserves_a_pending_and_selected_switch` |
+| H8 | A switch or fork carries an agent-authored input with its source conversation and execution through storage, model context and copied UI | `agent_origin_survives_provider_switch_and_a_fork_of_that_history`, handoff codec round trips, prompt frame and gateway projection tests; stress `delegate` forks the report conversation |
+| H9 | Cleanup-only preparation before provider preparation leaves its pending switch available; cleanup afterward preserves the selected fresh context and original switch actor/time without changing durable identity, context or handoffs | `lease_record_preparation_preserves_a_pending_and_selected_switch` |
 
 ## Bounds
 

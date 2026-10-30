@@ -106,3 +106,4 @@ export {
   usageLimitOnClientClock,
   type UsageLimitNotice,
 } from "./usage-limit"
+export type { AgentSource } from "./authorship"

@@ -22,11 +22,13 @@ export type ThreadReportOutcome =
 export interface ThreadReport {
   /** The thread the report is about: a conversation id. */
   readonly thread: string
+  /** The child turn the report is about. */
+  readonly execution: string
   readonly outcome: ThreadReportOutcome
 }
 
 const heading =
-  /^\[Thread report\] Thread (\S+) finished the turn you sent it \(execution [^)]+\): ([a-z_]+)\.$/
+  /^\[Thread report\] Thread (\S+) finished the turn you sent it \(execution ([^)]+)\): ([a-z_]+)\.$/
 
 const outcomes: ReadonlySet<string> = new Set<ThreadReportOutcome>([
   "completed",
@@ -42,8 +44,12 @@ const outcomes: ReadonlySet<string> = new Set<ThreadReportOutcome>([
 export function threadReportOf(text: string): ThreadReport | null {
   const first = text.split("\n", 1)[0] ?? ""
   const match = heading.exec(first)
-  if (!match || !outcomes.has(match[2])) return null
-  return { thread: match[1], outcome: match[2] as ThreadReportOutcome }
+  if (!match || !outcomes.has(match[3])) return null
+  return {
+    thread: match[1],
+    execution: match[2],
+    outcome: match[3] as ThreadReportOutcome,
+  }
 }
 
 /** What the line says the thread did. */

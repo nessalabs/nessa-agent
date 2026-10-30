@@ -100,8 +100,8 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{
-        ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator, InvocationStage,
-        MessageKind,
+        AgentSource, ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator,
+        InvocationStage, MessageKind,
     },
     leases::{AgentWork, LeaseCleanup, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
@@ -661,8 +661,11 @@ pub(super) enum Writer {
     /// the share grant that admitted it. The flag is whether this membership
     /// may use a remember choice. A grant turn is not offered one.
     Person(Initiation, bool),
+    /// A message from another turn's agent, with gateway-verified origin.
+    Agent(AgentSource),
     /// Retain report admission through its supervised queue write.
     ThreadReport {
+        source: AgentSource,
         _admission: Arc<OwnedMutexGuard<()>>,
     },
     /// Durable tool outcome, delivered as ordinary model input and hidden from user-message presentation.
@@ -678,6 +681,9 @@ impl Writer {
     fn is_app(&self) -> bool {
         matches!(self, Self::App { .. })
     }
+    fn is_person(&self) -> bool {
+        matches!(self, Self::Person(_, _))
+    }
     /// Who the turn is saved as started by. An app's call asks for
     /// `conversation.write`, which no paired session is admitted for
     /// (`read_access::admit_request`), so an app's message is always from the
@@ -685,7 +691,10 @@ impl Writer {
     fn initiation(&self) -> Initiation {
         match self {
             Self::Person(initiation, _) => initiation.clone(),
-            Self::App { .. } | Self::ThreadReport { .. } | Self::Internal => Initiation::owner(),
+            Self::Agent(source) | Self::ThreadReport { source, .. } => {
+                Initiation::agent(source.clone())
+            }
+            Self::App { .. } | Self::Internal => Initiation::owner(),
         }
     }
     /// Whether this message may be offered a remember choice. An app writes
@@ -694,6 +703,7 @@ impl Writer {
     fn offers_remember(&self) -> bool {
         match self {
             Self::Person(_, offered) => *offered,
+            Self::Agent(_) => false,
             Self::Internal => false,
             Self::App { .. } => true,
             Self::ThreadReport { .. } => false,
@@ -701,7 +711,10 @@ impl Writer {
     }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person(_, _) | Self::ThreadReport { .. } => MessageSender::Person,
+            Self::Person(_, _) => MessageSender::Person,
+            Self::Agent(source) | Self::ThreadReport { source, .. } => {
+                MessageSender::Agent(source.clone())
+            }
             Self::Internal => MessageSender::Internal,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
@@ -723,6 +736,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
+            Self::Agent(_) => false,
             Self::Person(_, _) | Self::ThreadReport { .. } | Self::Internal => false,
             Self::App {
                 apps, epoch, mount, ..
@@ -4176,6 +4190,7 @@ impl ConversationService {
                         .await?;
                     Initiation::checked_grant(grant.clone())
                 }
+                (None, Initiator::Agent(source)) => Initiation::agent(source.clone()),
             };
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
@@ -4384,6 +4399,7 @@ impl ConversationService {
                         Some((grant.grant().to_owned(), grant.policy_revision()))
                     }
                     Initiator::Owner => None,
+                    Initiator::Agent(_) => None,
                 }
             } else {
                 None
@@ -4393,11 +4409,7 @@ impl ConversationService {
             // the agent decides under its own lock whether the turn takes any
             // (only when admitted while idle) and which of those still
             // allowed (row J23). Never a steer, an app's message, or a retry.
-            let notes = if offers_notes(
-                known,
-                writer.is_app() || matches!(writer, Writer::Internal),
-                &mode,
-            ) {
+            let notes = if offers_notes(known, writer.is_person(), &mode) {
                 Some(service.note_candidates(&id, &live).await)
             } else {
                 None
@@ -7721,8 +7733,8 @@ impl AfterSaveCheck for ConfirmSavedGrant {
     }
 }
 
-fn offers_notes(known: bool, is_app: bool, mode: &SubmissionMode) -> bool {
-    !known && !is_app && matches!(mode, SubmissionMode::Queue)
+fn offers_notes(known: bool, is_person: bool, mode: &SubmissionMode) -> bool {
+    !known && is_person && matches!(mode, SubmissionMode::Queue)
 }
 
 fn awaits_uploaded_input(snapshot: Option<&SessionSnapshot>) -> bool {

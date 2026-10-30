@@ -66,6 +66,7 @@ export {
   placeNotes,
   placePublished,
   type HistoryExtent,
+  type AgentSource,
   type Note,
   type UsageLimitNotice,
   type HeldFile,
