@@ -6513,17 +6513,28 @@
       "type": "object",
       "additionalProperties": false,
       "description": "Result of devices.list: this gateway's own machine (the hub) and the paired environments that work for it.",
-      "required": ["workers"],
+      "required": ["workers", "omitted"],
       "properties": {
         "hub": {
           "$ref": "#/$defs/DeviceMachine",
           "description": "The machine this gateway runs on; absent when it cannot be read."
         },
+        "listening": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it."
+        },
         "workers": {
           "type": "array",
           "items": { "$ref": "#/$defs/DeviceWorker" },
-          "maxItems": 10000,
-          "description": "Every worker connected now or seen before, by environment name."
+          "maxItems": 64,
+          "description": "The workers connected now or seen before and still paired, at most 64: online first, then draining, then offline, the most recently seen first within each."
+        },
+        "omitted": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Workers past the 64 listed, not listed."
         }
       }
     },

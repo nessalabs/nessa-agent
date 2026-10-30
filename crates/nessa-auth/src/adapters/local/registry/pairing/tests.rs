@@ -2236,6 +2236,17 @@ fn real_device_verifier_refuses_other_tls_key_audience_and_ordinary_bearer() {
             .unwrap_err(),
         AccessError::InvalidCredential
     );
+    // The paired keys are the ones a device credential is bound to, for
+    // this audience alone.
+    assert_eq!(
+        fixture.store.paired_device_keys(&audience).unwrap(),
+        vec![fixture.channel.device_proof().key()]
+    );
+    assert!(fixture
+        .store
+        .paired_device_keys(&AudienceId::new("foreign-gateway").unwrap())
+        .unwrap()
+        .is_empty());
     let ordinary_id = CredentialEvidence::new(b"ordinary-reader".to_vec()).unwrap();
     assert_eq!(
         ready(verifier.verify(&ordinary_id, &audience)).unwrap_err(),

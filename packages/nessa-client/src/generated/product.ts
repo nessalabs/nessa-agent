@@ -2639,8 +2639,12 @@ export interface DeviceWorker {
 export interface DevicesListResult {
   /** The machine this gateway runs on; absent when it cannot be read. */
   hub?: DeviceMachine
-  /** Every worker connected now or seen before, by environment name. */
+  /** Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it. */
+  listening?: string
+  /** The workers connected now or seen before and still paired, at most 64: online first, then draining, then offline, the most recently seen first within each. */
   workers: DeviceWorker[]
+  /** Workers past the 64 listed, not listed. */
+  omitted: number
 }
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
 export interface ServerReachResult {

@@ -1,5 +1,6 @@
 use super::*;
 use std::{
+    collections::BTreeSet,
     io,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -72,6 +73,18 @@ impl SightingStore for Store {
         saved.push((peer, sighting.clone()));
         Ok(())
     }
+    fn remove(&self, peer: PeerEnvironment) -> io::Result<()> {
+        self.saved.lock().unwrap().retain(|(held, _)| *held != peer);
+        Ok(())
+    }
+}
+
+/// The keys paired now; `None` says the registry cannot be read.
+struct Paired(Mutex<Option<BTreeSet<PeerEnvironment>>>);
+impl PairedKeys for Paired {
+    fn paired(&self) -> Option<BTreeSet<PeerEnvironment>> {
+        self.0.lock().unwrap().clone()
+    }
 }
 
 struct Clock(AtomicU64);
@@ -85,6 +98,7 @@ struct Fixture {
     store: Arc<Store>,
     clock: Arc<Clock>,
     live: Arc<Live>,
+    paired: Arc<Paired>,
 }
 
 impl Fixture {
@@ -93,14 +107,19 @@ impl Fixture {
             store: Arc::default(),
             clock: Arc::new(Clock(AtomicU64::new(1_000))),
             live: Arc::new(Live(Mutex::new(Vec::new()))),
+            paired: Arc::new(Paired(Mutex::new(None))),
         }
+    }
+
+    fn sightings(&self) -> Arc<WorkerSightings> {
+        Arc::new(WorkerSightings::new(self.store.clone(), self.clock.clone()))
     }
 
     fn devices(&self, hub: Option<MachineReport>) -> Devices {
         Devices::new(
             Arc::new(Probe(hub)),
-            Some(self.live.clone()),
-            Arc::new(WorkerSightings::new(self.store.clone(), self.clock.clone())),
+            Some((self.live.clone(), self.paired.clone())),
+            self.sightings(),
         )
     }
 }
@@ -192,29 +211,39 @@ async fn a_serving_worker_before_its_first_report_keeps_what_was_saved() {
     assert_eq!(fixture.store.saves.load(Ordering::SeqCst), 0);
 }
 
-#[test]
-fn a_sighting_is_saved_again_only_when_the_machine_changes_or_it_is_stale() {
+#[tokio::test]
+async fn a_sighting_is_saved_again_only_when_the_machine_changes_or_it_is_stale() {
     let fixture = Fixture::new();
-    let sightings = WorkerSightings::new(fixture.store.clone(), fixture.clock.clone());
-    sightings.saw(peer(1), &report("build-box", 100), 1_000);
+    let sightings = fixture.sightings();
+    sightings
+        .saw(peer(1), &report("build-box", 100), 1_000)
+        .await;
     // Busier is the same machine.
-    sightings.saw(peer(1), &report("build-box", 900), 2_000);
+    sightings
+        .saw(peer(1), &report("build-box", 900), 2_000)
+        .await;
     assert_eq!(fixture.store.saves.load(Ordering::SeqCst), 1);
-    sightings.saw(peer(1), &report("renamed", 900), 3_000);
+    sightings.saw(peer(1), &report("renamed", 900), 3_000).await;
     assert_eq!(fixture.store.saves.load(Ordering::SeqCst), 2);
-    sightings.saw(peer(1), &report("renamed", 900), 3_000 + SAVE_EVERY_MS - 1);
+    sightings
+        .saw(peer(1), &report("renamed", 900), 3_000 + SAVE_EVERY_MS - 1)
+        .await;
     assert_eq!(fixture.store.saves.load(Ordering::SeqCst), 2);
-    sightings.saw(peer(1), &report("renamed", 900), 3_000 + SAVE_EVERY_MS);
+    sightings
+        .saw(peer(1), &report("renamed", 900), 3_000 + SAVE_EVERY_MS)
+        .await;
     assert_eq!(fixture.store.saves.load(Ordering::SeqCst), 3);
 }
 
-#[test]
-fn a_connection_that_ends_saves_its_last_sighting_now() {
+#[tokio::test]
+async fn a_connection_that_ends_saves_its_last_sighting_now() {
     let fixture = Fixture::new();
-    let sightings = WorkerSightings::new(fixture.store.clone(), fixture.clock.clone());
-    sightings.saw(peer(1), &report("build-box", 100), 1_000);
+    let sightings = fixture.sightings();
+    sightings
+        .saw(peer(1), &report("build-box", 100), 1_000)
+        .await;
     fixture.clock.0.store(1_500, Ordering::SeqCst);
-    sightings.left(peer(1), &report("build-box", 300));
+    sightings.left(peer(1), &report("build-box", 300)).await;
     assert_eq!(
         sightings.saved(),
         vec![(
@@ -225,4 +254,78 @@ fn a_connection_that_ends_saves_its_last_sighting_now() {
             }
         )]
     );
+}
+
+#[tokio::test]
+async fn an_older_sighting_never_replaces_a_newer_one() {
+    let fixture = Fixture::new();
+    let sightings = fixture.sightings();
+    sightings
+        .saw(peer(1), &report("build-box", 100), 5_000)
+        .await;
+    sightings.saw(peer(1), &report("renamed", 100), 4_000).await;
+    assert_eq!(sightings.saved()[0].1.machine, report("build-box", 100));
+}
+
+#[tokio::test]
+async fn a_worker_no_longer_paired_is_forgotten_unless_it_is_connected() {
+    let fixture = Fixture::new();
+    for byte in [1, 2, 3] {
+        fixture.store.saved.lock().unwrap().push((
+            peer(byte),
+            Sighting {
+                machine: report("box", 100),
+                seen_ms: 400,
+            },
+        ));
+    }
+    // 2 is connected though its pairing is gone: its connection ends on
+    // its own; until then it is listed.
+    *fixture.live.0.lock().unwrap() = vec![(peer(2), None, None)];
+    // Unreadable, nothing is forgotten.
+    let devices = fixture.devices(None);
+    assert_eq!(devices.list().await.workers.len(), 3);
+    *fixture.paired.0.lock().unwrap() = Some(BTreeSet::from([peer(1)]));
+    let listed: Vec<_> = devices
+        .list()
+        .await
+        .workers
+        .into_iter()
+        .map(|worker| worker.peer)
+        .collect();
+    assert_eq!(listed, vec![peer(1), peer(2)]);
+    let kept: Vec<_> = fixture
+        .store
+        .saved
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(peer, _)| *peer)
+        .collect();
+    assert_eq!(kept, vec![peer(1), peer(2)]);
+}
+
+#[tokio::test]
+async fn the_list_names_at_most_its_bound_online_first_and_counts_the_rest() {
+    let fixture = Fixture::new();
+    let total = MAX_LISTED_WORKERS + 6;
+    for index in 0..total {
+        let byte = u8::try_from(index + 1).unwrap();
+        fixture.store.saved.lock().unwrap().push((
+            peer(byte),
+            Sighting {
+                machine: report("box", 100),
+                seen_ms: u64::from(byte),
+            },
+        ));
+    }
+    let online = peer(1);
+    *fixture.live.0.lock().unwrap() = vec![(online, Some((0, false)), Some(report("box", 1)))];
+    let list = fixture.devices(None).list().await;
+    assert_eq!(list.workers.len(), MAX_LISTED_WORKERS);
+    assert_eq!(list.omitted, total - MAX_LISTED_WORKERS);
+    assert_eq!(list.workers[0].peer, online);
+    // Then the most recently seen of the rest.
+    let last = u8::try_from(total).unwrap();
+    assert_eq!(list.workers[1].peer, peer(last));
 }

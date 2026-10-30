@@ -73,9 +73,11 @@ pub(crate) trait ServingCredentials: Send + Sync {
     ) -> EnvironmentFuture<'a, Result<bool, AccessError>>;
 }
 
-/// Told when a paired environment's connection ends, with the last report
-/// its machine sent on it. Implemented in composition.
-pub(crate) trait Departures: Send + Sync {
+/// Told what a paired environment's machine reports while its connection
+/// serves, and when that connection ends, with the last report it sent.
+/// Implemented in composition.
+pub(crate) trait Sightings: Send + Sync {
+    fn reported(&self, peer: PeerEnvironment, machine: &MachineReport);
     fn left(&self, peer: PeerEnvironment, machine: MachineReport);
 }
 
@@ -99,7 +101,7 @@ pub(crate) struct PeerEnvironments {
     /// environment moves it as its connection is admitted, ends, or is
     /// revoked.
     connections: watch::Sender<u64>,
-    departures: Option<Arc<dyn Departures>>,
+    sightings: Option<Arc<dyn Sightings>>,
 }
 
 impl PeerEnvironments {
@@ -116,14 +118,14 @@ impl PeerEnvironments {
             budgets,
             peers: Mutex::new(BTreeMap::new()),
             connections: watch::Sender::new(0),
-            departures: None,
+            sightings: None,
         }
     }
 
-    /// Tell `departures` each time a connection that reported its machine
-    /// ends.
-    pub(crate) fn with_departures(mut self, departures: Arc<dyn Departures>) -> Self {
-        self.departures = Some(departures);
+    /// Tell `sightings` each machine report a connection carries, and when
+    /// a connection that reported ends.
+    pub(crate) fn with_sightings(mut self, sightings: Arc<dyn Sightings>) -> Self {
+        self.sightings = Some(sightings);
         self
     }
 
@@ -162,9 +164,14 @@ impl PeerEnvironments {
             keep,
             artifacts: ArtifactTransport::Frames,
         };
-        environment.serve(proof, connection).await;
-        if let (Some(departures), Some(machine)) = (&self.departures, environment.machine()) {
-            departures.left(peer, machine);
+        let reported = |machine: MachineReport| {
+            if let Some(sightings) = &self.sightings {
+                sightings.reported(peer, &machine);
+            }
+        };
+        environment.serve(proof, connection, &reported).await;
+        if let (Some(sightings), Some(machine)) = (&self.sightings, environment.machine()) {
+            sightings.left(peer, machine);
         }
     }
 

@@ -728,6 +728,11 @@ pub const MACHINE_REPORT_INTERVAL: Duration = Duration::from_secs(15);
 /// version; a longer one is cut by its sender at a character boundary.
 pub const MAX_MACHINE_TEXT_BYTES: usize = 128;
 
+/// The largest byte figure a [`MachineReport`] may carry: the largest whole
+/// number a JSON reader keeps exactly (2^53 − 1), so the figure reaches the
+/// person as it was sent. The product schema's `DeviceMachine` holds the same.
+pub const MAX_MACHINE_FIGURE: u64 = (1 << 53) - 1;
+
 /// A machine as its environment describes it: what it is, and how busy it
 /// is at the moment it was read. Every figure is the sender's word, shown to
 /// the person and never used to decide anything.
@@ -775,6 +780,8 @@ impl MachineReport {
             && self.os_version.len() <= MAX_MACHINE_TEXT_BYTES
             && self.arch.len() <= MAX_MACHINE_TEXT_BYTES
             && self.cpu_permille <= 1000
+            && self.memory_total_bytes <= MAX_MACHINE_FIGURE
+            && self.disk_total_bytes <= MAX_MACHINE_FIGURE
             && self.memory_used_bytes <= self.memory_total_bytes
             && self.disk_used_bytes <= self.disk_total_bytes
     }

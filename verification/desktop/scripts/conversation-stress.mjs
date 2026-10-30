@@ -493,7 +493,7 @@ async function untilTurn(run, conversationId, at, ready, seconds = 60) {
           ? view.messages[at]
           : view.messages.find((each) => each.userText === at.text)
       if (turn && ready(turn, view)) return { view, turn }
-    } catch {
+    } catch (error) {
       // A read across a restart fails; the next one is on the new client.
       log(`read ${conversationId}: ${error.message}`)
     }
@@ -513,7 +513,7 @@ async function untilView(run, conversationId, ready, seconds = 60) {
     try {
       view = await readWithReviews(run.client, conversationId)
       if (ready(view)) return { view }
-    } catch {
+    } catch (error) {
       log(`read ${conversationId}: ${error.message}`)
     }
     await sleep(200)
@@ -901,7 +901,7 @@ async function choose(page, conversationId, label) {
     try {
       await more.click({ timeout: 2_000 })
       break
-    } catch {
+    } catch (error) {
       if (Date.now() > end) throw error
     }
   }
@@ -1091,7 +1091,7 @@ async function settled(run, conversationId, seen, text, status, failures, second
         turn = carried(view, seen, text) ?? turn
       if (turn && ended(turn) && !(turn.status === "cancelled" && status !== "cancelled"))
         break
-    } catch {
+    } catch (error) {
       log(`read ${conversationId}: ${error.message}`)
     }
     await sleep(200)
@@ -3146,7 +3146,7 @@ const steps = {
         try {
           const { lease } = await followedOnce(run, conversationId)
           return lease?.state === "ended" ? lease : null
-        } catch {
+        } catch (error) {
           log(`view ${conversationId}: ${explain(error)}`)
           return null
         }
@@ -3477,7 +3477,7 @@ const steps = {
     let thrown = null
     try {
       if (on) await throughTunnel()
-    } catch {
+    } catch (error) {
       thrown = error
     }
     let kept = null
@@ -3839,7 +3839,7 @@ const steps = {
           try {
             await owner.conversation.webhookCursor(conversationId, credential)
             return true
-          } catch {
+          } catch (error) {
             if (error.code !== "invalid_request") throw error
             lastRefusal = error
             return false
@@ -3890,7 +3890,7 @@ const steps = {
       try {
         if (shared)
           await owner.conversation.unshare(conversationId, run.stack.webhookCredential)
-      } catch {
+      } catch (error) {
         failures.push(`webhook grant cleanup failed: ${error.message}`)
       } finally {
         owner.close()
@@ -4466,7 +4466,7 @@ const steps = {
       try {
         await run.client.conversation.read(conversationId)
         return false
-      } catch {
+      } catch (error) {
         return error?.code === "conversation_deleted"
       }
     }, 60_000)

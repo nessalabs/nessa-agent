@@ -106,5 +106,9 @@ describe("devices model", () => {
     expect(summary("Studio", [one])).toBe(
       "Studio is your hub. 1 of 1 computer online, 4 agents on them.",
     )
+    // Past the list's bound, the rest still count toward the total.
+    expect(summary("Studio", [one], 70)).toBe(
+      "Studio is your hub. 1 of 71 computers online, 4 agents on them.",
+    )
   })
 })

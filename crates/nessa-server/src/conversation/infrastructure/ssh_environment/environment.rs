@@ -260,7 +260,13 @@ impl SshEnvironment {
     /// list changes when the connection is admitted and again when it ends,
     /// and each is said on `connections` once the change is made, so whoever
     /// it wakes reads the list as it is after it.
-    pub(super) async fn serve(&self, proof: DeviceConnectionProof, connection: LeaseConnection) {
+    /// `reported` is told each machine report the connection carries.
+    pub(super) async fn serve(
+        &self,
+        proof: DeviceConnectionProof,
+        connection: LeaseConnection,
+        reported: &(dyn Fn(nessa_protocol::lease::MachineReport) + Send + Sync),
+    ) {
         let Reach::Peer {
             serving,
             credentials,
@@ -296,10 +302,20 @@ impl SshEnvironment {
         let ended = link.ended();
         let revoked = self.inner.until_revoked(credentials.as_ref(), &proof);
         let drains = link.drains();
+        let mut machines = link.machines();
         tokio::pin!(ended, revoked, drains);
         let mut draining = false;
+        let mut reporting = true;
         loop {
             tokio::select! {
+                changed = machines.changed(), if reporting => match changed {
+                    Ok(()) => {
+                        if let Some(report) = machines.borrow_and_update().clone() {
+                            reported(report);
+                        }
+                    }
+                    Err(_) => reporting = false,
+                },
                 () = &mut ended => break,
                 () = &mut revoked => {
                     self.inner.revoke(&link);

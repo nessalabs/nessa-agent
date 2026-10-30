@@ -2659,7 +2659,10 @@ pub struct DeviceWorker {
 pub struct DevicesListResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub: Option<DeviceMachine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listening: Option<String>,
     pub workers: Vec<DeviceWorker>,
+    pub omitted: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

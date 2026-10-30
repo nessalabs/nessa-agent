@@ -4,7 +4,7 @@ use super::{
     decode, encode, fingerprint, read_hello, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
     GrantRefusal, GrantedTerms, Hello, MachineReport, PublishRefusal, Sandbox, StagedArtifact,
-    ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_MACHINE_TEXT_BYTES,
+    ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_MACHINE_FIGURE, MAX_MACHINE_TEXT_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -742,6 +742,14 @@ fn a_machine_report_names_no_lease_and_is_bounded() {
         },
         MachineReport {
             disk_used_bytes: 101,
+            ..report.clone()
+        },
+        MachineReport {
+            memory_total_bytes: MAX_MACHINE_FIGURE + 1,
+            ..report.clone()
+        },
+        MachineReport {
+            disk_total_bytes: MAX_MACHINE_FIGURE + 1,
             ..report
         },
     ] {

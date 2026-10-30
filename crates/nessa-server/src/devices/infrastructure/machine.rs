@@ -4,9 +4,9 @@ use crate::devices::application::MachineProbe;
 use nessa_protocol::lease::MachineReport;
 use std::{
     path::PathBuf,
-    sync::{Mutex, PoisonError},
+    sync::{Mutex, TryLockError},
 };
-use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 /// This machine, its disk being the one `data` is on.
 pub(crate) struct SystemMachine {
@@ -26,7 +26,13 @@ impl SystemMachine {
 
 impl MachineProbe for SystemMachine {
     fn read(&self) -> Option<MachineReport> {
-        let mut held = self.system.lock().unwrap_or_else(PoisonError::into_inner);
+        // A read still running (one given up on, say) holds it: this one
+        // has nothing, rather than wait behind it on another thread.
+        let mut held = match self.system.try_lock() {
+            Ok(held) => held,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return None,
+        };
         let system = match held.as_mut() {
             Some(system) => {
                 system.refresh_cpu_usage();
@@ -72,19 +78,13 @@ impl MachineProbe for SystemMachine {
     }
 }
 
-/// The size and use of the disk `path` is on: the mounted disk whose mount
-/// point is the longest prefix of it; nothing known is `(0, 0)`.
+/// The size and use of the disk `path` is on, asked of that one file
+/// system (`statvfs`, `GetDiskFreeSpaceEx`): never a walk of every mount,
+/// where a network share that does not answer would hold the read.
+/// Nothing known is `(0, 0)`.
 fn disk_of(path: &std::path::Path) -> (u64, u64) {
-    let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let disks = Disks::new_with_refreshed_list();
-    disks
-        .list()
-        .iter()
-        .filter(|disk| path.starts_with(disk.mount_point()))
-        .max_by_key(|disk| disk.mount_point().as_os_str().len())
-        .map(|disk| {
-            let total = disk.total_space();
-            (total, total.saturating_sub(disk.available_space()))
-        })
-        .unwrap_or((0, 0))
+    match (fs2::total_space(path), fs2::available_space(path)) {
+        (Ok(total), Ok(available)) => (total, total.saturating_sub(available)),
+        _ => (0, 0),
+    }
 }

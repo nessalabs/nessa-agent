@@ -9,9 +9,10 @@ import {
 /** The hub's devices: the machine the gateway runs on and its workers. */
 export type DevicesApi = {
   /**
-   * The gateway's own machine (absent when it cannot be read) and every
-   * paired environment that works for it: connected now or seen before.
-   * Figures are a snapshot; read again to follow them.
+   * The gateway's own machine (absent when it cannot be read) and the
+   * paired environments that work for it, connected now or seen before:
+   * at most 64, online first, with `omitted` counting the rest. Figures
+   * are a snapshot; read again to follow them.
    */
   list(): Promise<DevicesListResult>
 }
@@ -35,19 +36,31 @@ const MACHINE_KEYS = [
   "diskUsedBytes",
 ] as const
 const MAX_TEXT = 128
-const MAX_WORKERS = 10_000
+const MAX_WORKERS = 64
+const MAX_LISTENING = 64
 const ENVIRONMENT = /^peer:[0-9a-f]{64}$/
 const STATES = new Set<string>(["online", "draining", "offline"])
 
 /** Reads a `devices.list` answer, refusing anything off its schema. */
 export function devicesList(value: unknown): DevicesListResult {
   const invalid = () => new TypeError("Invalid devices list")
-  if (!isRecord(value) || !onlyKeys(value, ["workers"], ["hub"])) throw invalid()
+  if (!isRecord(value) || !onlyKeys(value, ["workers", "omitted"], ["hub", "listening"]))
+    throw invalid()
+  if (
+    Object.hasOwn(value, "listening") &&
+    (typeof value.listening !== "string" || value.listening.length > MAX_LISTENING)
+  )
+    throw invalid()
   const workers = value.workers
-  if (!Array.isArray(workers) || workers.length > MAX_WORKERS) throw invalid()
+  if (!Array.isArray(workers) || workers.length > MAX_WORKERS || !count(value.omitted))
+    throw invalid()
   return {
     ...(Object.hasOwn(value, "hub") ? { hub: machine(value.hub) } : {}),
+    ...(Object.hasOwn(value, "listening")
+      ? { listening: value.listening as string }
+      : {}),
     workers: workers.map(worker),
+    omitted: value.omitted as number,
   }
 }
 

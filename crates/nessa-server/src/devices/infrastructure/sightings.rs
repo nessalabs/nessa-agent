@@ -21,7 +21,7 @@ struct Saved {
     seen_ms: u64,
 }
 
-/// `<namespace>/devices/workers`.
+/// `<conversations>/workers`, one file per worker.
 pub(crate) struct FileSightings {
     directory: PathBuf,
 }
@@ -29,6 +29,13 @@ pub(crate) struct FileSightings {
 impl FileSightings {
     pub(crate) fn new(directory: PathBuf) -> Self {
         Self { directory }
+    }
+
+    /// `<directory>/<key in hex>.json`.
+    fn path(&self, peer: PeerEnvironment) -> PathBuf {
+        let name = peer.name();
+        let hex = name.strip_prefix(PeerEnvironment::PREFIX).unwrap_or(&name);
+        self.directory.join(format!("{hex}.json"))
     }
 
     fn read(&self, path: &std::path::Path) -> io::Result<Sighting> {
@@ -81,13 +88,19 @@ impl SightingStore for FileSightings {
             seen_ms: sighting.seen_ms,
         })
         .map_err(io::Error::other)?;
-        let name = peer.name();
-        let hex = name.strip_prefix(PeerEnvironment::PREFIX).unwrap_or(&name);
         let mut file = PrivateTempFile::new_in(&self.directory)?;
         file.as_file_mut().write_all(&bytes)?;
         file.as_file().sync_all()?;
-        file.persist(&self.directory.join(format!("{hex}.json")))?;
+        file.persist(&self.path(peer))?;
         sync_directory(&self.directory)
+    }
+
+    fn remove(&self, peer: PeerEnvironment) -> io::Result<()> {
+        match std::fs::remove_file(self.path(peer)) {
+            Ok(()) => sync_directory(&self.directory),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -122,6 +135,9 @@ mod tests {
         store.save(peer, &sighting(1)).unwrap();
         store.save(peer, &sighting(2)).unwrap();
         assert_eq!(store.load().unwrap(), vec![(peer, sighting(2))]);
+        store.remove(peer).unwrap();
+        store.remove(peer).unwrap();
+        assert!(store.load().unwrap().is_empty());
     }
 
     #[test]

@@ -271,7 +271,16 @@ struct Routes {
     draining: Drains,
     /// What the host last said its machine is and how busy
     /// (`FromEnvironment::Machine`); `None` until it says.
-    machine: Option<MachineReport>,
+    machine: Reports,
+}
+
+/// The host's latest machine report, for whoever waits to learn it.
+struct Reports(watch::Sender<Option<MachineReport>>);
+
+impl Default for Reports {
+    fn default() -> Self {
+        Self(watch::channel(None).0)
+    }
 }
 
 /// Whether the host said it is stopping, for whoever waits to learn it.
@@ -595,7 +604,12 @@ impl HostLink {
     /// What the host last said its machine is and how busy, on this
     /// connection; `None` before it says, or when it never does.
     pub(crate) fn machine(&self) -> Option<MachineReport> {
-        self.routes().machine.clone()
+        self.routes().machine.0.borrow().clone()
+    }
+
+    /// Wakes each time the host reports its machine on this connection.
+    pub(crate) fn machines(&self) -> watch::Receiver<Option<MachineReport>> {
+        self.routes().machine.0.subscribe()
     }
 
     /// Answers once the host said it is stopping on this connection: from
@@ -1672,7 +1686,7 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         FromEnvironment::Keepalive => Routed::Done,
         // Shown, never acted on; one out of its bounds is not kept.
         FromEnvironment::Machine { report } if report.is_bounded() => {
-            routes.machine = Some(report);
+            routes.machine.0.send_replace(Some(report));
             Routed::Done
         }
         FromEnvironment::Machine { .. } => Routed::Dropped,

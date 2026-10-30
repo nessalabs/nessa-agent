@@ -1,8 +1,10 @@
 //! When each worker was last seen, and as what: saved, so a worker that is
-//! off still shows. Saved when a serving worker is listed and its sighting
-//! is due, and when its connection ends; at most every [`SAVE_EVERY_MS`]
-//! for a worker whose machine has not changed, so many workers listed often
-//! write little.
+//! off still shows. Saved as a serving worker reports when its sighting is
+//! due, and when its connection ends; at most every [`SAVE_EVERY_MS`] for a
+//! worker whose machine has not changed, so many reports write little.
+//! Forgotten once its key is no longer paired. Each save and removal runs
+//! on a blocking thread, one at a time, and a newer sighting is never
+//! replaced by an older one.
 use super::WallClock;
 use nessa_protocol::lease::MachineReport;
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
@@ -30,6 +32,8 @@ pub(crate) trait SightingStore: Send + Sync {
     fn load(&self) -> io::Result<Vec<(PeerEnvironment, Sighting)>>;
     /// Replace `peer`'s sighting.
     fn save(&self, peer: PeerEnvironment, sighting: &Sighting) -> io::Result<()>;
+    /// Remove `peer`'s sighting; none is no error.
+    fn remove(&self, peer: PeerEnvironment) -> io::Result<()>;
 }
 
 /// The saved sightings, read once when the gateway starts and then kept
@@ -38,6 +42,8 @@ pub(crate) struct WorkerSightings {
     store: Arc<dyn SightingStore>,
     clock: Arc<dyn WallClock>,
     saved: Mutex<BTreeMap<PeerEnvironment, Sighting>>,
+    /// Held across each write to the store, so writes land in turn.
+    writing: Mutex<()>,
 }
 
 impl WorkerSightings {
@@ -50,6 +56,7 @@ impl WorkerSightings {
             store,
             clock,
             saved: Mutex::new(saved.into_iter().collect()),
+            writing: Mutex::new(()),
         }
     }
 
@@ -65,7 +72,12 @@ impl WorkerSightings {
     }
 
     /// `peer` serves as `machine` at `now`: saved when its sighting is due.
-    pub(crate) fn saw(&self, peer: PeerEnvironment, machine: &MachineReport, now: u64) {
+    pub(crate) async fn saw(
+        self: &Arc<Self>,
+        peer: PeerEnvironment,
+        machine: &MachineReport,
+        now: u64,
+    ) {
         let due = match self.held().get(&peer) {
             None => true,
             Some(saved) => {
@@ -74,26 +86,53 @@ impl WorkerSightings {
             }
         };
         if due {
-            self.keep(peer, machine, now);
+            self.keep(peer, machine, now).await;
         }
     }
 
     /// `peer`'s connection ended, its last report `machine`: saved now.
-    pub(crate) fn left(&self, peer: PeerEnvironment, machine: &MachineReport) {
-        self.keep(peer, machine, self.clock.now_ms());
+    pub(crate) async fn left(self: &Arc<Self>, peer: PeerEnvironment, machine: &MachineReport) {
+        self.keep(peer, machine, self.clock.now_ms()).await;
     }
 
-    fn keep(&self, peer: PeerEnvironment, machine: &MachineReport, now: u64) {
+    /// `peer` is no longer paired: its sighting is removed.
+    pub(crate) async fn forget(self: &Arc<Self>, peer: PeerEnvironment) {
+        let this = self.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _writing = this.writing.lock().unwrap_or_else(PoisonError::into_inner);
+            match this.store.remove(peer) {
+                Ok(()) => {
+                    this.held().remove(&peer);
+                }
+                Err(error) => tracing::warn!(?error, "a worker sighting could not be removed"),
+            }
+        })
+        .await;
+    }
+
+    async fn keep(self: &Arc<Self>, peer: PeerEnvironment, machine: &MachineReport, now: u64) {
+        let this = self.clone();
         let sighting = Sighting {
             machine: machine.clone(),
             seen_ms: now,
         };
-        match self.store.save(peer, &sighting) {
-            Ok(()) => {
-                self.held().insert(peer, sighting);
+        let _ = tokio::task::spawn_blocking(move || {
+            let _writing = this.writing.lock().unwrap_or_else(PoisonError::into_inner);
+            if this
+                .held()
+                .get(&peer)
+                .is_some_and(|held| held.seen_ms > sighting.seen_ms)
+            {
+                return;
             }
-            Err(error) => tracing::warn!(?error, "a worker sighting could not be saved"),
-        }
+            match this.store.save(peer, &sighting) {
+                Ok(()) => {
+                    this.held().insert(peer, sighting);
+                }
+                Err(error) => tracing::warn!(?error, "a worker sighting could not be saved"),
+            }
+        })
+        .await;
     }
 
     fn held(&self) -> std::sync::MutexGuard<'_, BTreeMap<PeerEnvironment, Sighting>> {

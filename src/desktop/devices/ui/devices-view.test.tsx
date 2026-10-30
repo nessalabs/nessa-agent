@@ -6,7 +6,7 @@ import type { DevicesListResult } from "@nessa/client"
 import { ClockProvider } from "../../../clock"
 import type { DevicesGateway, WorkerPairing } from "../adapters/devices-gateway"
 import { DevicesProvider, DevicesView } from "./devices-view"
-import { commands, hubAddress } from "./add-computer"
+import { commands, hubAddress, listeningPort, onlyThisMachine } from "./add-computer"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -60,6 +60,7 @@ const listed: DevicesListResult = {
       lastSeenMs: 999_000,
     },
   ],
+  omitted: 0,
 }
 
 function pairing(phase: WorkerPairing["phase"], claimed = false): WorkerPairing {
@@ -238,6 +239,47 @@ it("asks for one code at a time, as the hub makes them", async () => {
   for (let i = 0; i < 4; i += 1) await act(async () => {})
   expect(calls).not.toContain("busy")
   expect(host.querySelectorAll("[data-devices-command]")).toHaveLength(2)
+})
+
+it("leaving while approving keeps the approval, and cancels a refused one", async () => {
+  for (const accepted of [true, false]) {
+    let answer: (value: Awaited<ReturnType<DevicesGateway["approve"]>>) => void = () => {}
+    const { gateway, calls } = fakeGateway({
+      approve: (_, key) => {
+        calls.push(`approve ${key.slice(0, 4)}`)
+        return new Promise((resolve) => (answer = resolve))
+      },
+    })
+    const { host, root } = await mount(gateway)
+    await act(async () =>
+      (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
+    )
+    await act(async () => {})
+    await act(async () => vi.advanceTimersByTime(2_000))
+    await act(async () => {})
+    await act(async () =>
+      (host.querySelector('[data-devices-action="approve"]') as HTMLElement).click(),
+    )
+    await act(async () => root.unmount())
+    expect(calls).not.toContain("cancel")
+    await act(async () =>
+      answer(accepted ? { ok: true, value: pairing("active", true) } : { ok: false }),
+    )
+    // Approved, there is nothing to cancel; refused, nobody else will.
+    expect(calls.includes("cancel")).toBe(!accepted)
+    document.body.replaceChildren()
+  }
+})
+
+it("dials the port the hub listens on, and says when only it can reach that", () => {
+  expect(listeningPort("0.0.0.0:47700")).toBe(47700)
+  expect(listeningPort("[::]:47701")).toBe(47701)
+  expect(listeningPort(undefined)).toBe(47650)
+  expect(hubAddress("Studio", "tailscale", 47700)).toBe("studio:47700")
+  expect(onlyThisMachine("127.0.0.1:47650")).toBe(true)
+  expect(onlyThisMachine("[::1]:47650")).toBe(true)
+  expect(onlyThisMachine("0.0.0.0:47650")).toBe(false)
+  expect(onlyThisMachine(undefined)).toBe(false)
 })
 
 it("writes the address each route dials", () => {

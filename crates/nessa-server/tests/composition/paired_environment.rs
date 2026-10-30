@@ -8,7 +8,7 @@
 //! ("Environment peers").
 use super::local_auth::SystemClock;
 use super::native_pairing::{bind, prepare, start, RunningNative};
-use super::paired_environments::{ListenerEnvironments, RegistryServing};
+use super::paired_environments::{ListenerEnvironments, RegistryPaired, RegistryServing};
 use super::peer_reading_tests::{inputs, owned, uuid, NoAgents, WAIT};
 use super::runtime_config::NativeConfig;
 use crate::app::dependencies::RuntimeDependencies;
@@ -81,6 +81,8 @@ struct Gateway {
     peers: Arc<PeerEnvironments>,
     /// Each connection that ended having reported its machine.
     departed: Arc<Departed>,
+    /// Which keys the registry says are paired, as `devices.list` asks.
+    paired: RegistryPaired,
     /// Holds the next ask of whether a key serves, once armed.
     gate: Arc<Gate>,
     native: SocketAddr,
@@ -111,13 +113,19 @@ impl ServingCredentials for Gate {
     }
 }
 
-/// Records each departure [`PeerEnvironments`] tells of.
+/// Records each report and departure [`PeerEnvironments`] tells of.
 #[derive(Default)]
-struct Departed(std::sync::Mutex<Vec<(PeerEnvironment, nessa_protocol::lease::MachineReport)>>);
+struct Departed {
+    reported: std::sync::Mutex<Vec<(PeerEnvironment, nessa_protocol::lease::MachineReport)>>,
+    left: std::sync::Mutex<Vec<(PeerEnvironment, nessa_protocol::lease::MachineReport)>>,
+}
 
-impl crate::conversation::infrastructure::ssh_environment::Departures for Departed {
+impl crate::conversation::infrastructure::ssh_environment::Sightings for Departed {
+    fn reported(&self, peer: PeerEnvironment, machine: &nessa_protocol::lease::MachineReport) {
+        self.reported.lock().unwrap().push((peer, machine.clone()));
+    }
     fn left(&self, peer: PeerEnvironment, machine: nessa_protocol::lease::MachineReport) {
-        self.0.lock().unwrap().push((peer, machine));
+        self.left.lock().unwrap().push((peer, machine));
     }
 }
 
@@ -191,6 +199,10 @@ impl Gateway {
             released: Notify::new(),
         });
         let departed = Arc::new(Departed::default());
+        let paired = RegistryPaired {
+            store: auth.clone(),
+            audience: AudienceId::new(gateway.clone()).unwrap(),
+        };
         let peers = Arc::new(
             PeerEnvironments::new(
                 gate.clone(),
@@ -199,7 +211,7 @@ impl Gateway {
                 timings,
                 budgets,
             )
-            .with_departures(departed.clone()),
+            .with_sightings(departed.clone()),
         );
         let prepared = prepared.with_environments(Arc::new(ListenerEnvironments(peers.clone())));
         let state = ProductRouteState::new(
@@ -233,6 +245,7 @@ impl Gateway {
             commands,
             peers,
             departed,
+            paired,
             gate,
             native,
             running: Some(start(bound, failure)),
@@ -536,6 +549,8 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     a.until_connected(e.peer, true).await;
     assert_eq!(a.echo(e.peer, "again").await.unwrap().stdout, b"again");
 
+    use crate::devices::application::PairedKeys;
+    assert!(a.paired.paired().unwrap().contains(&e.peer));
     a.auth
         .revoke_sync(RevokeCredentialRequest {
             request_id: uuid(),
@@ -544,6 +559,8 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
             revoked_at: SystemClock.unix_seconds(),
         })
         .unwrap();
+    // Revoked, its key is no longer paired: Devices forgets it.
+    assert!(!a.paired.paired().unwrap().contains(&e.peer));
     assert_eq!(
         a.echo(e.peer, "revoked").await.unwrap_err(),
         CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
@@ -2243,18 +2260,30 @@ async fn a_paired_environment_reports_its_machine_and_its_departure_keeps_it() {
     .expect("the machine is reported");
     assert_eq!(reported.0.map(|load| load.leases), Some(0));
     assert_eq!(reported.1, BuildBox.read());
-    assert!(a.departed.0.lock().unwrap().is_empty());
+    assert!(a.departed.left.lock().unwrap().is_empty());
+    // The report is told as it arrives, not only once the connection ends.
+    tokio::time::timeout(WAIT, async {
+        while a.departed.reported.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the report is told");
+    assert_eq!(
+        a.departed.reported.lock().unwrap()[0],
+        (e.peer, BuildBox.read().unwrap())
+    );
 
     served.abort();
     tokio::time::timeout(WAIT, async {
-        while a.departed.0.lock().unwrap().is_empty() {
+        while a.departed.left.lock().unwrap().is_empty() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .expect("the departure is told");
     assert_eq!(
-        *a.departed.0.lock().unwrap(),
+        *a.departed.left.lock().unwrap(),
         vec![(e.peer, BuildBox.read().unwrap())]
     );
 }

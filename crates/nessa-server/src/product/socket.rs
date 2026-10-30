@@ -2541,17 +2541,22 @@ fn device_list(
     };
     DevicesListResult {
         hub: list.hub.map(machine),
+        listening: list.listening.map(|address| address.to_string()),
         workers: list
             .workers
             .into_iter()
             .map(|worker| DeviceWorker {
                 environment: worker.peer.name(),
                 state: worker.state.as_str().to_owned(),
-                agents: u64::try_from(worker.agents).unwrap_or(u64::MAX),
+                // The schema's bound; no connection carries that many.
+                agents: u64::try_from(worker.agents)
+                    .unwrap_or(u64::MAX)
+                    .min(u64::from(u32::MAX)),
                 machine: worker.machine.map(machine),
                 last_seen_ms: worker.last_seen_ms,
             })
             .collect(),
+        omitted: u64::try_from(list.omitted).unwrap_or(u64::MAX),
     }
 }
 #[cfg(test)]
@@ -4684,7 +4689,7 @@ mod tests {
     #[tokio::test]
     async fn devices_list_names_the_hub_and_its_workers() {
         use crate::devices::application::{
-            Devices, LiveWorker, LiveWorkers, MachineProbe, WorkerSightings,
+            Devices, LiveWorker, LiveWorkers, MachineProbe, PairedKeys, WorkerSightings,
         };
         use crate::devices::infrastructure::{FileSightings, SystemWallClock};
         use nessa_protocol::lease::MachineReport;
@@ -4719,6 +4724,12 @@ mod tests {
                 }]
             }
         }
+        struct AllPaired;
+        impl PairedKeys for AllPaired {
+            fn paired(&self) -> Option<std::collections::BTreeSet<PeerEnvironment>> {
+                None
+            }
+        }
         let (state, _authority) = fixture(MembershipRole::Member);
         let session = authenticate(&state).await;
         let OutgoingMessage::Response(refused) =
@@ -4731,7 +4742,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = state.with_devices(Arc::new(Devices::new(
             Arc::new(Hub),
-            Some(Arc::new(One)),
+            Some((Arc::new(One), Arc::new(AllPaired))),
             Arc::new(WorkerSightings::new(
                 Arc::new(FileSightings::new(directory.path().join("workers"))),
                 Arc::new(SystemWallClock),
@@ -4765,6 +4776,7 @@ mod tests {
                     "machine": machine("build-box"),
                     "lastSeenMs": null,
                 }],
+                "omitted": 0,
             })
         );
     }

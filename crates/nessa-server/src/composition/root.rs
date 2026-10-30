@@ -335,6 +335,9 @@ impl CompositionRoot {
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"
                 );
+                if let Some(devices) = &product.devices {
+                    devices.listening(bound.local_address());
+                }
                 Some(bound.with_announcer(
                     crate::device_pairing::infrastructure::platform_announcer(),
                 ))

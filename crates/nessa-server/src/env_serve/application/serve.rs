@@ -113,7 +113,7 @@ use super::fetches::{ArtifactInbox, LeaseFetches, NoInbox};
 use super::grants::{admit_agent, admit_command, PeerGrants};
 use super::lease_policy::LeasePolicyEvaluator;
 use super::wire::{write_frame, FrameStream};
-use crate::devices::application::MachineProbe;
+use crate::devices::application::{read_machine, MachineProbe};
 use crate::env_serve::domain::{NotGranted, Peer};
 use crate::timer::{timeout, within, Moment, Timer};
 use nessa_protocol::lease::{
@@ -692,17 +692,12 @@ where
     (sender, writer)
 }
 
-/// The machine as `probe` reads it, read off the runtime: `None` when it
-/// cannot be read.
+/// The machine as `probe` reads it (`read_machine`): `None` when it cannot
+/// be read in time.
 async fn report(probe: &Arc<dyn MachineProbe>) -> Option<FromEnvironment> {
-    let probe = probe.clone();
-    let report = tokio::task::spawn_blocking(move || probe.read())
+    read_machine(probe)
         .await
-        .ok()
-        .flatten()?;
-    report
-        .is_bounded()
-        .then_some(FromEnvironment::Machine { report })
+        .map(|report| FromEnvironment::Machine { report })
 }
 
 /// One harness running under a lease.

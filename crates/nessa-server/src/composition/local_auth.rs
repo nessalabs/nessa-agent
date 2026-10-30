@@ -793,10 +793,13 @@ type PairedParts = (
     PairedWorkers,
 );
 
-/// The paired environments' connections and their saved sightings, for
-/// `devices.list`.
+/// The paired environments' connections, which keys are paired, and their
+/// saved sightings, for `devices.list`.
 type PairedWorkers = (
-    Arc<dyn crate::devices::application::LiveWorkers>,
+    (
+        Arc<dyn crate::devices::application::LiveWorkers>,
+        Arc<dyn crate::devices::application::PairedKeys>,
+    ),
     Arc<crate::devices::application::WorkerSightings>,
 );
 
@@ -1718,7 +1721,7 @@ fn environments(
     organization: crate::conversation::application::OrganizationBudgets,
 ) -> Result<(Environments, Option<PairedParts>), RunError> {
     use super::paired_environments::{
-        ListenerEnvironments, PeerWorkers, RegistryServing, SightingDepartures,
+        ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
     };
     use crate::conversation::infrastructure::{
         ssh_environment::{
@@ -1742,6 +1745,12 @@ fn environments(
         )
     };
     let sightings = Arc::new(worker_sightings(root));
+    let paired_keys = serving.as_ref().map(|serving| {
+        Arc::new(RegistryPaired {
+            store: serving.store.clone(),
+            audience: serving.audience.clone(),
+        }) as Arc<dyn crate::devices::application::PairedKeys>
+    });
     let peers = match (serving, &audit) {
         (Some(serving), Some(audit)) => Some(Arc::new(
             PeerEnvironments::new(
@@ -1756,7 +1765,7 @@ fn environments(
                 SshTimings::default(),
                 organization,
             )
-            .with_departures(Arc::new(SightingDepartures(sightings.clone()))),
+            .with_sightings(Arc::new(SavedSightings(sightings.clone()))),
         )),
         _ => None,
     };
@@ -1794,10 +1803,13 @@ fn environments(
             .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
         environments = environments.with_commands(Arc::new(evaluator));
     }
-    let paired = peers.map(|peers| {
+    let paired = peers.zip(paired_keys).map(|(peers, paired_keys)| {
         let connected = peers.clone();
         let changes = peers.connections();
-        let workers: PairedWorkers = (Arc::new(PeerWorkers(peers.clone())), sightings);
+        let workers: PairedWorkers = (
+            (Arc::new(PeerWorkers(peers.clone())), paired_keys),
+            sightings,
+        );
         (
             Arc::new(ListenerEnvironments(peers))
                 as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,

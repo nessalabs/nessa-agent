@@ -32,8 +32,25 @@ export const NATIVE_PORT = 47650
 /** How the computer reaches the hub. */
 export type Route = "tailscale" | "network"
 
-/** Where a computer dials the hub `hub` names, by route. */
-export function hubAddress(hub: string, route: Route): string {
+/**
+ * The port in `listening`, where the hub says its native listener is bound
+ * (`host:port`, `[v6]:port`); [`NATIVE_PORT`] when it says none.
+ */
+export function listeningPort(listening: string | undefined): number {
+  const port = Number(/:(\d{1,5})$/.exec(listening ?? "")?.[1])
+  return Number.isInteger(port) && port > 0 && port < 65_536 ? port : NATIVE_PORT
+}
+
+/** Whether `listening` is bound to this machine alone: no other can dial it. */
+export function onlyThisMachine(listening: string | undefined): boolean {
+  const host = listening?.replace(/:\d{1,5}$/, "").replace(/^\[(.*)\]$/, "$1")
+  return (
+    host !== undefined && (/^127\./.test(host) || host === "::1" || host === "localhost")
+  )
+}
+
+/** Where a computer dials the hub `hub` names, by route, at `port`. */
+export function hubAddress(hub: string, route: Route, port = NATIVE_PORT): string {
   const host =
     hub
       .trim()
@@ -42,7 +59,7 @@ export function hubAddress(hub: string, route: Route): string {
       // As Tailscale and Bonjour name a machine: "Ada’s Mac" is adas-mac.
       .replace(/['’]/g, "")
       .replace(/[^a-z0-9.-]+/g, "-") || "your-mac"
-  return route === "tailscale" ? `${host}:${NATIVE_PORT}` : `${host}.local:${NATIVE_PORT}`
+  return route === "tailscale" ? `${host}:${port}` : `${host}.local:${port}`
 }
 
 /** The two commands a computer runs, in order. */
@@ -87,10 +104,13 @@ const back = (
 export function AddComputer({
   gateway,
   hubName,
+  listening,
   onDone,
 }: {
   gateway: DevicesGateway
   hubName: string | undefined
+  /** Where the hub says its native listener is bound (`devices.list`). */
+  listening: string | undefined
   onDone: () => void
 }) {
   const [route, setRoute] = useState<Route>("tailscale")
@@ -101,15 +121,18 @@ export function AddComputer({
   // The hub makes one code at a time and refuses another while it does
   // (`pairing_busy`): each request waits for the last, and its cancel, to end.
   const settled = useRef<Promise<unknown>>(Promise.resolve())
+  // The invitation the page shows now; `null` while making one, or gone.
+  const shown = useRef<string | null>(null)
 
   useEffect(() => {
     let live = true
     setStep({ kind: "making" })
     // A new code replaces the one shown: that one can no longer be used.
-    const shown = open.current
+    const replaced = open.current
     open.current = null
+    shown.current = null
     const made = settled.current
-      .then(() => (shown ? gateway.cancel(shown) : undefined))
+      .then(() => (replaced ? gateway.cancel(replaced) : undefined))
       .then(() => gateway.pair())
     settled.current = made.then((each) =>
       !live && each.ok ? gateway.cancel(each.value.pairing.invitationId) : undefined,
@@ -118,6 +141,7 @@ export function AddComputer({
       if (!live) return
       if (!each.ok) return setStep({ kind: "failed" })
       open.current = each.value.pairing.invitationId
+      shown.current = each.value.pairing.invitationId
       setStep({ kind: "waiting", code: each.value, pairing: each.value.pairing })
     })
     return () => {
@@ -127,6 +151,7 @@ export function AddComputer({
 
   useEffect(
     () => () => {
+      shown.current = null
       if (open.current) void gateway.cancel(open.current)
     },
     [gateway],
@@ -150,21 +175,25 @@ export function AddComputer({
 
   const approve = (code: WorkerCode, pairing: WorkerPairing) => {
     if (!pairing.deviceKey) return
+    const id = pairing.invitationId
+    // Being approved, it is no longer the page's to cancel on leaving.
+    open.current = null
     setStep({ kind: "approving", code, pairing })
-    void gateway.approve(pairing.invitationId, pairing.deviceKey).then((approved) => {
-      if (approved.ok && approved.value.phase !== "terminal") {
-        open.current = null
-        setStep({ kind: "added", code })
-      } else
-        setStep({
-          kind: "waiting",
-          code,
-          pairing: approved.ok ? approved.value : pairing,
-        })
+    void gateway.approve(id, pairing.deviceKey).then((approved) => {
+      const added = approved.ok && approved.value.phase !== "terminal"
+      if (shown.current !== id) {
+        // The page left, or showed a new code, while it was approved: one
+        // that was not is still open, and nobody else will cancel it.
+        if (!added) void gateway.cancel(id)
+        return
+      }
+      if (added) return setStep({ kind: "added", code })
+      open.current = id
+      setStep({ kind: "waiting", code, pairing: approved.ok ? approved.value : pairing })
     })
   }
 
-  const address = hubAddress(hubName ?? "", route)
+  const address = hubAddress(hubName ?? "", route, listeningPort(listening))
   return (
     <div className="devices-page devices-add-page" data-devices-page="add">
       <button
@@ -226,6 +255,14 @@ export function AddComputer({
                 ? "Recommended. Both machines signed in to the same tailnet reach each other from anywhere, with nothing open to the internet."
                 : "Only while both are on the same Wi-Fi or office network."}
             </p>
+            {onlyThisMachine(listening) ? (
+              <p className="devices-muted" role="status" data-devices-loopback>
+                {hubName ?? "The hub"} listens only to itself now ({listening}), so no
+                other computer can reach it yet. Set native.listen in its config.json to
+                0.0.0.0:{listeningPort(listening)}, then turn native linking off and on in
+                Settings › Linked devices.
+              </p>
+            ) : null}
           </section>
 
           <section className="devices-card">
@@ -265,6 +302,7 @@ export function AddComputer({
                       variant="plain"
                       size="30"
                       shape="pill"
+                      disabled={step.kind === "approving"}
                       onClick={() => setAttempt((value) => value + 1)}
                     >
                       New code

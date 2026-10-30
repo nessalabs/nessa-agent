@@ -54,6 +54,10 @@ export function DevicesProvider({
 interface Read {
   readonly hub?: HubCard | null
   readonly workers?: readonly WorkerCard[]
+  /** Workers past the list's bound, not listed. */
+  readonly omitted?: number
+  /** Where the hub's native listener is bound; absent while linking is off. */
+  readonly listening?: string
   readonly cloud?: CloudState | null
   readonly linked?: readonly LinkedDevice[] | null
   /** The last read of the list failed. */
@@ -77,6 +81,8 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
       setRead((last) => ({
         hub: list.ok ? (list.value.hub ? hubCard(list.value.hub) : null) : last.hub,
         workers: list.ok ? sortWorkers(list.value.workers.map(workerCard)) : last.workers,
+        omitted: list.ok ? list.value.omitted : last.omitted,
+        listening: list.ok ? list.value.listening : last.listening,
         cloud: cloud.ok ? cloud.value : null,
         linked: linked.ok ? linked.value : null,
         unreachable: !list.ok,
@@ -114,6 +120,7 @@ export function DevicesView() {
       <AddComputer
         gateway={gateway}
         hubName={devices.hub?.name}
+        listening={devices.listening}
         onDone={() => {
           devices.reload()
           setPage({ kind: "list" })
@@ -238,6 +245,13 @@ function DevicesList({
                 <span>Add a computer</span>
               </button>
             </div>
+            {read.omitted ? (
+              <p className="devices-muted" data-devices-omitted>
+                {read.omitted === 1
+                  ? "1 more computer, not shown"
+                  : `${read.omitted} more computers, not shown`}
+              </p>
+            ) : null}
           </section>
           <CloudSection cloud={read.cloud} />
           <LinkedSection linked={read.linked} />
