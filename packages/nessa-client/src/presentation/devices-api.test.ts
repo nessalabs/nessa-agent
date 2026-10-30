@@ -73,8 +73,17 @@ describe("devices.list", () => {
       { workers: [], hub: { ...machine, hostname: "x".repeat(129) } },
       { workers: [], hub: { ...machine, gpu: "yes" } },
       { workers: [], hub: { ...machine, disks: Array(17).fill(machine.disks[0]) } },
-      { workers: [], hub: { ...machine, disks: [{ mount: "/", totalBytes: 1, usedBytes: 2 }] } },
-      { workers: [], hub: { ...machine, disks: [{ mount: "x".repeat(129), totalBytes: 1, usedBytes: 0 }] } },
+      {
+        workers: [],
+        hub: { ...machine, disks: [{ mount: "/", totalBytes: 1, usedBytes: 2 }] },
+      },
+      {
+        workers: [],
+        hub: {
+          ...machine,
+          disks: [{ mount: "x".repeat(129), totalBytes: 1, usedBytes: 0 }],
+        },
+      },
       { workers: [], hub: { ...machine, disks: [{ mount: "/", totalBytes: 1 }] } },
     ]
     for (const value of bad)

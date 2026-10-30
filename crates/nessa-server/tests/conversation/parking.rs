@@ -20,9 +20,9 @@ use nessa_sdk::application::agent_execution::sessions::{
 };
 use nessa_sdk::domain::agent_execution::{executions::ExecutionOutcome, sessions::SessionId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
-use std::sync::atomic::AtomicU64;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::AtomicU64;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -190,8 +190,10 @@ impl Fixture {
     /// records each rest of, parked once idle for [`LIMIT`] and here never
     /// otherwise.
     async fn in_workspace(rested: Arc<RestedWorkspaces>, placements: &Path) -> Self {
-        let placements =
-            Arc::new(crate::conversation::infrastructure::FilePlacements::new(placements.join("placements")).unwrap());
+        let placements = Arc::new(
+            crate::conversation::infrastructure::FilePlacements::new(placements.join("placements"))
+                .unwrap(),
+        );
         let environment = Environments::new(
             crate::conversation::infrastructure::in_process_environment(),
             BTreeMap::new(),
@@ -637,7 +639,10 @@ async fn a_zero_limit_parks_nothing() {
     assert!(fixture.slot().await.is_some());
     fixture.service.shutdown().await.unwrap();
     // The sweep ends with the gateway.
-    tokio::time::timeout(BOUND, sweeping).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, sweeping)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 /// An agent that closed its thread is parked once its turn ends, watched

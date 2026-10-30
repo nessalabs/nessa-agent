@@ -3269,7 +3269,7 @@ const steps = {
         failures.push(`the worker reported ${JSON.stringify(listed.machine)}`)
       // Each page follows the last; together they name the worker once.
       const pages = []
-      for (let after; pages.length < 1_024; ) {
+      for (let after; pages.length < 1_024;) {
         const page = await run.client.devices.list(after)
         pages.push(page)
         if (!page.next) break
@@ -3334,8 +3334,7 @@ const steps = {
           .allInnerTexts()
         const reported = listed.machine.disks.map((disk) => disk.mount)
         if (
-          JSON.stringify(volumes) !==
-          JSON.stringify(reported.length > 1 ? reported : [])
+          JSON.stringify(volumes) !== JSON.stringify(reported.length > 1 ? reported : [])
         )
           failures.push(`the worker's page names disks ${JSON.stringify(volumes)}`)
         if ((await detail.innerText()).includes("Running here"))

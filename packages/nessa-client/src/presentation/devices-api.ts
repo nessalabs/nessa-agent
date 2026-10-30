@@ -24,7 +24,10 @@ export function createDevicesApi(session: RpcRequester): DevicesApi {
   return {
     list: async (after) =>
       devicesList(
-        await session.request(ProductMethod.DevicesList, after === undefined ? {} : { after }),
+        await session.request(
+          ProductMethod.DevicesList,
+          after === undefined ? {} : { after },
+        ),
       ),
   }
 }

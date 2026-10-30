@@ -353,8 +353,11 @@ mod tests {
 
     #[test]
     fn the_managed_shell_runs_in_the_vm_at_the_threads_workspace() {
-        let (program, arguments) =
-            mapped("/Applications/Nessa.app/nessa", &stand_in(MANAGED_SERVER_NAME)).unwrap();
+        let (program, arguments) = mapped(
+            "/Applications/Nessa.app/nessa",
+            &stand_in(MANAGED_SERVER_NAME),
+        )
+        .unwrap();
         assert_eq!(program, PathBuf::from(VM_SHELL));
         assert_eq!(
             arguments,
@@ -380,7 +383,10 @@ mod tests {
 
     #[test]
     fn nothing_but_this_gateways_stand_ins_is_mapped() {
-        assert_eq!(mapped("/usr/bin/other", &stand_in(MANAGED_SERVER_NAME)), None);
+        assert_eq!(
+            mapped("/usr/bin/other", &stand_in(MANAGED_SERVER_NAME)),
+            None
+        );
         assert_eq!(
             mapped(
                 "/Applications/Nessa.app/nessa",

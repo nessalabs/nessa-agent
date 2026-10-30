@@ -222,13 +222,19 @@ impl Workspaces {
         Ok(true)
     }
     fn in_use(&self, thread: &str) -> bool {
-        let mut uses = self.uses.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut uses = self
+            .uses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         uses.retain(|_, used| used.strong_count() != 0);
         uses.contains_key(thread)
     }
     /// `thread`'s workspace held in use, from now until the token goes.
     fn hold(&self, thread: &str) -> InUse {
-        let mut uses = self.uses.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut uses = self
+            .uses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(held) = uses.get(thread).and_then(Weak::upgrade) {
             return held;
         }

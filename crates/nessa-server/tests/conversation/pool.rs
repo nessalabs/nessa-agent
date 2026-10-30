@@ -181,13 +181,20 @@ async fn with_no_computer_online_a_conversation_runs_in_the_cloud_when_it_can() 
         if connected {
             placed.unwrap();
             assert_eq!(
-                environments.placement(&conversation()).await.unwrap().as_deref(),
+                environments
+                    .placement(&conversation())
+                    .await
+                    .unwrap()
+                    .as_deref(),
                 Some(crate::conversation::application::placement::BOAT),
                 "{asked}"
             );
         } else {
             // No cloud account: refused, as before.
-            assert!(matches!(placed, Err(ConversationError::EnvironmentNotConfigured)));
+            assert!(matches!(
+                placed,
+                Err(ConversationError::EnvironmentNotConfigured)
+            ));
         }
     }
     // A host the configuration does not name is never sent to the cloud.

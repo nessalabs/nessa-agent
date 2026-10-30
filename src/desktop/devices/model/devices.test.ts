@@ -119,18 +119,28 @@ describe("devices model", () => {
       agents: 0,
       machine: { ...machine, disks },
     })
-    expect(card.disks?.map((disk) => [disk.mount, disk.usage.value, disk.usage.of])).toEqual([
+    expect(
+      card.disks?.map((disk) => [disk.mount, disk.usage.value, disk.usage.of]),
+    ).toEqual([
       ["/", "256 GB", "of 1 TB"],
       ["/data", "256 GB", "of 1 TB"],
     ])
     // One volume is the disk figure already; offline shows no usage at all.
     expect(
-      workerCard({ environment, state: "online", agents: 0, machine: { ...machine, disks: [disks[0]!] } })
-        .disks,
+      workerCard({
+        environment,
+        state: "online",
+        agents: 0,
+        machine: { ...machine, disks: [disks[0]!] },
+      }).disks,
     ).toBeUndefined()
     expect(
-      workerCard({ environment, state: "offline", agents: 0, machine: { ...machine, disks } })
-        .disks,
+      workerCard({
+        environment,
+        state: "offline",
+        agents: 0,
+        machine: { ...machine, disks },
+      }).disks,
     ).toBeUndefined()
   })
 })
