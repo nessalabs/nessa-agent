@@ -22,7 +22,7 @@
 //! owes stays owed and its provider session id stays recorded. The submission
 //! lock is held until the slot is released, so a message that arrives meanwhile
 //! waits and then opens the conversation again rather than being refused.
-use super::{ConversationService, LiveConversation, Slot};
+use super::{ConversationError, ConversationService, LiveConversation, Slot};
 use futures_util::{stream, StreamExt};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -47,15 +47,32 @@ const MOST_BETWEEN_SWEEPS: Duration = Duration::from_secs(15);
 const PARKS_AT_ONCE: usize = 64;
 
 impl ConversationService {
+    /// `id`'s agent closed its own thread (`close_thread`): once its turn
+    /// ends it is parked, watched or not, and a thread in a cloud workspace
+    /// stops its VM with it. The next message opens it again.
+    ///
+    /// # Errors
+    /// [`ConversationError::Unavailable`] when it is not open now.
+    pub async fn close_after_turn(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        let slot = self
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or(ConversationError::Unavailable)?;
+        slot.closing.store(true, Ordering::SeqCst);
+        tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");
+        Ok(())
+    }
+
     /// Park idle agents until the gateway retires: those nobody watches
     /// after `park_after`, when it is set, and those in a cloud workspace
-    /// after `workspace_idle`. Started once by composition; does nothing
-    /// when neither can be parked here.
+    /// after `workspace_idle`, and those whose agent closed its thread at
+    /// once. Started once by composition.
     pub async fn run_parking(&self) {
         let park_after = self.inner.limits.park_after;
-        if park_after.is_none() && !self.inner.environment.has_workspaces() {
-            return;
-        }
         let shortest = park_after.map_or(self.inner.limits.workspace_idle, |park_after| {
             park_after.min(self.inner.limits.workspace_idle)
         });
@@ -97,7 +114,7 @@ impl ConversationService {
             let Some(live) = settled(&slot) else {
                 continue;
             };
-            match self.idle_limit(&id, &live, park_after).await {
+            match self.idle_limit(&id, &slot, &live, park_after).await {
                 Idle::InUse => slot.touch(now),
                 Idle::Never => {}
                 Idle::After(limit) => {
@@ -126,11 +143,16 @@ impl ConversationService {
     async fn idle_limit(
         &self,
         id: &ConversationId,
+        slot: &Slot,
         live: &LiveConversation,
         park_after: Option<Duration>,
     ) -> Idle {
         if !self.could_park(live).await {
             return Idle::InUse;
+        }
+        // Its agent closed its thread: parked now that it is idle.
+        if slot.closing.load(Ordering::SeqCst) {
+            return Idle::After(Duration::ZERO);
         }
         if self.inner.environment.in_workspace(id).await {
             let running = self
@@ -204,7 +226,7 @@ impl ConversationService {
             ParkWhen::IdleFor(limit) => {
                 slot.untouched_for(now) >= limit
                     && matches!(
-                        self.idle_limit(id, &live, Some(limit)).await,
+                        self.idle_limit(id, &slot, &live, Some(limit)).await,
                         Idle::After(again) if slot.untouched_for(now) >= again
                     )
             }

@@ -625,10 +625,32 @@ async fn a_workspace_conversation_rests_its_vm_once_idle_even_when_followed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_zero_limit_parks_nothing() {
     let fixture = Fixture::new(None).await;
-    tokio::time::timeout(BOUND, fixture.service.run_parking())
-        .await
-        .expect("with no limit the sweep does not run");
+    let sweeping = {
+        let service = fixture.service.clone();
+        tokio::spawn(async move { service.run_parking().await })
+    };
+    fixture.wait(NEVER);
+    tokio::time::sleep(LIMIT * 4).await;
     assert!(fixture.slot().await.is_some());
+    fixture.service.shutdown().await.unwrap();
+    // The sweep ends with the gateway.
+    tokio::time::timeout(BOUND, sweeping).await.unwrap().unwrap();
+}
+
+/// An agent that closed its thread is parked once its turn ends, watched
+/// or not, with no idle limit at all; the next message opens it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_that_closed_its_thread_is_parked_once_idle() {
+    let fixture = Fixture::new(None).await;
+    let follower = fixture.service.live_changes(&fixture.id);
+    fixture.service.close_after_turn(&fixture.id).await.unwrap();
+    assert_eq!(fixture.service.sweep(None).await, 1);
+    assert!(fixture.slot().await.is_none());
+    fixture.turn("again").await;
+    // Opened again, it starts unmarked.
+    assert_eq!(fixture.service.sweep(None).await, 0);
+    assert!(fixture.slot().await.is_some());
+    drop(follower);
     fixture.service.shutdown().await.unwrap();
 }
 

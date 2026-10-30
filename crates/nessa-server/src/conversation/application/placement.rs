@@ -532,11 +532,6 @@ impl Environments {
         }
     }
 
-    /// Whether a conversation can run in a cloud workspace of its own here.
-    pub(crate) fn has_workspaces(&self) -> bool {
-        self.workspaces.is_some()
-    }
-
     /// Whether `conversation` runs in a cloud workspace of its own
     /// ([`BOAT`]), whose VM rests while its agent does
     /// ([`Environments::rest`]).

@@ -837,6 +837,10 @@ struct Slot {
     /// agents, the one with the oldest is parked first
     /// (`service/parking.rs`). Unix milliseconds from the service's clock.
     touched: AtomicU64,
+    /// Its agent closed its thread (`close_thread`): it is parked as soon
+    /// as it is idle, watched or not. Its next opening is a new slot, and
+    /// starts unmarked.
+    closing: AtomicBool,
 }
 impl Slot {
     fn new(now_ms: u64) -> Self {
@@ -846,6 +850,7 @@ impl Slot {
             started: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             touched: AtomicU64::new(now_ms),
+            closing: AtomicBool::new(false),
         }
     }
     /// The conversation is in use at `now_ms`.
