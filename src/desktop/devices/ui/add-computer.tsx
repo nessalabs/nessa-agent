@@ -258,9 +258,9 @@ export function AddComputer({
             {onlyThisMachine(listening) ? (
               <p className="devices-muted" role="status" data-devices-loopback>
                 {hubName ?? "The hub"} listens only to itself now ({listening}), so no
-                other computer can reach it yet. Set native.listenAddress in its config.json to
-                0.0.0.0:{listeningPort(listening)}, then turn native linking off and on in
-                Settings › Linked devices.
+                other computer can reach it yet. Set native.listenAddress in its
+                config.json to 0.0.0.0:{listeningPort(listening)}, then turn native
+                linking off and on in Settings › Linked devices.
               </p>
             ) : null}
           </section>
