@@ -1,7 +1,7 @@
-//! The question a turn's command policy answers: may the person this turn
-//! runs for use this host, and run this program on it? (ADR 803 step 4.)
+//! The question a turn's command policy answers: may this turn's initiator
+//! use this host, and run this program on it? (ADR 803 step 4.)
 //!
-//! The owner's turns and a Drive grant's turns ask the same port. It is
+//! Owner, agent-authored and Drive grant turns ask the same port. It is
 //! answered by Cedar (`infrastructure::tool_policy::cedar`), from what is
 //! true: the hosts and program lists this gateway is configured with, the
 //! hosts a grant's policy names for itself (`ToolPolicy::command_hosts`), and
@@ -17,10 +17,11 @@
 //! with: a Drive turn does not inherit the owner's hosts.
 //!
 //! `run` asks [`admit_command`] and `environments_list` asks
-//! [`CommandQuestion::Host`] for the running turn's initiator: the owner, or
-//! the Drive grant that started it with its policy at the revision the turn
-//! was admitted under (`AdmittedPolicies`). Whether a grant's turn may call
-//! `run` at all is its tool policy's (`drive_tools`), asked first.
+//! [`CommandQuestion::Host`] for the running turn's initiator: the owner, an
+//! agent, or the Drive grant that started it with its policy at the revision
+//! the turn was admitted under (`AdmittedPolicies`). Cedar refuses commands
+//! for agent-authored turns. Whether a grant's turn may call `run` at all is
+//! its tool policy's (`drive_tools`), asked first.
 
 use nessa_sdk::domain::agent_execution::leases::CommandRefusal;
 
@@ -50,6 +51,8 @@ pub enum CommandQuestion<'a> {
 pub enum CommandInitiator<'a> {
     /// The conversation's owner.
     Owner,
+    /// An agent-authored turn, distinct from the conversation's owner.
+    Agent,
     /// A Drive grant.
     Grant {
         /// The grant's identity text.

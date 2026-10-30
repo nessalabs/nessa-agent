@@ -433,6 +433,7 @@ async fn run(
                 )
                 .await
                 .map_err(code)?;
+            let author = source.author().map_err(code)?;
             let mode = match args.mode {
                 SendMode::Queued => SubmissionMode::Queue,
                 SendMode::Steering => SubmissionMode::Steer,
@@ -441,7 +442,7 @@ async fn run(
                         .leave_note(
                             target.clone(),
                             source.caller(),
-                            Initiator::Owner,
+                            Initiator::Agent(author),
                             args.message,
                             NoteDelivery::RecordOnly,
                         )
@@ -477,7 +478,7 @@ async fn run(
                     storage,
                     target.clone(),
                     source.caller(),
-                    Initiation::owner(),
+                    Initiation::agent(author),
                     false,
                     execution.clone(),
                     SubmittedMessage {

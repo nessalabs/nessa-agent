@@ -15,6 +15,7 @@ use nessa_sdk::{
         },
     },
     domain::agent_execution::{
+        executions::AgentSource,
         permissions::PermissionEffect,
         prompts::{ImageReference, LinkedFile, MessageSender, UserMessage},
     },
@@ -262,6 +263,9 @@ pub struct ConversationMessage {
     /// person wrote it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    /// The source turn whose agent wrote this input; absent for a person or app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub status: ConversationMessageStatus,
@@ -357,6 +361,9 @@ pub struct ConversationPending {
     /// As [`ConversationMessage::app`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<ConversationMessageApp>,
+    /// The source turn whose agent wrote this waiting input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     pub mode: ConversationPendingMode,
 }
 /// The MCP App that wrote a turn on the person's behalf: the tool call whose
@@ -373,13 +380,38 @@ impl ConversationMessageApp {
     /// The app that wrote `message`, or `None` when the person did.
     pub fn of(message: &UserMessage) -> Option<Self> {
         match message.sender() {
-            MessageSender::Person | MessageSender::Internal => None,
+            MessageSender::Person | MessageSender::Internal | MessageSender::Agent(_) => None,
             MessageSender::App(app) => Some(Self {
                 execution_id: app.execution_id().as_str().into(),
                 tool_id: app.tool_id().as_str().into(),
                 server: app.tool().server().into(),
                 tool: app.tool().tool().into(),
             }),
+        }
+    }
+}
+/// Verified origin of an agent-authored message or note. It carries no
+/// permission to act as the source turn's human initiator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationAgentSource {
+    pub conversation_id: String,
+    pub execution_id: String,
+}
+impl ConversationAgentSource {
+    /// Read an agent message's origin from the SDK's saved sender.
+    pub fn of(message: &UserMessage) -> Option<Self> {
+        match message.sender() {
+            MessageSender::Agent(source) => Some(source.into()),
+            _ => None,
+        }
+    }
+}
+impl From<&AgentSource> for ConversationAgentSource {
+    fn from(source: &AgentSource) -> Self {
+        Self {
+            conversation_id: source.conversation().into(),
+            execution_id: source.execution().as_str().into(),
         }
     }
 }
@@ -1150,8 +1182,17 @@ impl ConversationNote {
                     nessa_sdk::domain::agent_execution::executions::Initiator::Grant(_) => {
                         ConversationNoteAuthorKind::Grant
                     }
+                    nessa_sdk::domain::agent_execution::executions::Initiator::Agent(_) => {
+                        ConversationNoteAuthorKind::Agent
+                    }
                 },
                 surface: note.actor.surface_id().into(),
+                agent: match &note.author {
+                    nessa_sdk::domain::agent_execution::executions::Initiator::Agent(source) => {
+                        Some(source.into())
+                    }
+                    _ => None,
+                },
             },
         }
     }
@@ -1231,6 +1272,7 @@ impl ConversationHandoff {
                     .turns()
                     .iter()
                     .map(|turn| ConversationCarriedTurn {
+                        agent: turn.agent_source().map(Into::into),
                         said: turn.said().map(Into::into),
                         reply: turn.reply().map(Into::into),
                     })
@@ -1273,6 +1315,9 @@ pub struct ConversationHandoffAgent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationCarriedTurn {
+    /// Verified author of the copied input, when an agent wrote it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1285,6 +1330,8 @@ pub struct ConversationCarriedTurn {
 pub struct ConversationNoteAuthor {
     pub kind: ConversationNoteAuthorKind,
     pub surface: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
 }
 /// Under which authority a note was left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -1292,6 +1339,7 @@ pub struct ConversationNoteAuthor {
 pub enum ConversationNoteAuthorKind {
     Owner,
     Grant,
+    Agent,
 }
 
 /// Non-secret runtime facts selected by server composition.

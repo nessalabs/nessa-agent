@@ -2,6 +2,7 @@
   "Nessa": {
     "entityTypes": {
       "Owner": {},
+      "Agent": {},
       "Grant": {
         "shape": {
           "type": "Record",
@@ -132,13 +133,13 @@
       },
       "command.host": {
         "appliesTo": {
-          "principalTypes": ["Owner", "Grant"],
+          "principalTypes": ["Owner", "Grant", "Agent"],
           "resourceTypes": ["Host"]
         }
       },
       "command.run": {
         "appliesTo": {
-          "principalTypes": ["Owner", "Grant"],
+          "principalTypes": ["Owner", "Grant", "Agent"],
           "resourceTypes": ["Host"],
           "context": {
             "type": "Record",

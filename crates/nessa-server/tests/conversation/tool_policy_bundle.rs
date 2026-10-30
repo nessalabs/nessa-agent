@@ -18,6 +18,7 @@ fn every_checked_in_policy_has_a_unique_id() {
             "app.other_server_tool",
             "app.own_server",
             "app.visible_tool",
+            "command.agent_host",
             "command.denied_program",
             "command.grant_host",
             "command.owner_host",

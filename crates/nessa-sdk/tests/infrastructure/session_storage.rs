@@ -1,5 +1,6 @@
 //! Public record-storage contract exercised through the SDK port.
-//! session_storage -> memory public bindings / receipts / reset
+//! session_storage -> authorship public fold / rejection before append / restored origin
+//!                 -> memory public bindings / receipts / reset
 //!                 -> record public writer / watch / physical interruption / retry
 //!                 -> record_source public publication / restored extension
 //!                 -> discovery public bounded query ordering / physical faults
@@ -7,6 +8,7 @@
 //!                 -> ownership_settlement public SQLite proof / Completion refusal
 //!                 -> fixtures public immutable data / actual emitted donor output
 
+mod authorship;
 mod caller_wakes;
 mod discovery;
 mod events;

@@ -1,4 +1,5 @@
 import type { ImageReference } from "./attachments"
+import type { AgentSource } from "./authorship"
 import type { MessageContent } from "./content"
 import type { PublishedFile } from "./held-files"
 import type { Note } from "./notes"
@@ -305,6 +306,8 @@ export interface SubmissionDiagnostic {
 export type UserTurn = {
   id: string
   from: "user"
+  /** Verified source when another turn's agent wrote this input. */
+  agent?: AgentSource
   content: MessageContent
   receipt: Receipt
   executionId?: string
@@ -514,6 +517,7 @@ type ConversationState = {
     pending: {
       executionId: string
       text: string
+      agent?: AgentSource
       attachments: ImageReference[]
       mode: "queued" | "steering"
     }[]

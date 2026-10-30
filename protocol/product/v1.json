@@ -1238,6 +1238,10 @@
           "$ref": "#/$defs/ConversationMessageApp",
           "description": "The app that wrote this turn on the person's behalf; absent when the person wrote it."
         },
+        "agent": {
+          "$ref": "#/$defs/ConversationAgentSource",
+          "description": "The verified source turn whose agent wrote this input; absent for a person or app."
+        },
         "status": {
           "$ref": "#/$defs/ConversationMessageStatus",
           "description": "Current invocation state."
@@ -1329,12 +1333,38 @@
           "$ref": "#/$defs/ConversationMessageApp",
           "description": "The app that wrote this waiting input on the person's behalf; absent when the person wrote it."
         },
+        "agent": {
+          "$ref": "#/$defs/ConversationAgentSource",
+          "description": "The verified source turn whose agent wrote this waiting input."
+        },
         "mode": {
           "$ref": "#/$defs/ConversationPendingMode",
           "description": "Queue or steering admission."
         }
       },
       "required": ["executionId", "text", "attachments", "files", "mode"]
+    },
+    "ConversationAgentSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The source conversation and turn whose agent wrote a message or note. Origin does not grant owner authority.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical ID of the conversation in which the sending agent ran."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "ID of the source turn or the child turn a report concerns."
+        }
+      },
+      "required": ["conversationId", "executionId"]
     },
     "ConversationMessageApp": {
       "type": "object",
@@ -6959,8 +6989,8 @@
     },
     "ConversationNoteAuthorKind": {
       "type": "string",
-      "enum": ["owner", "grant"],
-      "description": "owner: the conversation's owner left it. grant: someone the conversation is shared with left it, under their grant."
+      "enum": ["owner", "grant", "agent"],
+      "description": "owner: the conversation's owner. grant: a share grant holder. agent: another turn's agent."
     },
     "ConversationNoteAuthor": {
       "type": "object",
@@ -6977,6 +7007,10 @@
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
           "description": "The verified surface it was left from."
+        },
+        "agent": {
+          "$ref": "#/$defs/ConversationAgentSource",
+          "description": "The verified source turn when kind is agent."
         }
       },
       "required": ["kind", "surface"]
@@ -7061,6 +7095,7 @@
       "additionalProperties": false,
       "description": "One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only.",
       "properties": {
+        "agent": { "$ref": "#/$defs/ConversationAgentSource" },
         "said": {
           "type": "string",
           "minLength": 1,

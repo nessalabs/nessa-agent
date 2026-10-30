@@ -15,6 +15,7 @@ import type { WorkspaceFailureReason } from "./failure"
 import type { WidgetRef } from "../../widgets/model/widget-ref"
 import type {
   HistoryExtent,
+  AgentSource,
   Note,
   ImageReferencePart,
   LinkedFileReferencePart,
@@ -235,6 +236,8 @@ export interface TurnMessage {
    * (`ui/message`, #390); absent when the person wrote it.
    */
   readonly app?: MessageApp
+  /** The source turn whose agent wrote this input. */
+  readonly agent?: AgentSource
   /**
    * The images the person put on a message sent from this window, while it
    * waits in the outbox: drawn from the bytes the window holds, and uploaded

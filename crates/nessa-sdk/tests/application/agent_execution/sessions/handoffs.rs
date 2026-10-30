@@ -35,7 +35,7 @@ fn history(turns: &[(&str, &str)]) -> CarriedHistory {
     CarriedHistory::new(
         turns
             .iter()
-            .map(|(said, reply)| CarriedTurn::new(Some(said), Some(reply)).unwrap())
+            .map(|(said, reply)| CarriedTurn::new(Some(said), Some(reply), None).unwrap())
             .collect(),
         0,
     )
@@ -101,11 +101,11 @@ fn a_handoff_id_is_the_requests_own_and_bounded() {
 
 #[test]
 fn carried_history_keeps_the_newest_turns_that_fit() {
-    assert!(CarriedTurn::new(None, Some(" ")).is_err());
+    assert!(CarriedTurn::new(None, Some(" "), None).is_err());
     let long = "x".repeat(CarriedTurn::MAX_PART_BYTES + 1);
-    assert!(CarriedTurn::new(Some(&long), None).is_err());
+    assert!(CarriedTurn::new(Some(&long), None, None).is_err());
     assert_eq!(
-        CarriedTurn::clipped(Some(&long), None)
+        CarriedTurn::clipped(Some(&long), None, None)
             .unwrap()
             .said()
             .unwrap()
@@ -114,7 +114,7 @@ fn carried_history_keeps_the_newest_turns_that_fit() {
     );
     let full = "y".repeat(CarriedTurn::MAX_PART_BYTES);
     let turns: Vec<_> = (0..10)
-        .map(|_| CarriedTurn::new(Some(&full), None).unwrap())
+        .map(|_| CarriedTurn::new(Some(&full), None, None).unwrap())
         .collect();
     let kept = CarriedHistory::newest(1, turns.clone());
     assert_eq!(

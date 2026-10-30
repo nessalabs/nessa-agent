@@ -10,7 +10,9 @@
 //! applies to each semantic batch. No previous history is re-encoded during a save.
 //! Cancellation maps an undispatched local decision and caller separately from
 //! scheduling edges and provider settlement reports. Initiation maps who started
-//! a turn back through the domain's constructors.
+//! a turn back through the domain's constructors. Agent source maps that origin
+//! for both initiation and copied handoff history.
+mod agent_source;
 mod artifacts;
 mod cancellation;
 pub(super) mod checkpoint;

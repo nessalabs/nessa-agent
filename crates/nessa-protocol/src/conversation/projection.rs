@@ -1,9 +1,9 @@
 use super::domain::{ConversationApprovalMode, ConversationId, LATEST_TIME_MS};
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
-    ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationArtifact,
-    ConversationAsked, ConversationCapabilities, ConversationEarlier, ConversationHandoff,
-    ConversationHandoffKind, ConversationLeaseCause, ConversationLeaseCleanup,
+    ConversationAgentSource, ConversationAnswerOption, ConversationApprovalModeChangeView,
+    ConversationArtifact, ConversationAsked, ConversationCapabilities, ConversationEarlier,
+    ConversationHandoff, ConversationHandoffKind, ConversationLeaseCause, ConversationLeaseCleanup,
     ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
     ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
@@ -993,6 +993,7 @@ impl Projection {
                             .map(Into::into)
                             .collect(),
                         app: ConversationMessageApp::of(&record.request.user_message),
+                        agent: ConversationAgentSource::of(&record.request.user_message),
                         mode,
                     });
                 } else {
@@ -1218,6 +1219,7 @@ impl Projection {
             files: Vec::new(),
             uploads: Vec::new(),
             app: None,
+            agent: None,
             steering_target: None,
             status: ConversationMessageStatus::Running,
             error: None,
@@ -1873,6 +1875,7 @@ impl Projection {
             .map(Into::into)
             .collect();
         self.view.messages[index].app = ConversationMessageApp::of(&record.request.user_message);
+        self.view.messages[index].agent = ConversationAgentSource::of(&record.request.user_message);
         self.view.messages[index].parts.clear();
         self.view.messages[index].retained_text = 0;
         self.tool_parts.remove(id);

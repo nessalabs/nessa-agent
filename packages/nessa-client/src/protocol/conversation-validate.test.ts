@@ -214,7 +214,17 @@ describe("conversation view agreement", () => {
       handoffId: "h-fork",
       kind: "fork",
       atMs: 5,
-      turns: [{ said: "Plan a trip", reply: "Lisbon" }, {}],
+      turns: [
+        {
+          said: "Plan a trip",
+          reply: "Lisbon",
+          agent: {
+            conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16",
+            executionId: "source-turn",
+          },
+        },
+        {},
+      ],
       omittedTurns: 3,
     }
     expect(
@@ -243,6 +253,21 @@ describe("conversation view agreement", () => {
       { ...forked, omittedTurns: -1 },
       { ...forked, omittedTurns: 1.5 },
       { ...forked, turns: [{ said: "" }] },
+      {
+        ...forked,
+        turns: [
+          { said: "agent", agent: { conversationId: "not-a-uuid", executionId: "e" } },
+        ],
+      },
+      {
+        ...forked,
+        turns: [
+          {
+            said: "agent",
+            agent: { conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16" },
+          },
+        ],
+      },
       { ...forked, extra: true },
     ])
       expect(() =>
@@ -660,6 +685,58 @@ describe("conversation view agreement", () => {
         () => conversationView(invalid, "conversation"),
         JSON.stringify(app),
       ).toThrow()
+    }
+  })
+
+  it("correlates an agent's waiting input with its saved turn and note origin", () => {
+    const origin = {
+      conversationId: "00000000-0000-4000-8000-000000000001",
+      executionId: "source-turn",
+    }
+    const value = view() as Omit<
+      ReturnType<typeof view>,
+      "messages" | "pending" | "notes"
+    > & {
+      messages: Record<string, unknown>[]
+      pending: Record<string, unknown>[]
+      notes: Record<string, unknown>[]
+    }
+    value.messages[0]!.agent = origin
+    value.pending[0]!.agent = origin
+    value.notes.push({
+      messageId: "note-1",
+      text: "agent note",
+      acceptedAtMs: 1,
+      delivery: "record_only",
+      deliveryState: "recorded",
+      author: { kind: "agent", surface: "panel", agent: origin },
+    })
+    expect(conversationView(value, "conversation").messages[0]!.agent).toEqual(origin)
+    for (const change of [
+      (copy: typeof value) => {
+        copy.pending[0]!.agent = { ...origin, executionId: "other" }
+      },
+      (copy: typeof value) => {
+        delete copy.pending[0]!.agent
+      },
+      (copy: typeof value) => {
+        copy.messages[0]!.app = {
+          executionId: "running",
+          toolId: "tool",
+          server: "s",
+          tool: "t",
+        }
+      },
+      (copy: typeof value) => {
+        copy.notes[0]!.author = { kind: "owner", surface: "panel", agent: origin }
+      },
+      (copy: typeof value) => {
+        copy.notes[0]!.author = { kind: "agent", surface: "panel" }
+      },
+    ]) {
+      const copy = structuredClone(value)
+      change(copy)
+      expect(() => conversationView(copy, "conversation")).toThrow()
     }
   })
 

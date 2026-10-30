@@ -2,7 +2,7 @@
 //! checked, and of the authority a note was left under (the same initiator).
 //! Decoding goes back through the domain constructors, so a saved grant breaks
 //! the same rules a live one would and is refused as corrupt.
-use super::tools::corrupt;
+use super::{agent_source::WireAgentSource, tools::corrupt};
 use crate::application::agent_execution::sessions::StorageError;
 use crate::domain::agent_execution::executions::{
     GrantInitiator, Initiation as DomainInitiation, Initiator as DomainInitiator,
@@ -21,6 +21,7 @@ pub(super) struct Initiation {
 pub(super) enum Initiator {
     Owner,
     Grant { grant: String, policy_revision: u64 },
+    Agent(WireAgentSource),
 }
 #[derive(Serialize, Deserialize)]
 enum ToolChecking {
@@ -53,6 +54,12 @@ impl Initiation {
             (DomainInitiator::Grant(grant), ToolChecking::Checked) => {
                 DomainInitiation::checked_grant(grant)
             }
+            (DomainInitiator::Agent(source), ToolChecking::NotChecked) => {
+                DomainInitiation::agent(source)
+            }
+            (DomainInitiator::Agent(_), ToolChecking::Checked) => {
+                return Err(corrupt("an agent's turn saved as tool-checked"))
+            }
         })
     }
 }
@@ -64,6 +71,7 @@ impl From<&DomainInitiator> for Initiator {
                 grant: grant.grant().into(),
                 policy_revision: grant.policy_revision(),
             },
+            DomainInitiator::Agent(source) => Self::Agent(source.into()),
         }
     }
 }
@@ -77,6 +85,7 @@ impl Initiator {
             } => DomainInitiator::Grant(
                 GrantInitiator::new(grant, policy_revision).map_err(corrupt)?,
             ),
+            Self::Agent(source) => DomainInitiator::Agent(source.decode()?),
         })
     }
 }

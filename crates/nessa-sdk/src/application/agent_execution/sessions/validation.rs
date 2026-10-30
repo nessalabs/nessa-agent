@@ -63,6 +63,11 @@ impl InvocationContinuation {
         Ok(state)
     }
     pub(super) fn empty(invocation: &InvocationRecord) -> Result<Self, StorageError> {
+        super::authorship::validate_message_author(
+            &invocation.initiation,
+            &invocation.request.user_message,
+        )
+        .map_err(corrupt)?;
         invocation
             .request
             .validate_message_size()

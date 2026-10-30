@@ -37,8 +37,8 @@ means a new command on each call.
 ## Reports back
 
 A queued or steering `send_message` reports back when its turn ends
-(`reportsBack: true`). The report is a new queued owner turn in the sending
-conversation, admitted under the same caller its send was, that names the
+(`reportsBack: true`). The report is a new queued agent-authored turn in the sending
+conversation, attributed to the child and watched execution, that names the
 thread and execution, the outcome, and the thread's final visible reply: the
 text after its last tool step, thinking left out, cut so the whole report fits
 the conversation's input limit. It queues behind whatever the sender is doing,
@@ -154,6 +154,33 @@ report carries, so it can be ahead of the event's own local outcome when
 settlement replaced it; the settlement events follow after the cursor.
 
 ## Source authority
+
+### Authorship carried into the target
+
+The source turn admitted by `admit_agent_tool` is the only authority for a
+`send_message` author. The target's normal access check still decides whether
+the verified principal may write there. A successful agent send records the
+source conversation and execution in both the message sender and turn
+initiation. A report records the child conversation and watched execution as
+its author. Those identities describe origin; they do not confer owner
+initiation or a share grant. The target's tool policy sees an agent turn, not a
+person turn. A passive send records that origin on its note without starting a
+turn. The model receives the same author label as structured context ahead of
+the message text.
+
+| Event and prior state | Saved author and effect | Retry or later authority |
+| --- | --- | --- |
+| Verified source sends queued or steering text to an accessible target | Agent(source conversation, source execution); submit once | The exact same request retains that origin; changed origin or text conflicts |
+| Agent steering arrives while a person-initiated target turn runs | The agent input waits for its own turn, even when native steering is available | It cannot inject calls into a turn with the person's authority |
+| Verified source leaves a passive note | Agent(source conversation, source execution); record only | Same request and text returns the same note; no turn or report begins |
+| An accepted agent note is waiting when a person starts the next turn | The note retains its agent author and can be carried into the turn | No grant read or owner attribution is needed for this admitted note |
+| A person forks an agent-authored chat or switches its provider | Copied input retains its typed agent source through save/restore, model history and transcript | The source remains origin only; the new turn uses its own admitted authority |
+| Watched child turn settles and its report is delivered | Agent(child conversation, watched execution); queue once in parent | A restored delivery reads the parent's saved execution before retrying |
+| Target access is refused before submission | No target turn or note | An earlier saved target receipt remains the authority for an exact retry |
+| Public input admission, incremental save or full restore receives disagreeing sender and initiation origins | Reject before accepting or appending the input | Prior committed history remains unchanged; encoding must not repair the sender |
+| An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
+| An agent-authored target turn lists command hosts or calls `run` | The command policy receives an Agent principal; Cedar refuses host and run questions with `command.agent_host` | No command lease starts; an unpermitted host is not offered, and the policy refusal is logged |
+
 
 The relay supplies source session identity; tool arguments supply no owner,
 source identity, credential or approval override. The conversation application

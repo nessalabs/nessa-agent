@@ -1319,6 +1319,40 @@ mod tests {
         assert!(
             matches!(decode_one(&bytes, &ProviderContext::Absent).unwrap(), SessionChange::InputAccepted(next) if *next == internal)
         );
+        // Agent provenance shares the codec with internal continuations, but
+        // the two origins cannot describe the same input.
+        let source = crate::domain::agent_execution::executions::AgentSource::new(
+            "8b547a4b-6974-49a4-b878-d13a9c031f16",
+            ExecutionId::new("source-turn").unwrap(),
+        )
+        .unwrap();
+        let mut agent = record.clone();
+        agent.initiation = Initiation::agent(source.clone());
+        agent.request.user_message =
+            UserMessage::text_only(PromptText::new("agent words").unwrap())
+                .sent_by(MessageSender::Agent(source));
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(agent.clone()))).unwrap();
+        assert!(
+            matches!(decode_one(&bytes, &ProviderContext::Absent).unwrap(), SessionChange::InputAccepted(next) if *next == agent)
+        );
+        let valid_agent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for field in ["user_internal", "user_app"] {
+            let mut ambiguous = valid_agent.clone();
+            ambiguous["changes"][0]["InputAccepted"]["metadata"][field] = match field {
+                "user_internal" => true.into(),
+                _ => valid["changes"][0]["InputAccepted"]["metadata"]["user_app"].clone(),
+            };
+            assert!(
+                matches!(
+                    decode_one(
+                        &serde_json::to_vec(&ambiguous).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "agent origin with {field}"
+            );
+        }
         // A person's message says so: `user_app` is null.
         let person = UserMessage::text_only(PromptText::new("mine").unwrap());
         let mut record = record;

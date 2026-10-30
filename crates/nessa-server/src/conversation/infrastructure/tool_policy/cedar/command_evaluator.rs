@@ -8,7 +8,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{program_name, CommandPolicy};
 
 use super::bundle::Bundle;
-use super::request::{decide, entity, grant, owner, strings, uid, Ask};
+use super::request::{agent, decide, entity, grant, owner, strings, uid, Ask};
 
 const GATEWAY: &str = "Nessa::Gateway";
 const HOST: &str = "Nessa::Host";
@@ -66,6 +66,7 @@ impl CommandPolicyEvaluator for CedarCommandPolicyEvaluator {
     ) -> Result<ToolDecision, ToolPolicyUnavailable> {
         let principal = match initiator {
             CommandInitiator::Owner => owner()?,
+            CommandInitiator::Agent => agent()?,
             CommandInitiator::Grant { grant: id, policy } => {
                 grant(id, policy, Some(policy.command_hosts().names()))?
             }

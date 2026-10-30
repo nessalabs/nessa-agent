@@ -15,6 +15,7 @@ use crate::conversation::domain::{ToolChoice, ToolPolicy, ToolPreset};
 use super::bundle::Bundle;
 
 pub(super) const OWNER: &str = "Nessa::Owner";
+pub(super) const AGENT: &str = "Nessa::Agent";
 pub(super) const GRANT: &str = "Nessa::Grant";
 pub(super) const ACTION: &str = "Nessa::Action";
 /// A grant whose policy is its own rules names this as its preset, so no
@@ -108,6 +109,11 @@ pub(super) fn strings<'a>(values: impl IntoIterator<Item = &'a String>) -> Restr
 /// The conversation's owner.
 pub(super) fn owner() -> Result<Entity, ToolPolicyUnavailable> {
     entity(OWNER, "owner", [])
+}
+
+/// An agent-authored turn; its source identity is retained in the initiation.
+pub(super) fn agent() -> Result<Entity, ToolPolicyUnavailable> {
+    entity(AGENT, "agent", [])
 }
 
 /// A Drive grant, with every fact of it the caller asks about: its tool

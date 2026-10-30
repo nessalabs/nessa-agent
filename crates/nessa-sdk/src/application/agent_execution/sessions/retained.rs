@@ -30,11 +30,12 @@ fn actor(value: &ActionContext) -> usize {
         .saturating_add(value.surface_id().len())
         .saturating_add(value.request_id().len())
 }
-/// The grant's identity text; an owner holds no text of its own.
+/// Variable identity text held by an initiator.
 fn initiator(value: &Initiator) -> usize {
     match value {
         Initiator::Owner => 0,
         Initiator::Grant(grant) => grant.grant().len(),
+        Initiator::Agent(source) => source.payload_bytes(),
     }
 }
 fn initiation(value: &Initiation) -> usize {
@@ -101,7 +102,7 @@ pub(super) fn handoff(record: &HandoffRecord) -> usize {
             .as_str()
             .len()
             .saturating_add(std::mem::size_of_val(history.turns()))
-            .saturating_add(history.text_bytes()),
+            .saturating_add(history.payload_bytes()),
     };
     record
         .id
@@ -349,6 +350,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         .saturating_add(match message.sender() {
             MessageSender::Person | MessageSender::Internal => 0,
             MessageSender::App(app) => app.payload_bytes(),
+            MessageSender::Agent(source) => source.payload_bytes(),
         })
         .saturating_add(std::mem::size_of_val(message.app_model_context()))
         .saturating_add(

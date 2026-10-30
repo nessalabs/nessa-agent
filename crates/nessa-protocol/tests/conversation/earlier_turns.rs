@@ -284,6 +284,11 @@ fn a_forks_copied_turns_come_with_the_page_that_reaches_the_start() {
     };
     use nessa_sdk::domain::agent_execution::prompts::{CarriedHistory, CarriedTurn};
     use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    let origin = nessa_sdk::domain::agent_execution::executions::AgentSource::new(
+        "8b547a4b-6974-49a4-b878-d13a9c031f16",
+        ExecutionId::new("source-turn").unwrap(),
+    )
+    .unwrap();
     let replies: Vec<String> = (0..30).map(|index| format!("reply {index}")).collect();
     let mut snapshot = chat(&replies);
     let actor = ActionContext::new("person", "desktop", "fork").unwrap();
@@ -292,7 +297,9 @@ fn a_forks_copied_turns_come_with_the_page_that_reaches_the_start() {
         kind: HandoffKind::Fork {
             source: SessionId::new("source").unwrap(),
             history: CarriedHistory::new(
-                vec![CarriedTurn::new(Some("plot May"), Some("done")).unwrap()],
+                vec![
+                    CarriedTurn::new(Some("plot May"), Some("done"), Some(origin.clone())).unwrap(),
+                ],
                 0,
             )
             .unwrap(),
@@ -313,6 +320,7 @@ fn a_forks_copied_turns_come_with_the_page_that_reaches_the_start() {
     assert_eq!(first.messages[0].execution_id, "turn-0");
     assert_eq!(first.handoffs.len(), 1);
     assert_eq!(first.handoffs[0].turns.len(), 1);
+    assert_eq!(first.handoffs[0].turns[0].agent, Some((&origin).into()));
 }
 
 /// A view with no turn has nothing to read before: copied turns too long for
@@ -334,6 +342,7 @@ fn a_fork_with_no_turn_after_it_counts_what_it_leaves_out() {
         to: None,
         turns: (0..3)
             .map(|_| ConversationCarriedTurn {
+                agent: None,
                 said: Some("s".repeat(1_000)),
                 reply: Some("r".repeat(1_000)),
             })
@@ -362,6 +371,7 @@ fn a_queued_turn_that_gives_way_is_not_earlier() {
         files: Vec::new(),
         uploads: Vec::new(),
         app: None,
+        agent: None,
         mode: ConversationPendingMode::Queued,
     });
     let size = serde_json::to_vec(&view).unwrap().len();
