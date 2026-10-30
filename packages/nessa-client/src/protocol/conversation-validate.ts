@@ -1329,7 +1329,8 @@ function conversationHandoff(item: Record<string, unknown>): string {
   if (item.turns !== undefined) {
     if (switched) throw new Error("Invalid conversation handoff turns")
     for (const turn of items(item, "turns", 256)) {
-      exact(turn, ["said", "reply"])
+      exact(turn, ["said", "reply", "agent"])
+      agentSourceKey(turn.agent, "carried input agent")
       for (const key of ["said", "reply"])
         if (turn[key] !== undefined) text(turn, key, 8192, false)
     }

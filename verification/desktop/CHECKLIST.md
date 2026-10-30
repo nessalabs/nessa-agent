@@ -34,7 +34,9 @@ Opt-in. Not part of `run-all`. The contract is
 - [ ] **An agent-authored thread report names its agent and keeps that origin.**
   The saved report source matches the child conversation and watched turn, and
   the window shows “Agent report from” with the child's chat pill. An ordinary
-  message that imitates the report heading cannot acquire that line.
+  message that imitates the report heading cannot acquire that line. Forking
+  through the session row keeps the source in the saved copy, report pill and
+  first model's carried history.
   _Check:_ `conversation-stress.mjs` (`delegate`) and
   `src/desktop/workspace/ui/transcript/chat-pill.test.tsx`.
 

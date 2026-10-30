@@ -453,6 +453,7 @@ export function transcriptFrom(
           role: "user",
           at: seen(id),
           parts: [{ kind: "text", text: turn.said }],
+          agent: turn.agent,
         })
       }
       if (turn.reply !== undefined) {

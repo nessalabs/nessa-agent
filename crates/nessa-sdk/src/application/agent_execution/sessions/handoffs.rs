@@ -29,7 +29,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{ExecutionId, MessageKind},
-    prompts::{CarriedHistory, CarriedTurn},
+    prompts::{CarriedHistory, CarriedTurn, MessageSender},
     sessions::SessionId,
 };
 use sha2::{Digest, Sha256};
@@ -203,7 +203,7 @@ pub(crate) fn history_before(snapshot: &SessionSnapshot, index: usize) -> Carrie
     CarriedHistory::newest(omitted, turns)
 }
 
-/// One saved turn as it is carried: the person's text, and the text after the
+/// One saved turn as it is carried: input text and its origin, and the text after the
 /// turn's last tool step, its final answer.
 fn carried_turn(record: &InvocationRecord) -> Option<CarriedTurn> {
     let mut reply = String::new();
@@ -222,6 +222,10 @@ fn carried_turn(record: &InvocationRecord) -> Option<CarriedTurn> {
     CarriedTurn::clipped(
         record.request.user_message.text().map(|text| text.as_str()),
         Some(&reply),
+        match record.request.user_message.sender() {
+            MessageSender::Agent(source) => Some(source.clone()),
+            _ => None,
+        },
     )
 }
 

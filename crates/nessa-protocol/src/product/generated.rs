@@ -3172,6 +3172,8 @@ pub struct ConversationHandoffAgent {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationCarriedTurn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply: Option<String>,

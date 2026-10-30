@@ -102,7 +102,7 @@ pub(super) fn handoff(record: &HandoffRecord) -> usize {
             .as_str()
             .len()
             .saturating_add(std::mem::size_of_val(history.turns()))
-            .saturating_add(history.text_bytes()),
+            .saturating_add(history.payload_bytes()),
     };
     record
         .id

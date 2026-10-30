@@ -174,6 +174,7 @@ the message text.
 | Agent steering arrives while a person-initiated target turn runs | The agent input waits for its own turn, even when native steering is available | It cannot inject calls into a turn with the person's authority |
 | Verified source leaves a passive note | Agent(source conversation, source execution); record only | Same request and text returns the same note; no turn or report begins |
 | An accepted agent note is waiting when a person starts the next turn | The note retains its agent author and can be carried into the turn | No grant read or owner attribution is needed for this admitted note |
+| A person forks an agent-authored chat or switches its provider | Copied input retains its typed agent source through save/restore, model history and transcript | The source remains origin only; the new turn uses its own admitted authority |
 | Watched child turn settles and its report is delivered | Agent(child conversation, watched execution); queue once in parent | A restored delivery reads the parent's saved execution before retrying |
 | Target access is refused before submission | No target turn or note | An earlier saved target receipt remains the authority for an exact retry |
 | Public input admission, incremental save or full restore receives disagreeing sender and initiation origins | Reject before accepting or appending the input | Prior committed history remains unchanged; encoding must not repair the sender |

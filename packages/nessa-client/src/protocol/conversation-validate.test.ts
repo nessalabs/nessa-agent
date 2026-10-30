@@ -214,7 +214,17 @@ describe("conversation view agreement", () => {
       handoffId: "h-fork",
       kind: "fork",
       atMs: 5,
-      turns: [{ said: "Plan a trip", reply: "Lisbon" }, {}],
+      turns: [
+        {
+          said: "Plan a trip",
+          reply: "Lisbon",
+          agent: {
+            conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16",
+            executionId: "source-turn",
+          },
+        },
+        {},
+      ],
       omittedTurns: 3,
     }
     expect(
@@ -243,6 +253,21 @@ describe("conversation view agreement", () => {
       { ...forked, omittedTurns: -1 },
       { ...forked, omittedTurns: 1.5 },
       { ...forked, turns: [{ said: "" }] },
+      {
+        ...forked,
+        turns: [
+          { said: "agent", agent: { conversationId: "not-a-uuid", executionId: "e" } },
+        ],
+      },
+      {
+        ...forked,
+        turns: [
+          {
+            said: "agent",
+            agent: { conversationId: "8b547a4b-6974-49a4-b878-d13a9c031f16" },
+          },
+        ],
+      },
       { ...forked, extra: true },
     ])
       expect(() =>

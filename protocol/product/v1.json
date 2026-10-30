@@ -7095,6 +7095,7 @@
       "additionalProperties": false,
       "description": "One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only.",
       "properties": {
+        "agent": { "$ref": "#/$defs/ConversationAgentSource" },
         "said": {
           "type": "string",
           "minLength": 1,

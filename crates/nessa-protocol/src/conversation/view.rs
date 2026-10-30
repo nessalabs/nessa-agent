@@ -15,6 +15,7 @@ use nessa_sdk::{
         },
     },
     domain::agent_execution::{
+        executions::AgentSource,
         permissions::PermissionEffect,
         prompts::{ImageReference, LinkedFile, MessageSender, UserMessage},
     },
@@ -401,11 +402,16 @@ impl ConversationAgentSource {
     /// Read an agent message's origin from the SDK's saved sender.
     pub fn of(message: &UserMessage) -> Option<Self> {
         match message.sender() {
-            MessageSender::Agent(source) => Some(Self {
-                conversation_id: source.conversation().into(),
-                execution_id: source.execution().as_str().into(),
-            }),
+            MessageSender::Agent(source) => Some(source.into()),
             _ => None,
+        }
+    }
+}
+impl From<&AgentSource> for ConversationAgentSource {
+    fn from(source: &AgentSource) -> Self {
+        Self {
+            conversation_id: source.conversation().into(),
+            execution_id: source.execution().as_str().into(),
         }
     }
 }
@@ -1183,10 +1189,7 @@ impl ConversationNote {
                 surface: note.actor.surface_id().into(),
                 agent: match &note.author {
                     nessa_sdk::domain::agent_execution::executions::Initiator::Agent(source) => {
-                        Some(ConversationAgentSource {
-                            conversation_id: source.conversation().into(),
-                            execution_id: source.execution().as_str().into(),
-                        })
+                        Some(source.into())
                     }
                     _ => None,
                 },
@@ -1269,6 +1272,7 @@ impl ConversationHandoff {
                     .turns()
                     .iter()
                     .map(|turn| ConversationCarriedTurn {
+                        agent: turn.agent_source().map(Into::into),
                         said: turn.said().map(Into::into),
                         reply: turn.reply().map(Into::into),
                     })
@@ -1311,6 +1315,9 @@ pub struct ConversationHandoffAgent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationCarriedTurn {
+    /// Verified author of the copied input, when an agent wrote it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<ConversationAgentSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

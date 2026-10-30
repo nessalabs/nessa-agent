@@ -506,7 +506,14 @@ describe("a conversation view as a transcript", () => {
             handoffId: "fork",
             kind: "fork",
             atMs: 1,
-            turns: [{ said: "Plan a trip", reply: "Lisbon" }, { reply: "Only a reply" }],
+            turns: [
+              {
+                said: "Plan a trip",
+                reply: "Lisbon",
+                agent: { conversationId: "source-chat", executionId: "source-turn" },
+              },
+              { reply: "Only a reply" },
+            ],
             omittedTurns: 2,
           },
           {
@@ -532,6 +539,10 @@ describe("a conversation view as a transcript", () => {
       at,
       GATEWAY_NOW_MS,
     )
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      agent: { conversationId: "source-chat", executionId: "source-turn" },
+    })
     expect(transcript.messages.map((message) => [message.id, message.role])).toEqual([
       [`${handoffId("fork")}/0`, "user"],
       [`${handoffId("fork")}/0/reply`, "agent"],

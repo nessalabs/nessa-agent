@@ -2946,6 +2946,7 @@ export interface ConversationHandoffAgent {
 }
 /** One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only. */
 export interface ConversationCarriedTurn {
+  agent?: ConversationAgentSource
   /** What was said in the turn, when it said anything in text. */
   said?: string
   /** The agent's final reply, when it gave one. */
