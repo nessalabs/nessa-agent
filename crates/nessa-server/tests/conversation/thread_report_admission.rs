@@ -69,6 +69,14 @@ async fn report_authorship_matches_exact_agent_origin_and_preserves_legacy_perso
             .any(|(_, turn)| turn == &pending.report.execution),
         "a genuine person-command collision remains excluded from report Stop capture"
     );
+    let deliveries = report_deliveries(&pending.report.execution, history, |record| {
+        is_report_record(&pending, record)
+    });
+    assert_eq!(deliveries.len(), 1);
+    assert!(
+        deliveries[0].contains_person_command(&people),
+        "the same receipt also excludes legacy Person acknowledgement during delivery"
+    );
     for (conversation, execution, expected) in [
         (pending.child.to_string(), pending.execution.clone(), true),
         (

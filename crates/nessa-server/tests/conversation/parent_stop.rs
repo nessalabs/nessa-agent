@@ -85,7 +85,7 @@ fn source(parent: &ConversationId, execution: &str, request: &str) -> AgentToolS
     AgentToolSource {
         caller: caller(request),
         source: parent.clone(),
-        execution: execution.into(),
+        execution: ExecutionId::new(execution).unwrap(),
     }
 }
 async fn child(
@@ -1861,7 +1861,7 @@ async fn accepted_parent_stops_recover_each_targets_organization_for_one_princip
                 AgentToolSource {
                     caller: recovery_caller_in_org(org, &format!("create-child-{org}")),
                     source: parent.clone(),
-                    execution: parent_execution.clone(),
+                    execution: ExecutionId::new(parent_execution.clone()).unwrap(),
                 },
                 child.clone(),
                 RequestedConversation::default(),
@@ -3509,12 +3509,18 @@ async fn parent_stop_captures_an_active_report_after_a_conflicting_person_submit
     restored_report_successor(true, Some(ReportPersonCommand::RejectedCurrent)).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_person_cannot_reauthor_a_typed_report_by_replaying_its_actor_and_text() {
+    restored_report_successor(false, Some(ReportPersonCommand::RejectedOrigin)).await;
+}
+
 #[derive(Clone, Copy)]
 enum ReportPersonCommand {
     Original,
     Intermediate,
     Current,
     RejectedCurrent,
+    RejectedOrigin,
 }
 
 async fn acknowledge_report_delivery(
@@ -3533,6 +3539,11 @@ async fn acknowledge_report_delivery(
         .iter()
         .find(|record| record.request.execution_id.as_str() == execution)
         .unwrap();
+    assert_eq!(
+        record.request.user_message.sender(),
+        &MessageSender::Person,
+        "person-command promotion applies only to explicit legacy Person history"
+    );
     let mut person = caller("report-action");
     person.surface_id = record.actor.surface_id().into();
     person.action_id = record.actor.request_id().into();
@@ -3583,24 +3594,69 @@ async fn restored_report_successor(active: bool, person_command: Option<ReportPe
         let (service, storage, metadata) = fixture(&root, provider.clone());
         bind(&service, &storage, &root, true).await;
         let reports = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
-        service.bind_thread_reports(reports);
+        service.bind_thread_reports(reports.clone());
         opened(&service, &provider, &parent).await;
         let p = hold_turn(&service, &provider, &parent, "before-restart").await;
         let child_id = child(&service, &parent, "before-restart", "create-reporter").await;
         let c = hold_turn(&service, &provider, &child_id, "child").await;
-        service
-            .report_thread_turn(
-                child_id.clone(),
-                "child".into(),
-                ThreadReport {
-                    parent: parent.clone(),
-                    caller: caller("report-action"),
-                    execution: "restored-report".into(),
-                },
-            )
-            .await;
-        c.send(()).unwrap();
-        service.look_for_reports(child_id, false).await;
+        let report = ThreadReport {
+            parent: parent.clone(),
+            caller: caller("report-action"),
+            execution: "restored-report".into(),
+        };
+        if command_collision {
+            // Persist the old gateway's Person-shaped report, without a
+            // canonical person-command receipt. New Agent reports cannot be
+            // re-authored as Person merely by replaying their identity/text.
+            reports
+                .save(&PendingReport {
+                    child: child_id.clone(),
+                    execution: "child".into(),
+                    report: report.clone(),
+                })
+                .await
+                .unwrap();
+            service.submit_as(
+                parent.clone(),
+                report.caller.clone(),
+                report.execution.clone(),
+                message(&format!("[Thread report] Thread {child_id} finished the turn you sent it (execution child): completed.\n\nIt gave no reply text.")),
+                SubmissionMode::Queue,
+                Writer::Person(Initiation::owner(), false),
+            ).await.unwrap();
+            c.send(()).unwrap();
+            tokio::time::timeout(TURN_HOLD_HANG, async {
+                loop {
+                    match service
+                        .thread_turn_end(&child_id, &caller("inspect-child"), "child")
+                        .await
+                    {
+                        crate::conversation::application::ThreadTurn::Unfinished => {
+                            tokio::task::yield_now().await
+                        }
+                        ended => {
+                            assert_eq!(
+                                ended,
+                                crate::conversation::application::ThreadTurn::Ended(
+                                    "completed",
+                                    None
+                                ),
+                                "legacy fixture represents the real child's exact result"
+                            );
+                            break;
+                        }
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        } else {
+            service
+                .report_thread_turn(child_id.clone(), "child".into(), report)
+                .await;
+            c.send(()).unwrap();
+            service.look_for_reports(child_id, false).await;
+        }
         let live = service.resolve(&parent, &caller("read")).await.unwrap();
         tokio::time::timeout(TURN_HOLD_HANG, async {
             while !live
@@ -3741,16 +3797,39 @@ async fn restored_report_successor(active: bool, person_command: Option<ReportPe
     if matches!(person_command, Some(ReportPersonCommand::Current)) {
         acknowledge_report_delivery(&service, &storage, &parent, next.as_str()).await;
     }
-    if matches!(person_command, Some(ReportPersonCommand::RejectedCurrent)) {
+    if matches!(
+        person_command,
+        Some(ReportPersonCommand::RejectedCurrent | ReportPersonCommand::RejectedOrigin)
+    ) {
+        let mut conflicting = caller("conflicting-person");
+        let text = if matches!(person_command, Some(ReportPersonCommand::RejectedOrigin)) {
+            let history = live.agent.session_manager().snapshot().await.unwrap();
+            let record = history
+                .invocations
+                .iter()
+                .find(|record| record.request.execution_id == next)
+                .unwrap();
+            assert!(matches!(
+                record.request.user_message.sender(),
+                MessageSender::Agent(_)
+            ));
+            conflicting.surface_id = record.actor.surface_id().into();
+            conflicting.action_id = record.actor.request_id().into();
+            assert_eq!(conflicting.actor().unwrap(), record.actor);
+            record.request.user_message.text_str().to_owned()
+        } else {
+            "different person input".into()
+        };
+        let rejected_actor = conflicting.actor().unwrap();
         let refused = service
             .submit_command(
                 storage.clone(),
                 parent.clone(),
-                caller("conflicting-person"),
+                conflicting,
                 Initiation::owner(),
                 false,
                 next.as_str().into(),
-                message("different person input"),
+                message(&text),
                 SubmissionMode::Queue,
             )
             .await;
@@ -3765,7 +3844,11 @@ async fn restored_report_successor(active: bool, person_command: Option<ReportPe
             .unwrap();
         let rejected = receipts
             .iter()
-            .find(|receipt| receipt.binding().actor().request_id() == "conflicting-person")
+            .find(|receipt| {
+                receipt.binding().actor() == &rejected_actor
+                    && receipt.binding().turn_id() == &next
+                    && receipt.binding().operation() == MutationOperation::Submit
+            })
             .unwrap();
         assert_eq!(rejected.stage(), commands::MutationStage::Attempted);
         assert_eq!(rejected.outcome(), None);

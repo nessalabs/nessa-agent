@@ -286,6 +286,19 @@ remote environment, retains the ordinary channel start owner's no-channel choice
 
 ## Service admission order
 
+Report capture and delivery preserve the typed author independently of the
+original receipt actor. Their shared source predicate and canonical-command
+exclusion distinguish these cases:
+
+| Existing delivery | Required interpretation | Regression |
+| --- | --- | --- |
+| Exact child and watched execution, matching actor and payload | Typed agent report; retain its admission guard through supervised queue acknowledgement | `report_authorship_matches_exact_agent_origin_and_preserves_legacy_person_records`, registry admission tests |
+| Another typed child or execution under matching report text | Not this report's delivery or acknowledgement | author matrix above |
+| Legacy Person-shaped report with no canonical person command | Preserve old report history and its canonical successors | explicit legacy fixtures in the restored-report tests |
+| A canonical person command anywhere in the delivery chain | Person work; neither Stop capture nor delivery acknowledgement may adopt it as a report | legacy collision and author-matrix tests |
+| Legacy receipt evidence cannot be read | Retain the obligation and retry; unknown history cannot acknowledge or replace it | registry unavailable-evidence tests |
+| A person replays a new Agent report's exact actor, identity and text | Refuse re-authorship; the typed report remains eligible for its real Stop | `a_person_cannot_reauthor_a_typed_report_by_replaying_its_actor_and_text` |
+
 Commands that serialize owned-thread work acquire the existing thread-admission
 mutex before shared service admission. An export takes exclusive service
 admission. Recovery and recursive Stop use the same order as submission,

@@ -372,6 +372,11 @@ async fn unavailable_stop_receipts_cannot_acknowledge_a_declined_failed_report()
             input(text),
             SubmissionMode::Queue,
             Writer::ThreadReport {
+                source: AgentSource::new(
+                    child.to_string(),
+                    ExecutionId::new("child-work").unwrap(),
+                )
+                .unwrap(),
                 _admission: admission,
             },
         )

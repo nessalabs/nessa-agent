@@ -42,6 +42,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::executions::{
     AgentSource, ExecutionId, ExecutionOutcome, InvocationStage, MessageKind, Resumption,
 };
+use nessa_sdk::domain::agent_execution::prompts::MessageSender;
 use std::{
     collections::{HashMap, HashSet},
     sync::{
@@ -982,7 +983,30 @@ impl ConversationService {
                 return;
             }
             let admission = Arc::new(self.inner.thread_admission.clone().lock_owned().await);
-            let history = self.report_history(&report.parent, &report.caller).await;
+            let mut history = self.report_history(&report.parent, &report.caller).await;
+            // Old reports were saved as Person. A matching public person
+            // command is still the person's work, not report acknowledgement.
+            // Uncertain receipts use the existing unreadable-history retry.
+            let people = if history.as_ref().is_some_and(|history| {
+                history.iter().any(|record| {
+                    record.request.user_message.sender() == &MessageSender::Person
+                        && super::thread_report_admission::is_report_record(&pending, record)
+                        && record.request.user_message.text_str() == text
+                })
+            }) {
+                match self
+                    .person_turns(&report.parent, &report.caller, history.as_ref().unwrap())
+                    .await
+                {
+                    Ok(people) => people,
+                    Err(_) => {
+                        history = None;
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
             let stopped = self
                 .stopped_report_executions(&report.parent, &report.caller)
                 .await
@@ -1014,6 +1038,11 @@ impl ConversationService {
                     },
                 )
                 .into_iter()
+                .filter(|delivery| {
+                    let person = delivery.contains_person_command(&people);
+                    previously_cancelled |= person;
+                    !person
+                })
                 .map(|delivery| delivery.current().clone())
                 .collect();
                 for record in history

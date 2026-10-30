@@ -943,7 +943,8 @@ async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
         let source = |action| AgentToolSource {
             caller: caller("person", action),
             source: parent.clone(),
-            execution: "active".into(),
+            execution: nessa_sdk::domain::agent_execution::executions::ExecutionId::new("active")
+                .unwrap(),
         };
         let child = new_id();
         let original = fixture

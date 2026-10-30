@@ -46,6 +46,11 @@ impl ReportDelivery {
     pub(super) fn execution_ids(&self) -> impl Iterator<Item = &ExecutionId> {
         std::iter::once(&self.original).chain(self.successors.iter())
     }
+
+    pub(super) fn contains_person_command(&self, people: &[(usize, String)]) -> bool {
+        self.execution_ids()
+            .any(|id| people.iter().any(|(_, person)| person == id.as_str()))
+    }
 }
 
 /// Iterate continuations established by the SDK's canonical admission owner.
@@ -117,8 +122,9 @@ pub(super) fn report_deliveries(
     }
     deliveries
 }
-/// Both durable source binding and saved submission identify a report. A
-/// caller-chosen execution ID alone cannot confer ownership over queued work.
+/// Candidate source and payload identity. Before capture or acknowledgement,
+/// exclude canonical person-command chains with `contains_person_command`.
+/// A caller-chosen execution ID alone cannot confer report ownership.
 pub(super) fn is_report_record(
     pending: &super::thread_reports::PendingReport,
     record: &InvocationRecord,
@@ -260,6 +266,7 @@ impl ConversationService {
                 record.request.execution_id.as_str(),
                 &message,
                 mode,
+                None,
             )?;
             if let Some(index) = receipts.iter().position(|receipt| {
                 receipt.binding().operation() == MutationOperation::Submit

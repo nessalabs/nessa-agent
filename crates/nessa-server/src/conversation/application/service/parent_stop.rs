@@ -349,16 +349,13 @@ impl ConversationService {
                     .await
                     .map_err(MutationFailure::Target)?;
                 for report in pending.into_iter().filter(|row| row.report.parent == *id) {
-                    let is_command = |turn: &ExecutionId| {
-                        people.iter().any(|(_, person)| person == turn.as_str())
-                    };
                     let deliveries = super::thread_report_admission::report_deliveries(
                         &report.report.execution,
                         &history.invocations,
                         |record| super::thread_report_admission::is_report_record(&report, record),
                     );
                     for delivery in deliveries {
-                        if delivery.execution_ids().any(&is_command) {
+                        if delivery.contains_person_command(&people) {
                             continue;
                         }
                         let turn = delivery.current();
