@@ -239,10 +239,12 @@ export function AddComputer({
     while (turned.ok && !listens && mounted.current && Date.now() < deadline) {
       await new Promise((resolve) => window.setTimeout(resolve, REACH_READ_MS))
       const read = await gateway.list()
+      // Listening, and not on the address the change moves: the hub that
+      // answers has started again with it.
       listens =
         read.ok &&
         read.value.listening !== undefined &&
-        !onlyThisMachine(read.value.listening)
+        read.value.listening !== SUPERSEDED_LISTEN
     }
     if (!mounted.current) return
     if (!listens) return setReach("failed")

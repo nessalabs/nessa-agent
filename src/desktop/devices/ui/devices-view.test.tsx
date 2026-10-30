@@ -337,6 +337,28 @@ it("lets other computers reach a hub with linking off, then makes a new code", a
   await act(async () => root.unmount())
 })
 
+it("turns linking on at a loopback address chosen by hand, then says to change it", async () => {
+  let listening: string | undefined
+  const { gateway, calls } = fakeGateway({
+    list: async () => ({ ok: true, value: { ...listed, listening } }),
+  })
+  const { host, root } = await mount(gateway)
+  await act(async () =>
+    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
+  )
+  await act(async () => {})
+  await act(async () =>
+    (host.querySelector('[data-devices-action="reach"]') as HTMLElement).click(),
+  )
+  listening = "127.0.0.1:47700"
+  await act(async () => vi.advanceTimersByTime(1_000))
+  for (let i = 0; i < 3; i += 1) await act(async () => {})
+  expect(calls.filter((call) => call === "pair")).toHaveLength(2)
+  expect(host.querySelector('[data-devices-action="reach"]')).toBeNull()
+  expect(text(host, "[data-devices-loopback]")).toContain("127.0.0.1:47700")
+  await act(async () => root.unmount())
+})
+
 it("says so when the hub does not start listening for others", async () => {
   const { gateway } = fakeGateway({
     list: async () => ({ ok: true, value: { ...listed, listening: undefined } }),

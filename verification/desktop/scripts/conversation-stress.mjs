@@ -3217,13 +3217,9 @@ const steps = {
   },
 
   async devices(run, step, failures) {
-    // A worker dials the native listener, off until a step turns it on.
-    const linked = await run.exclusive(async () => {
-      await openLinkedDevices(run.page)
-      const on = await switchLinking(run, true, failures)
-      if (on) await closeSettings(run.page)
-      return on
-    })
+    // A worker dials the native listener, off until a step turns it on:
+    // here Add a computer does, as a person with linking off would.
+    const linked = await run.exclusive(() => reachFromDevices(run, failures))
     if (!linked) return
     // With evidence asked for, each page is photographed as it is checked.
     const photograph = (label) =>
@@ -3261,8 +3257,27 @@ const steps = {
         failures.push(`devices.list never named ${worker.name} online with its machine`)
         return
       }
-      if (!(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0))
+      if (
+        !(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0) ||
+        !listed.machine.disks?.length ||
+        listed.machine.diskTotalBytes !==
+          Math.min(
+            Number.MAX_SAFE_INTEGER,
+            listed.machine.disks.reduce((sum, disk) => sum + disk.totalBytes, 0),
+          )
+      )
         failures.push(`the worker reported ${JSON.stringify(listed.machine)}`)
+      // Each page follows the last; together they name the worker once.
+      const pages = []
+      for (let after; pages.length < 1_024; ) {
+        const page = await run.client.devices.list(after)
+        pages.push(page)
+        if (!page.next) break
+        after = page.next
+      }
+      const named = pages.flatMap((page) => page.workers).map((each) => each.environment)
+      if (named.filter((name) => name === worker.name).length !== 1)
+        failures.push(`devices.list pages name the worker ${JSON.stringify(named)}`)
       await run.exclusive(async () => {
         const page = run.page
         await setSideRail(page, true, failures)
@@ -3314,6 +3329,15 @@ const steps = {
         for (const stat of ["Agents", "CPU", "Memory", "Disk"])
           if ((await detail.locator(`[data-devices-stat="${stat}"]`).count()) !== 1)
             failures.push(`the worker's page has no ${stat}`)
+        const volumes = await detail
+          .locator("[data-devices-disks] .devices-stat-label")
+          .allInnerTexts()
+        const reported = listed.machine.disks.map((disk) => disk.mount)
+        if (
+          JSON.stringify(volumes) !==
+          JSON.stringify(reported.length > 1 ? reported : [])
+        )
+          failures.push(`the worker's page names disks ${JSON.stringify(volumes)}`)
         if ((await detail.innerText()).includes("Running here"))
           failures.push("the worker's page lists what runs there")
         await photograph("worker")
@@ -6375,6 +6399,63 @@ async function pairFromWindow(run, failures) {
     .waitFor({ timeout: 10_000 })
     .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
+}
+
+/**
+ * Turns native linking on from Devices › Add a computer, with linking off:
+ * its "Let other computers reach it" button, which starts the gateway again
+ * in the same process. The page then makes a code, the button is gone, the
+ * run's client is connected again, and config.json holds linking on. Leaves
+ * the side rail closed. Called with nothing else in flight
+ * (`run.exclusive`).
+ */
+async function reachFromDevices(run, failures) {
+  const gateway = run.stack.gateway
+  const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+  const pid = gateway.server.pid
+  const page = run.page
+  await setSideRail(page, true, failures)
+  if (failures.length) return false
+  await page.locator('[data-rail-item="devices"]').click()
+  await page.locator('[data-devices-action="add"]').click()
+  const add = page.locator('[data-devices-page="add"]')
+  const reach = add.locator('[data-devices-action="reach"]')
+  if (!(await waitFor(async () => (await reach.count()) === 1, 10_000))) {
+    failures.push("Add a computer offers no way to let others reach the hub")
+    return false
+  }
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await reach.click()
+    const made = await waitFor(
+      async () =>
+        (await reach.count()) === 0 &&
+        (await add.locator("[data-devices-command]").count()) === 2,
+      60_000,
+    )
+    if (!made)
+      failures.push(
+        `after reaching, Add a computer reads ${JSON.stringify(await add.innerText())}`,
+      )
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const saved = JSON.parse(readFileSync(config, "utf8")).native
+    if (saved?.enabled === false || saved?.listenAddress !== run.nativeListen)
+      failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+    const { listening } = await run.client.devices.list()
+    if (listening === undefined) failures.push("devices.list names no listener")
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  await add.locator('[data-devices-action="back"]').click()
+  await page.locator('[data-rail-item="agents"]').click()
+  await setSideRail(page, false, failures)
+  return held
 }
 
 /**
