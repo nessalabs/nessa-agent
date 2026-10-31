@@ -44,6 +44,10 @@ export const KNOBS = {
   turns: { default: 3, what: "turns each background conversation takes" },
   switches: { default: 3, what: "access mode changes from the composer's shield" },
   stops: { default: 2, what: "turns stopped with the composer's Stop" },
+  parentstops: {
+    default: 1,
+    what: "parent turns stopped in the window with running owned child and grandchild",
+  },
   fails: { default: 1, what: "turns that fail, each followed by another message" },
   usageLimits: {
     default: 1,
@@ -229,7 +233,9 @@ const MODES = ["ask", "auto", "full"]
  * The many-reviews and large-review turns are about cards being shown, so a
  * switch back to ask comes first when full access is in force.
  */
-export function plan(knobs) {
+export function plan(knobs, accessScenario = "full") {
+  if (!["full", "ask-only"].includes(accessScenario))
+    throw new Error(`unknown stress access scenario: ${accessScenario}`)
   const next = random(knobs.seed)
   const pick = (list) => list[Math.floor(next() * list.length)]
   const steps = []
@@ -237,6 +243,7 @@ export function plan(knobs) {
     for (let i = 0; i < count; i += 1) steps.push(make())
   }
   add(knobs.stops, () => ({ kind: "stop" }))
+  add(knobs.parentstops, () => ({ kind: "parent-stop" }))
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
@@ -300,8 +307,13 @@ export function plan(knobs) {
   for (const step of sequence) {
     if (step.kind === "switch") {
       const to = pick(MODES.filter((each) => each !== mode))
-      out.push({ kind: "switch", from: mode, to, during: next() < 0.5 })
-      mode = to
+      const during = next() < 0.5
+      if (accessScenario === "ask-only")
+        out.push({ kind: "refused-access", from: mode, to: "full", during })
+      else {
+        out.push({ kind: "switch", from: mode, to, during })
+        mode = to
+      }
     } else if (step.kind === "permission") {
       out.push({ ...step, answer: next() < 0.7 ? "allow" : "deny", mode })
     } else if (
@@ -340,7 +352,7 @@ export function describe(steps) {
   return steps
     .map((step) => {
       const extra =
-        step.kind === "switch"
+        step.kind === "switch" || step.kind === "refused-access"
           ? ` ${step.from}→${step.to}${step.during ? " during a turn" : ""}`
           : step.kind === "restart"
             ? ` ${step.signal}`

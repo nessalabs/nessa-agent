@@ -27,6 +27,7 @@ use nessa_sdk::application::agent_execution::{
     },
     sessions::{SessionSnapshot, SessionStorage, StorageError},
 };
+use nessa_sdk::domain::agent_execution::subagents::TaskDigest;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -1524,11 +1525,139 @@ struct GateReady {
     storage: Arc<RecordStorage>,
     started: Arc<Notify>,
     gate: Arc<AsyncMutex<Option<oneshot::Receiver<()>>>>,
+    stage: CreationStage,
+}
+
+#[tokio::test]
+async fn child_creation_refuses_an_ordinary_create_between_check_and_initialize() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&directory.path().join("data"), provider.clone());
+    let target = id();
+    let started = Arc::new(Notify::new());
+    let (release, gate) = oneshot::channel();
+    let gated = Arc::new(GateReady {
+        storage: storage.clone(),
+        started: started.clone(),
+        gate: Arc::new(AsyncMutex::new(Some(gate))),
+        stage: CreationStage::Attempted,
+    });
+    let task = tokio::spawn({
+        let service = service.clone();
+        let target = target.clone();
+        async move {
+            service
+                .create_child_command(
+                    gated,
+                    target,
+                    caller("child-request"),
+                    RequestedConversation::default(),
+                    TaskDigest::new("a".repeat(64)).unwrap(),
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(CREATION_HANG, started.notified())
+        .await
+        .unwrap();
+    service
+        .create(
+            target.clone(),
+            caller("child-request"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    original_live(&service, &target)
+        .await
+        .join_attachment_owner()
+        .await
+        .unwrap();
+    let original = metadata.load(&target).await.unwrap().unwrap();
+    release.send(()).unwrap();
+    assert!(matches!(
+        task.await.unwrap(),
+        Err(CreationFailure::Target(
+            ConversationError::ChildCreationRefused(_)
+        ))
+    ));
+    assert_eq!(metadata.load(&target).await.unwrap().unwrap(), original);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+
+    assert!(
+        matches!(
+            service
+                .has_child_creation_receipt(
+                    storage.clone(),
+                    &target,
+                    &caller("child-request"),
+                    &TaskDigest::new("a".repeat(64)).unwrap()
+                )
+                .await,
+            Err(ConversationError::Unavailable)
+        ),
+        "Attempted plus matching ordinary metadata is unconfirmed after restart"
+    );
+
+    let fresh = id();
+    let ready = service
+        .create_child_command(
+            storage.clone(),
+            fresh.clone(),
+            caller("fresh-child"),
+            RequestedConversation::default(),
+            TaskDigest::new("a".repeat(64)).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .create_child_command(
+                storage.clone(),
+                fresh,
+                caller("fresh-child"),
+                RequestedConversation::default(),
+                TaskDigest::new("a".repeat(64)).unwrap(),
+            )
+            .await
+            .unwrap(),
+        ready
+    );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    let ordinary = id();
+    service
+        .create_command(
+            storage.clone(),
+            ordinary.clone(),
+            caller("ordinary-ready"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            service
+                .create_child_command(
+                    storage.clone(),
+                    ordinary,
+                    caller("ordinary-ready"),
+                    RequestedConversation::default(),
+                    TaskDigest::new("a".repeat(64)).unwrap()
+                )
+                .await,
+            Err(CreationFailure::Conflict)
+        ),
+        "an ordinary Ready receipt cannot serve as child preparation evidence"
+    );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 3);
+    retire(service, storage, metadata).await;
 }
 struct GateReadyLease {
     original: Arc<dyn CreationStorageLease>,
     started: Arc<Notify>,
     gate: Arc<AsyncMutex<Option<oneshot::Receiver<()>>>>,
+    stage: CreationStage,
 }
 impl CreationStorage for GateReady {
     fn open_creation(
@@ -1547,6 +1676,7 @@ impl CreationStorage for GateReady {
                         original,
                         started: self.started.clone(),
                         gate: self.gate.clone(),
+                        stage: self.stage,
                     }) as Arc<dyn CreationStorageLease>
                 }))
         })
@@ -1558,7 +1688,7 @@ impl CreationStorageLease for GateReadyLease {
     }
     fn save(&self, receipt: CreationReceipt) -> CreationFuture<'_, ()> {
         Box::pin(async move {
-            if receipt.stage() == CreationStage::Ready {
+            if receipt.stage() == self.stage {
                 if let Some(gate) = self.gate.lock().await.take() {
                     self.started.notify_one();
                     gate.await.map_err(|_| StorageError::Closed)?;
@@ -1581,6 +1711,7 @@ async fn retirement_joins_the_original_creation_receipt_owner() {
         storage: storage.clone(),
         started: started.clone(),
         gate: Arc::new(AsyncMutex::new(Some(gate))),
+        stage: CreationStage::Ready,
     });
     let task = tokio::spawn({
         let service = service.clone();
@@ -1659,6 +1790,7 @@ fn creation_crash_child() {
             storage,
             started: started.clone(),
             gate: Arc::new(AsyncMutex::new(Some(gate))),
+            stage: CreationStage::Ready,
         });
         tokio::spawn(async move {
             service

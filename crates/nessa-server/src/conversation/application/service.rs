@@ -4,7 +4,12 @@ mod channels;
 mod creation;
 mod model_changes;
 mod mutation;
+mod opening_resources;
+mod owned_threads;
+use opening_resources::OpeningResources;
+mod parent_stop;
 mod scheduled_messages;
+mod thread_report_admission;
 mod thread_reports;
 mod workspace_windows;
 use self::mutation::SubmissionPermit;
@@ -72,8 +77,8 @@ use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
     agents::{
         AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AttachmentFailure,
-        AttachmentFailureCode, AttachmentPhase, AttachmentRequest, QueueAdmission, QueueRemoval,
-        QueueReorder, SteeringDelivery, SteeringEvidence,
+        AttachmentFailureCode, AttachmentPhase, AttachmentRequest, OwnedLifetime, QueueAdmission,
+        QueueRemoval, QueueReorder, SteeringDelivery, SteeringEvidence,
     },
     commands::{CreationStorage, CreationTaskFault},
     executions::{
@@ -98,7 +103,7 @@ use nessa_sdk::domain::agent_execution::{
         AgentSource, ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator,
         InvocationStage, MessageKind,
     },
-    leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
+    leases::{AgentWork, LeaseCleanup, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
@@ -108,7 +113,7 @@ use nessa_sdk::domain::agent_execution::{
         UserMessage,
     },
     questions::{QuestionChoice, QuestionId},
-    sessions::ExecutionSessionId,
+    sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 pub(crate) use scheduled_messages::FENCE_LEASE_MS;
@@ -658,6 +663,11 @@ pub(super) enum Writer {
     Person(Initiation, bool),
     /// A message from another turn's agent, with gateway-verified origin.
     Agent(AgentSource),
+    /// Retain report admission through its supervised queue write.
+    ThreadReport {
+        source: AgentSource,
+        _admission: Arc<OwnedMutexGuard<()>>,
+    },
     /// Durable tool outcome, delivered as ordinary model input and hidden from user-message presentation.
     Internal,
     App {
@@ -681,7 +691,9 @@ impl Writer {
     fn initiation(&self) -> Initiation {
         match self {
             Self::Person(initiation, _) => initiation.clone(),
-            Self::Agent(source) => Initiation::agent(source.clone()),
+            Self::Agent(source) | Self::ThreadReport { source, .. } => {
+                Initiation::agent(source.clone())
+            }
             Self::App { .. } | Self::Internal => Initiation::owner(),
         }
     }
@@ -694,12 +706,15 @@ impl Writer {
             Self::Agent(_) => false,
             Self::Internal => false,
             Self::App { .. } => true,
+            Self::ThreadReport { .. } => false,
         }
     }
     fn sender(&self) -> MessageSender {
         match self {
             Self::Person(_, _) => MessageSender::Person,
-            Self::Agent(source) => MessageSender::Agent(source.clone()),
+            Self::Agent(source) | Self::ThreadReport { source, .. } => {
+                MessageSender::Agent(source.clone())
+            }
             Self::Internal => MessageSender::Internal,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
@@ -722,7 +737,7 @@ impl Writer {
     fn opening_ended(&self) -> bool {
         match self {
             Self::Agent(_) => false,
-            Self::Person(_, _) | Self::Internal => false,
+            Self::Person(_, _) | Self::ThreadReport { .. } | Self::Internal => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -744,7 +759,7 @@ struct LiveConversation {
     agent: Agent,
     /// The lease its agent runs under. Every close of the agent goes through
     /// it, so the lease's end is recorded with the close.
-    lease: LiveLease,
+    lease: Arc<LiveLease>,
     /// One acknowledged model binding and its configured admission reservation.
     model_budget: Mutex<ModelBudget>,
     projection: Mutex<Projection>,
@@ -811,6 +826,9 @@ struct OpeningFailure {
     holds: bool,
 }
 struct Slot {
+    /// Completion and actual environment cleanup owner. Successful preparation
+    /// transfers the lease; failed preparation retains it until release answers.
+    acquisition: Arc<OpeningResources>,
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
     ready: Notify,
     started: AtomicBool,
@@ -830,8 +848,18 @@ struct Slot {
     touched: AtomicU64,
 }
 impl Slot {
+    // Read the actual SDK/lease owner's resource receipt for this exact Slot,
+    // independent of the close diagnostic and any replacement conversation.
+    fn resource_cleanup(&self) -> Option<LeaseCleanup> {
+        self.value
+            .get()
+            .and_then(|live| live.as_ref().ok())
+            .and_then(|live| live.lease.cleanup())
+    }
+
     fn new(now_ms: u64) -> Self {
         Self {
+            acquisition: Arc::new(OpeningResources::default()),
             value: OnceCell::new(),
             ready: Notify::new(),
             started: AtomicBool::new(false),
@@ -901,6 +929,10 @@ struct Inner {
     workspace_windows: Arc<super::WorkspaceWindows>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
+    ownership: OnceLock<owned_threads::Ownership>,
+    thread_admission: Arc<Mutex<()>>,
+    ownership_preparations: Mutex<HashMap<SessionId, owned_threads::PendingPreparation>>,
+
     background_tasks: OnceLock<Arc<background_tasks::BackgroundTasks>>,
     /// Where channels, and which conversation is in which, are kept.
     channels: channels::ChannelBinding,
@@ -1450,6 +1482,9 @@ impl ConversationService {
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
                 thread_reports: Default::default(),
+                ownership: OnceLock::new(),
+                thread_admission: Arc::new(Mutex::new(())),
+                ownership_preparations: Mutex::new(HashMap::new()),
                 background_tasks: OnceLock::new(),
                 channels: Default::default(),
                 scheduled_messages: OnceLock::new(),
@@ -1505,7 +1540,7 @@ impl ConversationService {
         supervised(async move {
             let _admission = service.admit().await?;
             service
-                .create_admitted(id, caller, requested)
+                .create_admitted(id, caller, requested, false)
                 .await
                 .map(|_| ())
         })
@@ -1518,6 +1553,7 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
         requested: RequestedConversation,
+        new_only: bool,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
         let service = self.clone();
         // Asked of every creation, not only the ones that build a
@@ -1538,7 +1574,18 @@ impl ConversationService {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
             // (`a_deleted_conversation_refuses_every_command_on_it`).
-            service.access().admit(&record, &caller)?;
+            service.access().admit(&record, &caller).map_err(|cause| {
+                if new_only {
+                    ConversationError::ChildCreationRefused(Box::new(cause.into()))
+                } else {
+                    ConversationError::from(cause)
+                }
+            })?;
+            if new_only {
+                return Err(ConversationError::ChildCreationRefused(Box::new(
+                    ConversationError::RequestConflict,
+                )));
+            }
             drop(creation_guard);
             // Acknowledge the original creation from its stored creator
             // evidence before attributing this reopen to its caller, and
@@ -1699,7 +1746,18 @@ impl ConversationService {
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
-        service.access().admit(record, &caller)?;
+        service.access().admit(record, &caller).map_err(|cause| {
+            if new_only && outcome.disposition == super::ConversationCreationDisposition::Existing {
+                ConversationError::ChildCreationRefused(Box::new(cause.into()))
+            } else {
+                ConversationError::from(cause)
+            }
+        })?;
+        if new_only && outcome.disposition == super::ConversationCreationDisposition::Existing {
+            return Err(ConversationError::ChildCreationRefused(Box::new(
+                ConversationError::RequestConflict,
+            )));
+        }
         // Created acknowledges this exact admitted proposal. Existing alone
         // retains another creator's historical evidence. The regressions are
         // `creation_created_acknowledgement_preserves_the_admitted_origin` and
@@ -1752,11 +1810,26 @@ impl ConversationService {
                 continue;
             }
             let slot = match owners.entry(id.clone()) {
+                std::collections::hash_map::Entry::Occupied(_) if new_only => {
+                    return Err(ConversationError::ChildCreationRefused(Box::new(
+                        ConversationError::RequestConflict,
+                    )));
+                }
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
+                    // Audit and admission checks already passed. From this
+                    // transfer through publication/start there is no fallible
+                    // I/O and no unowned slot can supply this preparation.
+                    let owned_preparation = if new_only {
+                        service
+                            .claim_owned_preparation(&id, &actor, slot.clone())
+                            .await?
+                    } else {
+                        None
+                    };
                     entry.insert(slot.clone());
-                    service.start_slot(id.clone(), slot.clone(), actor.clone());
+                    service.start_slot(id.clone(), slot.clone(), actor.clone(), owned_preparation);
                     slot
                 }
             };
@@ -1894,7 +1967,7 @@ impl ConversationService {
                 }
                 let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), actor.clone());
+                self.start_slot(id.clone(), slot.clone(), actor.clone(), None);
                 slot
             };
             slot.touch(self.inner.clock.unix_milliseconds());
@@ -1943,7 +2016,13 @@ impl ConversationService {
         }
         false
     }
-    fn start_slot(&self, id: ConversationId, slot: Arc<Slot>, actor: ActionContext) {
+    fn start_slot(
+        &self,
+        id: ConversationId,
+        slot: Arc<Slot>,
+        actor: ActionContext,
+        owned_preparation: Option<Arc<dyn OwnedLifetime>>,
+    ) {
         let service = self.clone();
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
@@ -2068,11 +2147,16 @@ impl ConversationService {
                             // nowhere. On any worker of the pool, a worker
                             // that refuses it as it starts draining is left
                             // for another.
+                            let ownership = match owned_preparation {
+                                Some(ref gate) => Some(gate.clone()),
+                                None => service.ownership_gate(&id, &actor, Some(owner.acquisition.clone())).await
+                                    .map_err(|cause| OpeningFailure { cause, holds: false })?,
+                            };
                             let mut avoid = Vec::new();
-                            // Each refusal left for another worker, recorded
-                            // before the lease this opening ends with.
-                            let mut left = Vec::new();
-                            let (environment, opening) = loop {
+                            // The last acknowledged refusal is the fallback if
+                            // placement cannot find another worker.
+                            let mut last_refusal = None;
+                            let selection = loop {
                                 let place = match service
                                     .inner
                                     .environment
@@ -2083,11 +2167,14 @@ impl ConversationService {
                                     // Another worker could not be placed: the
                                     // refusal already given stands, and is
                                     // recorded as any refusal is.
-                                    Err(_) if !left.is_empty() => {
-                                        break left.pop().expect("one refusal left");
+                                    Err(_) if last_refusal.is_some() => {
+                                        break Err(OpeningFailure {
+                                            cause: ConversationError::LeaseRefused(last_refusal.expect("one refusal left")),
+                                            holds: false,
+                                        });
                                     }
                                     Err(cause) => {
-                                        return Err(OpeningFailure {
+                                        break Err(OpeningFailure {
                                             cause,
                                             holds: false,
                                         })
@@ -2097,9 +2184,18 @@ impl ConversationService {
                                     place.context.as_ref().map(|context| context.worker());
                                 // No other worker to ask: the refusal it gave stands.
                                 if worker.as_ref().is_some_and(|worker| avoid.contains(worker)) {
-                                    if let Some(refused) = left.pop() {
-                                        break refused;
+                                    if let Some(refusal) = last_refusal {
+                                        break Err(OpeningFailure {
+                                            cause: ConversationError::LeaseRefused(refusal),
+                                            holds: false,
+                                        });
                                     }
+                                }
+                                // Placement may wait or select another worker.
+                                // Check the same lifetime after that wait and
+                                // before each environment lease is acquired.
+                                if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
+                                    break Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
                                 }
                                 let opening = open_lease_on(
                                     place.environment.as_ref(),
@@ -2128,12 +2224,32 @@ impl ConversationService {
                                             refusal = ?opening.refusal,
                                             "a worker that left the pool refused the lease; asking another"
                                         );
+                                        // The refusal is consequential evidence,
+                                        // including when the next placement waits
+                                        // until this lifetime has sealed.
+                                        manager.prepare_for_lease_record(opening.fence.as_ref()).await.map_err(|cause| OpeningFailure {
+                                            cause: ConversationError::Agent(cause), holds: false,
+                                        })?;
+                                        let recorded = issue(&manager, place.environment.as_ref(), &opening, &actor).await;
+                                        let recorded = match recorded {
+                                            Err(LeaseIssueError::Record(LeaseRecordError::Storage(_))) => manager
+                                                .save_retained_lease_records().await
+                                                .map_err(|error| LeaseIssueError::Record(LeaseRecordError::Storage(error))),
+                                            result => result,
+                                        };
+                                        if let Err(error) = recorded {
+                                            tracing::error!(conversation_id = %id, %error, "a draining worker refusal could not be recorded");
+                                            break Err(OpeningFailure { cause: error.into(), holds: false });
+                                        }
                                         avoid.push(worker);
-                                        left.push((place.environment, opening));
+                                        last_refusal = opening.refusal;
                                     }
-                                    _ => break (place.environment, opening),
+                                    _ => break Ok((place.environment, opening)),
                                 }
                             };
+                            let (environment, opening) = selection?;
+                            let lease = Arc::new(LiveLease::new(&opening));
+                            owner.acquisition.acquired(lease.clone());
                             if let Some(handoff) = plan.handoff.clone() {
                                 manager.expect_handoff(handoff);
                             }
@@ -2162,6 +2278,9 @@ impl ConversationService {
                                     holds: error.needs_cleanup(),
                                 }
                             })?;
+                            if let Some(gate) = ownership {
+                                agent.install_owned_lifetime(gate).map_err(|error| OpeningFailure { cause: ConversationError::Agent(error), holds: true })?;
+                            }
                             // Before anything can run: every call a Drive
                             // grant's turn asks about is checked against its
                             // policy. An agent that does not ask about every
@@ -2182,23 +2301,6 @@ impl ConversationService {
                                     child: id.clone(),
                                 },
                             ));
-                            // A refusal left for another worker is recorded
-                            // as the refused lease it was, so the history says
-                            // which worker was asked and why it moved on. One
-                            // that cannot be recorded is logged; the opening
-                            // goes on to record its own lease.
-                            for (refused_on, refused) in &left {
-                                if let Err(error) = issue(
-                                    agent.session_manager(),
-                                    refused_on.as_ref(),
-                                    refused,
-                                    &actor,
-                                )
-                                .await
-                                {
-                                    tracing::error!(conversation_id = %id, %error, "a refusal left for another worker could not be recorded");
-                                }
-                            }
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -2256,32 +2358,14 @@ impl ConversationService {
                                 }
                                 (Err(error), _) => {
                                     tracing::error!(conversation_id = %id, %error, "a lease could not be recorded");
-                                    Some(match error {
-                                        LeaseIssueError::OverUnreadable => {
-                                            ConversationError::LeaseUnreadable
-                                        }
-                                        LeaseIssueError::Record(
-                                            LeaseRecordError::Refused(error)
-                                            | LeaseRecordError::Storage(error),
-                                        ) => {
-                                            ConversationError::Storage(error)
-                                        }
-                                        // Neither is what the history holds: the
-                                        // Agent prepared has loaded it, and only
-                                        // known records are written. Nothing ran,
-                                        // so the opening is only unavailable.
-                                        LeaseIssueError::Record(
-                                            LeaseRecordError::NotLoaded
-                                            | LeaseRecordError::Unreadable,
-                                        ) => ConversationError::Unavailable,
-                                    })
+                                    Some(error.into())
                                 }
                             };
                             if let Some(cause) = refused {
                                 // Nothing was attached; the Agent holds only
                                 // the history, which its close lets go of.
                                 let closed = if retained {
-                                    LiveLease::new(&opening)
+                                    lease
                                         .close(
                                             &agent,
                                             LeaseEndCause::Closed,
@@ -2305,7 +2389,7 @@ impl ConversationService {
                                 let holds = agent.may_hold_provider_resources();
                                 return Err(OpeningFailure { cause, holds });
                             }
-                            let lease = LiveLease::new(&opening);
+                            owner.acquisition.start_sdk_attachment();
                             let authorization = agent
                                 .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
                                 .map_err(|error| OpeningFailure {
@@ -2433,7 +2517,7 @@ impl ConversationService {
                             }
                             Ok(live)
                         };
-                        match AssertUnwindSafe(preparation).catch_unwind().await {
+                        let result = match AssertUnwindSafe(preparation).catch_unwind().await {
                             Ok(result) => result,
                             Err(payload) => {
                                 mem::forget(payload);
@@ -2442,7 +2526,12 @@ impl ConversationService {
                                     holds: true,
                                 })
                             }
+                        };
+                        match &result {
+                            Ok(_) => { owner.acquisition.transferred(); owner.acquisition.complete(true, service.inner.deletion_budgets.stop).await; }
+                            Err(failure) => owner.acquisition.complete(failure.holds, service.inner.deletion_budgets.stop).await,
                         }
+                        result
                     })
                     .await;
                 // A switch this opening carried is settled once it has
@@ -2474,7 +2563,7 @@ impl ConversationService {
                     }
                 }
                 owner.ready.notify_waiters();
-                if result.as_ref().is_err_and(|failure| !failure.holds) {
+                if result.is_err() && owner.acquisition.can_retire() {
                     let mut owners = service.inner.conversations.lock().await;
                     if owners
                         .get(&id)
@@ -2599,7 +2688,7 @@ impl ConversationService {
                     .as_ref()
                     .cloned()
                     .map_err(|failure| failure.cause.clone());
-                if result.as_ref().is_err_and(|failure| !failure.holds) {
+                if result.is_err() && slot.acquisition.can_retire() {
                     let mut owners = self.inner.conversations.lock().await;
                     if owners
                         .get(id)
@@ -2642,7 +2731,7 @@ impl ConversationService {
     ) -> Result<(), ConversationError> {
         self.stop_and_release(
             id,
-            slot,
+            slot.clone(),
             actor,
             &McpAppInitiator::System,
             LeaseEndCause::Stopped,
@@ -2650,7 +2739,9 @@ impl ConversationService {
         )
         .await
         .map_err(|stop| match stop {
-            StopFailure::Failed(error) if confirmed_despite(&error).is_some() => {
+            StopFailure::Failed(error)
+                if confirmed_despite(&error, slot.resource_cleanup()).is_some() =>
+            {
                 ConversationError::Agent(error)
             }
             _ => ConversationError::ApprovalModeUncertain,
@@ -5220,7 +5311,13 @@ impl ConversationService {
                 let slot = service.inner.conversations.lock().await.get(&id).cloned();
                 match slot {
                     Some(slot) => match service
-                        .finish_pending_close(&id, slot, &actor, &initiator_of(&actor), &caller)
+                        .finish_pending_close(
+                            &id,
+                            slot.clone(),
+                            &actor,
+                            &initiator_of(&actor),
+                            &caller,
+                        )
                         .await
                     {
                         // Uploads were let go before the slot, inside the close.
@@ -5234,7 +5331,7 @@ impl ConversationService {
                         // not saved: the carry-on lets the uploads go, then
                         // the slot, and the close answers the failure.
                         PendingClose::Stopped(StopFailure::Failed(error))
-                            if confirmed_despite(&error).is_some() =>
+                            if confirmed_despite(&error, slot.resource_cleanup()).is_some() =>
                         {
                             (Err(ConversationError::Agent(error)), Ok(()))
                         }
@@ -5274,7 +5371,7 @@ impl ConversationService {
                         // (`l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it`).
                         let closed = match &result {
                             Ok(_) => true,
-                            Err(error) => confirmed_despite(error).is_some(),
+                            Err(error) => confirmed_despite(error, live.lease.cleanup()).is_some(),
                         };
                         let snapshot = live.agent.session_manager().snapshot().await;
                         // A closed agent runs nothing more, so nothing can still
@@ -5457,7 +5554,18 @@ impl ConversationService {
                     deleting,
                 } => (*record, applied, deleting),
                 // Whoever erased it has already told the worker it is done.
-                Fence::FinishedByAnother { applied } => return Ok(applied),
+                Fence::FinishedByAnother { applied } => {
+                    if let Some(record) =
+                        load_conversation(service.inner.metadata.as_ref(), &id).await?
+                    {
+                        if let Some(deletion) = record.deletion() {
+                            service
+                                .end_deleted_ownership(&id, &deletion_actor(deletion)?)
+                                .await?;
+                        }
+                    }
+                    return Ok(applied);
+                }
                 Fence::LeftByAnother => {
                     return Err(ConversationError::DeletionIncomplete(Box::new(
                         DeletionFailures {
@@ -5816,7 +5924,9 @@ impl ConversationService {
             .cloned()
             .ok_or(ConversationError::Metadata)?;
         if deletion.erased() {
-            return Ok(());
+            return self
+                .end_deleted_ownership(&id, &deletion_actor(&deletion)?)
+                .await;
         }
         let actor = deletion_actor(&deletion)?;
         if let Err(error) = self.stop_background_tasks(Some(&id), &actor).await {
@@ -5839,13 +5949,14 @@ impl ConversationService {
             let stopped = tokio::select! {
                 stopped = self.stop_slot(
                     &id,
-                    slot,
+                    slot.clone(),
                     StopBy {
                         actor: &actor,
                         ended_by: deleted_by,
                         cause: LeaseEndCause::Closed,
                         end: AgentEnd::Close,
                     },
+                    ConfirmedClose::EraseHistory,
                 ) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
             };
@@ -5855,7 +5966,9 @@ impl ConversationService {
                 // saved. That record is in the history this erases, so it is
                 // not what the delete waits for
                 // (`l7_a_delete_whose_cleanup_record_cannot_be_saved_still_erases_the_history`).
-                Err(StopFailure::Failed(error)) if confirmed_despite(&error).is_some() => {
+                Err(StopFailure::Failed(error))
+                    if confirmed_despite(&error, slot.resource_cleanup()).is_some() =>
+                {
                     tracing::warn!(conversation_id = %id, %error, "a deletion's stop confirmed cleanup whose record was not saved");
                 }
                 Err(stop) => {
@@ -6026,7 +6139,7 @@ impl ConversationService {
                 .and_then(ConversationDeletion::after_erasure)
             {
                 Some(finished) => match self.inner.metadata.record_deletion(&id, finished).await {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => return self.end_deleted_ownership(&id, &actor).await,
                     Err(error) => failures.tombstone = Some(error),
                 },
                 None => failures.tombstone = Some(ConversationError::Metadata),
@@ -6454,9 +6567,9 @@ impl ConversationService {
     /// deletion whose process is still being stopped. A successful stop
     /// releases its slot, so it is not counted.
     ///
-    /// It reads the SDK's own fact, `Agent::may_hold_provider_resources`,
-    /// never the variant of the error a stop returned: that variant is a
-    /// diagnostic and does not say whether resources remain (ADR 221).
+    /// It joins the SDK's `Agent::may_hold_provider_resources` fact with the
+    /// actual environment cleanup owner, including failed preparation. A stop
+    /// error variant alone cannot establish resource release (ADR 221).
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(crate) async fn owns_unreleased_resources(&self) -> bool {
         let slots: Vec<_> = self
@@ -6470,8 +6583,10 @@ impl ConversationService {
         for slot in slots {
             let holds = match slot.value.get() {
                 None => true,
-                Some(Ok(live)) => live.agent.may_hold_provider_resources(),
-                Some(Err(failed)) => failed.holds,
+                Some(Ok(live)) => {
+                    live.agent.may_hold_provider_resources() || live.lease.cleanup().is_none()
+                }
+                Some(Err(_)) => !slot.acquisition.can_retire(),
             };
             if holds {
                 return true;
@@ -6543,6 +6658,7 @@ impl ConversationService {
                                     // the next start (`resume_unfinished`).
                                     end: AgentEnd::Suspend,
                                 },
+                                ConfirmedClose::ReleaseSlot,
                             )
                             .await
                         }
@@ -6597,10 +6713,11 @@ impl ConversationService {
         id: &ConversationId,
         slot: Arc<Slot>,
         by: StopBy<'_>,
+        on_confirm: ConfirmedClose,
     ) -> Result<(), StopFailure> {
         match tokio::time::timeout(
             self.inner.deletion_budgets.stop,
-            self.stopping(id, slot, None, by, ConfirmedClose::ReleaseSlot),
+            self.stopping(id, slot, None, by, on_confirm),
         )
         .await
         {
@@ -6748,7 +6865,12 @@ impl ConversationService {
                     ConfirmedClose::HoldSlot,
                 )
                 .await;
-            let confirmed = let_go(&stopped);
+            let confirmed = stopping_service.close_releases_owner(
+                &stop_id,
+                &stopped,
+                ConfirmedClose::HoldSlot,
+                slot_for_release.resource_cleanup(),
+            );
             let _ = confirmed_tx.send(stopped);
             if !confirmed {
                 return;
@@ -6821,6 +6943,27 @@ impl ConversationService {
         }
     }
 
+    // The registered lifetime owner must retain the same Agent/SessionManager
+    // across failed evidence writes. Only deletion's explicit erasure handoff
+    // consumes unsaved history; ordinary unowned release keeps its contract.
+    fn close_releases_owner(
+        &self,
+        id: &ConversationId,
+        closed: &Result<(), AgentError>,
+        on_confirm: ConfirmedClose,
+        resources: Option<LeaseCleanup>,
+    ) -> bool {
+        closed.is_ok()
+            || (let_go(closed, resources)
+                && (on_confirm == ConfirmedClose::EraseHistory
+                    || !self.inner.ownership.get().is_some_and(|ownership| {
+                        ownership
+                            .coordinator
+                            .active_lifetime_for_session(&conversation_session(id))
+                            .is_some()
+                    })))
+    }
+
     /// Stop the agent of `slot`, however long that takes: mark it as
     /// stopping, so it takes no more work, wait for it to finish opening if
     /// it has not, end its apps by `ended_by`, and close it. Once the close
@@ -6868,34 +7011,63 @@ impl ConversationService {
                         // rather than waiting unresolved for a resume that
                         // will not come
                         // (`a_close_ends_the_turns_a_restart_cut_off`).
-                        let mut owes_nothing = true;
-                        if end == AgentEnd::Close {
-                            for turn in live.agent.owed_turns().await {
-                                if let Err(error) =
-                                    live.agent.decline_turn(&turn, actor.clone()).await
-                                {
-                                    owes_nothing = false;
-                                    tracing::warn!(conversation_id = %id, execution_id = %turn.execution_id().as_str(), %error, "a turn the close ends could not be recorded ended; it stays marked, and the next start resumes it");
-                                }
-                            }
-                        }
+                        let owed = if end == AgentEnd::Close {
+                            live.agent.owed_turns().await
+                        } else {
+                            Vec::new()
+                        };
                         let closed = self
                             .close_leased(live, cause, actor.clone(), end)
                             .await
                             .map(|_| ());
-                        // Its cleanup confirmed, the agent holds nothing, and
-                        // the slot goes even when the record of that was not
-                        // saved: the stop answers that failure, and the next
-                        // opening accounts for the lease
-                        // (`l5_a_desktop_stop_whose_cleanup_record_cannot_be_saved_says_so_and_the_conversation_opens_again`).
-                        if let_go(&closed) {
+                        let mut decline_failure: Option<AgentError> = None;
+                        if end == AgentEnd::Close {
+                            for turn in owed {
+                                if let Err(error) =
+                                    live.agent.decline_turn(&turn, actor.clone()).await
+                                {
+                                    decline_failure = Some(match decline_failure {
+                                        None => error.clone(),
+                                        Some(first) => {
+                                            first.with_independent_failure(error.clone())
+                                        }
+                                    });
+                                    tracing::warn!(conversation_id = %id, execution_id = %turn.execution_id().as_str(), %error, "a turn the close ends could not be recorded ended; it stays marked, and the next start resumes it");
+                                }
+                            }
+                        }
+                        // Physical cleanup continues despite a historical settlement failure.
+                        // Neither a successful close nor an empty owed list acknowledges it.
+                        let closed = match (decline_failure, closed) {
+                            (None, closed) => closed,
+                            (Some(error), Ok(())) => Err(error),
+                            (Some(first), Err(second)) => {
+                                Err(first.with_independent_failure(second))
+                            }
+                        };
+                        let closed = if end == AgentEnd::Close && closed.is_ok() {
+                            self.forget_unfinished(id)
+                                .await
+                                .map_err(|error| match error {
+                                    ConversationError::Storage(error) => AgentError::Storage(error),
+                                    ConversationError::Agent(error) => error,
+                                    error => {
+                                        AgentError::Storage(StorageError::Io(error.to_string()))
+                                    }
+                                })
+                        } else {
+                            closed
+                        };
+                        // Owned cleanup keeps its actual evidence writer until
+                        // acknowledgement. Unowned reopening, or the durable
+                        // deletion's explicit erasure handoff, can relinquish
+                        // an attachment after physical confirmation alone.
+                        if self.close_releases_owner(id, &closed, on_confirm, live.lease.cleanup())
+                        {
                             // Closed for good: whatever it was doing ended
                             // with it, so a restart has nothing to resume.
-                            if end == AgentEnd::Close && owes_nothing {
-                                self.forget_unfinished(id).await;
-                            }
                             let _ = live.join_attachment_owner().await;
-                            if on_confirm == ConfirmedClose::ReleaseSlot {
+                            if on_confirm != ConfirmedClose::HoldSlot {
                                 self.release_slot(id, &slot).await;
                             }
                         }
@@ -6904,7 +7076,19 @@ impl ConversationService {
                     // One rule for a failed opening: while it may still hold
                     // what it launched, its stop cannot be confirmed.
                     Err(failed) if failed.holds => Err(AgentError::CleanupUncertain),
-                    Err(_) => Ok(()),
+                    Err(_) => {
+                        if !slot
+                            .acquisition
+                            .released(self.inner.deletion_budgets.stop)
+                            .await
+                        {
+                            return Err(AgentError::CleanupUncertain);
+                        }
+                        if on_confirm != ConfirmedClose::HoldSlot {
+                            self.release_slot(id, &slot).await;
+                        }
+                        Ok(())
+                    }
                 };
             }
             ready.await;
@@ -7013,10 +7197,10 @@ struct StopBy<'a> {
 
 /// Whether a stop let its agent go: it closed, or it confirmed the cleanup
 /// and only saving the record of it failed.
-fn let_go(stopped: &Result<(), AgentError>) -> bool {
+fn let_go(stopped: &Result<(), AgentError>, resources: Option<LeaseCleanup>) -> bool {
     match stopped {
         Ok(()) => true,
-        Err(error) => confirmed_despite(error).is_some(),
+        Err(error) => confirmed_despite(error, resources).is_some(),
     }
 }
 
@@ -7027,6 +7211,9 @@ enum ConfirmedClose {
     ReleaseSlot,
     /// The slot stays. The caller lets the uploads go, then releases it.
     HoldSlot,
+    /// Acknowledged deletion intent hands the history writer into erasure.
+    /// Ownership itself waits for the actual erased tombstone acknowledgement.
+    EraseHistory,
 }
 
 /// Whether a pass of stops can meet a submission still being admitted.

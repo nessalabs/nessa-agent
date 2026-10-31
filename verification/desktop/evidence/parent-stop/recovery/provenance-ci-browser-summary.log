@@ -1,0 +1,23 @@
+head=f09246860dc2c1e8786937fb461af3e065441380
+functionalSource=50bef867f45f9cb99fa27d798210e8e6a1dfe901
+run=https://github.com/nessalabs/nessa-agent/actions/runs/40990262102/job/123850734866
+job=Conversation stress check
+conclusion=success
+Both pinned engines passed the scripted aggregate. Default stress and separate focused checks are listed below; historical raised80/79 results are not included.
+2026-10-30T02:17:20.3625809Z resize-observers: 4/4 held
+2026-10-30T02:18:04.1048600Z mcp-apps-gateway: 16/16 held
+2026-10-30T02:18:52.1976370Z gateway-window: 15/15 held
+2026-10-30T02:19:44.2094469Z scripted-scenarios: 8/8 held
+2026-10-30T02:20:52.0964772Z parent-stop: 4/4 held
+2026-10-30T02:20:52.1345000Z {"verdict":"pass","evidence":"/home/runner/work/nessa-agent/nessa-agent-stress-evidence/scripted","summary":"/home/runner/work/nessa-agent/nessa-agent-stress-evidence/scripted/pr-summary.md"}
+2026-10-30T02:21:46.0490307Z github-live-events: 2/2 held
+2026-10-30T02:22:20.9920353Z usage-limit: 16/16 held
+2026-10-30T02:23:39.1076497Z drag: 8/8 held
+2026-10-30T02:36:46.9871893Z conversation-stress: 57/57 held
+2026-10-30T02:37:03.9552142Z conversation-stress: 4/4 held
+2026-10-30T02:37:37.7712104Z conversation-stress: 12/12 held
+2026-10-30T02:37:58.0767390Z conversation-stress: 4/4 held
+2026-10-30T02:38:31.7452857Z conversation-stress: 4/4 held
+2026-10-30T02:39:32.2419125Z conversation-stress: 4/4 held
+2026-10-30T02:40:37.9949183Z conversation-stress: 4/4 held
+2026-10-30T02:41:28.7499035Z conversation-chaos: 2/2 runs held

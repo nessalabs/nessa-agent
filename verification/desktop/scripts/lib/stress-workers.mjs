@@ -23,7 +23,6 @@ import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import {
-  MODELS,
   exited,
   repoRoot,
   signedOutEnvironment,
@@ -107,7 +106,7 @@ export async function startWorker({
             [agent]: {
               command: launch.command.argv[0],
               args: launch.command.argv.slice(1),
-              model: MODELS[agent],
+              model: launch.command.model,
               toolsEnabled: true,
             },
           },

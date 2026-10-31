@@ -91,3 +91,25 @@ fn environment_tools_naming_an_unknown_host_or_a_path_refuse_the_configuration()
         assert!(policy(&json).is_err(), "{json}");
     }
 }
+
+#[test]
+fn parent_stop_setting_defaults_and_strict_override() {
+    for input in ["{}", r#"{"subagents":{}}"#] {
+        let config: RuntimeConfig = serde_json::from_str(input).unwrap();
+        assert!(config.subagents.stop_children_on_parent_stop);
+    }
+    let config: RuntimeConfig =
+        serde_json::from_str(r#"{"subagents":{"stopChildrenOnParentStop":false}}"#).unwrap();
+    assert!(!config.subagents.stop_children_on_parent_stop);
+    for input in [
+        r#"{"subagents":null}"#,
+        r#"{"subagents":{"stopChildrenOnParentStop":null}}"#,
+        r#"{"subagents":{"stopChildrenOnParentStop":"false"}}"#,
+        r#"{"subagents":{"unknown":false}}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<RuntimeConfig>(input).is_err(),
+            "{input}"
+        );
+    }
+}

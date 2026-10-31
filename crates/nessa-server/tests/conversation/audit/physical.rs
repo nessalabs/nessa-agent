@@ -6,7 +6,7 @@ use nessa_sdk::application::agent_execution::agents::AgentError;
 use serde_json::Value;
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Condvar, Mutex,
@@ -19,6 +19,15 @@ use tokio::{
 };
 
 const WATCHDOG: Duration = Duration::from_secs(5);
+
+// TempDir inherits the process umask. The actual private-file writer requires
+// an explicitly private parent, created by the same storage owner as production.
+fn private_audit_directory() -> (tempfile::TempDir, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    (root, directory)
+}
 
 #[derive(Default)]
 struct Gate {
@@ -304,3 +313,312 @@ fn audit_without_a_runtime_is_a_typed_pre_effect_failure() {
 
 #[path = "physical/attachment_deadlines.rs"]
 mod attachment_deadlines;
+
+fn decline_bytes(writer: &str, sequence: u64, at: u64, actor: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "recordId":"decline-stable-identity", "writerId":writer, "sequence":sequence,
+        "observedAtMs":at,
+        "record":{"kind":"turn_resumed","sessionId":"session","executionId":"turn",
+            "cause":"interrupted","dispatched":true,"submittedBy":{"principalId":"person","surfaceId":"panel","requestId":"submit"},
+            "actor":{"principalId":"person","surfaceId":"panel","requestId":actor},"resumption":{"kind":"declined"}}
+    })).unwrap()
+}
+
+#[test]
+fn stable_decline_publication_preserves_first_metadata_and_rejects_conflicting_input() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    let (_root, directory) = private_audit_directory();
+    let path = directory.join("decline.json");
+    let first = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
+    let retry = decline_bytes("22222222-2222-4222-8222-222222222222", 8, 200, "close");
+    PrivateExecutionAuditFileWriter
+        .write_once(&path, &first)
+        .unwrap();
+    let original = fs::read(&path).unwrap();
+    PrivateExecutionAuditFileWriter
+        .write_once(&path, &retry)
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(
+        PrivateExecutionAuditFileWriter.write_once(
+            &path,
+            &decline_bytes(
+                "22222222-2222-4222-8222-222222222222",
+                9,
+                300,
+                "other-close"
+            )
+        ),
+        Err(AgentError::AuditFailure)
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn concurrent_decline_writers_acknowledge_one_create_only_winner() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    let (_root, directory) = private_audit_directory();
+    let path = Arc::new(directory.join("decline.json"));
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let writes: Vec<_> = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    ]
+    .into_iter()
+    .map(|id| {
+        let path = path.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            let bytes = decline_bytes(id, 0, 100, "close");
+            PrivateExecutionAuditFileWriter.write_once(&path, &bytes)
+        })
+    })
+    .collect();
+    for write in writes {
+        write.join().unwrap().unwrap();
+    }
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    let value: Value = serde_json::from_slice(&fs::read(path.as_ref()).unwrap()).unwrap();
+    assert_eq!(value["record"]["actor"]["requestId"], "close");
+}
+
+#[test]
+fn a_lost_decline_write_ack_rejoins_the_same_durable_record() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    struct LoseAck(AtomicUsize);
+    impl ExecutionAuditFileWriter for LoseAck {
+        fn write(&self, _: &Path, _: &[u8]) -> Result<(), AgentError> {
+            unreachable!()
+        }
+        fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+            PrivateExecutionAuditFileWriter.write_once(path, bytes)?;
+            if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let (_root, directory) = private_audit_directory();
+    let path = directory.join("decline.json");
+    let writer = LoseAck(AtomicUsize::new(0));
+    let bytes = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
+    assert_eq!(
+        writer.write_once(&path, &bytes),
+        Err(AgentError::AuditFailure)
+    );
+    let original = fs::read(&path).unwrap();
+    writer.write_once(&path, &bytes).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+}
+
+#[test]
+fn malformed_oversized_or_duplicate_decline_receipts_are_never_replaced() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    let (_root, directory) = private_audit_directory();
+    let path = directory.join("decline.json");
+    let bytes = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
+    PrivateExecutionAuditFileWriter
+        .write_once(&path, &bytes)
+        .unwrap();
+    let duplicate = String::from_utf8(bytes.clone())
+        .unwrap()
+        .replacen("\"sequence\":0", "\"sequence\":0,\"sequence\":0", 1)
+        .into_bytes();
+    let nested = String::from_utf8(bytes.clone())
+        .unwrap()
+        .replacen(
+            "\"kind\":\"declined\"",
+            "\"kind\":\"declined\",\"kind\":\"declined\"",
+            1,
+        )
+        .into_bytes();
+    for invalid in [
+        b"{}".to_vec(),
+        vec![b' '; bytes.len() + 4097],
+        duplicate,
+        nested,
+    ] {
+        fs::write(&path, &invalid).unwrap();
+        assert_eq!(
+            PrivateExecutionAuditFileWriter.write_once(&path, &bytes),
+            Err(AgentError::AuditFailure)
+        );
+        assert_eq!(fs::read(&path).unwrap(), invalid);
+    }
+}
+
+fn prepared_cancellation(
+    actor: &str,
+) -> nessa_sdk::application::agent_execution::executions::ExecutionAuditRecord {
+    use nessa_sdk::application::agent_execution::{
+        executions::{ExecutionAuditRecord, QueueSettlementRecord},
+        permissions::ActionContext,
+    };
+    use nessa_sdk::domain::agent_execution::{
+        executions::{ExecutionId, InvocationKind, SchedulingCause},
+        sessions::SessionId,
+    };
+    ExecutionAuditRecord::QueueSettled(
+        QueueSettlementRecord::cancelled(
+            SessionId::new("cancellation-session").unwrap(),
+            ExecutionId::new("cancelled-input").unwrap(),
+            InvocationKind::Queued,
+            None,
+            SchedulingCause::SessionClosed,
+            ActionContext::new("person", "panel", "original-submit").unwrap(),
+            Some(ActionContext::new("person", "panel", actor).unwrap()),
+        )
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn prepared_cancellation_rejection_and_lost_ack_rejoin_one_exact_durable_input_after_restart()
+{
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    struct FaultOnce {
+        calls: AtomicUsize,
+        commit: bool,
+    }
+    impl ExecutionAuditFileWriter for FaultOnce {
+        fn write(&self, _: &Path, _: &[u8]) -> Result<(), AgentError> {
+            unreachable!("prepared cancellation uses stable publication")
+        }
+        fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                if self.commit {
+                    PrivateExecutionAuditFileWriter.write_once(path, bytes)?;
+                }
+                return Err(AgentError::AuditFailure);
+            }
+            PrivateExecutionAuditFileWriter.write_once(path, bytes)
+        }
+    }
+    for commit in [false, true] {
+        let (_root, directory) = private_audit_directory();
+        let sink = DurableExecutionAudit::with_writer(
+            directory.clone(),
+            Arc::new(TestClock),
+            Arc::new(FaultOnce {
+                calls: AtomicUsize::new(0),
+                commit,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            sink.record(prepared_cancellation("first-close")).await,
+            Err(AgentError::AuditFailure)
+        );
+        let first = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(first.len(), usize::from(commit));
+        drop(sink);
+        let restored =
+            DurableExecutionAudit::new(directory.clone(), Arc::new(CountingClock::default()))
+                .unwrap();
+        restored
+            .record(prepared_cancellation("first-close"))
+            .await
+            .unwrap();
+        let records = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1);
+        if commit {
+            assert_eq!(
+                records, first,
+                "retry preserves the original winner's metadata"
+            );
+        }
+        assert_eq!(
+            restored
+                .record(prepared_cancellation("different-close"))
+                .await,
+            Err(AgentError::AuditFailure)
+        );
+        let after = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after, records,
+            "conflicting initiator cannot overwrite the original decision"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prepared_cancellation_late_physical_ack_keeps_one_winner_and_releases_its_worker() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    struct LateAck {
+        gate: Arc<Gate>,
+        entered: Mutex<Option<Sender<()>>>,
+    }
+    impl ExecutionAuditFileWriter for LateAck {
+        fn write(&self, _: &Path, _: &[u8]) -> Result<(), AgentError> {
+            unreachable!()
+        }
+        fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+            PrivateExecutionAuditFileWriter.write_once(path, bytes)?;
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+                self.gate.wait();
+            }
+            Ok(())
+        }
+    }
+    let (_root, directory) = private_audit_directory();
+    let gate = Arc::new(Gate::default());
+    let release = ReleaseOnDrop(gate.clone());
+    let (entered, waiting) = oneshot::channel();
+    let sink = Arc::new(
+        DurableExecutionAudit::with_writer(
+            directory.clone(),
+            Arc::new(TestClock),
+            Arc::new(LateAck {
+                gate,
+                entered: Mutex::new(Some(entered)),
+            }),
+        )
+        .unwrap(),
+    );
+    let observer = tokio::spawn({
+        let sink = sink.clone();
+        async move { sink.record(prepared_cancellation("first-close")).await }
+    });
+    tokio::time::timeout(WATCHDOG, waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    observer.abort();
+    assert!(observer.await.unwrap_err().is_cancelled());
+    let original = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    let restored = DurableExecutionAudit::new(directory.clone(), Arc::new(TestClock)).unwrap();
+    tokio::time::timeout(
+        WATCHDOG,
+        restored.record(prepared_cancellation("first-close")),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    drop(release);
+    tokio::time::timeout(WATCHDOG, sink.record(prepared_cancellation("first-close")))
+        .await
+        .unwrap()
+        .unwrap();
+    let after = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(after, original);
+    assert_eq!(after.len(), 1);
+}

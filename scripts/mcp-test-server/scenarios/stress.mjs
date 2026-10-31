@@ -18,6 +18,8 @@ export const STRESS = {
   webhook: "stress webhook witness",
   model: "stress model witness",
   permission: "stress permission",
+  listPermission: "stress compact version review",
+  listPreview: "stress list preview",
   reviews: "stress reviews",
   large: "stress large review",
   wait: "stress wait",
@@ -26,6 +28,9 @@ export const STRESS = {
   fail: "stress fail",
   limit: "stress usage limit",
   delegate: "stress delegate",
+  parentStop: "stress parent stop",
+  ownedChild: "stress owned child",
+  ownedSeed: "stress owned seed",
   await: "stress await",
   watch: "stress watch",
   long: "stress long",
@@ -73,6 +78,7 @@ export const SAYS = {
   delegated: "Delegated to ",
   awaited: "Awaited ",
   report: "Report received.",
+  owned: "Owned execution: ",
   backgroundStarted: "Background task started.",
   backgroundFinished: "Background outcome received.",
   watched: "Watched: ",
@@ -181,7 +187,7 @@ export const GITHUB_FINGERPRINTS = `node -e '${[
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
 
-const review = (title, args, allowedText) => ({
+const review = (title, args, allowedText, deniedText = SAYS.denied) => ({
   do: "permission",
   tool: TOOL,
   arguments: args,
@@ -191,7 +197,7 @@ const review = (title, args, allowedText) => ({
       { do: "tool", tool: TOOL, arguments: {} },
       { do: "text", chunks: [allowedText] },
     ],
-    "deny-once": [{ do: "text", chunks: [SAYS.denied] }],
+    "deny-once": [{ do: "text", chunks: [deniedText] }],
   },
 })
 
@@ -203,6 +209,7 @@ const review = (title, args, allowedText) => ({
  * `oversizedChunks` such chunks, longer than one view's frame.
  */
 export function stressScenario({
+  agent = "claude",
   reviews = 20,
   largeBytes = 24_000,
   pauseMs = 3_000,
@@ -210,6 +217,8 @@ export function stressScenario({
   longChunkBytes = 300,
   oversizedChunks = 240,
 } = {}) {
+  if (!["claude", "codex"].includes(agent))
+    throw new Error("unsupported stress fixture agent")
   const many = Array.from({ length: Math.max(1, reviews) }, (_, index) =>
     review(`Review ${index + 1} of ${reviews}`, { index }, `Allowed ${index + 1}.`),
   )
@@ -412,6 +421,46 @@ export function stressScenario({
         ],
       },
       {
+        when: STRESS.listPermission,
+        steps: [
+          ...(agent === "claude"
+            ? [
+                review(
+                  "A compact review",
+                  {},
+                  SAYS.allowed + " ${prompt.text}",
+                  SAYS.denied + " ${prompt.text}",
+                ),
+              ]
+            : [
+                {
+                  do: "version-review",
+                  on: {
+                    "allow-once": [
+                      { do: "text", chunks: [SAYS.allowed + " ${prompt.text}"] },
+                    ],
+                    "deny-once": [
+                      { do: "text", chunks: [SAYS.denied + " ${prompt.text}"] },
+                    ],
+                  },
+                },
+              ]),
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.listPreview,
+        steps: [
+          review(
+            "A list preview",
+            { body: "x".repeat(128) },
+            SAYS.allowed + " ${prompt.text}",
+            SAYS.denied + " ${prompt.text}",
+          ),
+          { do: "end" },
+        ],
+      },
+      {
         when: STRESS.permission,
         steps: [
           { do: "text", chunks: ["Asking: ${prompt.text}"] },
@@ -513,14 +562,40 @@ export function stressScenario({
           { do: "fail", message: SAYS.failure },
         ],
       },
-      {
-        when: STRESS.limit,
+      ...[STRESS.parentStop, STRESS.ownedChild].map((when) => ({
+        when,
         steps: [
           {
-            do: "fail",
-            message: "You've hit your weekly limit",
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
           },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "send_message",
+            arguments: {
+              threadId: "${thread.threadId}",
+              message: when === STRESS.parentStop ? STRESS.ownedSeed : STRESS.wait,
+            },
+            save: "sent",
+          },
+          {
+            do: "text",
+            chunks: [SAYS.owned, "${thread.threadId}", " ", "${sent.executionId}"],
+          },
+          { do: "wait-cancel" },
         ],
+      })),
+      {
+        when: STRESS.ownedSeed,
+        steps: [{ do: "text", chunks: ["Owned child seed completed"] }, { do: "end" }],
+      },
+      {
+        when: STRESS.limit,
+        steps: [{ do: "usage-limit" }],
       },
       {
         when: STRESS.delegate,

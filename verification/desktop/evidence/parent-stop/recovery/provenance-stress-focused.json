@@ -1,0 +1,108 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-30T02:21:45.779Z",
+  "finished": "2026-10-30T02:22:59.662Z",
+  "target": {
+    "url": "http://127.0.0.1:40981/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3231,
+      "seen": {
+        "index": 1,
+        "kind": "delegate"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 parent-stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3537,
+      "seen": {
+        "index": 2,
+        "kind": "parent-stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 parent-stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3995,
+      "seen": {
+        "index": 3,
+        "kind": "parent-stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4948,
+      "seen": {
+        "index": 4,
+        "kind": "await"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 14651,
+      "seen": {
+        "index": 5,
+        "kind": "handoff"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:40981/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

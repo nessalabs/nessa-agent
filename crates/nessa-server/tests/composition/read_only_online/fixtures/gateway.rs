@@ -50,7 +50,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::runtime::Handle;
 
@@ -81,14 +81,35 @@ pub(super) struct HeadHold {
     count: AtomicUsize,
     held: AtomicUsize,
     release: tokio::sync::Notify,
+    observed: AtomicUsize,
+    began: OnceLock<Instant>,
+}
+/// Receipt of this fixture's wait lifetime; Drop alone names no timeout cause.
+struct HeadWait<'a> {
+    owner: &'a HeadHold,
+    read: usize,
+}
+impl Drop for HeadWait<'_> {
+    fn drop(&mut self) {
+        self.owner.trace("head_wait_dropped", Some(self.read));
+    }
 }
 impl HeadHold {
+    /// Local observation order and elapsed time, without request payloads.
+    pub(super) fn trace(&self, event: &str, read: Option<usize>) {
+        let sequence = self.observed.fetch_add(1, Ordering::SeqCst) + 1;
+        let elapsed = self.began.get_or_init(Instant::now).elapsed();
+        eprintln!("record fixture semantic seq={sequence} elapsed_us={} event={event} head={read:?} held={}", elapsed.as_micros(), self.held.load(Ordering::SeqCst));
+    }
+
     /// Hold the next head read while the semantic producer settles.
     pub(super) fn hold_next(&self) {
         self.held
             .store(self.count.load(Ordering::SeqCst) + 1, Ordering::SeqCst);
+        self.trace("hold_armed", None);
     }
     pub(super) fn release(&self) {
+        self.trace("release_notified", None);
         self.release.notify_one();
     }
     /// Hold the second head read from now: a `follow`'s discovery reads the
@@ -108,6 +129,9 @@ impl RecordReadSource for GatedRead {
         let page = matches!(&operation, RecordReadOperation::Page(_));
         Box::pin(async move {
             let head = (!page).then(|| self.heads.count.fetch_add(1, Ordering::SeqCst) + 1);
+            if !page && self.mode == "semantic" {
+                self.heads.trace("head_entered", head);
+            }
             // Source latency exercises the real socket phase owner (B1), not a
             // fabricated timeout reply. Successful reads still use SDK storage.
             match (self.mode.as_str(), head) {
@@ -118,7 +142,17 @@ impl RecordReadSource for GatedRead {
                 ("live" | "semantic", Some(count))
                     if count == self.heads.held.load(Ordering::SeqCst) =>
                 {
-                    self.heads.release.notified().await
+                    let receipt = (self.mode == "semantic").then(|| {
+                        self.heads.trace("head_wait_started", Some(count));
+                        HeadWait {
+                            owner: &self.heads,
+                            read: count,
+                        }
+                    });
+                    self.heads.release.notified().await;
+                    if receipt.is_some() {
+                        self.heads.trace("head_release_observed", Some(count));
+                    }
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
                 ("budget-head", Some(1)) => {
@@ -142,6 +176,9 @@ impl RecordReadSource for GatedRead {
             }
             let started = std::time::Instant::now();
             let response = self.source.read(admitted, operation, lease).await;
+            if !page && self.mode == "semantic" {
+                self.heads.trace("head_source_returned", head);
+            }
             if let Err(error) = &response {
                 eprintln!(
                     "record fixture page={page} head={head:?} after {:?}: {error:?}",
@@ -833,6 +870,9 @@ fn stored_phone_file(owner: &str) -> SessionChange {
     .unwrap();
     SessionChange::InputAccepted(Box::new(InvocationRecord {
         target_event_offset: None,
+        resumed_from: None,
+        decline: None,
+        cancellation_delivery: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {
             execution_id: ExecutionId::new("phone-file").unwrap(),

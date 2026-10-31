@@ -1,0 +1,27 @@
+Unchanged isolated test: ['/workspace/nessa-agent/target/debug/deps/nessa_sdk-438bd3a05b08368c', 'infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed', '--exact', '--nocapture']
+
+running 1 test
+
+thread 'infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed' (153390) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:69:10:
+called `Result::unwrap()` on an `Err` value: CleanupUncertain
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed ... FAILED
+
+failures:
+
+failures:
+    infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1597 filtered out; finished in 4.10s
+
+actual test exit: 101
+new orphan: pid=153392 ppid=1 pgid=153391 state=Z comm=sleep; group still exists (signal 0 succeeded)
+Counterpart: same binary, exact filter and flags, task-local subreaper only
+
+running 1 test
+test infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1597 filtered out; finished in 0.09s
+
+local subreaper: reaped 0 adopted descendants; command status 0
+supervised command exit: 0

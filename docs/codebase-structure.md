@@ -499,7 +499,7 @@ own current lifecycle and API contracts.
 | `domain/common/value_objects/` | Shared validated dates, URLs, and token limits. |
 | `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, prompts, and the subagent lifetime graph; DDD roles beneath each feature. |
-| `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
+| `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. Resumption saves `InvocationRecord::resumed_from` atomically with admitted successor input; persistence validates its preceding resumable source and exact binding through that same resumption owner before publication or restoration. The retained admission fact is independent of current eligibility; observation, submission retry following and live/historical owed supersession consume the canonical-link decision. Ordinary input never supplies that owner fact; `conformance/resumption/canonical_admission.rs` exercises actual caller-created collisions and restoration. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
 | `application/agent_execution/subagents/` | Ownership coordinator for admitted child attempts, retained cleanup owners and tree drains. `publication.rs` owns audit eligibility and durable projection through the write fence; `root.rs` owns admission through ID delivery and unclaimed-result reconciliation. Domain graph and actual Agent gates own lifecycle and runnable admission. Stage-specific publication semantics live in the [ADR329 audit-eligibility table](adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628). `supervision.rs` contains injected effect phases after Ready capture; first-owner drain generations and bounded debt follow the [owned settlement table](adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649). |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
 | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, agreement between an agent turn's initiation and message sender (`authorship.rs`, at admission, incremental input folding and restoration), which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
@@ -2666,6 +2666,44 @@ windows `product/workspace.rs` holds for each connection in
 `domain/value_objects/workspace_window.rs`), through
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
+
+Gateway parent/child Stop orchestration lives in
+`conversation/application/service/owned_threads.rs` (ordinary empty-child
+preparation), `parent_stop.rs` (durable exact target selection, supervision and confirmed
+Stop history reconciliation after process loss),
+and `thread_report_admission.rs` (validated admitted delivery chains through SDK
+canonical successors, exact Stop receipt facts, and person admission delivery fences).
+Stop checks the existing person Submit receipts across each complete chain before
+selecting its current execution; report settlement consumes that same chain view.
+They reuse the SDK ownership graph and existing command receipts.
+Creation recovery observes principal-scoped receipts through the same joined
+command reader, then holds the original command lease while the coordinator
+records verified pre-initialization absence. `owned_recovery.rs` exercises the
+actual Accepted/Attempted crash prefixes and rejected discovery evidence.
+SDK recovery/quota boundaries live under
+`nessa-sdk/tests/application/agent_execution/subagents/capacity/preparation_recovery.rs`.
+`conversation/infrastructure/ownership_audit.rs` persists coordinator transition
+evidence through the ordinary durable audit owner. Namespace
+`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop`.
+The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
+`tests/conversation/parent_stop/confirmed_recovery.rs` kills a process between
+native cancel acknowledgement and turn settlement, retaining exact command authority.
+It also rejects the final decline write or loses its acknowledgement through real
+SQLite, then checks retry, settlement and reopening. `resumption.rs` flushes the
+existing session owner's retained evidence before recovery completes or its durable
+unfinished mark clears. `conformance/resumption/cleanup_proof_panics.rs` exercises
+retirement save construction, poll and drop faults for start, abandonment and
+Authorized-close through that same writer. `lifecycle_cleanup_proof.rs` polls the
+new evidence boundary behind an admitted proof writer before any audit effect.
+`conformance/close_reports/owned_root.rs` keeps bare SDK roots Closing until the
+same provider's actual executable-use release receipt, independently of audit;
+its late-receipt matrix covers Final/Suspend without inventing child capacity.
+`conversation/leases/cleanup_counts.rs` checks each actual backend cleanup identity
+across late End acknowledgement and a later opening, including duplicate/missing
+cleanup counterexamples. The SDK session manager distinguishes an applied scheduling
+decision from its persistence acknowledgement; the decline owner audits that actual
+decision and retains independent persistence and audit failures.
+`verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.
 
 `nessa-server/src/composition/github_tools.rs` serves fixed repository, issue
 and pull request GETs as a separate built-in MCP server. It uses the same live

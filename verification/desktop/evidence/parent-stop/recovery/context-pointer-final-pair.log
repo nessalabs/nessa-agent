@@ -1,0 +1,10 @@
+starting a dev server of its own on port 39901…
+warmed 1296 modules in 6293 ms
+conversation ready: review_rows completed, in 1286 ms
+ok    setup
+ok    message [chromium columns]
+ok    context [chromium columns]
+ok    console [chromium columns]
+chromium columns: 10396 ms
+wrote /tmp/nessa-981-evidence/context-pointer-final-pair.json
+mcp-apps-gateway: 4/4 held

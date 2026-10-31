@@ -76,6 +76,7 @@ import {
   runSteps,
   turnFor,
   parseScenario,
+  ScriptedUsageLimitError,
 } from "./scripted-scenario.mjs"
 import { SERVER } from "./local-gateway.mjs"
 
@@ -127,7 +128,8 @@ if (scenarioPath) {
 
 const send = (message) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
-const failure = (id, code, message) => send({ id, error: { code, message } })
+const failure = (id, code, message, data) =>
+  send({ id, error: { code, message, ...(data ? { data } : {}) } })
 
 /** How long a stopped stand-in has to exit before it is killed. */
 const STOP_GRACE_MS = 2_000
@@ -525,6 +527,19 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
         if (!target) throw new Error(`the session has no ${name} server`)
         return target.request("tools/call", args)
       },
+      // The compact-review fixture runs only this fixed, credential-free command.
+      // No arbitrary shell or scenario-supplied executable is introduced.
+      runVersion: () => {
+        const result = spawnSync(process.execPath, ["--version"], {
+          cwd: session.opened.cwd,
+          encoding: "utf8",
+          timeout: MCP_DEADLINE_MS,
+          maxBuffer: 1024,
+        })
+        if (result.error || result.status !== 0)
+          throw new Error("the native Node version command failed")
+        return { content: [{ type: "text", text: result.stdout.trim() }] }
+      },
       messageId: () => `msg-${randomUUID()}`,
       toolId: () =>
         agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`,
@@ -576,7 +591,12 @@ createInterface({ input: process.stdin })
     try {
       send({ id: message.id, result: await handler(message.params ?? {}) })
     } catch (error) {
-      failure(message.id, -32603, error.message)
+      failure(
+        message.id,
+        -32603,
+        error.message,
+        error instanceof ScriptedUsageLimitError ? error.data : undefined,
+      )
     }
   })
   .on("close", stop)

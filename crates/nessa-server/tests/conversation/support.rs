@@ -1313,6 +1313,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) authority_override:
         Mutex<Option<Result<Option<PermissionAuthority>, PermissionAuthorityError>>>,
     pub(crate) close_calls: AtomicUsize,
+    /// Minted per actual backend instance, independent of a restored session ID.
+    pub(crate) opened_backend_ids: Mutex<Vec<Uuid>>,
+    pub(crate) closed_backend_ids: Mutex<Vec<Uuid>>,
     /// Counts turn cancels. Session close does not increment this.
     pub(crate) cancel_calls: AtomicUsize,
     pub(crate) cancel_turns: Mutex<Vec<String>>,
@@ -1961,10 +1964,17 @@ impl AgentProvider for Provider {
                 .push((session_id.clone(), restore));
             let controller = ExecutionController::new(session_id.clone());
             let authority = controller.permission_authority_source();
+            let instance_id = Uuid::new_v4();
+            self.factory
+                .opened_backend_ids
+                .lock()
+                .unwrap()
+                .push(instance_id);
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     session_id,
                     Arc::new(Backend {
+                        instance_id,
                         factory: self.factory.clone(),
                         sender: Mutex::new(Some(sender)),
                         controller: Mutex::new(controller),
@@ -2004,6 +2014,7 @@ impl ExecutionEventStream for Events {
     }
 }
 struct Backend {
+    instance_id: Uuid,
     controller: Mutex<ExecutionController>,
     authority: PermissionAuthoritySource,
     factory: Arc<ProviderFactory>,
@@ -2470,6 +2481,11 @@ impl ProviderSessionBackend for Backend {
     fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         Box::pin(async move {
             self.factory.close_calls.fetch_add(1, Ordering::SeqCst);
+            self.factory
+                .closed_backend_ids
+                .lock()
+                .unwrap()
+                .push(self.instance_id);
             self.factory.close_requests.lock().unwrap().push(request);
             let now = self.factory.closing_now.fetch_add(1, Ordering::SeqCst) + 1;
             self.factory.most_closing.fetch_max(now, Ordering::SeqCst);

@@ -5,7 +5,10 @@ The gateway offers `nessa-agents` beside configured MCP servers and the optional
 provider-open token. Agent tools do not require SSH command configuration.
 
 A thread is a conversation. `create_thread` creates an empty thread using the
-configured default agent/model and normal Ask approval mode. `send_message`
+ordinary creation defaults. A same-channel child keeps the channel start owner's
+placement and current preset; agent/model choices stay with ordinary creation.
+Outside a channel it starts in Ask.
+`send_message`
 accepts plain text with `mode`: `queued` (the default) queues a turn;
 `steering` uses existing steering delivery and fallback semantics; `passive`
 records a RecordOnly note without starting or steering a model turn. Active
@@ -262,6 +265,58 @@ A create/send/stop already admitted by the command coordinator retains its
 supervised receipt/audit lifecycle even when its answer is lost. Cancellation
 is not a claim that an external effect was rolled back.
 
+## Channel placement during owned preparation
+
+Owned creation asks the existing channel start owner for placement and the
+initial preset while holding thread admission and after verifying the exact
+running source. Stable channel placement travels in the existing preparation
+description; the coordinator's existing spawn binding retains the admitted
+preset. The factory validates that binding and forwards its original preset to
+ordinary child creation. A later parent preset change does not change an exact
+retry's task identity or child policy. A caller cannot supply either choice;
+permission answers are not copied. A source outside a channel, or an explicitly
+remote environment, retains the ordinary channel start owner's no-channel choice.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Same-channel source starts an owned child | The child and its SDK spawn-policy binding retain the source channel's current preset, including a person's Ask override of the channel's Auto default | `owned_threads_use_channel_start_without_accepting_caller_overrides` |
+| Agent supplies a preset or channel override | Refuse invalid input before child preparation, provider open or child metadata | same regression |
+| Parent preset changes after owned creation, then the exact command retries | Return the original Ready receipt, child preset and SDK policy, with no second provider open | same regression |
+| A prepared child is restored | The preparation description supplies stable channel placement and the existing spawn binding supplies its original preset; omitted channel denotes ordinary default placement | existing owned recovery tests and the channel regression |
+
+## Service admission order
+
+Report capture and delivery preserve the typed author independently of the
+original receipt actor. Their shared source predicate and canonical-command
+exclusion distinguish these cases:
+
+| Existing delivery | Required interpretation | Regression |
+| --- | --- | --- |
+| Exact child and watched execution, matching actor and payload | Typed agent report; retain its admission guard through supervised queue acknowledgement | `report_authorship_matches_exact_agent_origin_and_preserves_legacy_person_records`, registry admission tests |
+| Another typed child or execution under matching report text | Not this report's delivery or acknowledgement | author matrix above |
+| Legacy Person-shaped report with no canonical person command | Preserve old report history and its canonical successors | explicit legacy fixtures in the restored-report tests |
+| A canonical person command anywhere in the delivery chain | Person work; neither Stop capture nor delivery acknowledgement may adopt it as a report | legacy collision and author-matrix tests |
+| Legacy receipt evidence cannot be read | Retain the obligation and retry; unknown history cannot acknowledge or replace it | registry unavailable-evidence tests |
+| A person replays a new Agent report's exact actor, identity and text | Refuse re-authorship; the typed report remains eligible for its real Stop | `a_person_cannot_reauthor_a_typed_report_by_replaying_its_actor_and_text` |
+
+Commands that serialize owned-thread work acquire the existing thread-admission
+mutex before shared service admission. An export takes exclusive service
+admission. Recovery and recursive Stop use the same order as submission,
+preparation, report delivery and scheduled delivery; an admitted reader must not
+wait for a thread owner whose reader is queued behind an export writer.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Recovery reader, export writer and scheduled delivery compete | Recovery queues for thread admission before requesting its reader; all three owners settle within the existing five-second test bound | `recovery_export_and_scheduled_delivery_share_one_admission_order` |
+| An ordinary command waits for thread admission before supervised Stop, then export queues | Stop waits for thread admission before requesting its reader; export acquires within the unchanged five-second cycle bound, before disk-backed command completion. Both commands then settle under the fixture's existing `TURN_HOLD_HANG` ceiling, sharing one completion deadline; Stop retains its exact receipt and single cancellation | `owned_stop_export_and_submission_share_one_admission_order` |
+| The outer Stop caller disconnects while its supervisor waits for thread admission | The original supervisor reaches provider cancellation before any replacement command; the existing export admission drain then joins its physical command completion before retry reads the actor and receipt without cancelling twice | `owned_stop_export_and_submission_share_one_admission_order`, lost-caller case |
+
+The guards retain their existing lifetimes. Recovery keeps its weak live handle
+while waiting and rechecks the slot after admission. Stop releases thread
+admission after capturing its durable selection and retains service admission
+through the selected effects. Cancelling an observer does not release a
+supervised operation's owners.
+
 ## Ordering and regression evidence
 
 | Order or failure | Behavior and test home |
@@ -339,3 +394,46 @@ owns source admission; the existing Cedar access adapter owns delegation policy;
 `conversation/infrastructure/agent_tool_audit.rs` owns durable delivery. Event
 projection and target admission are shared through the conversation application;
 private record formats stay in SDK infrastructure.
+
+## Claims while a report waits after Stop
+
+A taken report has one delivery guard. Its live-admission count can be released
+when its submitted turn is waiting or was cancelled; its entry in the existing
+queuing map stays owned by that guard until the delivery future ends. This keeps
+an in-turn reply claim visible without counting a paused durable report as live
+work. The durable report store remains the restart authority. No claim is made
+until the relay writes the whole reply, as described above.
+
+| Ordering | Result and regression |
+| --- | --- |
+| Sender awaits before the report is taken | The watch holds delivery; `an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued`. |
+| Live admission is released, then the sender claims its written reply | The same guard observes the claim; releasing twice does not decrement another count, and final drop removes its map entry; the same registry regression checks all three facts. |
+| Sender disconnects or its reply is not written | No claim; existing delivery/restart handling retains the saved report; `one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report`. |
+| An injected turn's host is suspended and resumes | Subscribe and the report both follow the SDK's exact successor, remaining unfinished until it settles; `an_injected_report_waits_for_its_suspended_hosts_exact_successor`. |
+| A person stops the parent while a child report becomes ready | Existing durable Stop receipts hold dispatch and cancelled report attempts remain saved for later person input; a report does not restart the stopped parent. |
+| Later person input releases an older report, then another Stop withdraws that queued report | Cancelled history without provider work is withdrawal, not a restarted turn. The stress check records the current parent's native session before Stop and rejects any further prompt to it, including a prompt cancelled before producing output; `stress-parent-stop.test.mjs` covers withdrawal, dispatch, and missing recording evidence. |
+| Recorded evidence contains a non-frame envelope or a prompt without a usable native session identity | The stress check refuses the absence proof. Its purpose-specific reader admits request/notification and response envelopes, then requires a prompt's session identity before comparing it; full ACP decoding remains gateway-owned. `stress-parent-stop.test.mjs` covers recorder-produced malformed values and valid counterparts. |
+| A whole-reply callback from the source turn runs after that turn was stopped | The callback carries its admitted `AgentToolSource`; existing durable Stop receipts refuse that exact execution's claim, retaining the saved report. `a_stopped_source_reply_claim_retains_the_durable_child_report` exercises the application callback after a real Stop. |
+| Source A canonically resumes as B, a person stops B, then the detached A callback runs | The SDK's validated source continuation relates A to B. The claim retains the durable row, including after SQLite reopen; `a_stopped_canonical_successor_retains_the_original_sources_delayed_reply` uses actual same-process SDK suspension/resumption and Stop, then checks later-source eligibility. |
+| Native Stop is confirmed, then the process dies before turn settlement | The gateway Stop owner reconciles the exact settled Cancelled/Withdrawn receipt with the SDK owed turn using the original actor. It records decline without native cancellation or a successor; Accepted/Attempted remains uncertain. `a_confirmed_stop_survives_process_loss_before_turn_settlement` and `an_unconfirmed_stop_remains_uncertain_after_process_loss` kill real fixture processes at those boundaries. |
+| A settled child receipt precedes its validated aggregate root when recovery enumerates the ledger | After restoring the selections, remove only standalone aliases whose exact binding belongs to a validated aggregate's children. Their mapping keeps the root request's actor; other captures retain first-admission order, and a request prefix alone grants no aggregate authority. The real-process confirmed Stop regression checks child-first SQLite order, child actor lookup, and the child's durable NotResumed actor. `a_prefixed_standalone_stop_keeps_its_own_actor` preserves a person's canonical standalone Stop with a derived-looking request ID, including its precedence over a later cascade of the same turn. |
+| Saving the earlier Interrupted edge fails before a decline decision is applied | The SDK returns the storage failure and leaves the turn owed; it emits no Declined audit. `a_failed_interrupted_save_does_not_invent_a_decline_decision` checks the successful retry separately. |
+| The final NotResumed decision is applied locally, but its save fails | The session owner retains that decision and reports its save outcome separately. The SDK attempts the real decision's audit and preserves independent storage/audit failures. Recovery flushes retained evidence before an empty live owed view can complete or clear the durable mark. `a_decline_audits_its_applied_decision_despite_a_failed_terminal_save` checks both audit outcomes. |
+| A final decline commits but its acknowledgement is lost, or settlement observes the retained terminal decision | The same SDK save binding owns retry. Both recovery and settlement retain the unfinished mark until the session owner acknowledges its write; the original actor and final history survive reopening, with no provider cancellation or successor. `confirmed_stop_keeps_its_mark_until_retained_history_is_acknowledged` crosses rejection/lost acknowledgement with recovery/settlement. |
+| Report replay finds the source input saved before restart, before its observer has settled the durable row | Input presence proves delivery, while the report store owns settlement. The restart regression waits for actual pending-row removal and then rechecks exactly one input. |
+| A later person turn starts before the old callback runs | The old execution remains stopped; its callback still retains the report. A newly admitted source execution can claim the reply; the same regression checks both identities. |
+| Stop receipt observation fails before a whole-reply claim | The report remains saved; an unreadable receipt does not prove that its source was not stopped. |
+| Source history is unavailable or does not cover an observed Stop identity | Retain the report: a stale or missing source history cannot prove an unstopped canonical continuation. |
+
+The callback checks the admitted source and the canonical continuations validated
+by the existing SDK, rather than the conversation's current pause: later person
+input can release a pause without reviving an earlier execution. It observes
+Stop receipts first, then reads source history that covers those selected
+identities; missing evidence retains the row. The receipt observation orders the claim against Stop; a claim whose
+observation preceded Stop remains an earlier acknowledgement. This consumes the
+same receipt authority as report delivery, without changing tool authorization.
+
+Claims can suppress a report still waiting to be submitted. A report already
+submitted has the existing duplicate allowance; a failed store settlement leaves
+the durable row available after restart. The claim map is transient coordination,
+not ownership of a child or an alternative durable store.

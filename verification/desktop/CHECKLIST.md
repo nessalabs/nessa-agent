@@ -320,7 +320,7 @@ _ADR 238 › One fit rule for every change of layout_.
   field and a row's highlight are as far from what is on their left — the
   sidebar's card, or with the sidebar away the window's edge — as from the
   panes on their right. _Check:_ `responsive.mjs --only list-gutter`
-  (Chromium and WebKit, sidebar open and closed).
+  (Chromium and WebKit, sidebar open and closed, including reserved scrollbars).
 - [ ] **Side columns fold first for room, and come back when there is room.**
   _ADR 238 › Side columns_ table. _Check:_ `safe-area.mjs --only resize-breakpoints`
   exercises it; watch with `--headed`.
@@ -834,6 +834,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   higher than the wait: the card counts down from the gateway's `serverNowMs`,
   not the window's clock (ADR 141 › What a person sees). Chromium
   and WebKit. The fixture is `fixtures/approval-deadline/`, dev server only.
+  The fixture's expired view carries the deadline notice source and the same
+  permission identity, as the gateway projection does; an untyped notice is
+  refused by the actual client (`lib/approval-deadline-state.test.mjs`).
   _Check:_ `approval-deadline.mjs`. The card's own widths stay
   `responsive.mjs --only approval-card` at 280 and 340 px.
 - [ ] **A clock snapshot is stable across React's consecutive reads even when
@@ -1093,11 +1096,12 @@ phone's scanner is not this screen.
   _Check:_ by hand.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; one line under its
-  title says what it is for, and its strip offers Experimental and Setup; Experimental
+  title says what it is for. Its tab strip follows the catalogue's visibility
+  and order, including Experimental and Setup; a single-tab category has no strip. It
   offers each preview as one switch — the subagents preview (on unless
   turned off) and the side rail (off until turned on); General has no Experimental tab; search finds it as "advanced",
   "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
-  unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
+  helper `settings-tabs.test.mjs`; unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
   `icon-provider.test.tsx`; the flask by eye in both families.
 - [ ] **Advanced › Setup distinguishes the native app from a browser.** The
   native app offers Replay; a browser offers the app-only hint without a button
@@ -2347,6 +2351,46 @@ rejected acknowledgement. SDK ACP tests cover remembered allow and deny, exact
 logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
+
+- [ ] **Stopping a parent cancels owned child and grandchild turns by default** (#329).
+  `parent-stop.mjs` creates them through the actual source-bound `nessa-agents`
+  tools and clicks the window composer's ordinary Stop button. Chromium and
+  WebKit assert one cancelled parent turn, cancelled descendants, an unrelated
+  turn still running with its queued report-watch turn preserved, and no new parent turn during a 1500 ms report-delivery
+  observation, then a later person command releases the retained child report.
+  A second isolated gateway sets
+  `subagents.stopChildrenOnParentStop:false` and asserts the descendants remain
+  running. This runs in `pnpm test:e2e:scripted`; the Rust Stop/report tests own
+  controlled races and restart coverage.
+  The repeated `conversation-stress.mjs` step also observes the selected native
+  session's ACP prompts: withdrawing an older queued report can publish empty
+  cancelled history, but a further provider prompt fails even if it produces
+  no output. Missing or damaged recording evidence fails the check.
+
+- [ ] **Stress review answers keep their exact command ACK.** The window sends
+  the intended conversation/execution/review/permission/option, and its matching
+  command receives `applied: true`. Expiry or a lost ACK cannot become success
+  merely because the card disappears. Provider completion remains checked by
+  the existing final transcript and at-rest checks. _Check:_
+  `lib/stress-review-answers.test.mjs` and `conversation-stress.mjs` in Chromium
+  and WebKit; [ordering controls](../../docs/design/stress-review-answers.md).
+
+- [ ] **Stress fixtures match their named access scenario.** `full` keeps the
+  original successful access-change assertions on a model advertising all three
+  modes. `ask-only` clicks Full and requires its exact unavailable refusal,
+  retained Ask selection and shield, no new turn or elevated provider command,
+  and a real review on the following permission turn. Incompatible model/scenario
+  pairs fail setup without fallback. Run defaults and raised counts for each
+  applicable profile; label the model and scenario in the evidence.
+
+- [ ] **Layout observations follow actual geometry.** A swipe settles only after
+  its finite geometry animations finish, within the original three-second bound;
+  repeated pixels during a paused width transition are not settlement. Filled
+  conversation slivers remain in 220–520 px panes; the short-home cutoff does not
+  hide them. Removal checks reveal and reacquire the visible session row after a
+  fold, then retain their next-frame reply and Stop assertions. _Check:_
+  `session-rows.mjs`, `responsive.mjs --only list-gutter`, and
+  `columns.mjs --only content-visible,reply-held,stop-held --sizes 760x700`.
 
 ### One header per chat; tabs only in the right panel
 

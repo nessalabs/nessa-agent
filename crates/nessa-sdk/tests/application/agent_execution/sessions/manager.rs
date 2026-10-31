@@ -602,6 +602,7 @@ async fn settlement_failure_retains_the_storage_failure_wrapper() {
 struct FaultLease {
     inner: Box<dyn SessionStorageLease>,
     fail_save: AtomicBool,
+    panic_save: AtomicBool,
     changes: std::sync::Mutex<Vec<Vec<SessionChange>>>,
 }
 impl SessionStorageLease for FaultLease {
@@ -613,6 +614,10 @@ impl SessionStorageLease for FaultLease {
         binding: SessionSaveGeneration,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
+        assert!(
+            !self.panic_save.load(Ordering::SeqCst),
+            "injected save constructor panic"
+        );
         self.changes.lock().unwrap().push(
             units
                 .iter()
@@ -633,6 +638,9 @@ impl SessionStorageLease for FaultLease {
 fn invocation(id: &str, complete: bool) -> InvocationRecord {
     let id = ExecutionId::new(id).unwrap();
     InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {
@@ -668,6 +676,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     let lease = Arc::new(FaultLease {
         inner: storage.open(id.clone()).await.unwrap(),
         fail_save: AtomicBool::new(false),
+        panic_save: AtomicBool::new(false),
         changes: std::sync::Mutex::new(Vec::new()),
     });
     let active = invocation("active", false);
@@ -843,6 +852,7 @@ async fn queued_admission_resets_consumed_message_cadence() {
             },
             SubmissionMode::Queued,
             NoteIntake::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1139,6 +1149,7 @@ async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
                 event,
                 SubmissionMode::Steering,
                 NoteIntake::default(),
+                None,
             )
             .await,
         Err(AgentError::InvalidInput(_))
@@ -1152,6 +1163,7 @@ async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
             event,
             SubmissionMode::Steering,
             NoteIntake::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2111,6 +2123,7 @@ mod note_records {
                 },
                 SubmissionMode::Queued,
                 intake,
+                None,
             )
             .await
     }
@@ -2317,4 +2330,338 @@ mod note_records {
             errors.iter().map(ToString::to_string).collect();
         assert_eq!(messages.len(), errors.len());
     }
+}
+
+/// The refusal has no executable provider context; none may be consulted.
+struct RecordOnlyProvider;
+impl AgentProvider for RecordOnlyProvider {
+    fn harness_host_identity(
+        &self,
+    ) -> crate::application::agent_execution::providers::HarnessHostIdentity<'_> {
+        panic!("record preparation cannot acquire a provider host")
+    }
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("different", "other", "elsewhere").unwrap()
+    }
+    fn capabilities(
+        &self,
+    ) -> &crate::domain::effective_capabilities::value_objects::EffectiveCapabilities {
+        panic!("record preparation cannot acquire provider capabilities")
+    }
+    fn open(
+        &self,
+        _: ProviderOpenRequest,
+    ) -> crate::application::agent_execution::providers::ProviderOpenFuture<'_> {
+        panic!("record preparation cannot open a provider")
+    }
+}
+
+#[tokio::test]
+async fn evidence_preparation_preserves_retained_refusal_across_failed_save_and_reload() {
+    use crate::domain::agent_execution::leases::{
+        AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeaseId, LeaseRefusal,
+        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+    };
+    let (mut manager, lease, _) = manager(0).await;
+    let queued_actor = ActionContext::new("person", "panel", "queued-before-refusal").unwrap();
+    manager
+        .begin_with_scheduling(
+            invocation("queued-before-refusal", false).request,
+            Submitter::owner(queued_actor.clone()),
+            InvocationSchedulingEvent {
+                kind: InvocationKind::Queued,
+                target: None,
+                before: None,
+                stage: InvocationStage::Queued,
+                cause: SchedulingCause::Submitted,
+                actor: Some(queued_actor.clone()),
+            },
+            SubmissionMode::Queued,
+            NoteIntake::default(),
+            None,
+        )
+        .await
+        .unwrap();
+    manager
+        .record_queue_admission(
+            ExecutionId::new("queued-before-refusal").unwrap(),
+            InvocationKind::Queued,
+            queued_actor,
+        )
+        .await
+        .unwrap();
+    let before = manager.snapshot().await.unwrap();
+    assert!(!super::super::queue_validation::replay(&before)
+        .unwrap()
+        .is_empty());
+    let refusal = LeaseRecord::Refused {
+        lease: LeaseId::new("refused-before-placement").unwrap(),
+        revision: LeaseRevision::FIRST,
+        terms: LeaseTerms {
+            environment: EnvironmentRef::Here,
+            work: LeaseWork::Agent(AgentWork::new("fixture", "model").unwrap()),
+            sandbox: SandboxProfile::HarnessDefault,
+            grants: LeaseGrants::Opening,
+            deadline: LeaseDeadline::UntilEnded,
+        },
+        refusal: LeaseRefusal::EnvironmentUnreachable,
+        actor: ActionContext::new("person", "panel", "original-opening").unwrap(),
+    };
+    lease.fail_save.store(true, Ordering::SeqCst);
+    let commit = manager
+        .record_lease(|_| (vec![refusal.clone()], ()))
+        .await
+        .unwrap();
+    assert!(commit.saved.is_err());
+    assert!(matches!(
+        manager.prepare_for_lease_record(&RecordOnlyProvider).await,
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    assert_eq!(
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed()
+            .unwrap()
+            .lease
+            .as_ref()
+            .unwrap()
+            .records(),
+        std::slice::from_ref(&refusal)
+    );
+    assert!(manager.snapshot().await.unwrap().lease.is_none());
+    lease.panic_save.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        manager.prepare_for_lease_record(&RecordOnlyProvider).await,
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    assert_eq!(
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed()
+            .unwrap()
+            .lease
+            .as_ref()
+            .unwrap()
+            .records(),
+        std::slice::from_ref(&refusal)
+    );
+    lease.panic_save.store(false, Ordering::SeqCst);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager
+        .prepare_for_lease_record(&RecordOnlyProvider)
+        .await
+        .unwrap();
+    let saved = manager.snapshot().await.unwrap();
+    assert_eq!(
+        saved.lease.as_ref().unwrap().records(),
+        std::slice::from_ref(&refusal)
+    );
+    assert_eq!(saved.provider, before.provider);
+    assert_eq!(saved.provider_context, before.provider_context);
+    assert_eq!(saved.queue_history, before.queue_history);
+    assert_eq!(
+        lease
+            .inner
+            .load()
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .lease
+            .as_ref()
+            .unwrap()
+            .records(),
+        &[refusal]
+    );
+    // Recording a refusal confers no authority to restore another provider.
+    assert!(matches!(
+        manager.prepare(&RecordOnlyProvider).await,
+        Err(AgentError::Storage(StorageError::IdentityMismatch))
+    ));
+}
+
+#[tokio::test]
+async fn lease_record_preparation_preserves_a_selected_fresh_context() {
+    struct MovedRuntime;
+    impl AgentProvider for MovedRuntime {
+        fn harness_host_identity(
+            &self,
+        ) -> crate::application::agent_execution::providers::HarnessHostIdentity<'_> {
+            panic!("evidence preparation does not acquire a host")
+        }
+        fn identity(&self) -> ProviderIdentity {
+            ProviderIdentity::new("fixture", "model", "new-runtime-context").unwrap()
+        }
+        fn capabilities(
+            &self,
+        ) -> &crate::domain::effective_capabilities::value_objects::EffectiveCapabilities {
+            panic!("evidence preparation does not inspect capabilities")
+        }
+        fn open(
+            &self,
+            _: ProviderOpenRequest,
+        ) -> crate::application::agent_execution::providers::ProviderOpenFuture<'_> {
+            panic!("evidence preparation does not open a provider")
+        }
+    }
+    let (mut manager, lease, _) = manager(0).await;
+    let before = lease.load().await.unwrap().snapshot().unwrap().clone();
+    assert_eq!(
+        manager.prepare(&MovedRuntime).await.unwrap(),
+        ProviderContext::Absent
+    );
+    assert!(manager.open_fresh_context.load(Ordering::Relaxed));
+    manager
+        .prepare_for_lease_record(&RecordOnlyProvider)
+        .await
+        .unwrap();
+    assert!(
+        manager.open_fresh_context.load(Ordering::Relaxed),
+        "a cleanup-only write cannot authorize restoring the old native context"
+    );
+    assert_eq!(lease.load().await.unwrap().snapshot().unwrap(), &before);
+}
+
+#[tokio::test]
+async fn lease_record_preparation_preserves_a_pending_and_selected_switch() {
+    let (mut manager, lease, _) = manager(0).await;
+    let before = lease.load().await.unwrap().snapshot().unwrap().clone();
+    let actor = ActionContext::new("person", "panel", "original-switch").unwrap();
+    let at_ms = 731;
+    manager.expect_handoff(HandoffIntent::Switch {
+        actor: actor.clone(),
+        at_ms,
+    });
+    manager
+        .prepare_for_lease_record(&RecordOnlyProvider)
+        .await
+        .unwrap();
+    assert_eq!(lease.load().await.unwrap().snapshot().unwrap(), &before);
+    assert_eq!(
+        manager.prepare(&RecordOnlyProvider).await.unwrap(),
+        ProviderContext::Absent,
+        "cleanup must leave the requested provider switch available"
+    );
+    assert!(manager.open_fresh_context.load(Ordering::Relaxed));
+    assert_eq!(
+        *manager.switching.lock().unwrap(),
+        Some((actor.clone(), at_ms))
+    );
+    manager
+        .prepare_for_lease_record(&RecordOnlyProvider)
+        .await
+        .unwrap();
+    assert!(manager.open_fresh_context.load(Ordering::Relaxed));
+    assert_eq!(*manager.switching.lock().unwrap(), Some((actor, at_ms)));
+    assert_eq!(lease.load().await.unwrap().snapshot().unwrap(), &before);
+}
+
+fn prepared_decline_record(applied: bool, acknowledged: bool) -> InvocationRecord {
+    let mut record = invocation("historical-decline", false);
+    record.submission = SubmissionMode::Queued;
+    let queued = InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: None,
+        stage: InvocationStage::Queued,
+        cause: SchedulingCause::Submitted,
+        actor: Some(record.actor.clone()),
+    };
+    let interrupted = InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: Some(InvocationStage::Queued),
+        stage: InvocationStage::Cancelled,
+        cause: SchedulingCause::Interrupted,
+        actor: None,
+    };
+    let declined = InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: Some(InvocationStage::Cancelled),
+        stage: InvocationStage::Cancelled,
+        cause: SchedulingCause::NotResumed,
+        actor: Some(ActionContext::new("person", "panel", "original-close").unwrap()),
+    };
+    record.scheduling = vec![queued, interrupted];
+    if applied {
+        record.scheduling.push(declined.clone());
+    }
+    record.decline = Some(super::super::DeclineDecision::new(declined, acknowledged));
+    record
+}
+
+#[test]
+fn decline_receipts_validate_original_decision_and_acknowledgement_order() {
+    for (applied, acknowledged) in [(false, false), (true, false), (true, true)] {
+        let record = prepared_decline_record(applied, acknowledged);
+        super::super::validation::invocation_history(&record).unwrap();
+    }
+    assert!(
+        super::super::validation::invocation_history(&prepared_decline_record(false, true))
+            .is_err(),
+        "audit acknowledgement cannot precede application"
+    );
+    let mut changed = prepared_decline_record(true, true);
+    changed.scheduling.last_mut().unwrap().actor =
+        Some(ActionContext::new("other", "elsewhere", "later-close").unwrap());
+    assert!(
+        super::super::validation::invocation_history(&changed).is_err(),
+        "terminal attribution cannot replace original preparation"
+    );
+    for field in ["actor", "target", "before", "cause"] {
+        let mut record = prepared_decline_record(false, false);
+        let mut event = record.decline.as_ref().unwrap().event().clone();
+        match field {
+            "actor" => event.actor = None,
+            "target" => event.target = Some(ExecutionId::new("foreign").unwrap()),
+            "before" => event.before = Some(InvocationStage::Running),
+            "cause" => event.cause = SchedulingCause::SessionClosed,
+            _ => unreachable!(),
+        }
+        record.decline = Some(super::super::DeclineDecision::new(event, false));
+        assert!(
+            super::super::validation::invocation_history(&record).is_err(),
+            "invalid original decline {field}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn decline_receipt_flush_does_not_take_unrelated_pending_write_ownership() {
+    let (manager, lease, _) = manager(0).await;
+    let before = lease
+        .load()
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .provider_context
+        .clone();
+    manager
+        .evidence
+        .lock()
+        .await
+        .record(vec![SessionChange::ProviderContext {
+            before: before.clone(),
+            after: ProviderContext::Absent,
+        }])
+        .unwrap();
+    lease.fail_save.store(true, Ordering::SeqCst);
+    manager.flush_decline_receipts().await.unwrap();
+    assert_eq!(manager.evidence.lock().await.pending.len(), 1);
+    assert_eq!(
+        lease
+            .load()
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .provider_context,
+        before
+    );
 }

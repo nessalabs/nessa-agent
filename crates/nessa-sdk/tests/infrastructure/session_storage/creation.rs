@@ -1,6 +1,15 @@
 use super::*;
 use crate::application::agent_execution::{
-    commands::CreationInitializationFailure, sessions::SessionStorage,
+    commands::{
+        CreationInitializationFailure, MutationBinding, MutationOperation, MutationReceipt,
+        MutationStage,
+    },
+    sessions::SessionStorage,
+};
+use nessa_local_database::rusqlite::{
+    params,
+    types::{Value, ValueRef},
+    Connection, StatementStatus,
 };
 
 fn binding(request: &str) -> CreationBinding {
@@ -520,6 +529,331 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
     );
     assert_eq!(target.calls.load(Ordering::SeqCst), 1);
     storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    let creation = storage
+        .open_creation("person".into(), "creation".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    creation
+        .save(CreationReceipt::accepted(binding("creation")))
+        .await
+        .unwrap();
+    // Opening a stream alone does not admit an action. Keep a later request
+    // open across publication of the first request to distinguish those orders.
+    let later_lease = storage
+        .open_creation("person".into(), "later".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let lease = storage
+        .open_creation("person".into(), "stop".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let command = MutationBinding::new(
+        ActionContext::new("person", "panel", "stop").unwrap(),
+        MutationOperation::Stop,
+        SessionId::new("target").unwrap(),
+        "turn",
+        [3; 32],
+    )
+    .unwrap();
+    let accepted = MutationReceipt::accepted(command);
+    lease.save_mutation(accepted.clone()).await.unwrap();
+    let later = MutationReceipt::accepted(
+        MutationBinding::new(
+            ActionContext::new("person", "panel", "later").unwrap(),
+            MutationOperation::Stop,
+            SessionId::new("target").unwrap(),
+            "later-turn",
+            [4; 32],
+        )
+        .unwrap(),
+    );
+    later_lease.save_mutation(later.clone()).await.unwrap();
+    let attempted = accepted.advance(MutationStage::Attempted, None).unwrap();
+    lease.save_mutation(attempted.clone()).await.unwrap();
+    assert_eq!(
+        storage.mutations("person".into()).await.unwrap(),
+        [attempted.clone(), later.clone()]
+    );
+    assert!(storage.mutations("other".into()).await.unwrap().is_empty());
+    assert!(storage
+        .open_creation("other".into(), "observe".into(), false)
+        .await
+        .unwrap()
+        .is_none());
+    drop((creation, lease, later_lease));
+    assert_eq!(
+        storage.mutations("person".into()).await.unwrap(),
+        [attempted.clone(), later.clone()]
+    );
+    storage.shutdown().await.unwrap();
+    drop(storage);
+    let storage = RecordStorage::new(root).unwrap();
+    assert_eq!(
+        storage.mutations("person".into()).await.unwrap(),
+        [attempted, later]
+    );
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn creation_enumeration_keeps_principal_original_admission_and_current_stage() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    let later = storage
+        .open_creation("person".into(), "later".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let first = storage
+        .open_creation("person".into(), "first".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let accepted = CreationReceipt::accepted(binding("first"));
+    first.save(accepted.clone()).await.unwrap();
+    let last = CreationReceipt::accepted(binding("later"));
+    later.save(last.clone()).await.unwrap();
+    let foreign = storage
+        .open_creation("foreign".into(), "first".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    foreign
+        .save(CreationReceipt::accepted(CreationBinding::new(
+            ActionContext::new("foreign", "panel", "first").unwrap(),
+            SessionId::new("target").unwrap(),
+            [7; 32],
+        )))
+        .await
+        .unwrap();
+    // An observation neither acquires the already-held request nor appends a
+    // command. Its old Accepted prefix cannot override a later authorized stage.
+    let observed = storage.creations("person".into()).await.unwrap();
+    assert_eq!(observed, [accepted.clone(), last.clone()]);
+    let attempted = accepted.advance(CreationStage::Attempted).unwrap();
+    first.save(attempted.clone()).await.unwrap();
+    assert_ne!(
+        first.load("first").await.unwrap().as_ref(),
+        observed.first()
+    );
+    assert_eq!(
+        storage.creations("person".into()).await.unwrap(),
+        [attempted.clone(), last.clone()]
+    );
+    assert!(storage
+        .creations("missing".into())
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(storage
+        .open_creation("missing".into(), "observe".into(), false)
+        .await
+        .unwrap()
+        .is_none());
+    drop((first, later, foreign));
+    storage.shutdown().await.unwrap();
+    drop(storage);
+    let storage = RecordStorage::new(root).unwrap();
+    assert_eq!(
+        storage.creations("person".into()).await.unwrap(),
+        [attempted, last]
+    );
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn mutation_observation_sql_bounds_fields_before_driver_materialization() {
+    // Query the real persistence statement as well as the public observer:
+    // typed corruption alone cannot prove it refused before allocating data.
+    for (column, expression) in [
+        ("event_id", "CAST(zeroblob(1048576) AS TEXT)"),
+        ("schema_id", "CAST(zeroblob(1048576) AS TEXT)"),
+        ("payload", "zeroblob(1048576)"),
+        ("offset", "zeroblob(1048576)"),
+        ("schema_version", "'wrong-type'"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("records");
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage
+            .open_creation("person".into(), "create".into(), true)
+            .await
+            .unwrap()
+            .unwrap();
+        lease
+            .save(CreationReceipt::accepted(binding("create")))
+            .await
+            .unwrap();
+        drop(lease);
+        let connection = Connection::open(root.join("records.sqlite3")).unwrap();
+        // This private temporary database models malformed retained bytes,
+        // including corruption a healthy writer's CHECK would prevent.
+        connection
+            .pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        connection
+            .execute(
+                &format!("UPDATE event_records SET {column}={expression}"),
+                [],
+            )
+            .unwrap();
+        let mut statement = connection.prepare(OBSERVED_COMMANDS_SQL).unwrap();
+        let mut rows = statement
+            .query(params![
+                format!("{CONTROL_STREAM_PREFIX}*"),
+                i64::try_from(MAX_IDENTIFIER_BYTES).unwrap(),
+                i64::try_from(MAX_COMMAND_BYTES.max(MAX_RECORD_BYTES)).unwrap()
+            ])
+            .unwrap();
+        let row = rows.next().unwrap().unwrap();
+        for field in 0..6 {
+            assert_eq!(
+                row.get_ref(field).unwrap(),
+                ValueRef::Null,
+                "oversized {column} reached field {field}"
+            );
+        }
+        drop(rows);
+        drop(statement);
+        drop(connection);
+        // Even an unrelated principal must see typed malformed evidence rather
+        // than allocate it before filtering. The read cannot repair the row.
+        assert!(matches!(
+            storage.mutations("other".into()).await,
+            Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
+        ));
+        assert!(matches!(
+            storage.creations("other".into()).await,
+            Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
+        ));
+        storage.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn command_observation_work_excludes_unrelated_history_records() {
+    fn observe(connection: &Connection) -> (Vec<Vec<Value>>, i32) {
+        let mut statement = connection.prepare(OBSERVED_COMMANDS_SQL).unwrap();
+        let records = statement
+            .query_map(
+                params![
+                    format!("{CONTROL_STREAM_PREFIX}*"),
+                    i64::try_from(MAX_IDENTIFIER_BYTES).unwrap(),
+                    i64::try_from(MAX_COMMAND_BYTES.max(MAX_RECORD_BYTES)).unwrap()
+                ],
+                |row| (0..6).map(|field| row.get(field)).collect(),
+            )
+            .unwrap()
+            .collect::<Result<Vec<Vec<Value>>, _>>()
+            .unwrap();
+        (records, statement.get_status(StatementStatus::VmStep))
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    let lease = storage
+        .open_creation("person".into(), "create".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let accepted = CreationReceipt::accepted(binding("create"));
+    lease.save(accepted.clone()).await.unwrap();
+    let histories = (0..8)
+        .map(|index| StreamId::new(format!("unrelated-conversation-history-{index}")).unwrap())
+        .collect::<Vec<_>>();
+    for history in &histories {
+        storage
+            .runtime()
+            .await
+            .unwrap()
+            .create_stream(history)
+            .await
+            .unwrap();
+    }
+    let mut connection = Connection::open(root.join("records.sqlite3")).unwrap();
+    let (before, baseline_steps) = observe(&connection);
+    assert_eq!(before.len(), 1);
+    // Keep commands and stream count fixed; grow only unrelated history.
+    // VM work is deterministic evidence, independent of wall-clock speed.
+    let mut measurements = Vec::new();
+    for histories in [&histories[..1], &histories[1..]] {
+        let transaction = connection.transaction().unwrap();
+        {
+            let mut insert = transaction.prepare(
+                "INSERT INTO event_records(stream_key,offset,event_id,schema_id,schema_version,payload)
+                 SELECT stream_key,?1,?2,'history',1,x'00' FROM event_streams WHERE public_id=?3"
+            ).unwrap();
+            for history in histories {
+                for offset in 1_u64..=4096 {
+                    assert_eq!(
+                        insert
+                            .execute(params![
+                                offset.to_be_bytes(),
+                                format!("history-{offset}"),
+                                history.as_str()
+                            ])
+                            .unwrap(),
+                        1
+                    );
+                }
+            }
+        }
+        transaction.commit().unwrap();
+        measurements.push(observe(&connection));
+    }
+    // Public observers must remain read-only, including the physical WAL.
+    let paths = [
+        root.join("records.sqlite3"),
+        root.join("records.sqlite3-wal"),
+    ];
+    let bytes = paths
+        .iter()
+        .map(|path| match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("read database evidence: {error}"),
+        })
+        .collect::<Vec<_>>();
+    let observed = storage.creations("person".into()).await.unwrap();
+    let after_observation = paths
+        .iter()
+        .map(|path| match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("read database evidence: {error}"),
+        })
+        .collect::<Vec<_>>();
+    drop(connection);
+    drop(lease);
+    storage.shutdown().await.unwrap();
+    assert_eq!(
+        bytes, after_observation,
+        "observation must not write command/history evidence"
+    );
+    assert_eq!(observed, [accepted]);
+    for (after, _) in &measurements {
+        assert_eq!(
+            *after, before,
+            "history must not change command bytes/order"
+        );
+    }
+    let history_steps = measurements
+        .iter()
+        .map(|(_, steps)| *steps)
+        .collect::<Vec<_>>();
+    assert!(history_steps.iter().all(|steps| *steps <= baseline_steps + 256),
+        "unrelated history increased command observation work: {baseline_steps} -> {history_steps:?}");
 }
 
 struct ClassifiedMutation {

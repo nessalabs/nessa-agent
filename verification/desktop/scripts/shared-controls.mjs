@@ -7,6 +7,7 @@
  */
 import { measureAdoptedPill, pressScale } from "./lib/adopted-pill.mjs"
 import { openPage, need, waitUntilSettled, withEngines } from "./lib/browser.mjs"
+import { hoverFailures, sampleHover } from "./lib/hover-state.mjs"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, names } from "./lib/selectors.mjs"
@@ -168,6 +169,27 @@ function rowFailures(rows, scale, where) {
   return failures
 }
 
+/** The sidebar publishes its quiet metadata after the complete overview paint. */
+async function overviewReady(page) {
+  await page.waitForFunction(
+    (sel) => {
+      const entry = document.querySelector(sel.overviewEntry)
+      const current = [
+        ...document.querySelectorAll(`${sel.sidebar} [aria-current="page"]`),
+      ]
+      return Boolean(
+        document.querySelector(sel.overviewListed) &&
+        entry &&
+        current.length === 1 &&
+        current[0] === entry,
+      )
+    },
+    css,
+    { timeout: 2_000, polling: "raf" },
+  )
+  await waitUntilSettled(page)
+}
+
 /** Points at the first row a selector finds that is neither chosen nor open, and reads its fill. */
 async function hovered(page, selector) {
   const row = page
@@ -176,12 +198,7 @@ async function hovered(page, selector) {
     .and(page.locator(':not([data-active="true"]):not([data-selected]):not([data-open])'))
     .first()
   if (!(await row.count())) return null
-  await row.hover()
-  // Past the fill's own transition (`--desktop-fast`).
-  await page.waitForTimeout(250)
-  const fill = await row.evaluate((element) => getComputedStyle(element).backgroundColor)
-  await page.mouse.move(1, 1)
-  return fill
+  return sampleHover(page, row)
 }
 
 /**
@@ -504,7 +521,7 @@ const checks = {
     const scale = await page.evaluate(windowScale)
     await page.keyboard.press(keys.overview)
     await need(page, css.overviewCount, "the overview's counts")
-    await page.waitForTimeout(400)
+    await overviewReady(page)
     const read = () =>
       page.evaluate((sel) => {
         const options = [...document.querySelectorAll(sel.overviewCount)]
@@ -528,13 +545,9 @@ const checks = {
     if (before.options.some((option) => option.pressed))
       failures.push("a count is pressed while every group shows")
     const second = page.locator(css.overviewCount).nth(1)
-    await second.hover()
-    await page.waitForTimeout(250)
-    const hover = await second.evaluate(
-      (element) => getComputedStyle(element).backgroundColor,
-    )
-    if (hover !== scale.hover)
-      failures.push(`a count under the pointer is ${hover}, not ${scale.hover}`)
+    const hoverEvidence = await sampleHover(page, second)
+    const hover = hoverEvidence.settled.fill
+    failures.push(...hoverFailures(hoverEvidence.settled, [scale.hover]))
     await second.click()
     await page.mouse.move(1, 1)
     await page.waitForTimeout(400)
@@ -556,7 +569,12 @@ const checks = {
       failures.push("choosing the pressed count again did not let it go")
     return {
       failures,
-      measured: { counts: before.options.length, hover, pressed: chosen?.fill },
+      measured: {
+        counts: before.options.length,
+        hover,
+        hoverEvidence,
+        pressed: chosen?.fill,
+      },
     }
   },
   rims: async (page) => {
@@ -629,7 +647,7 @@ const checks = {
   rows: async (page, { layout }) => {
     const scale = await page.evaluate(windowScale)
     const failures = []
-    const measured = { scale, hover: {} }
+    const measured = { scale, hover: {}, hoverEvidence: {} }
     const onLoad = await page.evaluate(rowsOnPage, css)
     failures.push(...rowFailures(onLoad, scale, "on load"))
     // The sample's unread session shows in the session list and in the tree.
@@ -652,19 +670,18 @@ const checks = {
           failures.push(`no kit row with a ${kind} at its end to point at`)
         continue
       }
-      await beside.hover({ force: true })
-      await page.waitForTimeout(250)
-      const fill = await beside.evaluate(
-        (element, sel) =>
-          getComputedStyle(element.closest(sel.kitRowFrame).querySelector(sel.kitRow))
-            .backgroundColor,
-        css,
+      const sample = await sampleHover(page, beside, {
+        frame: css.kitRowFrame,
+        row: css.kitRow,
+        force: true,
+      })
+      measured.hover[`kit row under its ${kind}`] = sample.settled.fill
+      measured.hoverEvidence[`kit row under its ${kind}`] = sample
+      failures.push(
+        ...hoverFailures(sample.settled, [scale.hover, scale.selected]).map(
+          (failure) => `kit row under its ${kind}: ${failure}`,
+        ),
       )
-      measured.hover[`kit row under its ${kind}`] = fill
-      if (fill !== scale.hover && fill !== scale.selected)
-        failures.push(
-          `a kit row pointed at by its ${kind} is ${fill}, not ${scale.hover}`,
-        )
       if (layout === "columns") {
         const through = await beside.evaluate((element, sel) => {
           const frame = element.closest(sel.kitRowFrame)
@@ -711,24 +728,33 @@ const checks = {
       measured.actions = actions
     }
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
-      const fill = await hovered(page, selector)
-      measured.hover[kind] = fill
-      if (fill === null) failures.push(`no ${kind} to point at`)
-      else if (fill !== scale.hover)
-        failures.push(`a ${kind} under the pointer is ${fill}, not ${scale.hover}`)
+      const sample = await hovered(page, selector)
+      measured.hover[kind] = sample?.settled.fill ?? null
+      measured.hoverEvidence[kind] = sample
+      if (sample === null) failures.push(`no ${kind} to point at`)
+      else
+        failures.push(
+          ...hoverFailures(sample.settled, [scale.hover]).map(
+            (failure) => `${kind}: ${failure}`,
+          ),
+        )
     }
     await page.keyboard.press(keys.overview)
     await need(page, css.overviewRow, "an overview row")
-    await page.waitForTimeout(400)
+    await overviewReady(page)
     const inOverview = await page.evaluate(rowsOnPage, css)
     failures.push(...rowFailures(inOverview, scale, "in the overview"))
     const finished = inOverview.filter((row) => row.unread)
     if (finished.length === 0) failures.push("no finished row in the overview to weigh")
     const overviewFill = await hovered(page, `${css.overviewRow}:not(:focus)`)
-    measured.hover["overview row"] = overviewFill
-    if (overviewFill !== scale.hover)
+    measured.hover["overview row"] = overviewFill?.settled.fill ?? null
+    measured.hoverEvidence["overview row"] = overviewFill
+    if (!overviewFill) failures.push("no overview row to point at")
+    else
       failures.push(
-        `an overview row under the pointer is ${overviewFill}, not ${scale.hover}`,
+        ...hoverFailures(overviewFill.settled, [scale.hover]).map(
+          (failure) => `overview row: ${failure}`,
+        ),
       )
     await page.keyboard.press(keys.switcher)
     await need(page, css.switcherResults, "the switcher")

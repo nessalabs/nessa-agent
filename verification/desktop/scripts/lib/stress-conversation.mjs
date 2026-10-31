@@ -1,5 +1,28 @@
 import { css, selectorFor } from "./selectors.mjs"
 
+/** Read semantic chat identities even after the renderer replaces UUIDs with titles. */
+export function chatIdentityTexts(nodes) {
+  return nodes.map((node) => {
+    const copy = node.cloneNode(true)
+    for (const pill of copy.querySelectorAll("[data-chat-pill]"))
+      pill.replaceWith(pill.getAttribute("data-chat-pill"))
+    return copy.textContent ?? ""
+  })
+}
+
+/** Home shows one provider tab at a time; choose only the named fixture model. */
+export async function selectStressModel(page, trigger, displayName) {
+  await trigger.click()
+  await page.locator(css.modelOption).first().waitFor({ timeout: 10_000 })
+  const choice = page.locator(css.modelOption).filter({ hasText: displayName })
+  const tabs = page.locator(css.modelProviderTab)
+  for (let tab = 0; !(await choice.count()) && tab < (await tabs.count()); tab++)
+    await tabs.nth(tab).click()
+  if ((await choice.count()) !== 1)
+    throw new Error("the exact fixture model is not uniquely offered in Home")
+  await choice.click()
+}
+
 /** Reads the focused window conversation's identity, once its row is published. */
 export async function selectedStressConversation(page, title) {
   return page

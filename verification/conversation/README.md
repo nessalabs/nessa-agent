@@ -16,6 +16,9 @@ current published gateway views. Every case passes the actual client decoder
 and the production gateway-to-panel conversion before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
 and command authority. This fixture checks the browser's presentation of their
 published result, including re-enabling controls after an incomplete view.
+`fixture-state.ts` supplies keyed permission/question entries and their separately
+loaded details. Its tests retain incomplete-view authority boundaries and reject
+the former missing-key and inline-detail inputs through the actual client decoder.
 
 Run `node verification/desktop/scripts/committed-transcript.mjs`. It shares the
 desktop verification browser, result and selector owners; Chromium and WebKit

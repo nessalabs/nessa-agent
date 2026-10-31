@@ -5,8 +5,10 @@
 //! written. The store still replaces one body; this fence is the coordinator's.
 #![deny(missing_docs)]
 
+use crate::application::agent_execution::agents::OwnedCleanupScope;
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, Weak,
@@ -74,6 +76,38 @@ pub struct SpawnCommand {
     pub model: Option<crate::domain::agent_execution::subagents::ModelChoice>,
     /// Verified origin. A retry that changes it conflicts.
     pub origin: SpawnOrigin,
+}
+
+/// Internal operation identity: preparation and task submission cannot share a retry.
+#[derive(Clone)]
+struct ChildCommand {
+    command: SpawnCommand,
+    session: Option<SessionId>,
+}
+impl Deref for ChildCommand {
+    type Target = SpawnCommand;
+    fn deref(&self) -> &Self::Target {
+        &self.command
+    }
+}
+impl ChildCommand {
+    fn digest(&self) -> Result<TaskDigest, OwnershipError> {
+        match &self.session {
+            None => task_digest(&self.task),
+            Some(session) => {
+                let mut digest = Sha256::new();
+                // Ordinary task preimages are UTF-8. This tag makes preparation
+                // preimages disjoint without changing stored ordinary task digests.
+                // `preparation_and_spawn_have_disjoint_bindings_for_crafted_utf8_tasks`.
+                digest.update([0xff]);
+                digest.update(b"nessa.child.preparation\0");
+                digest.update((session.as_str().len() as u64).to_be_bytes());
+                digest.update(session.as_str().as_bytes());
+                digest.update(self.task.as_bytes());
+                TaskDigest::new(HEXLOWER.encode(&digest.finalize()))
+            }
+        }
+    }
 }
 
 /// Child identity and how far its spawn chart has moved.
@@ -157,11 +191,20 @@ struct PublishPause {
     release: Notify,
 }
 
+/// Which capability owns whole-lifetime physical cleanup. Binding a resource
+/// owner only relinquishes attachment authority; restored absence cannot grant it.
+#[derive(Clone, Copy)]
+pub(super) enum CleanupOwner {
+    Attachment,
+    Resources,
+}
+
 struct LifetimeGate {
     inner: Weak<Shared>,
     lifetime: AgentLifetimeId,
     scope: Arc<Mutex<()>>,
     sealed: Arc<AtomicBool>,
+    attachment_only: AtomicBool,
 }
 
 struct InflightGuard {
@@ -261,6 +304,72 @@ impl OwnershipCoordinator {
         })
     }
 
+    /// Read the active ownership lifetime for a session, including child sessions.
+    /// Private admissions and Closed history are excluded. This read grants no
+    /// attachment or submission authority; use [`Self::participation`] for a gate.
+    pub fn active_lifetime_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
+        self.inner.with_graph(|graph| {
+            graph.snapshot().lifetimes.into_iter().find_map(|row| {
+                (row.session_id == *session
+                    && row.state != LifetimeState::Closed
+                    && self
+                        .inner
+                        .publication
+                        .lock()
+                        .expect("ownership publication")
+                        .lifetime_eligible(graph, &row.lifetime_id))
+                .then_some(row.lifetime_id)
+            })
+        })
+    }
+
+    /// Read a retained child session identity, including closed history.
+    /// This grants no admission authority. Hosts can distinguish an ordinary
+    /// root opening from a session whose existing child ancestry is sealed.
+    /// A closed reservation with validated absence never acquired that session.
+    pub fn child_lifetime_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
+        self.inner.with_graph(|graph| {
+            graph
+                .snapshot()
+                .spawns
+                .into_iter()
+                .find(|row| {
+                    row.child_session == *session
+                        && !(graph.lifetime_state(&row.child_lifetime)
+                            == Some(LifetimeState::Closed)
+                            && graph.has_absence(&row.child_lifetime))
+                })
+                .map(|row| row.child_lifetime)
+        })
+    }
+
+    /// Read the original spawn binding for a child lifetime, including retained
+    /// history. Roots return `None`. This immutable correlation grants no
+    /// preparation, attachment, cancellation or resource-cleanup authority.
+    pub fn spawn_binding_for_lifetime(&self, lifetime: &AgentLifetimeId) -> Option<SpawnBinding> {
+        self.inner.with_graph(|graph| {
+            graph
+                .snapshot()
+                .spawns
+                .into_iter()
+                .find(|row| &row.child_lifetime == lifetime)
+                .map(|row| row.binding)
+        })
+    }
+
+    /// Whether this coordinator retains a cleanup adapter for the lifetime.
+    /// This observes an existing transfer; it grants no attachment or cleanup
+    /// authority and does not imply physical release.
+    pub fn has_bound_resources(&self, lifetime: &AgentLifetimeId) -> bool {
+        self.inner.with_graph(|_| {
+            self.inner
+                .resources
+                .lock()
+                .expect("child resources")
+                .contains_key(lifetime)
+        })
+    }
+
     /// Reserve, prepare, and admit one child. Identical retries do not call the factory again.
     /// A caller that arrives while the attempt is running joins it. Dropping one waiter
     /// leaves the attempt running.
@@ -272,6 +381,48 @@ impl OwnershipCoordinator {
     /// Stage-specific failure, capacity, and sealing semantics and their named
     /// enforcers are defined by the [ADR329 ordering table](https://github.com/nessalabs/nessa-agent/blob/main/docs/adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628).
     pub async fn spawn(&self, command: SpawnCommand) -> Result<SpawnReceipt, OwnershipFailure> {
+        self.start_child(ChildCommand {
+            command,
+            session: None,
+        })
+        .await
+    }
+
+    /// Prepare an owned child on the supplied session without submitting a turn.
+    ///
+    /// `command.task` is retained as a configuration/task-description fingerprint
+    /// and passed to the factory; it is not sent to `InitialSubmit`. The session,
+    /// preparation operation and description are part of retry identity. A Ready
+    /// receipt records acknowledged preparation, not a fabricated task receipt.
+    /// Caller cancellation leaves the admitted preparation supervised. Lifetime
+    /// close still drains this child. The host owns later ordinary submissions.
+    ///
+    /// ```no_run
+    /// # use nessa_sdk::application::agent_execution::subagents::{OwnershipCoordinator, OwnershipFailure, SpawnCommand};
+    /// # use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    /// # async fn prepare(coordinator: OwnershipCoordinator, command: SpawnCommand, session: SessionId) -> Result<(), OwnershipFailure> {
+    /// let prepared = coordinator.prepare_child(command, session).await?;
+    /// let child_session = prepared.session; // Use ordinary Agent APIs for later work.
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    /// Returns the same admission, audit, store, capacity and preparation failures
+    /// as [`Self::spawn`]. A retry changing session or operation conflicts.
+    pub async fn prepare_child(
+        &self,
+        command: SpawnCommand,
+        session: SessionId,
+    ) -> Result<SpawnReceipt, OwnershipFailure> {
+        self.start_child(ChildCommand {
+            command,
+            session: Some(session),
+        })
+        .await
+    }
+
+    async fn start_child(&self, command: ChildCommand) -> Result<SpawnReceipt, OwnershipFailure> {
         if command.task.trim().is_empty() {
             return Err(OwnershipFailure::EmptyTask);
         }
@@ -359,12 +510,21 @@ impl OwnershipCoordinator {
         }
     }
 
+    /// Current minted target and session for lease-scoped SDK resource evidence.
+    /// Returns no scope for an unknown or Closed lifetime, or refused graph.
+    /// `lifetime` names the exact cleanup target, independently of close timing.
+    pub fn cleanup_scope(&self, lifetime: &AgentLifetimeId) -> Option<OwnedCleanupScope> {
+        self.inner
+            .with_graph(|graph| cleanup_scope(graph, lifetime))
+    }
+
     /// Transfer a cleanup owner for an admitted lifetime, such as the root.
     /// `resources` remains the caller's responsibility until this returns success.
     /// A successful transfer is retained for close even if later audit/storage fails.
     /// Binding and never-bound absence claims serialize under the admission scope.
     /// An existing owner is not replaced; Closing recovery may accept a vacant
     /// owner slot only before physical release or an absence claim.
+    /// Restored evidence debt uses [`Self::restore_closing_resources`] instead.
     ///
     /// # Errors
     /// Returns [`BindResourcesFailure`] with the exact rejected owner for an
@@ -375,13 +535,43 @@ impl OwnershipCoordinator {
         lifetime: AgentLifetimeId,
         resources: Arc<dyn ChildResources>,
     ) -> Result<(), BindResourcesFailure> {
+        self.transfer_resources(lifetime, resources, false)
+    }
+
+    /// Restore the resource owner a Closing graph still requires for cleanup or
+    /// its own unacknowledged evidence. This uses the existing resource slot;
+    /// it does not admit attachment, replace a live owner, or reserve capacity.
+    /// The graph's exact cleanup targets, including released resources with
+    /// evidence debt, own eligibility. Ordinary [`Self::bind_resources`] still
+    /// refuses every acknowledged physical release.
+    ///
+    /// # Errors
+    /// Returns the exact rejected owner for ordinary transfer refusals or when
+    /// the graph no longer requires that lifetime's resource owner.
+    pub fn restore_closing_resources(
+        &self,
+        lifetime: AgentLifetimeId,
+        resources: Arc<dyn ChildResources>,
+    ) -> Result<(), BindResourcesFailure> {
+        self.transfer_resources(lifetime, resources, true)
+    }
+
+    fn transfer_resources(
+        &self,
+        lifetime: AgentLifetimeId,
+        resources: Arc<dyn ChildResources>,
+        restoring: bool,
+    ) -> Result<(), BindResourcesFailure> {
         let result = self.inner.with_graph(|graph| {
             let mut owned = self.inner.resources.lock().expect("child resources");
-            let refusal = self.inner.transfer_refusal(graph, &lifetime).or_else(|| {
-                owned
-                    .contains_key(&lifetime)
-                    .then_some(BindResourcesRefusal::AlreadyBound)
-            });
+            let refusal = self
+                .inner
+                .transfer_refusal(graph, &lifetime, restoring)
+                .or_else(|| {
+                    owned
+                        .contains_key(&lifetime)
+                        .then_some(BindResourcesRefusal::AlreadyBound)
+                });
             if let Some(reason) = refusal {
                 return Err(BindResourcesFailure { reason, resources });
             }
@@ -390,6 +580,14 @@ impl OwnershipCoordinator {
                 .lock()
                 .expect("bound lifetimes")
                 .insert(lifetime.clone());
+            self.inner
+                .gates
+                .lock()
+                .expect("lifetime gates")
+                .get(&lifetime)
+                .expect("admitted lifetime gate")
+                .attachment_only
+                .store(false, Ordering::Release);
             owned.insert(lifetime, resources);
             Ok(())
         });
@@ -422,7 +620,11 @@ impl OwnershipCoordinator {
                     .load(Ordering::Acquire)
                     .then_some(gate as Arc<dyn OwnedLifetime>);
             }
-            if self.inner.transfer_refusal(graph, lifetime).is_some() {
+            if self
+                .inner
+                .transfer_refusal(graph, lifetime, false)
+                .is_some()
+            {
                 return None;
             }
             let gate = self
@@ -443,8 +645,137 @@ impl OwnershipCoordinator {
 
     /// Reload the store. Reserved, prepared, and attached spawns become unconfirmed
     /// and are not sent to the factory. A closing root resumes its drain.
+    ///
+    /// Call during quiescent startup, before admitting work or binding restored resources.
+    /// Retained children reserve live room until validated physical release; roots do not.
+    /// Repeating a quiescent reload does not reserve the same child twice. Insufficient
+    /// room returns `NoRoom` after acknowledged rollback, without installing the snapshot.
+    /// A room-adapter panic returns `Startup(Uncertain)`; an unacknowledged reservation
+    /// or release is never compensated by inventing an extra release.
+    /// Refused history is installed sealed and cannot release existing reservations.
     pub async fn resume(&self) -> Result<(), OwnershipFailure> {
         Arc::clone(&self.inner).resume_from_store().await
+    }
+
+    /// Reject an original preparation proven never to have initialized resources.
+    ///
+    /// This is a host recovery assertion, not an inference from a restored
+    /// reservation. During quiescent startup the host must hold the original
+    /// initialization command's exclusion and verify its immutable binding and
+    /// acknowledged pre-initialization stage. Missing metadata, an interrupted
+    /// initializer, or an absent terminal receipt cannot establish this promise.
+    /// The existing graph records preparation rejection/absence, seals only this
+    /// child subtree, and retains its original close owner and audit obligations.
+    /// No factory or provider effect is repeated or synthetically acknowledged.
+    /// Repeating the same confirmed absence does not release capacity twice.
+    ///
+    /// # Errors
+    /// Refuses an unrelated identity, later preparation milestone, refused
+    /// history, live factory flight or bound cleanup owner. Audit/store failures
+    /// retain cleanup evidence; physically absent capacity may already be free.
+    /// An ancestor's existing close remains separately owned and is not joined.
+    ///
+    /// # Cancellation
+    /// A sealed child's absence and first close remain retained. Retry recovery
+    /// with the same verified original command; cancellation permits no factory replay.
+    pub async fn reject_unstarted_preparation(
+        &self,
+        request: &SpawnRequestId,
+        child: &AgentLifetimeId,
+    ) -> Result<(), OwnershipFailure> {
+        let (closing, owner, ended) = self.inner.with_graph(|graph| {
+            let stale = || OwnershipFailure::Domain(OwnershipError::StaleOutcome);
+            if graph.refusal().is_some()
+                || graph.child_lifetime(request) != Some(child)
+                || self
+                    .inner
+                    .inflight
+                    .lock()
+                    .expect("inflight spawns")
+                    .contains(child)
+                || self
+                    .inner
+                    .resources
+                    .lock()
+                    .expect("child resources")
+                    .contains_key(child)
+            {
+                return Err(stale());
+            }
+            let progress = graph.spawn_progress(request).ok_or_else(stale)?;
+            let absent = graph.has_absence(child);
+            if !matches!(
+                progress,
+                SpawnProgress::Unconfirmed {
+                    known: KnownMilestone::Reserved
+                }
+            ) && !(absent && progress.known() == KnownMilestone::Reserved)
+            {
+                return Err(stale());
+            }
+            let ended = matches!(progress, SpawnProgress::Ended { .. });
+            let closing = if absent {
+                None
+            } else {
+                self.inner.revoke_child_in_graph(graph, child)
+            };
+            let owner = graph.close_owner(child).ok_or_else(stale)?;
+            if !absent {
+                let operation = graph.close_operation(&owner).cloned().ok_or_else(stale)?;
+                let _retained = graph
+                    .note_absence(
+                        &owner,
+                        &operation,
+                        child,
+                        AbsenceProof::PreparationRejectedWithoutOwner(request.clone()),
+                    )
+                    .map_err(OwnershipFailure::Domain)?;
+            }
+            Ok((closing, owner, ended))
+        })?;
+        self.inner.release_slot(child);
+        if let Some(closing) = closing {
+            self.inner.persist_evidence(&closing).await?;
+        } else {
+            self.inner
+                .commit_snapshot()
+                .await
+                .map_err(OwnershipFailure::Store)?;
+        }
+        if !ended {
+            if self.inner.with_graph(|graph| {
+                matches!(
+                    graph.spawn_progress(request),
+                    Some(SpawnProgress::Unconfirmed { .. })
+                )
+            }) {
+                self.inner
+                    .advance(
+                        request,
+                        SpawnProgress::Draining {
+                            known: KnownMilestone::Reserved,
+                        },
+                    )
+                    .await?;
+            }
+            self.inner
+                .advance(
+                    request,
+                    SpawnProgress::Ended {
+                        known: KnownMilestone::Reserved,
+                    },
+                )
+                .await?;
+        }
+        let generation = self
+            .inner
+            .start_drain(owner.clone(), false)
+            .ok_or(OwnershipFailure::Incomplete)?;
+        if owner == *child {
+            wait_generation(generation).await
+        } else {
+            Ok(())
+        }
     }
 
     /// Read one page of children. Illegal restored history stays readable.
@@ -533,6 +864,7 @@ impl Shared {
         &self,
         graph: &OwnershipGraph,
         lifetime: &AgentLifetimeId,
+        restoring: bool,
     ) -> Option<BindResourcesRefusal> {
         match graph.lifetime_state(lifetime) {
             None => Some(BindResourcesRefusal::UnknownLifetime),
@@ -567,15 +899,23 @@ impl Shared {
             {
                 Some(BindResourcesRefusal::FactoryInFlight)
             }
+            Some(LifetimeState::Open) if restoring => Some(BindResourcesRefusal::NotClosing),
+            _ if restoring
+                && !graph
+                    .close_owner(lifetime)
+                    .is_some_and(|root| graph.cleanup_targets(&root).contains(lifetime)) =>
+            {
+                Some(BindResourcesRefusal::Released)
+            }
             _ if graph.has_absence(lifetime)
                 || self
                     .absence_claimed
                     .lock()
                     .expect("absence claims")
                     .contains(lifetime)
-                || graph.snapshot().settlements.iter().any(|row| {
+                || (graph.snapshot().settlements.iter().any(|row| {
                     row.target == *lifetime && row.physical == PhysicalFact::Released
-                }) =>
+                }) && !restoring) =>
             {
                 Some(BindResourcesRefusal::Released)
             }
@@ -583,13 +923,20 @@ impl Shared {
         }
     }
 
-    pub(super) fn remember(&self, inner: Weak<Shared>, lifetime: AgentLifetimeId, sealed: bool) {
+    pub(super) fn remember(
+        &self,
+        inner: Weak<Shared>,
+        lifetime: AgentLifetimeId,
+        sealed: bool,
+        cleanup: CleanupOwner,
+    ) {
         let flag = Arc::new(AtomicBool::new(sealed));
         let gate = Arc::new(LifetimeGate {
             inner,
             lifetime: lifetime.clone(),
             scope: Arc::clone(&self.scope),
             sealed: Arc::clone(&flag),
+            attachment_only: AtomicBool::new(matches!(cleanup, CleanupOwner::Attachment)),
         });
         self.seals
             .lock()
@@ -624,7 +971,7 @@ impl Shared {
         })
     }
 
-    fn lookup(&self, command: &SpawnCommand) -> Option<Result<SpawnReceipt, OwnershipFailure>> {
+    fn lookup(&self, command: &ChildCommand) -> Option<Result<SpawnReceipt, OwnershipFailure>> {
         self.with_graph(|graph| {
             let progress = graph.spawn_progress(&command.request_id).cloned()?;
             let Some(child) = graph.child_lifetime(&command.request_id).cloned() else {
@@ -636,7 +983,8 @@ impl Shared {
             let Some(session) = graph.session_id(&child).cloned() else {
                 return Some(Err(OwnershipFailure::Domain(OwnershipError::UnknownSpawn)));
             };
-            let digest_ok = task_digest(&command.task)
+            let digest_ok = command
+                .digest()
                 .map(|digest| digest_matches(graph, &command.request_id, &digest))
                 .unwrap_or(false);
             if stored_parent(graph, &command.request_id).as_ref() != Some(&command.parent)
@@ -694,7 +1042,7 @@ impl Shared {
 
     async fn drive_spawn(
         self: &Arc<Self>,
-        command: SpawnCommand,
+        command: ChildCommand,
     ) -> Result<SpawnReceipt, OwnershipFailure> {
         if let Some(found) = self.lookup(&command) {
             return found;
@@ -781,7 +1129,7 @@ impl Shared {
     fn admit_new(
         &self,
         graph: &mut OwnershipGraph,
-        command: &SpawnCommand,
+        command: &ChildCommand,
         _weak: Weak<Shared>,
     ) -> Result<Admitted, OwnershipFailure> {
         if graph.spawn_progress(&command.request_id).is_some() {
@@ -816,8 +1164,8 @@ impl Shared {
             return Err(OwnershipFailure::Domain(OwnershipError::NoRoom));
         }
         let child = mint_lifetime();
-        let session = mint_session();
-        let digest = task_digest(&command.task).map_err(OwnershipFailure::Domain)?;
+        let session = command.session.clone().unwrap_or_else(mint_session);
+        let digest = command.digest().map_err(OwnershipFailure::Domain)?;
         let binding = SpawnBinding {
             parent_lifetime: command.parent.clone(),
             parent_session,
@@ -839,7 +1187,7 @@ impl Shared {
                     .lock()
                     .expect("inflight spawns")
                     .insert(child.clone());
-                self.remember(_weak, child.clone(), false);
+                self.remember(_weak, child.clone(), false, CleanupOwner::Resources);
                 let token = self
                     .publication
                     .lock()
@@ -865,7 +1213,7 @@ impl Shared {
 
     async fn preparing_factory(
         self: &Arc<Self>,
-        command: &SpawnCommand,
+        command: &ChildCommand,
         admitted: Admitted,
     ) -> Result<SpawnReceipt, OwnershipFailure> {
         let owned_lifetime = self.with_graph(|_| {
@@ -1054,6 +1402,24 @@ impl Shared {
             .await?;
         self.advance(&command.request_id, SpawnProgress::Attached)
             .await?;
+        if command.session.is_some() {
+            self.advance(&command.request_id, SpawnProgress::Ready)
+                .await?;
+            // Ready publication can await audit/storage while the parent closes.
+            // Reuse the graph's admission decision after that publication.
+            match self
+                .with_graph(|graph| graph.dispatch_after_prepare(&command.request_id))
+                .map_err(OwnershipFailure::Domain)?
+            {
+                Dispatch::Allowed => return self.receipt(&command.request_id),
+                Dispatch::Drain => {
+                    return Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+                }
+                Dispatch::ChildUnavailable => {
+                    return Err(OwnershipFailure::Domain(OwnershipError::ChildUnavailable))
+                }
+            }
+        }
         let submitted = effect(
             "initial_submission",
             || prepared.submit.submit(&command.task, &command.request_id),
@@ -1211,37 +1577,50 @@ impl Shared {
         report: super::ports::ResourceReport,
     ) -> Result<(), OwnershipFailure> {
         self.with_graph(|graph| {
-            let _retained =
-                graph.apply_report(root, operation, target, report.physical, report.evidence)?;
-            if report.physical == PhysicalFact::Released {
-                let request = graph
-                    .snapshot()
-                    .spawns
-                    .iter()
-                    .find(|row| {
-                        &row.child_lifetime == target
-                            && matches!(
-                                row.progress,
-                                SpawnProgress::StartupFailed {
-                                    known: KnownMilestone::Reserved
-                                }
-                            )
-                    })
-                    .map(|row| row.binding.request_id.clone());
-                if let Some(request) = request {
-                    let _ended = graph.advance_spawn(
-                        &request,
-                        SpawnProgress::Ended {
-                            known: KnownMilestone::Reserved,
-                        },
-                    )?;
-                }
-            }
-            Ok::<_, OwnershipError>(())
+            self.install_report_on_graph(graph, root, operation, target, report)
         })
         .map_err(OwnershipFailure::Domain)?;
         if report.physical == PhysicalFact::Released {
             self.release_slot(target);
+        }
+        Ok(())
+    }
+
+    // Caller holds the existing graph/admission scope, including authority
+    // selection when a bare attachment publishes its own resource observation.
+    fn install_report_on_graph(
+        &self,
+        graph: &mut OwnershipGraph,
+        root: &AgentLifetimeId,
+        operation: &CloseOperationId,
+        target: &AgentLifetimeId,
+        report: super::ports::ResourceReport,
+    ) -> Result<(), OwnershipError> {
+        let _retained =
+            graph.apply_report(root, operation, target, report.physical, report.evidence)?;
+        if report.physical == PhysicalFact::Released {
+            let request = graph
+                .snapshot()
+                .spawns
+                .iter()
+                .find(|row| {
+                    &row.child_lifetime == target
+                        && matches!(
+                            row.progress,
+                            SpawnProgress::StartupFailed {
+                                known: KnownMilestone::Reserved
+                            }
+                        )
+                })
+                .map(|row| row.binding.request_id.clone());
+            if let Some(request) = request {
+                let _ended = graph.advance_spawn(
+                    &request,
+                    SpawnProgress::Ended {
+                        known: KnownMilestone::Reserved,
+                    },
+                )?;
+            }
         }
         Ok(())
     }
@@ -1805,7 +2184,7 @@ impl Shared {
 
     fn unclaim_unreleased(&self, root: &AgentLifetimeId) {
         self.with_graph(|graph| {
-            let pending = graph.physical_targets(root);
+            let pending = graph.cleanup_targets(root);
             let mut claimed = self.claimed.lock().expect("close claims");
             for id in pending {
                 claimed.remove(&id);
@@ -1861,7 +2240,7 @@ impl Shared {
         loop {
             let notified = self.notify.notified();
             tokio::pin!(notified);
-            let targets = self.with_graph(|graph| graph.physical_targets(&root));
+            let targets = self.with_graph(|graph| graph.cleanup_targets(&root));
             let mut processed = false;
             for target in &targets {
                 if external.load(Ordering::Acquire) && target == &root {
@@ -1918,7 +2297,7 @@ impl Shared {
     }
 
     fn drain_blocked(&self, root: &AgentLifetimeId, external: &AtomicBool) -> bool {
-        let targets = self.with_graph(|graph| graph.physical_targets(root));
+        let targets = self.with_graph(|graph| graph.cleanup_targets(root));
         let external_root =
             external.load(Ordering::Acquire) && targets.iter().any(|target| target == root);
         if external_root || self.subtree_inflight(root) {
@@ -1999,9 +2378,51 @@ impl Shared {
             })
             .map(|row| row.child_lifetime.clone())
             .collect();
+        let retained: HashSet<_> = restored_snapshot
+            .spawns
+            .iter()
+            .filter(|row| {
+                // Match the existing resource-transfer and slot-release authorities.
+                // Audit delivery alone never proves physical release.
+                !restored_snapshot.settlements.iter().any(|settlement| {
+                    settlement.target == row.child_lifetime
+                        && settlement.physical == PhysicalFact::Released
+                }) && !(restored.lifetime_state(&row.child_lifetime) == Some(LifetimeState::Open)
+                    && matches!(
+                        row.progress,
+                        SpawnProgress::Ended {
+                            known: KnownMilestone::Reserved
+                        }
+                    ))
+            })
+            .map(|row| row.child_lifetime.clone())
+            .collect();
         let rows = restored_snapshot.lifetimes;
         let weak = Arc::downgrade(self);
         self.with_graph(|graph| {
+            let mut held = self.held.lock().expect("live slots");
+            let mut release_uncertain = false;
+            if !refused {
+                for (acquired, _) in retained.difference(&held).enumerate() {
+                    let reservation = synchronous(|| self.room.try_reserve());
+                    if reservation != Some(true) {
+                        // A panicked call has an unknown outcome. Release only the
+                        // reservations whose successful acquisition was observed.
+                        for _ in 0..acquired {
+                            release_uncertain |= synchronous(|| self.room.release()).is_none();
+                        }
+                        return Err(if reservation == Some(false) && !release_uncertain {
+                            OwnershipFailure::Domain(OwnershipError::NoRoom)
+                        } else {
+                            OwnershipFailure::Startup(PortFailure::Uncertain)
+                        });
+                    }
+                }
+                for _ in held.difference(&retained) {
+                    release_uncertain |= synchronous(|| self.room.release()).is_none();
+                }
+                *held = retained;
+            }
             *graph = restored;
             *self.publication.lock().expect("ownership publication") = publication;
             // A restored identity cannot prove never-bound absence.
@@ -2016,9 +2437,15 @@ impl Shared {
                     refused
                         || row.state != LifetimeState::Open
                         || nonrunnable_children.contains(&row.lifetime_id),
+                    CleanupOwner::Resources,
                 );
             }
-        });
+            if release_uncertain {
+                Err(OwnershipFailure::Startup(PortFailure::Uncertain))
+            } else {
+                Ok(())
+            }
+        })?;
         if refused {
             return Ok(());
         }
@@ -2046,6 +2473,21 @@ struct Admitted {
     session: SessionId,
     evidence: OwnershipEvidence,
     policy: ApprovalPolicy,
+}
+
+fn cleanup_scope(graph: &OwnershipGraph, target: &AgentLifetimeId) -> Option<OwnedCleanupScope> {
+    if graph.refusal().is_some()
+        || !matches!(
+            graph.lifetime_state(target),
+            Some(LifetimeState::Open | LifetimeState::Closing)
+        )
+    {
+        return None;
+    }
+    Some(OwnedCleanupScope::new(
+        target.clone(),
+        graph.session_id(target)?.clone(),
+    ))
 }
 
 fn closing_ids(graph: &OwnershipGraph, root: &AgentLifetimeId) -> Vec<AgentLifetimeId> {
@@ -2149,6 +2591,21 @@ fn host_actor(actor: &ActionContext) -> Result<HostActor, AgentError> {
 
 #[async_trait]
 impl OwnedLifetime for LifetimeGate {
+    fn cleanup_scope(&self) -> Option<OwnedCleanupScope> {
+        let shared = self.inner.upgrade()?;
+        shared.with_graph(|graph| {
+            if !shared
+                .gates
+                .lock()
+                .expect("lifetime gates")
+                .get(&self.lifetime)
+                .is_some_and(|gate| std::ptr::eq(gate.as_ref(), self))
+            {
+                return None;
+            }
+            cleanup_scope(graph, &self.lifetime)
+        })
+    }
     fn admission_scope(&self) -> Arc<Mutex<()>> {
         Arc::clone(&self.scope)
     }
@@ -2192,34 +2649,56 @@ impl OwnedLifetime for LifetimeGate {
         let Some(shared) = self.inner.upgrade() else {
             return;
         };
-        let physical = if released {
-            PhysicalFact::Released
-        } else {
-            PhysicalFact::Failed
-        };
-        let evidence_fact = if evidence_acknowledged {
-            EvidenceFact::Acknowledged
-        } else {
-            EvidenceFact::Failed
-        };
-        let owner = shared.with_graph(|graph| graph.close_owner(&self.lifetime));
-        if let Some(owner) = owner {
-            let operation = shared.with_graph(|graph| graph.close_operation(&owner).cloned());
-            if let Some(operation) = operation {
-                let _ = shared.install_report(
-                    &owner,
-                    &operation,
-                    &self.lifetime,
-                    super::ports::ResourceReport {
-                        physical,
-                        evidence: evidence_fact,
-                    },
-                );
-                // The resource close can be awaiting this callback. Publish its
-                // observation and let the owned generation reconcile it without
-                // making the producer join its own pending resource future.
-                let _ = shared.start_drain(owner.clone(), false);
+        let mut installed_release = false;
+        let owner = shared.with_graph(|graph| {
+            // Quiescent restoration replaces gates. An old capability cannot
+            // publish into, or hand off a phase of, the reconstructed lifetime.
+            if !shared
+                .gates
+                .lock()
+                .expect("lifetime gates")
+                .get(&self.lifetime)
+                .is_some_and(|current| std::ptr::eq(current.as_ref(), self))
+            {
+                return None;
             }
+            let owner = graph.close_owner(&self.lifetime)?;
+            let operation = graph.close_operation(&owner)?.clone();
+            if self.attachment_only.load(Ordering::Acquire) {
+                let report = super::ports::ResourceReport {
+                    physical: if released {
+                        PhysicalFact::Released
+                    } else {
+                        PhysicalFact::Failed
+                    },
+                    evidence: if evidence_acknowledged {
+                        EvidenceFact::Acknowledged
+                    } else {
+                        EvidenceFact::Failed
+                    },
+                };
+                let installed = shared
+                    .install_report_on_graph(graph, &owner, &operation, &self.lifetime, report)
+                    .is_ok();
+                installed_release = installed && released;
+            }
+            Some(owner)
+        });
+        if installed_release {
+            shared.release_slot(&self.lifetime);
+        }
+        if let Some(owner) = owner {
+            // No graph lock while acquiring drains: registration takes them in
+            // the opposite order. A descendant cannot release its ancestor's
+            // still-running external attachment phase.
+            if owner == self.lifetime {
+                if let Some(drain) = shared.drains.lock().expect("close drains").get(&owner) {
+                    drain.external.store(false, Ordering::Release);
+                }
+            }
+            // The actual resource close may be waiting for this callback.
+            // Hand off and notify; do not await that close here.
+            let _ = shared.start_drain(owner, false);
         }
         shared.notify.notify_waiters();
     }
@@ -2359,6 +2838,15 @@ mod process_cleanup {
 
     #[tokio::test]
     async fn parent_close_kills_the_child_process_group() {
+        physical_child_cleanup(false).await;
+    }
+
+    #[tokio::test]
+    async fn parent_close_kills_the_prepared_child_process_group() {
+        physical_child_cleanup(true).await;
+    }
+
+    async fn physical_child_cleanup(prepare_only: bool) {
         let factory = Arc::new(ProcessFactory {
             child: Mutex::new(None),
         });
@@ -2375,20 +2863,25 @@ mod process_cleanup {
         coordinator
             .bind_resources(root.clone(), Arc::new(ReleasedRoot))
             .unwrap();
-        coordinator
-            .spawn(SpawnCommand {
-                parent: root.clone(),
-                request_id: SpawnRequestId::new("proc-req").unwrap(),
-                task: "sleep".to_owned(),
-                policy: PolicyRead::Committed(
-                    ApprovalPolicy::new("read-only", "ask", "rev-1").unwrap(),
-                ),
-                child_supports_policy: true,
-                model: None,
-                origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
-            })
-            .await
-            .unwrap();
+        let command = SpawnCommand {
+            parent: root.clone(),
+            request_id: SpawnRequestId::new("proc-req").unwrap(),
+            task: "sleep".to_owned(),
+            policy: PolicyRead::Committed(
+                ApprovalPolicy::new("read-only", "ask", "rev-1").unwrap(),
+            ),
+            child_supports_policy: true,
+            model: None,
+            origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
+        };
+        if prepare_only {
+            coordinator
+                .prepare_child(command, SessionId::new("prepared-process").unwrap())
+                .await
+                .unwrap();
+        } else {
+            coordinator.spawn(command).await.unwrap();
+        }
         let process = factory.child.lock().expect("process").clone().unwrap();
         assert_eq!(unsafe { libc::kill(process.pid, 0) }, 0);
         coordinator
@@ -2422,8 +2915,8 @@ async fn wait_generation(
 #[cfg(test)]
 mod lifetime_races {
     use super::{
-        CloseCommand, OwnershipCoordinator, OwnershipDependencies, OwnershipFailure, PublishPause,
-        SpawnCommand,
+        CleanupOwner, CloseCommand, OwnershipCoordinator, OwnershipDependencies, OwnershipFailure,
+        PublishPause, SpawnCommand,
     };
     use crate::application::agent_execution::subagents::{
         ChildFactory, ChildResources, InitialSubmit, LiveCapacity, MemoryOwnershipStore,
@@ -2511,6 +3004,73 @@ mod lifetime_races {
         ) -> Result<TaskReceiptId, PortFailure> {
             Ok(TaskReceiptId::new("receipt").expect("receipt"))
         }
+    }
+
+    #[tokio::test]
+    async fn cleanup_scope_requires_current_gate_and_rejects_closed_targets() {
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(AcceptAudit),
+            factory: Arc::new(OnceFactory {
+                resources: Arc::new(Holding {
+                    closes: AtomicUsize::new(0),
+                    hold: Arc::new(Notify::new()),
+                }),
+            }),
+            room: Arc::new(LiveCapacity::new(4)),
+        });
+        let session = SessionId::new("cleanup-scope-session").unwrap();
+        let root = coordinator
+            .open_root(session.clone(), Initiator::Runtime)
+            .await
+            .unwrap();
+        let original = coordinator.participation(&root).unwrap();
+        let scope = original
+            .cleanup_scope()
+            .expect("actual SDK cleanup may precede graph close");
+        assert_eq!(scope.lifetime(), &root);
+        assert_eq!(scope.session(), &session);
+        let retained = coordinator
+            .inner
+            .gates
+            .lock()
+            .unwrap()
+            .remove(&root)
+            .unwrap();
+        assert!(
+            original.cleanup_scope().is_none(),
+            "revoked installation cannot publish cleanup proof"
+        );
+        coordinator.inner.remember(
+            Arc::downgrade(&coordinator.inner),
+            root.clone(),
+            false,
+            CleanupOwner::Attachment,
+        );
+        let replacement = coordinator.participation(&root).unwrap();
+        assert!(replacement.cleanup_scope().is_some());
+        assert!(
+            original.cleanup_scope().is_none(),
+            "matching target attributes cannot replace gate identity"
+        );
+        coordinator
+            .bind_resources(root.clone(), Arc::new(Released))
+            .unwrap();
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: root.clone(),
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(
+                    HostActor::new("person", "desktop", "close-scope").unwrap(),
+                ),
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+            .unwrap();
+        assert!(replacement.cleanup_scope().is_none());
+        assert!(coordinator.cleanup_scope(&root).is_none());
+        drop(retained);
     }
 
     fn command(parent: AgentLifetimeId) -> SpawnCommand {
@@ -2701,9 +3261,12 @@ mod lifetime_races {
             let _ = graph
                 .open_root(session.clone(), root.clone(), Initiator::Runtime)
                 .unwrap();
-            coordinator
-                .inner
-                .remember(Arc::downgrade(&coordinator.inner), root.clone(), false);
+            coordinator.inner.remember(
+                Arc::downgrade(&coordinator.inner),
+                root.clone(),
+                false,
+                CleanupOwner::Attachment,
+            );
         });
         assert_eq!(coordinator.active_root_for_session(&session), None);
 

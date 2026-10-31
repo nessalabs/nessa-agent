@@ -860,7 +860,13 @@ active one, and it leaves the attachment open.
 
 See [gateway chat](guides/gateway-chat.md) for configuration, ownership, commands,
 limits, and durability. The server stores SDK semantic records in one SQLite runtime at consequential
-boundaries and mandatory audit records independently. Unfinished streaming text
+boundaries and mandatory audit records independently. Historical decline first
+saves its original preparation through that same SDK writer; a terminal edge and
+idempotent Declined audit then retain separate acknowledgements. Pending receipts
+survive an empty owed-work view and restart. Remote End confirms the environment's
+physical cleanup; the existing SDK attachment owner separately acknowledges whole
+release, including its executable-use guard. Derived reports release no owner.
+Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
 The shared record database is opened before the gateway listens.
 
@@ -1119,6 +1125,17 @@ bootstraps first access, and local recovery/provisioning retain their exclusive
 registry lock. Cloud selection fails explicitly until its implementation exists.
 See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
+
+Owned cold-close recovery consumes SDK resource proof from the existing session
+lease stream (`SdkCleanupAcknowledged`), independently of prepared cancellation
+and decline audit receipts and physical End. The actual installed SDK lifetime
+gate supplies the minted target/session; the writer binds proof to its current
+lease. Resource cleanup can precede graph close, and a later lease cannot use
+an earlier proof. An unattached history-restoration Agent has no installed gate
+and cannot certify that old cleanup. An exact completed opening can instead
+establish SDK non-acquisition only if attachment never started, its current lease
+correlates, and its actual environment owner acknowledged release. Both cold paths
+share this evidence join. See [Parent Stop ownership](adr/todo/329-subagents.md#cycle8-qualification-orderings).
 
 ## Hosted GitHub webhook ingress and local relay
 
