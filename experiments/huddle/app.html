@@ -38,6 +38,31 @@
   #mode { background: transparent; border: 0; color: var(--quiet); font-size: 12px; cursor: pointer; padding: 0 4px; }
   #debug { position: absolute; right: 12px; bottom: 8px; font: 11px ui-monospace, Menlo, monospace; color: var(--faint); max-width: 50%; text-align: right; }
   [hidden] { display: none !important; }
+  /* Markdown is drawn as a document. Each block keeps the source lines it came
+     from (data-n to data-to), so draw, view and pointing still speak in lines. */
+  #paper.doc { max-width: 780px; margin: 0 auto; }
+  .line.md { display: block; white-space: normal; word-break: normal; font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+    margin: 0; padding: 2px 10px; border-radius: 6px; overflow-wrap: break-word; }
+  .md.h1 { font-size: 26px; line-height: 1.3; font-weight: 650; letter-spacing: -0.02em; margin: 20px 0 10px; }
+  .md.h2 { font-size: 20px; line-height: 1.35; font-weight: 620; letter-spacing: -0.015em; margin: 22px 0 8px; }
+  .md.h3 { font-size: 17px; font-weight: 600; margin: 18px 0 6px; }
+  .md.h4, .md.h5, .md.h6 { font-size: 15px; font-weight: 600; margin: 14px 0 4px; color: var(--quiet); }
+  .md.p { margin: 6px 0; color: #d6d6da; }
+  .md.li { position: relative; padding-left: calc(28px + var(--depth, 0) * 20px); margin: 2px 0; color: #d6d6da; }
+  .md.li .bullet { position: absolute; left: calc(10px + var(--depth, 0) * 20px); color: var(--faint); }
+  .md.quote { border-left: 3px solid #333336; color: var(--quiet); padding-left: 16px; margin: 8px 0; border-radius: 0 6px 6px 0; }
+  .md.pre { font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; background: #151517; padding: 12px 14px; margin: 10px 0;
+    white-space: pre; overflow-x: auto; color: #cfcfd4; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05); }
+  .md.hr { height: 0; border-top: 1px solid #262629; margin: 18px 10px; padding: 0; }
+  .md.table { overflow-x: auto; margin: 10px 0; }
+  .md table { border-collapse: collapse; font-size: 13.5px; }
+  .md th, .md td { text-align: left; padding: 6px 12px; border-bottom: 1px solid #262629; vertical-align: top; }
+  .md th { color: var(--quiet); font-weight: 600; }
+  .md code { font: 0.88em ui-monospace, "SF Mono", Menlo, monospace; background: #1c1c1f; padding: 1px 5px; border-radius: 4px; }
+  .md.pre code { background: none; padding: 0; font: inherit; }
+  .md .link { color: #9ec1ff; }
+  .md strong { color: var(--ink); font-weight: 620; }
+  .md.underline { text-decoration: underline; text-decoration-color: var(--mark); text-decoration-thickness: 2px; text-underline-offset: 4px; }
 </style>
 </head>
 <body>
@@ -101,12 +126,21 @@
   // ---- Stage: show, draw, view, clear ----
   var current = null, marks = {}, markId = 0, zoom = 1;
   var paper = $("paper"), stage = $("stage"), ink = $("ink");
-  function lineEl(n) { return paper.querySelector('.line[data-n="' + n + '"]'); }
+  // A row is one source line, or one markdown block covering data-n to data-to.
+  function lineEl(n) {
+    var rows = paper.querySelectorAll(".line");
+    for (var i = 0; i < rows.length; i++) {
+      var from = Number(rows[i].dataset.n), to = Number(rows[i].dataset.to || from);
+      if (n >= from && n <= to) return rows[i];
+    }
+    return null;
+  }
   function range(from, to) {
     var out = [];
-    for (var n = from; n <= (to || from); n++) { var el = lineEl(n); if (el) out.push(el); }
+    for (var n = from; n <= (to || from); n++) { var el = lineEl(n); if (el && out.indexOf(el) < 0) out.push(el); }
     return out;
   }
+  function isMarkdown(path) { return /\.(md|markdown|mdx)$/i.test(path); }
   async function show(args) {
     var file = await callTool("huddle_read_file", { path: args.path });
     current = file.path;
@@ -114,8 +148,10 @@
     Object.keys(marks).forEach(function (id) { removeMark(id); });
     paper.querySelectorAll(".line, #empty").forEach(function (el) { el.remove(); });
     var lines = file.content.split("\n");
-    var frag = document.createDocumentFragment();
-    lines.forEach(function (text, i) {
+    var markdown = isMarkdown(file.path);
+    paper.classList.toggle("doc", markdown);
+    var frag = markdown ? renderMarkdown(lines) : document.createDocumentFragment();
+    if (!markdown) lines.forEach(function (text, i) {
       var row = document.createElement("div");
       row.className = "line"; row.dataset.n = String(i + 1);
       var no = document.createElement("span"); no.className = "no"; no.textContent = String(i + 1);
@@ -126,6 +162,73 @@
     if (args.line) view({ line: args.line }); else stage.scrollTop = 0;
     return { shown: file.path, lines: lines.length };
   }
+  // ---- Markdown, drawn without a library (the app's CSP loads no scripts) ----
+  function escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function inline(text) {
+    var codes = [];
+    var out = escapeHtml(text).replace(/`([^`]+)`/g, function (_, code) { codes.push(code); return "\u0000" + (codes.length - 1) + "\u0000"; });
+    out = out
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, '<span class="link" title="$2">$1</span>')
+      .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, function (_, a, b) { return "<strong>" + (a || b) + "</strong>"; })
+      .replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+      .replace(/(^|[^_\w])_([^_\s][^_]*)_(?!\w)/g, "$1<em>$2</em>");
+    return out.replace(/\u0000(\d+)\u0000/g, function (_, i) { return "<code>" + codes[Number(i)] + "</code>"; });
+  }
+  function tableCells(row) { return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); }
+  function renderMarkdown(lines) {
+    var frag = document.createDocumentFragment(), i = 0;
+    function block(kind, from, to, html) {
+      var el = document.createElement("div");
+      el.className = "line md " + kind; el.dataset.n = String(from + 1);
+      if (to > from) el.dataset.to = String(to + 1);
+      el.innerHTML = html; frag.appendChild(el); return el;
+    }
+    var special = /^\s*(#{1,6}\s|```|~~~|>|([-*+]|\d+[.)])\s|(\*\s*){3,}$|(-\s*){3,}$|(_\s*){3,}$)/;
+    while (i < lines.length) {
+      var line = lines[i], m;
+      if (!line.trim()) { i++; continue; }
+      if ((m = line.match(/^\s*(```|~~~)/))) {
+        var fence = m[1], start = i, body = [];
+        i++;
+        while (i < lines.length && lines[i].trim().indexOf(fence) !== 0) body.push(lines[i++]);
+        block("pre", start, Math.min(i, lines.length - 1), "<code>" + escapeHtml(body.join("\n")) + "</code>");
+        i++; continue;
+      }
+      if ((m = line.match(/^\s*(#{1,6})\s+(.*?)\s*#*\s*$/))) { block("h" + m[1].length, i, i, inline(m[2])); i++; continue; }
+      if (/^\s*((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$/.test(line)) { block("hr", i, i, ""); i++; continue; }
+      if (/^\s*>/.test(line)) {
+        var qs = i, quote = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ""));
+        block("quote", qs, i - 1, inline(quote.join(" "))); continue;
+      }
+      if ((m = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/))) {
+        var ls = i, text = m[3], depth = Math.floor(m[1].replace(/\t/g, "    ").length / 2);
+        var marker = /\d/.test(m[2]) ? escapeHtml(m[2]) : "•";
+        i++;
+        while (i < lines.length && lines[i].trim() && !special.test(lines[i]) && /^\s+/.test(lines[i])) text += " " + lines[i++].trim();
+        var item = block("li", ls, i - 1, '<span class="bullet">' + marker + "</span>" + inline(text.replace(/^\[( |x)\]\s+/i, function (_, done) { return done.trim() ? "☑ " : "☐ "; })));
+        item.style.setProperty("--depth", String(Math.min(depth, 6)));
+        continue;
+      }
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+        var ts = i, head = tableCells(line), rows = [];
+        i += 2;
+        while (i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim()) rows.push(tableCells(lines[i++]));
+        var html = "<table><thead><tr>" + head.map(function (c) { return "<th>" + inline(c) + "</th>"; }).join("") + "</tr></thead><tbody>" +
+          rows.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + inline(c) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table>";
+        block("table", ts, i - 1, html); continue;
+      }
+      var ps = i, para = [];
+      while (i < lines.length && lines[i].trim() && !special.test(lines[i])) para.push(lines[i++].trim());
+      if (!para.length) para.push(lines[i++].trim());
+      block("p", ps, i - 1, inline(para.join(" ")));
+    }
+    return frag;
+  }
+
   function removeMark(id) {
     var mark = marks[id]; if (!mark) return;
     mark.rows.forEach(function (row) { row.classList.remove(mark.kind); });
@@ -141,7 +244,8 @@
       var id = "m" + (++markId), mark = { kind: spec.kind, rows: rows };
       if (spec.kind === "circle") {
         var top = rows[0].offsetTop, bottom = rows[rows.length - 1].offsetTop + rows[rows.length - 1].offsetHeight;
-        var left = rows[0].offsetLeft + 52, width = Math.min(rows[0].offsetWidth - 52, 680);
+        var gutter = rows[0].classList.contains("md") ? 0 : 52;
+        var left = rows[0].offsetLeft + gutter, width = Math.min(rows[0].offsetWidth - gutter, 680);
         var e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
         e.setAttribute("cx", String(left + width / 2)); e.setAttribute("cy", String((top + bottom) / 2));
         e.setAttribute("rx", String(width / 2 + 16)); e.setAttribute("ry", String((bottom - top) / 2 + 12));
@@ -179,7 +283,8 @@
     if (pointed) pointed.classList.remove("pointed");
     pointed = row; row.classList.add("pointed");
     send({ type: "conversation.item.create", item: { type: "message", role: "user",
-      content: [{ type: "input_text", text: "(The person is pointing at " + current + " line " + row.dataset.n + ".)" }] } });
+      content: [{ type: "input_text", text: "(The person is pointing at " + current + " line " + row.dataset.n +
+        (row.dataset.to ? "–" + row.dataset.to : "") + ".)" }] } });
   });
 
   var stageTools = {
