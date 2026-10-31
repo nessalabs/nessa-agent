@@ -18,8 +18,8 @@ use crate::composition::HostDependencies;
 use crate::platform::Host;
 
 /// Opens the gateway's `config.json`. Refused when the service namespace was
-/// not usable, or the file is not there yet: the gateway writes it on its
-/// first start.
+/// not usable, the file is not there yet (the gateway writes it on its first
+/// start), or what is there is not a regular file.
 #[tauri::command]
 pub fn open_gateway_config(deps: State<'_, HostDependencies>) -> Result<(), String> {
     open_config(deps.gateway_config.as_deref(), crate::platform::current())
@@ -34,7 +34,10 @@ fn open_config(path: Option<&Path>, host: &dyn Host) -> Result<(), String> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_file() => {}
         Ok(_) => return Err("config.json isn't a regular file, so it wasn't opened.".into()),
-        Err(_) => return Err("The gateway hasn't written its configuration file yet.".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err("The gateway hasn't written its configuration file yet.".into())
+        }
+        Err(error) => return Err(format!("config.json couldn't be read: {error}.")),
     }
     host.open_file(path)
 }

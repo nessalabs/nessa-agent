@@ -306,7 +306,7 @@ export const css = {
   settingsSearch: 'input[aria-label="Search settings"]',
   control: 'button, input, select, textarea, [role="switch"]',
 
-  // Settings › Connections › Integrations: the gateway's MCP servers
+  // Settings › Connections › MCP servers: the gateway's MCP servers
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)

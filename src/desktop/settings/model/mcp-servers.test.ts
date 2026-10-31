@@ -1733,6 +1733,8 @@ describe("a variable's value (S1–S8)", () => {
     expect(commandLine("cmd", ["a b"])).toBe('cmd "a b"')
     expect(commandLine("cmd", ["a", "b"])).toBe("cmd a b")
     expect(commandLine("cmd", ["", 'say "hi"'])).toBe('cmd "" "say \\"hi\\""')
+    // A backslash reads as itself, quoted or not.
+    expect(commandLine("cmd", ["a\\b", "a\\b c"])).toBe('cmd a\\b "a\\b c"')
   })
 
   it("S8: a stored variable removed elsewhere goes if not edited, stays as new if edited", () => {

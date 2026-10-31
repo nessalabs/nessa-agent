@@ -27,7 +27,6 @@ import {
   groupsOf,
   sharesName,
   hasLineBreak,
-  launchChanged,
   lineBreaks,
   linesOf,
   namesKept,
@@ -963,7 +962,6 @@ function FormDialog({
   const described = (field: FormField) =>
     form.problem?.field === field ? problems[field] : undefined
   const listed = editedServer(state)
-  const relaunched = launchChanged(form, listed)
   const waiting = valuesWaiting(form, listed)
   const keepable = namesKept(form, listed)
   const adding = form.editing === undefined
@@ -1170,7 +1168,7 @@ function FormDialog({
                     />
                     <SecretField
                       secret={secretOf(row)}
-                      relaunched={relaunched}
+                      askedAgain={waiting === "again"}
                       keepable={keepable}
                       describedBy={
                         [
@@ -1397,14 +1395,18 @@ const secretOf = (row: VariableRow): Secret => ({
 
 function SecretField({
   secret: row,
-  relaunched,
+  askedAgain,
   keepable,
   describedBy,
   dispatch,
   focusAfter,
 }: {
   secret: Secret
-  relaunched: boolean
+  /**
+   * Whether every stored value is asked for again (`valuesWaiting` is
+   * "again"): then a stored one leaves its rest and asks for its value.
+   */
+  askedAgain: boolean
   /** Whether a stored value may be kept: the command, arguments and variable names as stored (V9). */
   keepable: boolean
   describedBy: string | undefined
@@ -1416,7 +1418,7 @@ function SecretField({
   const replaceButton = useRef<HTMLButtonElement>(null)
   // A stored value rests as "Stored" until Replace is chosen, so a field
   // touched in passing never asks for, or empties, a value nobody meant to
-  // change. Once the launch changed, every stored one is asked for (U33).
+  // change. Once every stored one is asked for again, it opens (U33).
   const [replacing, setReplacing] = useState(false)
   // Replace and Keep swap this field's own controls, which the form may not
   // draw again: focus follows here, onto what took the pressed one's place.
@@ -1450,7 +1452,7 @@ function SecretField({
         {sentences.keepStored}
       </button>
     ) : null
-  if (row.stored && !row.edited && !row.held && !relaunched && !replacing)
+  if (row.stored && !row.edited && !row.held && !askedAgain && !replacing)
     return (
       <span className="settings-secret-stored" data-mcp-secret-stored>
         <span>{sentences.storedValue}</span>
@@ -1530,7 +1532,7 @@ function SecretField({
                   ? sentences.storedValueCleared
                   : sentences.storedValueAgain
                 : undefined
-              : relaunched
+              : askedAgain
                 ? sentences.storedValueAgain
                 : sentences.storedValue
             : "Value"

@@ -897,6 +897,8 @@ describe("Integrations", () => {
       // A is still edited (empty), and nothing else changed: what holds Save
       // is A's empty value, said so, and Keep comes back for A.
       expect(note()).toBe("Enter a value, or keep the stored one.")
+      // B is not asked for: Keep on A is all that holds Save.
+      expect(variable("B").querySelector("[data-mcp-secret-stored]")).not.toBeNull()
       expect(button("Keep stored value", variable("A"))).toBeDefined()
       await click(button("Keep stored value", variable("A")))
       expect(note()).toBe("")

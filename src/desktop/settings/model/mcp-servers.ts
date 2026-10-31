@@ -940,8 +940,10 @@ export function commandLine(
   args: readonly string[],
   short = false,
 ): string {
+  // Quoted with its quotes escaped and nothing else, so a backslash reads as
+  // itself whether or not the part is quoted.
   const shown = (part: string) =>
-    part === "" || /[\s"]/.test(part) ? JSON.stringify(part) : part
+    part === "" || /[\s"]/.test(part) ? `"${part.replaceAll('"', '\\"')}"` : part
   const program = short
     ? (command.split(/[\\/]/).filter(Boolean).pop() ?? command)
     : command
