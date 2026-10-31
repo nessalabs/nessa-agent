@@ -313,6 +313,9 @@ impl Vault {
             return Err(Failure::SessionOwned);
         }
         let generation = state.generation;
+        // Intent delivery is pre-admission: explicit lock must be able to fence
+        // this generation while an audit sink is blocked.
+        drop(state);
         // A substituted effect may unwind. Keep its typed failure inside this
         // operation so shared state is not poisoned while holding key authority.
         let evidence = |action, transition, cause, result| {
@@ -327,12 +330,16 @@ impl Vault {
             "explicit_request",
             "requested",
         )?;
-        // Close can invalidate this lease independently while audit holds the mutex.
+        let mut state = self.state()?;
         if !lease.is_active() {
             return Err(Failure::SessionClosed);
         }
         if state.generation != generation {
             return Err(Failure::Locked);
+        }
+        let owner = Self::live(&mut state).ok_or(Failure::Locked)?;
+        if !Arc::ptr_eq(&owner, &lease.0) {
+            return Err(Failure::SessionOwned);
         }
         let key = state.unlocked.take().ok_or(Failure::Locked)?.key;
         state.generation = state.generation.wrapping_add(1);

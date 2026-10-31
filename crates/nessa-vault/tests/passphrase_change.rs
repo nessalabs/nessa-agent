@@ -373,6 +373,62 @@ fn connection_close_during_intent_prevents_admission_after_audit_resumes() {
     assert_eq!(std::fs::read(f.file()).unwrap(), bytes);
     assert_eq!(vault.status(), Ok(Status::Locked));
 }
+#[test]
+fn explicit_lock_during_intent_prevents_admission_after_audit_resumes() {
+    let f = Fixture::new();
+    let (started, waiting) = mpsc::sync_channel(1);
+    let (resume, released) = mpsc::sync_channel(1);
+    let vault = Vault::new(
+        f.repo.clone(),
+        Arc::new(GateAudit {
+            inner: f.audit.clone(),
+            started,
+            resume: Mutex::new(released),
+        }),
+        Arc::new(Time),
+    );
+    let owner = vault.session("owner".into(), caller());
+    vault.create(&owner.lease(), phrase(OLD), &[]).unwrap();
+    let generation = vault.unlocked_generation().unwrap();
+    let bytes = std::fs::read(f.file()).unwrap();
+    let worker = {
+        let vault = vault.clone();
+        let lease = owner.lease();
+        std::thread::spawn(move || vault.change_passphrase(&lease, phrase(NEW)))
+    };
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let (answer, answered) = mpsc::sync_channel(1);
+    let locking = {
+        let vault = vault.clone();
+        let lease = owner.lease();
+        std::thread::spawn(move || answer.send(vault.lock(&lease)).unwrap())
+    };
+    let before_resume = answered.recv_timeout(std::time::Duration::from_secs(5));
+    // Always release the audit and join both threads, including in the revert probe.
+    resume.send(()).unwrap();
+    let change = worker.join().unwrap();
+    locking.join().unwrap();
+    assert_eq!(before_resume, Ok(Ok(Status::Locked)));
+    assert_eq!(change, Err(Failure::Locked));
+    assert_eq!(vault.status(), Ok(Status::Locked));
+    assert_eq!(std::fs::read(f.file()).unwrap(), bytes);
+    assert!(f.repo.unlock(&phrase(OLD)).is_ok());
+    assert!(matches!(
+        f.repo.unlock(&phrase(NEW)),
+        Err(Failure::WrongPassphrase)
+    ));
+    assert!(matches!(
+        vault.read_in(generation, &entry("absent")),
+        Err(Failure::Locked)
+    ));
+    let evidence = f.audit.stored.lock().unwrap();
+    assert_eq!(evidence.iter().filter(|r| r.action == "lock").count(), 1);
+    assert!(!evidence
+        .iter()
+        .any(|r| r.action == "passphrase_change" && r.result != "requested"));
+}
 struct GateRepository {
     inner: Arc<EncryptedFileVault>,
     started: mpsc::SyncSender<()>,

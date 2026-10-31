@@ -402,9 +402,10 @@ Other platforms retain their independent OS/signing safeguards.
 
 An independently reviewed bounded design seals after change admission instead
 of publishing a replacement live key. The sole derivation permit spans terminal
-audit. Intent audit precedes admission; lease liveness and captured generation
-are rechecked afterward. Taking the old key out of shared state and advancing
-its generation is the admission/seal point. Consumer work cannot read through
+audit. Intent audit precedes admission and releases the state mutex so an owner
+lock can fence the change while delivery is blocked. Lease liveness, captured
+generation and live ownership are rechecked afterward. Taking the old key out of
+shared state and advancing its generation is the admission/seal point. Consumer work cannot read through
 that retired generation. Only an already admitted operation keeps its old key
 until repository work settles.
 
