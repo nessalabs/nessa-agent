@@ -714,6 +714,8 @@ async function aroundTheLights(page, rail, failures) {
         near(now.at.pill.left + now.at.pill.width / 2, now.at.item) &&
         now.at.itemTop > now.at.pill.top &&
         // The corner row (the toggle and "nessa Studio") stands below it.
+        // Down to the corner: no more than the toggle's foot room below it.
+        now.at.windowBottom - now.at.pill.bottom <= 24 &&
         now.at.toggleBottom < now.at.pill.bottom &&
         // "nessa Studio" stands clear of the pill's edge.
         now.at.words >= now.at.pill.left + now.at.pill.width + 8 - 0.5
