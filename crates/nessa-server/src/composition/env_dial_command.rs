@@ -34,13 +34,18 @@ use crate::{
     app::dependencies::RuntimeDependencies,
     core::RunError,
     device_pairing::infrastructure::TlsStream,
+    env::LEASE_PROTOCOL,
     env_serve::{
+        application::ServeEnd,
         application::{
             self, enroll_once, redial, stop_past_deadline, Backoff, EnrolledOnce, NotApproved,
             NotEnrolled,
         },
         domain::Peer,
-        infrastructure::{dial, Approved, FileEnrollmentCode, FilePairingEnvironment},
+        infrastructure::{
+            dial, fetch, kept_for, run_in_place, this_build, Approved, FileEnrollmentCode,
+            FilePairingEnvironment, FETCH_DEADLINE,
+        },
     },
     timer::TokioTimer,
 };
@@ -54,7 +59,7 @@ use std::{
     future::Future,
     io::{self, Write},
     path::Path,
-    sync::Arc,
+    sync::{Arc, PoisonError},
     time::Duration,
 };
 use tokio::{
@@ -111,6 +116,9 @@ pub(super) async fn dial_in(
     enroll_code_file: Option<&Path>,
 ) -> Result<(), RunError> {
     check_address(address)?;
+    // A build fetched from the gateway runs in this one's place, from the
+    // start: nothing is held yet.
+    run_kept_copy();
     // Before any signal is taken: a stop while enrolling has nothing to
     // drain, and the process's default ends it.
     if let Some(code_file) = enroll_code_file {
@@ -200,20 +208,56 @@ async fn approved_then_served(
     let Some(composed) = composed else {
         return Ok(());
     };
-    let composed = composed.map_err(|(_, failure)| failure)?;
-    let served = serve_dialing(
-        &composed,
-        address,
-        Beyond { relay, tunnel },
-        identity,
-        pin,
-        stopping,
-        draining,
-    )
-    .await;
-    composed.finish().await;
-    served
+    let mut composed = composed.map_err(|(_, failure)| failure)?;
+    // After a fetch that failed, none is tried again for a while: the
+    // gateway's build is large, and redialing goes on meanwhile.
+    let mut fetch_after: Option<std::time::Instant> = None;
+    loop {
+        let served = serve_dialing(
+            &composed,
+            address,
+            Beyond { relay, tunnel },
+            identity.clone(),
+            pin,
+            fetch_after,
+            stopping.clone(),
+            draining.clone(),
+        )
+        .await;
+        composed.finish().await;
+        let Some(protocol) = served? else {
+            return Ok(());
+        };
+        match fetch_update(
+            address,
+            Beyond { relay, tunnel },
+            identity.clone(),
+            pin,
+            &protocol,
+        )
+        .await
+        {
+            Ok(copy) => {
+                tracing::info!(copy = %copy.display(), "running the gateway's build");
+                let error = run_in_place(&copy);
+                tracing::error!(%error, "the gateway's build could not be run; this one serves");
+            }
+            Err(reason) => tracing::warn!(%reason, "the gateway's build was not taken"),
+        }
+        fetch_after = Some(std::time::Instant::now() + FETCH_AGAIN_AFTER);
+        composed = compose().await.map_err(|(_, failure)| failure)?;
+    }
 }
+
+/// Where builds fetched from the gateway are kept: beside this machine's
+/// pairing, on its data volume, so a container started again from the same
+/// image still runs the build it fetched.
+fn fetched_builds() -> Result<std::path::PathBuf, RunError> {
+    Ok(environment_directory()?.join("builds"))
+}
+
+/// How long after a fetch that failed another may be tried.
+const FETCH_AGAIN_AFTER: Duration = Duration::from_secs(600);
 
 /// This machine's key and the gateway's pin, or `None` when stop was asked
 /// first. The pairing, and its directory's lock, is let go either way.
@@ -266,17 +310,35 @@ struct Beyond<'a> {
     tunnel: Option<&'a TunnelAddress>,
 }
 
+/// Serve the gateway over each connection dialed, until stopped or drained,
+/// or until the gateway refused this build's protocol for another and this
+/// host's owner lets it update this build: then the protocol it named. No
+/// fetch is asked for before `fetch_after`, when one failed.
+#[allow(clippy::too_many_arguments)]
 async fn serve_dialing(
     composed: &Composed,
     address: &str,
     Beyond { relay, tunnel }: Beyond<'_>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
+    fetch_after: Option<std::time::Instant>,
     stopping: watch::Receiver<bool>,
     draining: watch::Receiver<bool>,
-) -> Result<(), RunError> {
+) -> Result<Option<String>, RunError> {
     let drain = draining.clone();
-    redial(
+    // Stopped from outside, or to fetch the gateway's build.
+    let (own_stop, own_stopping) = watch::channel(false);
+    let own_stop = Arc::new(own_stop);
+    let forward = {
+        let own_stop = own_stop.clone();
+        tokio::spawn(async move {
+            stopped(stopping).await;
+            own_stop.send_replace(true);
+        })
+    };
+    let refused: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+    let peer = Peer::Gateway { pin };
+    let served = redial(
         || {
             let identity = identity.clone();
             // Resolved on every dial, the gateway's address may move; each
@@ -295,28 +357,122 @@ async fn serve_dialing(
             // Each connection was dialed to the gateway holding this pin: its
             // grants are that gateway's.
             let drain = drain.clone();
-            serve_until_stopped(stream, stopping, |input, output| {
-                composed.serve(Peer::Gateway { pin }, input, output, drain)
-            })
+            let (refused, own_stop) = (refused.clone(), own_stop.clone());
+            async move {
+                let end = serve_until_stopped(stream, stopping, |input, output| {
+                    composed.serve(peer, input, output, drain)
+                })
+                .await;
+                let ServeEnd::VersionRefused { protocol } = end else {
+                    return;
+                };
+                // Asked when the refusal comes, so a fetch that failed is
+                // tried again once its wait is over, however long dialing
+                // has gone on.
+                let may_fetch = fetch_after.is_none_or(|after| std::time::Instant::now() >= after);
+                if protocol == LEASE_PROTOCOL {
+                    // Refused for something else than its protocol: a build
+                    // that speaks this one would be refused the same.
+                    tracing::warn!("the gateway refused this build, which speaks its protocol");
+                } else if !may_fetch {
+                    // A fetch failed a moment ago: dialing goes on, and the
+                    // gateway may yet come to this build's protocol.
+                } else if composed.may_update(&peer) {
+                    tracing::info!(gateway = protocol, "fetching the gateway's build");
+                    *refused.lock().unwrap_or_else(PoisonError::into_inner) = Some(protocol);
+                    own_stop.send_replace(true);
+                } else {
+                    tracing::warn!(
+                        gateway = protocol,
+                        this = LEASE_PROTOCOL,
+                        "the gateway runs another build and this machine does not let it \
+                         update this one: let it run commands here (nessa env grant \
+                         --commands --max-timeout 10m), or install the gateway's build"
+                    );
+                }
+            }
         },
         Backoff::default(),
         &TokioTimer::new(),
-        stopping,
+        own_stopping,
         draining,
     )
     .await
-    .map_err(|error| RunError::Agent(format!("{address}: {error}")))
+    .map_err(|error| RunError::Agent(format!("{address}: {error}")));
+    forward.abort();
+    served?;
+    let protocol = refused
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    Ok(protocol)
+}
+
+/// Fetch the gateway's build, which it said speaks `protocol`, over a
+/// connection of its own, and keep it in place of this build.
+async fn fetch_update(
+    address: &str,
+    Beyond { relay, tunnel }: Beyond<'_>,
+    identity: Arc<NativeIdentity>,
+    pin: [u8; 44],
+    protocol: &str,
+) -> Result<std::path::PathBuf, String> {
+    let builds = fetched_builds().map_err(|error| error.to_string())?;
+    let this = tokio::task::spawn_blocking(this_build)
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("this build could not be read: {error}"))?;
+    let stream = dial(
+        address.to_owned(),
+        relay.cloned(),
+        tunnel.cloned(),
+        identity,
+        pin,
+        clock(),
+    )
+    .await
+    .map_err(|error| format!("the gateway could not be reached: {error}"))?;
+    let (input, output) = tokio::io::split(stream);
+    tokio::time::timeout(
+        FETCH_DEADLINE,
+        fetch(input, output, protocol, &builds, &this),
+    )
+    .await
+    .map_err(|_| "the gateway's build did not arrive in time".to_owned())?
+    .map_err(|refused| refused.to_string())
+}
+
+/// The copy of another build fetched to run in place of this one, when
+/// there is one: run before anything else, with the same arguments.
+fn run_kept_copy() {
+    let Ok(builds) = fetched_builds() else {
+        return;
+    };
+    // Asked only of a machine that ever fetched one: reading this build to
+    // know which it is takes a moment.
+    if !builds.join("current").exists() {
+        return;
+    }
+    let Ok(this) = this_build() else {
+        return;
+    };
+    if let Some(copy) = kept_for(&builds, &this) {
+        tracing::info!(copy = %copy.display(), "running the build fetched from the gateway");
+        let error = run_in_place(&copy);
+        tracing::error!(%error, "the fetched build could not be run; this one serves");
+    }
 }
 
 /// Serve one dialed connection with `serve`, closing it once stop is asked
 /// so its leases end as they do when a gateway goes away.
-pub(super) async fn serve_until_stopped<Serve, Served>(
+pub(super) async fn serve_until_stopped<Serve, Served, End>(
     stream: TlsStream,
     stopping: watch::Receiver<bool>,
     serve: Serve,
-) where
+) -> End
+where
     Serve: FnOnce(ReadHalf<TlsStream>, WriteHalf<TlsStream>) -> Served,
-    Served: Future<Output = ()>,
+    Served: Future<Output = End>,
 {
     let closer = stream.closer();
     let closing = tokio::spawn(async move {
@@ -324,8 +480,9 @@ pub(super) async fn serve_until_stopped<Serve, Served>(
         closer.close();
     });
     let (input, output) = tokio::io::split(stream);
-    serve(input, output).await;
+    let end = serve(input, output).await;
     closing.abort();
+    end
 }
 
 async fn stopped(mut stopping: watch::Receiver<bool>) {

@@ -75,7 +75,9 @@ use crate::conversation::application::{
 };
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
+use crate::env_serve::install::Platform;
 use futures_util::FutureExt;
+use nessa_protocol::build_update::{self, FromEnvironment::UpdateWanted};
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
@@ -434,6 +436,7 @@ impl HostLink {
         liveness: Liveness,
     ) -> Result<Arc<Self>, Opening> {
         let mut stream = FrameStream::new(connection.from_environment);
+        let mut to_environment = connection.to_environment;
         let first = match tokio::time::timeout(deadline, stream.next()).await {
             Ok(Ok(Some(body))) => body,
             Ok(Ok(None)) => {
@@ -448,6 +451,15 @@ impl HostLink {
                 return Err(LeaseRefusal::EnvironmentUnreachable.into());
             }
         };
+        // A paired host asking for this build instead of serving.
+        if let (Some(updates), Some(UpdateWanted { os, arch, libc })) =
+            (&connection.updates, build_update::from_environment(&first))
+        {
+            updates
+                .send_build(host, Platform { os, arch, libc }, &mut to_environment)
+                .await;
+            return Err(Opening::NotServed);
+        }
         let hello = match read_hello(&first) {
             Some(hello) if hello.protocol == LEASE_PROTOCOL => hello,
             other => {
@@ -461,6 +473,10 @@ impl HostLink {
                     tracing::error!(%error, "an environment's version refusal could not be recorded");
                 }
                 tracing::warn!(host, "the host speaks another lease protocol");
+                // A paired host is told which one, so it can ask for it.
+                if let Some(updates) = &connection.updates {
+                    updates.refuse_version(&mut to_environment).await;
+                }
                 return Err(LeaseRefusal::EnvironmentVersionMismatch.into());
             }
         };
@@ -481,11 +497,7 @@ impl HostLink {
             return Err(LeaseRefusal::EnvironmentUnreachable.into());
         }
         let (frames, outgoing) = mpsc::channel(TO_HOST_QUEUE);
-        tokio::spawn(write_frames(
-            connection.to_environment,
-            outgoing,
-            liveness.keepalive,
-        ));
+        tokio::spawn(write_frames(to_environment, outgoing, liveness.keepalive));
         let routes = Arc::new(Mutex::new(Routes::default()));
         let (ending, ended) = watch::channel(());
         let link = Arc::new(Self {

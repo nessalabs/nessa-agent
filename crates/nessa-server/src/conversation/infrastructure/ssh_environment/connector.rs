@@ -46,6 +46,10 @@ pub(crate) struct LeaseConnection {
     pub(crate) keep: Box<dyn Send>,
     /// How a published file's bytes are read off the host over it.
     pub(crate) artifacts: ArtifactTransport,
+    /// What a paired host whose build speaks another protocol is told, and
+    /// sent when it asks (`peer_update.rs`); `None` over SSH, where this
+    /// gateway installs its build itself.
+    pub(crate) updates: Option<Arc<super::peer_update::PeerUpdates>>,
 }
 
 /// How a connection carries a published file's bytes from the host.

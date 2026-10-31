@@ -15,6 +15,7 @@
 //! - `pairing`: native pairing framing, envelope codec, enrollment channel and socket.
 //! - `conversation`: the conversation read model, and `agents`, the agent names it uses.
 //! - `lease`: the lease frames a gateway and an environment (`nessa env serve`) exchange.
+//! - `build_update`: the frames, never changed, that bring a paired environment its gateway's build.
 //! - `clock`: the monotonic clock port the pairing socket's deadlines read.
 //! - `relay`: the preamble a gateway and a reader speak to a relay before it joins them.
 //!
@@ -22,6 +23,7 @@
 //! is the one deliberate exception, blocking std socket mechanics both ends
 //! need; `tokio` is taken with `rt` only, for the one shared worker-fault mapping.
 pub mod agents;
+pub mod build_update;
 pub mod clock;
 pub mod conversation;
 pub mod lease;

@@ -50,6 +50,13 @@
           "attributes": {},
           "additionalAttributes": false
         }
+      },
+      "Build": {
+        "shape": {
+          "type": "Record",
+          "attributes": {},
+          "additionalAttributes": false
+        }
       }
     },
     "actions": {
@@ -68,6 +75,17 @@
         "appliesTo": {
           "principalTypes": ["Peer"],
           "resourceTypes": ["Command"],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
+      "build.update": {
+        "appliesTo": {
+          "principalTypes": ["Peer"],
+          "resourceTypes": ["Build"],
           "context": {
             "type": "Record",
             "attributes": {},
