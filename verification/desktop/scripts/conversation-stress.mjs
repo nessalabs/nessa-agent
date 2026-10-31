@@ -17,7 +17,10 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               full access, nothing is asked and the tool runs
  *   reviews     one turn asks `--reviews` reviews in a row, each a card
  *   large       one review larger than the old 16 KB display limit
- *   stop        Send turns into Stop while the turn runs; Stop cancels it
+ *   stop        Send turns into Stop while the turn runs; Stop cancels it.
+ *               While it runs, the chat's channel in the sidebar breathes its
+ *               # and draws no spinner at its end, and its settings show
+ *               only under the pointer; stopped, the # is still again
  *   fail        the turn fails; the next message is sent in the same conversation
  *   usageLimit  the turn ends in a usage limit; the card shows, the project
  *               preference is turned on and back off, and the turn is not resumed
@@ -686,6 +689,75 @@ async function channelShowsList(page, failures) {
     failures.push("choosing a channel left the session list hidden")
   const panes = await page.locator(css.pane).count()
   if (panes !== 1) failures.push(`choosing a channel left ${panes} panes, not 1`)
+}
+
+/** The sidebar channel the main conversation is listed in. */
+const MAIN_CHANNEL = "Conversations"
+
+/**
+ * A channel in the sidebar shows that something runs in it by its own glyph:
+ * the # breathes (an animation plays on it) and nothing spins at the row's
+ * end, and its name says "Running" to a reader. Its settings stay hidden
+ * until the row is pointed at. Without a running turn the # is still.
+ */
+async function channelBreathes(page, name, running, failures) {
+  const row = page
+    .locator(`${css.sidebar} ${css.kitRowFrame}`)
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .filter({ has: page.locator(":is(.workspace-row-icon, .workspace-disclosure)") })
+    .first()
+  const read = () =>
+    row.evaluate((frame) => {
+      const icon = frame.querySelector(
+        ":is(.workspace-row-icon, .workspace-disclosure)[data-running]",
+      )
+      const glyph = icon?.matches(".workspace-disclosure")
+        ? icon.querySelector("svg")
+        : icon
+      const settings = frame.querySelector("[data-channel-settings-open]")
+      let shown = settings ? 1 : 0
+      for (let at = settings; at; at = at.parentElement)
+        shown *= Number(getComputedStyle(at).opacity)
+      return {
+        marked: Boolean(icon),
+        breathes: Boolean(
+          glyph?.getAnimations().some((each) => each.playState === "running"),
+        ),
+        spinner: Boolean(frame.querySelector('.workspace-status[data-status="running"]')),
+        said: (
+          frame
+            .querySelector('[data-size], [data-row="channel"]')
+            ?.getAttribute("aria-label") ?? ""
+        ).includes("Running"),
+        settings: settings ? shown : null,
+      }
+    })
+  if (!(await row.count())) {
+    failures.push(`no channel ${name} in the sidebar`)
+    return
+  }
+  const wanted = (now) => now.marked === running && now.breathes === running
+  let now = await read()
+  await waitFor(async () => wanted((now = await read())), 10_000)
+  if (!wanted(now))
+    failures.push(
+      `channel ${name} ${running ? "does not breathe while" : "still breathes after"} a turn runs: ${JSON.stringify(now)}`,
+    )
+  if (now.spinner) failures.push(`channel ${name} draws a spinner at its end`)
+  if (running && !now.said) failures.push(`channel ${name} does not say it is running`)
+  if (now.settings === null) return
+  // Away from the window's left edge, where the pointer would peek the sidebar out.
+  await page.mouse.move(600, 400)
+  await sleep(250)
+  const atRest = (await read()).settings
+  if (atRest !== 0)
+    failures.push(`channel ${name} shows its settings at rest (${atRest})`)
+  await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
+  await sleep(300)
+  const pointed = (await read()).settings
+  if (pointed !== 1)
+    failures.push(`channel ${name} pointed at shows its settings at ${pointed}`)
+  await page.mouse.move(600, 400)
 }
 
 /** The compact rail and the window bar keep separate geometry. */
@@ -2178,11 +2250,13 @@ const steps = {
       failures.push("Send did not turn into Stop while the turn ran")
       return
     }
+    await channelBreathes(run.page, MAIN_CHANNEL, true, failures)
     await dock(run.page)
       .getByRole(...composerControls.stop)
       .click({ timeout: 10_000 })
     await settled(run, run.main.id, seen, text, "cancelled", failures)
     if (!(await sendShown(run.page))) failures.push("Stop did not turn back into Send")
+    await channelBreathes(run.page, MAIN_CHANNEL, false, failures)
   },
 
   async fail(run, step, failures) {

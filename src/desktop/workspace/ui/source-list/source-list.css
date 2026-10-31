@@ -210,11 +210,11 @@
 }
 
 /*
- * A count or a running glyph at a row's end is the row's, as it was inside the
- * row's button: the kit lays it in a slot beside the control, so the slot lets
- * the pointer through, and pointed at, the row keeps its fill, its click and
- * its tooltip. (`data-trailing` is written by `sidebar-row.tsx` only; the tree's
- * + is a control of its own.)
+ * A count at a row's end is the row's, as it was inside the row's button: the
+ * kit lays it in a slot beside the control, so the slot lets the pointer
+ * through, and pointed at, the row keeps its fill, its click and its tooltip.
+ * (`data-trailing` is written by `sidebar-row.tsx` only; the tree's + is a
+ * control of its own.)
  */
 .workspace-sidebar
   :is([data-trailing], [data-row-actions])
@@ -235,12 +235,6 @@
 }
 
 .workspace-sidebar
-  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="glyph"] {
-  --workspace-row-decoration-width: 10px;
-  padding-right: calc(16px + var(--workspace-row-decoration-width));
-}
-
-.workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="count"] {
   --workspace-row-decoration-width: 18px;
   padding-right: calc(16px + var(--workspace-row-decoration-width));
@@ -258,11 +252,15 @@
   padding-right: calc(16px + var(--workspace-row-decoration-width));
 }
 
-/* The action slot is independent of the count or glyph already at the end. */
+/*
+ * A row's actions show under the pointer or keyboard focus, in the count's
+ * cell (the kit swaps one for the other), so the label leaves room for the
+ * wider of the two, and does not move as they swap.
+ */
 .workspace-sidebar
   :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-row-actions] {
   padding-right: calc(
-    16px + var(--workspace-row-decoration-width, 0px) + var(--desktop-control-size)
+    16px + max(var(--workspace-row-decoration-width, 0px), var(--desktop-control-size))
   );
 }
 
@@ -282,6 +280,31 @@
   width: 14px;
   height: 14px;
   stroke-width: 1.75;
+}
+
+/*
+ * Something runs in the row: its icon breathes in the running light, in place
+ * of a spinner at the row's end. An ambient loop, slow enough to sit beside
+ * the label without pulling the eye; under less motion it is lit and still.
+ */
+.workspace-sidebar .workspace-row-icon[data-running] {
+  color: var(--desktop-run);
+  animation: workspace-row-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes workspace-row-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+:root[data-motion="reduced"] .workspace-sidebar .workspace-row-icon[data-running] {
+  animation: none;
 }
 
 /* A row's count: the kit's `Badge`, as small as the row's caption, in the window's fills. */

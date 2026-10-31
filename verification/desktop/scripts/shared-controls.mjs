@@ -149,6 +149,31 @@ function rowsOnPage(sel) {
   })
 }
 
+/**
+ * The sidebar's running channels: each breathes its # (an animation playing on
+ * its icon), draws no spinner at its end, and says "Running" in its name.
+ * In the page.
+ */
+function runningChannels(sel) {
+  return [
+    ...document.querySelectorAll(
+      `${sel.sidebar} :is(.workspace-row-icon, .workspace-disclosure)[data-running]`,
+    ),
+  ].map((icon) => {
+    const frame = icon.closest(sel.kitRowFrame)
+    const row = frame.querySelector(sel.kitRow)
+    const glyph = icon.matches(".workspace-disclosure") ? icon.querySelector("svg") : icon
+    return {
+      label: row.textContent.trim().slice(0, 40),
+      breathes: glyph
+        .getAnimations()
+        .some((animation) => animation.playState === "running"),
+      spinner: Boolean(frame.querySelector('.workspace-status[data-status="running"]')),
+      said: (row.getAttribute("aria-label") ?? "").includes("Running"),
+    }
+  })
+}
+
 /** Rows that are neither of the two components, and current or unread rows off the scale. */
 function rowFailures(rows, scale, where) {
   const failures = []
@@ -634,11 +659,17 @@ const checks = {
     failures.push(...rowFailures(onLoad, scale, "on load"))
     // The sample's unread session shows in the session list and in the tree.
     if (!onLoad.some((row) => row.unread)) failures.push("no unread row on load to weigh")
-    // A count and a glyph beside a kit row, each said once (the sample has both).
-    for (const kind of ["count", "glyph"])
-      if (!onLoad.some((row) => row.besides === kind))
-        failures.push(`no kit row with a ${kind} beside it on load`)
-    // Pointed at, a count or a running glyph at a row's end leaves the row its fill.
+    // A count beside a kit row, said once (the sample has one).
+    if (!onLoad.some((row) => row.besides === "count"))
+      failures.push("no kit row with a count beside it on load")
+    // A running channel breathes its own icon and draws no spinner at its end.
+    const running = await page.evaluate(runningChannels, css)
+    measured.running = running
+    if (running.length === 0) failures.push("no running channel on load")
+    for (const row of running)
+      if (!row.breathes || row.spinner || !row.said)
+        failures.push(`running channel "${row.label}": ${JSON.stringify(row)}`)
+    // Pointed at, a count or a lit point at a row's end leaves the row its fill.
     for (const kind of ["count", "glyph"]) {
       const beside = page
         .locator(
@@ -648,7 +679,7 @@ const checks = {
       if (!(await beside.count())) {
         // The tree lays its folded summary in the kit's own badge slot, with no `data-trailing`.
         measured.hover[`kit row under its ${kind}`] = "none on this layout"
-        if (kind === "count" || layout === "columns")
+        if (kind === "count")
           failures.push(`no kit row with a ${kind} at its end to point at`)
         continue
       }
@@ -681,28 +712,53 @@ const checks = {
       await page.mouse.move(1, 1)
     }
     if (layout === "columns") {
-      const actions = await page
-        .locator(`${css.sidebar} ${css.channelSettingsOpen}`)
-        .evaluateAll(
-          (buttons, sel) =>
-            buttons.map((button) => {
-              const frame = button.closest(sel.kitRowFrame)
-              const label = frame.querySelector(sel.rowLabel)
-              const band = button.closest('[data-slot="sidebar-menu-item-trailing"]')
-              const box = button.getBoundingClientRect()
-              const hit = document.elementFromPoint(
-                box.x + box.width / 2,
-                box.y + box.height / 2,
-              )
-              return {
-                labelClear:
-                  label.getBoundingClientRect().right <=
-                  band.getBoundingClientRect().left,
-                reachable: hit === button || button.contains(hit),
-              }
-            }),
-          css,
+      // A channel's settings show only under the pointer (or keyboard focus).
+      const settings = page.locator(`${css.sidebar} ${css.channelSettingsOpen}`)
+      const shown = () =>
+        settings.evaluateAll((buttons) =>
+          buttons.map((button) => {
+            let opacity = 1
+            for (let at = button; at; at = at.parentElement)
+              opacity *= Number(getComputedStyle(at).opacity)
+            return opacity
+          }),
         )
+      await page.mouse.move(1, 1)
+      await page.waitForTimeout(250)
+      const atRest = await shown()
+      measured.settingsAtRest = atRest
+      if (atRest.some((opacity) => opacity > 0))
+        failures.push(`a channel's settings show at rest: ${JSON.stringify(atRest)}`)
+      await settings
+        .first()
+        .locator(`xpath=ancestor::*[@data-slot="sidebar-menu-item-row"][1]`)
+        .locator(":scope > [data-size]")
+        .hover()
+      await page.waitForTimeout(250)
+      const pointed = (await shown())[0]
+      measured.settingsPointedAt = pointed
+      if (pointed !== 1)
+        failures.push(`a channel pointed at shows its settings at ${pointed}`)
+      const actions = await settings.evaluateAll(
+        (buttons, sel) =>
+          buttons.map((button) => {
+            const frame = button.closest(sel.kitRowFrame)
+            const label = frame.querySelector(sel.rowLabel)
+            const band = button.closest('[data-slot="sidebar-menu-item-trailing"]')
+            const box = button.getBoundingClientRect()
+            const hit = document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            )
+            return {
+              labelClear:
+                label.getBoundingClientRect().right <= band.getBoundingClientRect().left,
+              reachable: hit === button || button.contains(hit),
+            }
+          }),
+        css,
+      )
+      await page.mouse.move(1, 1)
       if (!actions.length) failures.push("no channel settings action beside the row")
       if (actions.some((action) => !action.labelClear || !action.reachable))
         failures.push(

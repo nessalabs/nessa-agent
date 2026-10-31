@@ -50,8 +50,19 @@
   opacity: 0;
 }
 
+/* Something runs in the channel: its glyph breathes (`source-list.css` › Rows). */
+.workspace-disclosure[data-running] > svg:first-child {
+  color: var(--desktop-run);
+  animation: workspace-row-breathe 1.6s ease-in-out infinite;
+}
+
+:root[data-motion="reduced"] .workspace-disclosure[data-running] > svg:first-child {
+  animation: none;
+}
+
 [data-row="channel"]:is(:hover, :focus-visible) .workspace-disclosure > svg:first-child {
   opacity: 0;
+  animation: none;
 }
 
 [data-row="channel"]:is(:hover, :focus-visible) .workspace-disclosure > svg:last-child {
