@@ -3415,6 +3415,7 @@ export type VaultPassphraseChangeState =
   (typeof VaultPassphraseChangeState)[keyof typeof VaultPassphraseChangeState]
 /** Confirmed passphrase replacement. Its complete success payload is locked; this does not confirm audit-failed or unknown publication outcomes. */
 export interface VaultPassphraseChangeStatus {
+  /** The vault is sealed after a confirmed passphrase change; explicitly unlock with the new phrase before protected use. */
   state: VaultPassphraseChangeState
 }
 /** Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed. */

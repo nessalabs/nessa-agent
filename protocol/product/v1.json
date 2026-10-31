@@ -8440,7 +8440,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "state": {"$ref": "#/$defs/VaultPassphraseChangeState"}
+        "state": {
+          "$ref": "#/$defs/VaultPassphraseChangeState",
+          "description": "The vault is sealed after a confirmed passphrase change; explicitly unlock with the new phrase before protected use."
+        }
       },
       "required": ["state"]
     },
