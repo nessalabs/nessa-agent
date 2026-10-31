@@ -15,6 +15,11 @@ export function appPluginId(server: string): string {
   return `mcp:${server}`
 }
 
+/** Whether `plugin` is the id of a server's app (`appPluginId`). */
+export function isAppPluginId(plugin: string): boolean {
+  return plugin.startsWith("mcp:")
+}
+
 /**
  * The widget a tool call of `server`'s is drawn as. The id is the three
  * identities as a JSON array, so no spelling of any can make two calls one
