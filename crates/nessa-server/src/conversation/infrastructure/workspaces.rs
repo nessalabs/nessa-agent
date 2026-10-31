@@ -73,18 +73,17 @@ impl VmCopies {
                     let conversation = self.conversation.clone();
                     let done = self.choosing.clone();
                     let task = tokio::spawn(async move {
-                        let copy = served_copy(
+                        // Let go once done, a panic included, so the next
+                        // opening asks the VM again.
+                        let _done = Done(done);
+                        served_copy(
                             &installer,
                             audit.as_ref(),
                             &conversation,
                             runtime.as_ref(),
                             install,
                         )
-                        .await;
-                        *done
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                        copy
+                        .await
                     });
                     let pending = async move {
                         task.await
@@ -131,6 +130,16 @@ async fn served_copy(
             .await?;
     }
     Ok(ServedCopy::Installed(installer.serve_command().await?))
+}
+/// Clears a thread's [`PendingCopy`] when its task ends, however it ends.
+struct Done(Arc<Mutex<Option<PendingCopy>>>);
+impl Drop for Done {
+    fn drop(&mut self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
 }
 /// A VM's own connection, as the installer's shell: the host it is given
 /// only names the VM in the records.

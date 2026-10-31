@@ -34,6 +34,8 @@ pub(super) struct SshAccess {
     remote_socket: String,
     /// The thread's workspace in the VM, where its shell runs.
     workspace: String,
+    /// The VM, as its SSH diagnostics name it.
+    vm: String,
 }
 
 /// Nessa's own shell server in the image: the managed server runs here, in
@@ -54,7 +56,7 @@ impl SshAccess {
         let program = match copy {
             ServedCopy::Image => image,
             ServedCopy::Installed(command) => {
-                format!("{VM_SERVE_ENVIRONMENT} {command}; exec {image}")
+                posix(&format!("{VM_SERVE_ENVIRONMENT} {command}; exec {image}"))
             }
         };
         let mut command = ssh(&self.directory, self.endpoint);
@@ -91,7 +93,9 @@ impl SshAccess {
         let said = tokio::time::timeout(
             Duration::from_secs(30),
             self.run(
-                format!("p=$({VM_NESSA} env protocol 2>/dev/null); echo \"protocol $p\""),
+                posix(&format!(
+                    "p=$({VM_NESSA} env protocol 2>/dev/null); echo \"protocol $p\""
+                )),
                 None,
             ),
         )
@@ -121,7 +125,7 @@ impl SshAccess {
             .stderr(Stdio::piped());
         let mut child = ssh.spawn()?;
         if let Some(stderr) = child.stderr.take() {
-            log_stderr("boat", stderr);
+            log_stderr(&format!("boat {}", self.vm), stderr);
         }
         let stdout = child
             .stdout
@@ -262,8 +266,14 @@ impl SshAccess {
             local_program,
             remote_socket,
             workspace,
+            vm: vm.to_owned(),
         }))
     }
+}
+/// `script` run by `sh`, whatever the VM account's login shell is, as the
+/// installer's own commands are.
+fn posix(script: &str) -> String {
+    format!("sh -c '{}'", script.replace('\'', "'\\''"))
 }
 fn ssh(directory: &tempfile::TempDir, endpoint: SocketAddr) -> Command {
     let mut command = Command::new("ssh");
@@ -402,6 +412,17 @@ impl ArtifactChannels for SshAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_with_its_own_quotes_reaches_sh_whole() {
+        let script = posix("echo 'a  b'; echo \"$(echo c)\"");
+        // The VM's sshd hands the command to the account's login shell.
+        let said = std::process::Command::new("bash")
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&said.stdout), "a  b\nc\n");
+    }
 
     fn stand_in(server: &str) -> Vec<String> {
         relay_arguments("/gateway/mcp.sock", server, "digest")

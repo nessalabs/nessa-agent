@@ -298,24 +298,34 @@ A VM made from an earlier image keeps its files and is not replaced. Each
 opening first asks the image's own `nessa env protocol`. When that is not this
 build's, the gateway installs this build in the VM over the VM's own SSH
 connection, exactly as it installs on an SSH host (`HostInstaller`, kept under
-`~/.nessa/env/<digest>`, records naming the VM `boat-<thread>`), then serves
-that copy. An account of a lease already held never installs. A development
-build pins no release for Linux, so from a Mac it cannot install and the
-opening is refused `environment_platform_unsupported`.
+`~/.nessa/env/<digest>`, records naming the VM `boat-<thread>`). The serve
+command then runs the installed copy, and the image's own when none is there.
+A VM that could not be asked gets nothing installed on a guess: it is served
+what is there, and the next opening asks again. An account of a lease already
+held never installs. A development build pins no release for Linux, so from a
+Mac it cannot install and the opening is refused
+`environment_platform_unsupported`.
+
+The install runs on a task of its own, one per thread: an opening whose 120 s
+connect wait runs out while the build is still being sent is refused
+`environment_unreachable`, the install goes on, and the next send waits on that
+same install rather than starting another.
 
 ```mermaid
 sequenceDiagram
     participant G as Gateway (Connector)
     participant V as VM
-    G->>V: /opt/nessa/bin/nessa env protocol
+    G->>V: sh -c '/opt/nessa/bin/nessa env protocol'
     alt this build's protocol
         G->>V: serve the image's copy
+    else could not be asked
+        G->>V: serve the installed copy, else the image's
     else another, or none
         G->>V: probe ~/.nessa/env/<digests>
         opt absent
-            G->>V: upload this build (or its pinned Linux release)
+            G->>V: upload this build (or its pinned Linux release), on its own task
         end
-        G->>V: serve the installed copy
+        G->>V: serve the installed copy, else the image's
     end
 ```
 

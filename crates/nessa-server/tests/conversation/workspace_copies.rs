@@ -76,6 +76,8 @@ impl EnvironmentAudit for Audit {
 /// upload waits for a permit of `uploads` once it has one to wait for.
 struct Vm {
     image: Option<String>,
+    /// The next command run panics.
+    panics: AtomicBool,
     installed: AtomicBool,
     commands: Mutex<Vec<String>>,
     uploads: Option<tokio::sync::Semaphore>,
@@ -84,6 +86,7 @@ impl Vm {
     fn with_image(image: Option<&str>) -> Self {
         Self {
             image: image.map(str::to_owned),
+            panics: AtomicBool::new(false),
             installed: AtomicBool::new(false),
             commands: Mutex::default(),
             uploads: None,
@@ -108,6 +111,10 @@ impl WorkspaceRuntime for Vm {
     }
     async fn run(&self, command: String, input: Option<std::fs::File>) -> io::Result<String> {
         self.commands.lock().unwrap().push(command.clone());
+        assert!(
+            !self.panics.swap(false, Ordering::SeqCst),
+            "injected VM panic"
+        );
         if command.contains("umask 077") {
             assert!(input.is_some(), "an upload sends the build");
             if let Some(uploads) = &self.uploads {
@@ -225,4 +232,27 @@ async fn an_account_of_a_held_lease_never_installs() {
         ))
     );
     assert!(vm.commands.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_install_that_panicked_is_let_go_and_the_next_opening_asks_again() {
+    let vm = Arc::new(Vm::with_image(Some("")));
+    vm.panics.store(true, Ordering::SeqCst);
+    let copies = VmCopies {
+        audit: Arc::new(Audit::default()),
+        installer: Arc::new(installer()),
+        conversation: conversation(),
+        choosing: Arc::default(),
+    };
+    assert_eq!(
+        copies.copy(vm.clone(), true).await,
+        Err(LeaseRefusal::EnvironmentUnreachable)
+    );
+    assert!(copies.choosing.lock().unwrap().is_none());
+    let served = copies.installer.serve_command().await.unwrap();
+    assert_eq!(
+        copies.copy(vm.clone(), true).await,
+        Ok(ServedCopy::Installed(served))
+    );
+    assert_eq!(vm.uploads(), 1);
 }
