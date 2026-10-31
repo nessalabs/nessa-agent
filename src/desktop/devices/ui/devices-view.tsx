@@ -1,8 +1,9 @@
 /**
- * Devices, the side rail's page for the hub's machines: the hub itself, the
- * computers that run agents for it, the cloud it falls back to, and the
- * phones and apps linked to it. A device opens its own page; "Add a
- * computer" pairs a new worker.
+ * Devices, the side rail's page for the hub's machines: the hub itself, then
+ * one list of every other device — the computers that run agents for it, the
+ * cloud it falls back to, and the phones and apps linked to it — each saying
+ * what it is underneath its name. A computer or the cloud opens its own page;
+ * "Add device" asks which kind and adds it here.
  *
  * Everything shown is what the gateway last answered, read again every
  * `pollMs` while the page is open; nothing is kept once it closes.
@@ -21,6 +22,8 @@ import {
 } from "react"
 import { useNow } from "../../../clock"
 import { linkedOn, type LinkedDevice } from "../../model/linked-device"
+import { LinkedDevicesTab } from "../../settings/ui/linked-devices-tab"
+import { BoatConnectionFields, useBoatConnection } from "../../settings/ui/boat-row"
 import type { CloudState, DevicesGateway } from "../adapters/devices-gateway"
 import {
   agentsWord,
@@ -102,7 +105,10 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
 type Page =
   | { readonly kind: "list" }
   | { readonly kind: "worker"; readonly id: string }
+  | { readonly kind: "cloud" }
   | { readonly kind: "add" }
+  | { readonly kind: "add-computer" }
+  | { readonly kind: "add-phone" }
 
 export function DevicesView() {
   const gateway = useContext(Gateway)
@@ -116,7 +122,40 @@ export function DevicesView() {
         </p>
       </div>
     )
+  const list = () => setPage({ kind: "list" })
   if (page.kind === "add")
+    return (
+      <AddDevice
+        onBack={list}
+        onPick={(kind) =>
+          setPage({
+            kind:
+              kind === "computer"
+                ? "add-computer"
+                : kind === "phone"
+                  ? "add-phone"
+                  : "cloud",
+          })
+        }
+      />
+    )
+  if (page.kind === "add-phone")
+    return (
+      <div className="devices-page devices-add-page" data-devices-page="add-phone">
+        <BackButton onBack={list} />
+        <div className="devices-heading">
+          <h1>Add a phone</h1>
+          <p className="devices-muted">
+            Pair the Nessa app to talk to the hub from anywhere.
+          </p>
+        </div>
+        <div className="devices-settings">
+          <LinkedDevicesTab />
+        </div>
+      </div>
+    )
+  if (page.kind === "cloud") return <CloudPage onBack={list} onChanged={devices.reload} />
+  if (page.kind === "add-computer")
     return (
       <AddComputer
         gateway={gateway}
@@ -132,17 +171,14 @@ export function DevicesView() {
   if (page.kind === "worker") {
     const worker = devices.workers?.find((each) => each.id === page.id)
     return (
-      <WorkerPage
-        worker={worker}
-        hub={devices.hub?.name ?? "the hub"}
-        onBack={() => setPage({ kind: "list" })}
-      />
+      <WorkerPage worker={worker} hub={devices.hub?.name ?? "the hub"} onBack={list} />
     )
   }
   return (
     <DevicesList
       read={devices}
       onOpen={(id) => setPage({ kind: "worker", id })}
+      onCloud={() => setPage({ kind: "cloud" })}
       onAdd={() => setPage({ kind: "add" })}
     />
   )
@@ -166,10 +202,12 @@ const plus = (
 function DevicesList({
   read,
   onOpen,
+  onCloud,
   onAdd,
 }: {
   read: Read
   onOpen: (id: string) => void
+  onCloud: () => void
   onAdd: () => void
 }) {
   const now = useNow(30_000)
@@ -193,7 +231,7 @@ function DevicesList({
           data-devices-action="add"
         >
           {plus}
-          Add a computer
+          Add device
         </Button>
       </header>
       {read.unreachable ? (
@@ -206,13 +244,8 @@ function DevicesList({
       ) : (
         <>
           <HubSection hub={read.hub ?? null} />
-          <section className="devices-section" aria-labelledby="devices-computers">
-            <SectionHead
-              id="devices-computers"
-              title="Computers"
-              hint="Run agents the hub sends them"
-            />
-            <div className="devices-grid">
+          <section className="devices-section" aria-label="Your devices">
+            <div className="devices-grid" data-devices-list>
               {(read.workers ?? []).map((worker) => (
                 <Tile
                   key={worker.id}
@@ -238,13 +271,16 @@ function DevicesList({
                   }
                 />
               ))}
+              <CloudTile cloud={read.cloud} onOpen={onCloud} />
+              <LinkedTiles linked={read.linked} />
               <button
                 type="button"
                 className="devices-tile devices-tile-add"
                 onClick={onAdd}
+                data-devices-action="add-tile"
               >
                 {plus}
-                <span>Add a computer</span>
+                <span>Add device</span>
               </button>
             </div>
             {read.more ? (
@@ -253,8 +289,6 @@ function DevicesList({
               </p>
             ) : null}
           </section>
-          <CloudSection cloud={read.cloud} />
-          <LinkedSection linked={read.linked} />
         </>
       )}
     </div>
@@ -273,15 +307,6 @@ function DelayedLoading() {
       Loading Devices
     </LoadingText>
   ) : null
-}
-
-function SectionHead({ id, title, hint }: { id: string; title: string; hint: string }) {
-  return (
-    <div className="devices-section-head">
-      <h2 id={id}>{title}</h2>
-      <span className="devices-muted">{hint}</span>
-    </div>
-  )
 }
 
 function Dot({ status }: { status: DeviceStatus }) {
@@ -386,66 +411,169 @@ function Tile({
   )
 }
 
-function CloudSection({ cloud }: { cloud: CloudState | null | undefined }) {
+/** Where the cloud stands, in a few words under its tile. */
+function cloudWord(cloud: CloudState | null): string {
+  return cloud === "connected"
+    ? "Connected"
+    : cloud === "locked"
+      ? "Unlock the vault to use it"
+      : cloud === "disconnected"
+        ? "Not connected"
+        : "Couldn’t read the connection"
+}
+
+function CloudTile({
+  cloud,
+  onOpen,
+}: {
+  cloud: CloudState | null | undefined
+  onOpen: () => void
+}) {
   if (cloud === undefined) return null
   return (
-    <section className="devices-section" aria-labelledby="devices-cloud">
-      <SectionHead
-        id="devices-cloud"
-        title="Cloud"
-        hint="Boat VMs for channels set to run there"
-      />
-      <div className="devices-grid">
-        <Tile
-          art="cloud"
-          name="Boat"
-          kind="Cloud VMs"
-          status={cloud === "connected" ? "ready" : "offline"}
-          data-devices-cloud={cloud ?? "unknown"}
-          footer={
-            <span>
-              {cloud === "connected"
-                ? "Connected"
-                : cloud === "locked"
-                  ? "Unlock the vault to use it"
-                  : cloud === "disconnected"
-                    ? "Connect in Settings › Integrations"
-                    : "Couldn’t read the connection"}
-            </span>
-          }
-        />
-      </div>
-    </section>
+    <Tile
+      art="cloud"
+      name="Boat"
+      kind="Cloud VMs for channels set to run there"
+      status={cloud === "connected" ? "ready" : "offline"}
+      onClick={onOpen}
+      data-devices-cloud={cloud ?? "unknown"}
+      footer={<span>{cloudWord(cloud)}</span>}
+    />
   )
 }
 
-function LinkedSection({
-  linked,
+function LinkedTiles({ linked }: { linked: readonly LinkedDevice[] | null | undefined }) {
+  if (!linked) return null
+  return linked.map((device) => (
+    <Tile
+      key={device.credentialId}
+      art="phone"
+      name={device.fullAccess ? "Your phone" : "Linked device"}
+      kind={device.fullAccess ? "Nessa app · full access" : "Reads shared chats"}
+      status="online"
+      data-devices-linked={device.credentialId}
+      footer={<span>Linked {linkedOn(device.issuedAt)}</span>}
+    />
+  ))
+}
+
+type AddKind = "computer" | "phone" | "cloud"
+
+const addKinds: readonly {
+  kind: AddKind
+  art: WorkerCard["art"]
+  name: string
+  detail: string
+}[] = [
+  {
+    kind: "computer",
+    art: "laptop",
+    name: "Computer",
+    detail: "Runs agents the hub sends it",
+  },
+  { kind: "phone", art: "phone", name: "Phone", detail: "Talk to the hub from anywhere" },
+  {
+    kind: "cloud",
+    art: "cloud",
+    name: "Cloud",
+    detail: "Boat VMs for channels to run in",
+  },
+]
+
+/** "Add device": which kind, then that kind's own way in. */
+function AddDevice({
+  onBack,
+  onPick,
 }: {
-  linked: readonly LinkedDevice[] | null | undefined
+  onBack: () => void
+  onPick: (kind: AddKind) => void
 }) {
-  if (!linked || linked.length === 0) return null
   return (
-    <section className="devices-section" aria-labelledby="devices-linked">
-      <SectionHead
-        id="devices-linked"
-        title="Phones and apps"
-        hint="Talk to the hub from anywhere"
-      />
+    <div className="devices-page" data-devices-page="add-device">
+      <BackButton onBack={onBack} />
+      <div className="devices-heading">
+        <h1>Add device</h1>
+        <p className="devices-muted">What would you like to add?</p>
+      </div>
       <div className="devices-grid">
-        {linked.map((device) => (
-          <Tile
-            key={device.credentialId}
-            art="phone"
-            name={device.fullAccess ? "Your phone" : "Linked device"}
-            kind={device.fullAccess ? "Nessa app · full access" : "Reads shared chats"}
-            status="online"
-            data-devices-linked={device.credentialId}
-            footer={<span>Linked {linkedOn(device.issuedAt)}</span>}
-          />
+        {addKinds.map((each) => (
+          <button
+            key={each.kind}
+            type="button"
+            className="devices-tile"
+            onClick={() => onPick(each.kind)}
+            data-devices-add={each.kind}
+          >
+            <div className="devices-stage">
+              <DeviceFigure kind={each.art} className="devices-tile-figure" />
+            </div>
+            <div className="devices-tile-body">
+              <span className="devices-tile-name">{each.name}</span>
+              <span className="devices-muted">{each.detail}</span>
+            </div>
+          </button>
         ))}
       </div>
-    </section>
+    </div>
+  )
+}
+
+/** Boat's own page: its connection and VM settings, managed here. */
+function CloudPage({ onBack, onChanged }: { onBack: () => void; onChanged: () => void }) {
+  const connection = useBoatConnection(onChanged)
+  const state = connection.status?.state
+  return (
+    <div className="devices-page" data-devices-page="cloud">
+      <BackButton onBack={onBack} />
+      <header className="devices-detail-head">
+        <DeviceFigure
+          kind="cloud"
+          dimmed={state !== "connected"}
+          className="devices-detail-figure"
+        />
+        <div className="devices-heading">
+          <h1>Boat</h1>
+          <p className="devices-status devices-detail-status" data-devices-cloud-state>
+            <Dot status={state === "connected" ? "ready" : "offline"} />
+            {state === undefined ? "Reading…" : cloudWord(state)}
+            <span className="devices-muted">
+              {" · "}Cloud VMs for channels set to run there
+            </span>
+          </p>
+        </div>
+        {state === "connected" ? (
+          <Button
+            className="devices-detail-action"
+            variant="danger"
+            size="30"
+            shape="pill"
+            disabled={connection.busy}
+            onClick={() => void connection.disconnect()}
+            data-devices-action="disconnect"
+          >
+            Disconnect
+          </Button>
+        ) : null}
+      </header>
+      <div className="devices-settings">
+        <BoatConnectionFields connection={connection} />
+      </div>
+    </div>
+  )
+}
+
+function BackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      className="devices-back"
+      onClick={onBack}
+      data-devices-action="back"
+    >
+      {back}
+      Devices
+    </button>
   )
 }
 
@@ -478,15 +606,7 @@ function WorkerPage({
   const now = useNow(30_000)
   return (
     <div className="devices-page" data-devices-page="worker">
-      <button
-        type="button"
-        className="devices-back"
-        onClick={onBack}
-        data-devices-action="back"
-      >
-        {back}
-        Devices
-      </button>
+      <BackButton onBack={onBack} />
       {!worker ? (
         <p className="devices-muted">This computer is no longer listed.</p>
       ) : (

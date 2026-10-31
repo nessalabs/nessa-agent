@@ -3340,7 +3340,7 @@ const steps = {
             return { fill: style.backgroundColor, ink: style.color }
           })
         if (ink.fill === ink.ink)
-          failures.push(`Add a computer is drawn ${ink.ink} on ${ink.fill}`)
+          failures.push(`Add device is drawn ${ink.ink} on ${ink.fill}`)
         // Its own page: its load, never the agents it runs.
         await tile.click()
         const detail = page.locator('[data-devices-page="worker"]')
@@ -3360,8 +3360,42 @@ const steps = {
           failures.push("the worker's page lists what runs there")
         await photograph("worker")
         await detail.locator('[data-devices-action="back"]').click()
-        // Add a computer: a code and the two commands that use it.
+        // One list: the computer and the cloud side by side, no sections.
+        const list = page.locator("[data-devices-list]")
+        await list.waitFor({ timeout: 5_000 })
+        if (
+          (await list.locator(`[data-devices-worker="${id}"]`).count()) !== 1 ||
+          (await list.locator("[data-devices-cloud]").count()) !== 1
+        )
+          failures.push("the worker and the cloud are not in one list")
+        const headings = await page
+          .locator('[data-devices-page="list"] h2:not(#devices-hub-name)')
+          .allInnerTexts()
+        if (headings.length) failures.push(`Devices splits its list: ${headings}`)
+        // Boat is managed on its own page, not sent to Settings.
+        if (
+          (await page.locator('[data-devices-page="list"]').innerText()).includes(
+            "Settings ›",
+          )
+        )
+          failures.push("Devices still sends Boat to Settings")
+        await list.locator("[data-devices-cloud]").click()
+        const cloud = page.locator('[data-devices-page="cloud"]')
+        await cloud.waitFor({ timeout: 5_000 })
+        if ((await cloud.locator('input[type="password"]').count()) !== 1)
+          failures.push("Boat's page has no token field")
+        await photograph("cloud")
+        await cloud.locator('[data-devices-action="back"]').click()
+        // Add device offers each kind; a computer gets a code and the two commands that use it.
         await page.locator('[data-devices-action="add"]').click()
+        const kinds = await page
+          .locator("[data-devices-add]")
+          .evaluateAll((each) =>
+            each.map((button) => button.getAttribute("data-devices-add")),
+          )
+        if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
+          failures.push(`Add device offers ${JSON.stringify(kinds)}`)
+        await page.locator('[data-devices-add="computer"]').click()
         const add = page.locator('[data-devices-page="add"]')
         const shown = await waitFor(
           async () => (await add.locator("[data-devices-command]").count()) === 2,
@@ -6518,6 +6552,7 @@ async function reachFromDevices(run, failures) {
   if (failures.length) return false
   await page.locator('[data-rail-item="devices"]').click()
   await page.locator('[data-devices-action="add"]').click()
+  await page.locator('[data-devices-add="computer"]').click()
   const add = page.locator('[data-devices-page="add"]')
   const reach = add.locator('[data-devices-action="reach"]')
   if (!(await waitFor(async () => (await reach.count()) === 1, 10_000))) {
