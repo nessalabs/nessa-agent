@@ -108,3 +108,14 @@ The first rebuild exhausted the workspace disk; only disposable compiler caches
 were cleared before rebuilding. Failed resource-constrained launches are not
 counted as passes. The full local stress prerequisite and platform exclusions
 above still apply.
+
+### Subsequent Settings integration
+
+Main advanced to `1c28c39e2` while qualification was running. Integration source
+commit `87979c62ab6323ef32a1de6bc2cb9bd64e6056f0` preserves both the new MCP Settings flow and the vault controls.
+Independent review checked the two conflict resolutions, host composition,
+complete stress counts and selection/prerequisite handling. Primary vault/core
+and native-vault source hashes remain unchanged; those Linux and harness results
+carry across this frontend/native-composition integration. Current frontend,
+browser and CI outcomes remain recorded on the linked draft PR, with their exact
+head and scope. The state page checkpoint identifies this reviewed integration.
