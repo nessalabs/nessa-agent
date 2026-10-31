@@ -3,7 +3,7 @@ id: local-vault
 title: Local vault
 kind: statechart
 status: implemented
-sourceRevision: "ada97db780cd9457f6e1a5efdaa30eda2e64f1d3"
+sourceRevision: "fa20cf23bf92392c91e1979ca0f03ffa37827331"
 summary: A passphrase unlocks encrypted local credentials for one native app session.
 parent: gateway
 sources:

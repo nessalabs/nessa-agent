@@ -86,3 +86,25 @@ Relevant log lines: none.
 ![WebKit confirms change and sealing](changed-webkit.png)
 
 ![Recovery remains visible after a lost answer](recovery-chromium.png)
+
+## Current-main reconciliation
+
+The source was reconciled with `291910cb5d9e8221448f2082816a5c46ba6742b3`
+and committed as `fa20cf23bf92392c91e1979ca0f03ffa37827331`.
+Independent review confirmed the primary security source hashes still match the
+reviewed implementation and the new-main device/stress changes remain intact.
+Private findings and reproductions are excluded from the publication tree.
+
+Repeated checks passed: vault 47; client-core 488 plus 6 doctests; focused
+TypeScript/settings 81; stress-plan 11; protocol 65; app/client typechecks;
+affected lint, repository formatting, architecture and 141-document validation.
+The rebuilt executable bootstrap/retained-CLI checks passed 3/3 and the native
+Rust source/endpoint harness passed 11/11. These are local results for the
+reconciled source; the earlier table remains the original qualification record.
+
+Current runtime/browser qualification and exact-head hosted CI outcomes are
+recorded on the draft PR linked from [tracking issue #1223](https://github.com/nessalabs/nessa-agent/issues/1223).
+The first rebuild exhausted the workspace disk; only disposable compiler caches
+were cleared before rebuilding. Failed resource-constrained launches are not
+counted as passes. The full local stress prerequisite and platform exclusions
+above still apply.
