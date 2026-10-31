@@ -289,17 +289,29 @@ describe("the handshake", () => {
     ] as const) {
       const app = harness({ server })
       await flush()
-      app.say({ jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} })
+      app.say({
+        jsonrpc: "2.0",
+        method: "ui/notifications/sandbox-proxy-ready",
+        params: {},
+      })
       const [ready] = app.take()
       expect((ready as unknown as { params: { allow: string } }).params.allow).toBe(allow)
       app.say({
         jsonrpc: "2.0",
         id: 1,
         method: "ui/initialize",
-        params: { protocolVersion: "2026-01-26", appInfo: { name: "t", version: "1" }, appCapabilities: {} },
+        params: {
+          protocolVersion: "2026-01-26",
+          appInfo: { name: "t", version: "1" },
+          appCapabilities: {},
+        },
       })
-      const [answer] = app.take() as unknown as [{ result: { hostCapabilities: JsonObject } }]
-      expect(answer.result.hostCapabilities.sandbox).toMatchObject({ permissions: granted })
+      const [answer] = app.take() as unknown as [
+        { result: { hostCapabilities: JsonObject } },
+      ]
+      expect(answer.result.hostCapabilities.sandbox).toMatchObject({
+        permissions: granted,
+      })
     }
   })
 

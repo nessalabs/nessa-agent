@@ -73,6 +73,11 @@ export function uiResource(result: JsonObject, uri: string): UiResource | undefi
   return {
     html,
     csp: appliedCsp(ui),
-    permissions: { microphone: asked(isObject(ui) ? field(ui, "permissions") : undefined, "microphone") },
+    permissions: {
+      microphone: asked(
+        isObject(ui) ? field(ui, "permissions") : undefined,
+        "microphone",
+      ),
+    },
   }
 }

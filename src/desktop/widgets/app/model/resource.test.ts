@@ -45,8 +45,10 @@ describe("the UI resource", () => {
 
   it("grants the microphone only to an app that asks for it, as a flag or an object", () => {
     const asking = (microphone: unknown) =>
-      uiResource(item({ text: "<p></p>", _meta: { ui: { permissions: { microphone } } } }), uri)
-        ?.permissions.microphone
+      uiResource(
+        item({ text: "<p></p>", _meta: { ui: { permissions: { microphone } } } }),
+        uri,
+      )?.permissions.microphone
     expect(asking({})).toBe(true)
     expect(asking(true)).toBe(true)
     expect(asking(false)).toBe(false)
