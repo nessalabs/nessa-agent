@@ -2268,7 +2268,9 @@ const steps = {
       .click({ timeout: 10_000 })
     await settled(run, run.main.id, seen, text, "cancelled", failures)
     if (!(await sendShown(run.page))) failures.push("Stop did not turn back into Send")
-    await channelRunning(run.page, MAIN_CHANNEL, false, failures)
+    // Background turns run in the same channel and keep it running: the
+    // channel is idle only once they are drained and held.
+    await run.exclusive(() => channelRunning(run.page, MAIN_CHANNEL, false, failures))
   },
 
   async fail(run, step, failures) {
