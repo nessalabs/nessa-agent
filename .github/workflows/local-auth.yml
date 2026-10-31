@@ -384,6 +384,15 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menuPanels') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menuPanels 1 --evidence "$STRESS_EVIDENCE/menu-panel-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-panel-webkit.log"
         timeout-minutes: 10
+      # Devices ships in WKWebView too: its titlebar's free room takes the
+      # press that moves the window, and its corner shows no "nessa Studio".
+      - name: Run the devices stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'devices') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --devices 1 --evidence "$STRESS_EVIDENCE/devices-webkit" 2>&1 | tee "$STRESS_EVIDENCE/devices-webkit.log"
+        timeout-minutes: 10
       # The window's menus ship in WKWebView too: row height, icons, the
       # check before its number, and picking a filter choice by its number.
       - name: Run the menu stress step in WebKit
@@ -442,7 +451,8 @@ jobs:
       matrix:
         partition: [server-conversation, server-other]
     runs-on: windows-latest
-    timeout-minutes: 60
+    # The test step's 70 plus at most 4 minutes of setup.
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
@@ -465,8 +475,12 @@ jobs:
         env:
           # Emit panic details immediately even if later tests hit the step deadline.
           RUST_TEST_NOCAPTURE: "1"
+        # The step compiles before it tests. Cargo.lock is part of the cache
+        # key, so a change that edits it compiles the graph cold: about 25
+        # minutes on this runner, then 20 to 25 of tests for server-other.
+        # 70 covers that; a warm run ends in under 30.
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault
-        timeout-minutes: 45
+        timeout-minutes: 70
 
   local-auth:
     needs: changes

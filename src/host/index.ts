@@ -28,6 +28,7 @@ export {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  openGatewayConfig,
   onPathsDragged,
   type DroppedPath,
   onAttachmentDragging,

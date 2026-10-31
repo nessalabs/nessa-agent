@@ -347,7 +347,7 @@ test("apt installs and every CI job are bounded", () => {
       frontend: 30,
       "conversation-stress": 60,
       "local-auth": 130,
-      "windows-server-tests": 60,
+      "windows-server-tests": 80,
       "sdk-domain-coverage": 60,
       "required-checks": 10,
     },

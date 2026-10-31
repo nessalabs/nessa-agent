@@ -2599,6 +2599,69 @@ export interface PairingTunnelResult {
   /** Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready. */
   failure?: string
 }
+/** What one machine reports about itself: its name, system and how busy it is. A worker sends it over its lease connection (the lease protocol's Machine frame); the hub reads its own. */
+export interface DeviceMachine {
+  /** The machine's own name for itself; empty when it has none. */
+  hostname: string
+  /** The operating system family: macos, linux, windows, … */
+  os: string
+  /** The system's version, e.g. 15.4 or 24.04; empty when unknown. */
+  osVersion: string
+  /** The processor architecture: aarch64, x86_64, … */
+  arch: string
+  /** Logical processors. */
+  cpus: number
+  /** Processor use across all of them, in thousandths. */
+  cpuPermille: number
+  /** Memory installed. */
+  memoryTotalBytes: number
+  /** Memory in use; never more than memoryTotalBytes. */
+  memoryUsedBytes: number
+  /** Size of every disk in disks together. */
+  diskTotalBytes: number
+  /** Space used on them together; never more than diskTotalBytes. */
+  diskUsedBytes: number
+  /** Each local disk, once however many volumes share it, the root first. Absent or empty when none could be read. */
+  disks?: DeviceDisk[]
+}
+/** One local disk of a machine. */
+export interface DeviceDisk {
+  /** Where it is mounted, e.g. / or /Volumes/Archive. */
+  mount: string
+  /** Its size. */
+  totalBytes: number
+  /** Space used on it; never more than totalBytes. */
+  usedBytes: number
+}
+/** A paired environment (`nessa env serve`) that has served this gateway. */
+export interface DeviceWorker {
+  /** Its environment name, peer: and its key in hex: what a conversation's placement names. */
+  environment: string
+  /** online: its connection serves leases and takes new work. draining: it serves the leases it holds and takes no new ones. offline: no connection serves leases now. */
+  state: "online" | "draining" | "offline"
+  /** Agent leases its connection carries now; 0 offline. */
+  agents: number
+  /** Its latest report: live while online, the last one saved while offline. Absent before it first reported. */
+  machine?: DeviceMachine
+  /** Unix milliseconds it last reported, saved at most every few minutes; absent before it first reported. */
+  lastSeenMs?: number
+}
+/** Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it. */
+export interface DevicesListResult {
+  /** The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read. */
+  hub?: DeviceMachine
+  /** Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it. */
+  listening?: string
+  /** One page of the workers connected now or seen before and still paired, at most 64, in the order of their environment names, each after the page's after. */
+  workers: DeviceWorker[]
+  /** The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page. */
+  next?: string
+}
+/** Which page of the hub's workers to list. */
+export interface DevicesListParams {
+  /** Absent on the first page. Later pages echo the previous page's next. */
+  after?: string
+}
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
 export interface ServerReachResult {
   /** The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages. */
@@ -3543,7 +3606,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 104,
+  maxReadyMethods: 105,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3835,6 +3898,7 @@ export const ProductMethod = {
   GithubLiveEvents: "github.liveEvents",
   GithubStatus: "github.status",
   GithubConnect: "github.connect",
+  DevicesList: "devices.list",
   GithubCancel: "github.cancel",
   GithubDisconnect: "github.disconnect",
   PeerEnroll: "peer.enroll",
@@ -3952,6 +4016,7 @@ export const productReadyMethods = [
   "github.liveEvents",
   "github.status",
   "github.connect",
+  "devices.list",
   "github.cancel",
   "github.disconnect",
   "peer.enroll",
@@ -4060,6 +4125,7 @@ export const productMethodGrants = {
   "github.liveEvents": "credential.manage",
   "github.status": "credential.manage",
   "github.connect": "credential.manage",
+  "devices.list": "server.read",
   "github.cancel": "credential.manage",
   "github.disconnect": "credential.manage",
   "peer.enroll": "credential.manage",

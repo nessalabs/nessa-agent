@@ -77,6 +77,10 @@ export const KNOBS = {
     default: 2,
     what: "other clients following every conversation's events, view and list, stopping and following again as they go",
   },
+  closes: {
+    default: 1,
+    what: "conversations whose agent closes its own thread (close_thread) while the window shows it, parked once the turn ends, then talked to again",
+  },
   parks: {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
@@ -125,6 +129,10 @@ export const KNOBS = {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway, with a code opened by Pair a device while it is on",
   },
+  mcpServers: {
+    default: 1,
+    what: "MCP servers added, edited (the stored variable kept when Replace is left empty) and removed from Settings, each followed by a message",
+  },
   pastes: {
     default: 1,
     what: "images pasted into the composer as a screenshot is, shown as tiles, sent with the message and handed to the agent",
@@ -148,6 +156,10 @@ export const KNOBS = {
   pools: {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
+  },
+  devices: {
+    default: 1,
+    what: "times a paired worker is shown in the side rail's Devices with its machine, opened, offered by Add a computer's commands, and kept as offline with when it was last seen once it stops",
   },
   tunnels: {
     default: 1,
@@ -250,6 +262,7 @@ export function plan(knobs) {
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  add(knobs.closes, () => ({ kind: "close" }))
   add(knobs.renames, () => ({ kind: "rename" }))
   add(knobs.handoffs, () => ({ kind: "handoff" }))
   add(knobs.deletes, () => ({ kind: "delete" }))
@@ -261,11 +274,13 @@ export function plan(knobs) {
   add(knobs.streams, () => ({ kind: "stream" }))
   add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
+  add(knobs.mcpServers, () => ({ kind: "mcp" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.transcriptViews, () => ({ kind: "transcriptView" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.devices, () => ({ kind: "devices" }))
   add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))

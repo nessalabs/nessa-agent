@@ -93,6 +93,8 @@ lease_protocol!(
     "../env_serve/infrastructure/cedar/schema.json",
     "../env_serve/infrastructure/cedar/policies.cedar",
     "../timer/runtime.rs",
+    "../devices/application/machine.rs",
+    "../devices/infrastructure/machine.rs",
     "../env_serve/install.rs",
     "../conversation/infrastructure/ssh_environment/link.rs",
     "../conversation/infrastructure/ssh_environment/environment.rs",

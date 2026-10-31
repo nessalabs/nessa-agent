@@ -2,7 +2,7 @@
 //! supplies the host identity; no user's SSH configuration or agent is consulted.
 use crate::{
     conversation::application::{ArtifactChannel, ArtifactChannels},
-    mcp_servers::domain::{relay_arguments, RELAY_SUBCOMMAND},
+    mcp_servers::domain::{relay_arguments, MANAGED_SERVER_NAME, RELAY_SUBCOMMAND},
     workspaces::{application::WorkspaceStream, domain::Failure},
 };
 use base64::Engine;
@@ -26,7 +26,16 @@ pub(super) struct SshAccess {
     local_socket: PathBuf,
     local_program: PathBuf,
     remote_socket: String,
+    /// The thread's workspace in the VM, where its shell runs.
+    workspace: String,
 }
+
+/// Nessa's own shell server in the image: the managed server runs here, in
+/// the VM beside the agent, never back on the gateway's machine.
+const VM_SHELL: &str = "/opt/nessa/bin/nessa-mcp";
+/// Where that shell keeps its private record of each command it ran.
+const VM_PROCESS_AUDIT: &str = "/home/user/.nessa/process-audit";
+
 impl SshAccess {
     pub(super) fn serve(self: &Arc<Self>) -> io::Result<WorkspaceStream> {
         let mut command = ssh(&self.directory, self.endpoint);
@@ -60,6 +69,7 @@ impl SshAccess {
         vm: &str,
         local_socket: PathBuf,
         local_program: PathBuf,
+        workspace: String,
     ) -> Result<Arc<Self>, Failure> {
         let directory = tempfile::Builder::new()
             .prefix("nessa-boat-")
@@ -184,6 +194,7 @@ impl SshAccess {
             local_socket,
             local_program,
             remote_socket,
+            workspace,
         }))
     }
 }
@@ -238,20 +249,52 @@ fn ssh(directory: &tempfile::TempDir, endpoint: SocketAddr) -> Command {
 }
 impl HarnessMcpRelay for SshAccess {
     fn command(&self, program: &Path, arguments: &[String]) -> Option<(PathBuf, Vec<String>)> {
-        let [relay, socket, server, configuration] = arguments else {
-            return None;
-        };
-        if program != self.local_program
-            || relay != RELAY_SUBCOMMAND
-            || std::path::Path::new(socket) != self.local_socket
-        {
-            return None;
-        }
-        Some((
-            "/opt/nessa/bin/nessa".into(),
-            relay_arguments(&self.remote_socket, server, configuration),
-        ))
+        vm_command(
+            &self.local_program,
+            &self.local_socket,
+            &self.remote_socket,
+            &self.workspace,
+            program,
+            arguments,
+        )
     }
+}
+
+/// What the agent in the VM runs for a server stand-in the gateway made
+/// (`program mcp-relay <local socket> <server> <configuration>`): the
+/// managed shell runs in the VM, rooted at the thread's workspace, so its
+/// commands run where the agent's files are; any other server is relayed
+/// back to the gateway through the forwarded socket. `None` for anything
+/// that is not one of this gateway's stand-ins.
+fn vm_command(
+    local_program: &Path,
+    local_socket: &Path,
+    remote_socket: &str,
+    workspace: &str,
+    program: &Path,
+    arguments: &[String],
+) -> Option<(PathBuf, Vec<String>)> {
+    let [relay, socket, server, configuration] = arguments else {
+        return None;
+    };
+    if program != local_program || relay != RELAY_SUBCOMMAND || Path::new(socket) != local_socket {
+        return None;
+    }
+    if server == MANAGED_SERVER_NAME {
+        return Some((
+            VM_SHELL.into(),
+            vec![
+                "--workspace".into(),
+                workspace.into(),
+                "--audit-directory".into(),
+                VM_PROCESS_AUDIT.into(),
+            ],
+        ));
+    }
+    Some((
+        "/opt/nessa/bin/nessa".into(),
+        relay_arguments(remote_socket, server, configuration),
+    ))
 }
 impl ArtifactChannels for SshAccess {
     fn open(&self) -> io::Result<ArtifactChannel> {
@@ -286,5 +329,74 @@ impl ArtifactChannels for SshAccess {
             to_host,
             keep: Box::new(child),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stand_in(server: &str) -> Vec<String> {
+        relay_arguments("/gateway/mcp.sock", server, "digest")
+    }
+
+    fn mapped(program: &str, arguments: &[String]) -> Option<(PathBuf, Vec<String>)> {
+        vm_command(
+            Path::new("/Applications/Nessa.app/nessa"),
+            Path::new("/gateway/mcp.sock"),
+            "/home/user/.nessa/mcp-1.sock",
+            "/home/user/.nessa/workspaces/thread-1",
+            Path::new(program),
+            arguments,
+        )
+    }
+
+    #[test]
+    fn the_managed_shell_runs_in_the_vm_at_the_threads_workspace() {
+        let (program, arguments) = mapped(
+            "/Applications/Nessa.app/nessa",
+            &stand_in(MANAGED_SERVER_NAME),
+        )
+        .unwrap();
+        assert_eq!(program, PathBuf::from(VM_SHELL));
+        assert_eq!(
+            arguments,
+            [
+                "--workspace",
+                "/home/user/.nessa/workspaces/thread-1",
+                "--audit-directory",
+                VM_PROCESS_AUDIT,
+            ]
+        );
+    }
+
+    #[test]
+    fn any_other_server_is_relayed_back_through_the_forwarded_socket() {
+        let (program, arguments) =
+            mapped("/Applications/Nessa.app/nessa", &stand_in("github")).unwrap();
+        assert_eq!(program, PathBuf::from("/opt/nessa/bin/nessa"));
+        assert_eq!(
+            arguments,
+            relay_arguments("/home/user/.nessa/mcp-1.sock", "github", "digest")
+        );
+    }
+
+    #[test]
+    fn nothing_but_this_gateways_stand_ins_is_mapped() {
+        assert_eq!(
+            mapped("/usr/bin/other", &stand_in(MANAGED_SERVER_NAME)),
+            None
+        );
+        assert_eq!(
+            mapped(
+                "/Applications/Nessa.app/nessa",
+                &relay_arguments("/elsewhere.sock", MANAGED_SERVER_NAME, "digest"),
+            ),
+            None
+        );
+        assert_eq!(
+            mapped("/Applications/Nessa.app/nessa", &["mcp-relay".into()]),
+            None
+        );
     }
 }

@@ -155,20 +155,12 @@
 .side-rail-item:hover .g-core {
   animation: rail-pulse 620ms var(--rail-spring);
 }
-.side-rail-item:hover .g-line {
-  animation: rail-write 520ms var(--desktop-ease);
-}
-.side-rail-item:hover .g-ring {
+/* Devices: the phone steps up beside the screen. */
+.side-rail-item:hover .g-phone {
   animation: rail-ring 520ms var(--rail-spring);
 }
-.side-rail-item:hover .g-page {
-  animation: rail-page 520ms var(--rail-spring);
-}
-.side-rail-item:hover .g-globe {
-  animation: rail-spin 700ms var(--desktop-ease);
-}
-.side-rail-item:hover .g-lid {
-  animation: rail-lid 520ms var(--rail-spring);
+.side-rail-item:hover .g-screen {
+  animation: rail-pulse-soft 520ms var(--rail-spring);
 }
 
 @keyframes rail-spark {
@@ -187,16 +179,6 @@
     transform: scale(1.35);
   }
 }
-@keyframes rail-write {
-  0% {
-    stroke-dasharray: 8;
-    stroke-dashoffset: 8;
-  }
-  100% {
-    stroke-dasharray: 8;
-    stroke-dashoffset: 0;
-  }
-}
 @keyframes rail-ring {
   35% {
     transform: translateY(-1.5px);
@@ -205,19 +187,9 @@
     transform: translateY(0.5px);
   }
 }
-@keyframes rail-page {
+@keyframes rail-pulse-soft {
   40% {
-    transform: scaleX(0.7);
-  }
-}
-@keyframes rail-spin {
-  100% {
-    transform: rotate(360deg);
-  }
-}
-@keyframes rail-lid {
-  40% {
-    transform: translateY(-2px) rotate(-4deg);
+    transform: scale(0.94);
   }
 }
 
@@ -368,4 +340,14 @@
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
   animation: none !important;
   transition-duration: 0s !important;
+}
+
+/*
+ * Over the panes the titlebar's free room lets clicks through to the pane
+ * headers under it, which move the window. An item's view has no header
+ * there, so the room takes the press itself: a drag moves the window and a
+ * double-click zooms it, as over a chat.
+ */
+.workspace-window[data-rail-view] .workspace-titlebar-space {
+  pointer-events: auto;
 }

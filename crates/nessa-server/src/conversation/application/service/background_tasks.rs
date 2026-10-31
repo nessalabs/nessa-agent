@@ -52,6 +52,11 @@ pub(super) struct BackgroundTasks {
     ready: AtomicBool,
 }
 impl BackgroundTasks {
+    /// Whether a background command of `conversation` is running now: one
+    /// Shepherd runs for it whose end has not been settled.
+    pub(super) fn running_for(&self, conversation: &ConversationId) -> bool {
+        self.owners().keys().any(|(owner, _)| owner == conversation)
+    }
     fn owners(&self) -> std::sync::MutexGuard<'_, HashMap<Key, Owner>> {
         self.owners.lock().unwrap_or_else(PoisonError::into_inner)
     }

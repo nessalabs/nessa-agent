@@ -66,6 +66,10 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
+ *   close       another conversation's agent closes its own thread
+ *               (close_thread) while the window shows it; once the turn ends
+ *               its agent is parked though followed (its lease ends `idle`),
+ *               and the next message sent there starts it again
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
@@ -110,6 +114,13 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               up with its card, and answering there takes the notice back;
  *               a second review there stays up across a reload of the
  *               window, and is taken back once another client answers it
+ *   mcp         an MCP server added in Settings › Connections › MCP servers
+ *               with one variable, off for new conversations: one closed
+ *               row ("Local · 1 variable", its switch off); edited from its ⋯
+ *               menu, the command is named and not a field, the variable
+ *               rests as stored, and Replace opened and left empty saves
+ *               without changing the stored value; removed once asked in
+ *               its dialog, gone from the row list and config.json
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -2356,6 +2367,106 @@ const steps = {
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
+  async mcp(run, step, failures) {
+    const name = `stress-mcp-r${step.index}-s${run.knobs.seed}`
+    const variable = "STRESS_TOKEN"
+    // Generated, never printed, and looked for in the page and config.json.
+    const value = randomUUID()
+    const config = join(
+      run.stack.gateway.directory,
+      "ci",
+      "instances",
+      INSTANCE,
+      "config.json",
+    )
+    const stored = () =>
+      (JSON.parse(readFileSync(config, "utf8")).agents?.mcpServers ?? []).find(
+        (server) => server.name === name,
+      )
+    const valueOf = (server) => server?.env?.[variable]
+    const page = run.page
+    const row = () => page.locator(selectorFor.mcpRowNamed(name))
+    const shot = (what) =>
+      run.evidence
+        ? page.screenshot({ path: join(run.evidence, `mcp-${what}.png`) }).catch(() => {})
+        : undefined
+    await run.exclusive(async () => {
+      await openMcpServers(page)
+      await shot("list")
+      // Added from the window, off for new conversations so no agent starts it.
+      await page.getByRole("button", { name: names.mcp.add, exact: true }).click()
+      const form = page.locator(css.mcpForm)
+      await form.getByLabel(names.mcp.name, { exact: true }).fill(name)
+      await form.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
+      await form.getByRole("switch", { name: names.mcp.useInNew }).click()
+      await form.getByRole("button", { name: names.mcp.addVariable, exact: true }).click()
+      const added = form.locator(css.mcpVariableAdded).last()
+      await added.getByLabel(names.mcp.variableName, { exact: true }).fill(variable)
+      await added.locator(css.mcpSecret).fill(value)
+      await form.getByRole("button", { name: names.mcp.save, exact: true }).click()
+      const shown = await row()
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false)
+      if (!shown) {
+        failures.push(`${name} was saved but no row came back for it`)
+        // Left as the next step expects: no dialog, no Settings.
+        if (await form.isVisible().catch(() => false)) await page.keyboard.press("Escape")
+        await closeSettings(page).catch(() => {})
+        return
+      }
+      // A closed row: its name, one short line, a switch and its ⋯ menu.
+      const line = await row().locator('[data-slot="settings-row-detail"]').innerText()
+      if (line !== "Local · 1 variable")
+        failures.push(
+          `${name}'s row says ${JSON.stringify(line)}, not "Local · 1 variable"`,
+        )
+      if ((await row().locator(css.mcpSwitch).getAttribute("aria-checked")) !== "false")
+        failures.push(`${name}'s switch is on, though it was saved off`)
+      if (valueOf(stored()) !== value)
+        failures.push(`config.json does not hold ${variable} as typed after the add`)
+      if ((await page.content()).includes(value))
+        failures.push(`${variable}'s value is in the page after the save`)
+      // Edited: no command to change, the stored value at rest, Replace
+      // opened and left empty, saved. The value stays as stored.
+      await mcpMenu(page, name, names.mcp.edit)
+      await shot("edit")
+      if ((await form.locator(selectorFor.mcpField("command")).count()) > 0)
+        failures.push("the edit form offers the command as a field")
+      const command = await form
+        .locator(css.mcpCommand)
+        .innerText()
+        .catch(() => "")
+      if (command !== basename(process.execPath))
+        failures.push(`the edit form names the command ${JSON.stringify(command)}`)
+      const kept = form.locator(selectorFor.mcpVariableNamed(variable))
+      if ((await kept.locator(css.mcpSecretStored).count()) !== 1)
+        failures.push(`${variable} is not shown as stored in the edit form`)
+      await kept.getByRole("button", { name: names.mcp.replaceValue(variable) }).click()
+      await kept.locator(css.mcpSecret).fill("")
+      await form.getByRole("button", { name: names.mcp.save, exact: true }).click()
+      await page.waitForSelector(css.mcpForm, { state: "detached", timeout: 10_000 })
+      if (valueOf(stored()) !== value)
+        failures.push(
+          `${variable}'s stored value changed on a save that did not type one`,
+        )
+      // Removed, once asked in its dialog.
+      await mcpMenu(page, name, names.mcp.remove)
+      const ask = page.locator(selectorFor.mcpAction("confirm"))
+      await shot("remove")
+      await ask.click()
+      await row()
+        .waitFor({ state: "detached", timeout: 10_000 })
+        .catch(() => {})
+      if ((await row().count()) > 0)
+        failures.push(`${name}'s row is still there after Remove`)
+      if (stored()) failures.push(`config.json still holds ${name} after Remove`)
+      await closeSettings(page)
+    })
+    // The gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async github(run, step, failures) {
     const github = run.stack.github
     if (!github) {
@@ -3264,6 +3375,196 @@ const steps = {
     }
   },
 
+  async devices(run, step, failures) {
+    // A worker dials the native listener, off until a step turns it on:
+    // here Add a computer does, as a person with linking off would.
+    const linked = await run.exclusive(() => reachFromDevices(run, failures))
+    if (!linked) return
+    // With evidence asked for, each page is photographed as it is checked.
+    const photograph = (label) =>
+      run.evidence
+        ? run.page
+            .screenshot({
+              path: join(run.evidence, `devices-${run.engine}-${label}.png`),
+            })
+            .catch(() => {})
+        : Promise.resolve()
+    let worker
+    let owner
+    try {
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      worker = await startWorker({
+        owner,
+        address: run.nativeAddress,
+        agent: run.stack.agent,
+        launch: scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario }),
+        label: `devices${step.index}`,
+        connected: async (name) =>
+          (await offers(run, (environments) => environments.includes(name))).includes(
+            name,
+          ),
+      })
+      const id = worker.name.slice("peer:".length)
+      // The gateway's list names the worker with the machine it reported
+      // over its lease link, as the window reads it.
+      const listed = await waitFor(async () => {
+        const { workers } = await run.client.devices.list()
+        const found = workers.find((each) => each.environment === worker.name)
+        return found?.state === "online" && found.machine ? found : null
+      }, 30_000)
+      if (!listed) {
+        failures.push(`devices.list never named ${worker.name} online with its machine`)
+        return
+      }
+      if (
+        !(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0) ||
+        !listed.machine.disks?.length ||
+        listed.machine.diskTotalBytes !==
+          Math.min(
+            Number.MAX_SAFE_INTEGER,
+            listed.machine.disks.reduce((sum, disk) => sum + disk.totalBytes, 0),
+          )
+      )
+        failures.push(`the worker reported ${JSON.stringify(listed.machine)}`)
+      // Each page follows the last; together they name the worker once.
+      const pages = []
+      for (let after; pages.length < 1_024;) {
+        const page = await run.client.devices.list(after)
+        pages.push(page)
+        if (!page.next) break
+        after = page.next
+      }
+      const named = pages.flatMap((page) => page.workers).map((each) => each.environment)
+      if (named.filter((name) => name === worker.name).length !== 1)
+        failures.push(`devices.list pages name the worker ${JSON.stringify(named)}`)
+      await run.exclusive(async () => {
+        const page = run.page
+        await setSideRail(page, true, failures)
+        if (failures.length) return
+        await page.locator('[data-rail-item="devices"]').click()
+        const tile = page.locator(`[data-devices-worker="${id}"]`)
+        if (
+          !(await waitFor(
+            async () => (await page.$("[data-devices-hub]")) !== null,
+            10_000,
+          ))
+        )
+          failures.push("the Devices view drew no hub card")
+        // Its cards run under the bottom-left corner, so it draws no "nessa Studio".
+        if ((await page.locator(".side-rail-studio").count()) !== 0)
+          failures.push(`the Devices view still draws "nessa Studio" in its corner`)
+        // Its titlebar's free room moves the window, as over a chat.
+        const drags = await page.evaluate(() => {
+          const space = document.querySelector(".workspace-titlebar-space")
+          if (!space) return false
+          const box = space.getBoundingClientRect()
+          const hit = document.elementFromPoint(
+            box.left + box.width / 2,
+            box.top + box.height / 2,
+          )
+          return hit?.closest("[data-tauri-drag-region]") !== null && hit !== null
+        })
+        if (!drags) failures.push("the Devices titlebar does not move the window")
+        for (const stat of ["CPU", "Memory", "Disk"])
+          if (
+            (await page
+              .locator(`[data-devices-hub] [data-devices-stat="${stat}"]`)
+              .count()) !== 1
+          )
+            failures.push(`the hub card has no ${stat}`)
+        const online = await waitFor(async () => {
+          const text = (await tile.count()) ? await tile.innerText() : ""
+          return text.includes(listed.machine.hostname) &&
+            text.includes("Online") &&
+            text.includes("CPU")
+            ? text
+            : null
+        }, 15_000)
+        if (!online) {
+          failures.push(
+            `the worker's tile reads ${JSON.stringify(await tile.allInnerTexts())}`,
+          )
+          return
+        }
+        await photograph("list")
+        // The filled action's words stand out from its fill.
+        const ink = await page
+          .locator('[data-devices-action="add"]')
+          .evaluate((button) => {
+            const style = getComputedStyle(button)
+            return { fill: style.backgroundColor, ink: style.color }
+          })
+        if (ink.fill === ink.ink)
+          failures.push(`Add a computer is drawn ${ink.ink} on ${ink.fill}`)
+        // Its own page: its load, never the agents it runs.
+        await tile.click()
+        const detail = page.locator('[data-devices-page="worker"]')
+        await detail.waitFor({ timeout: 5_000 })
+        for (const stat of ["Agents", "CPU", "Memory", "Disk"])
+          if ((await detail.locator(`[data-devices-stat="${stat}"]`).count()) !== 1)
+            failures.push(`the worker's page has no ${stat}`)
+        const volumes = await detail
+          .locator("[data-devices-disks] .devices-stat-label")
+          .allInnerTexts()
+        const reported = listed.machine.disks.map((disk) => disk.mount)
+        if (
+          JSON.stringify(volumes) !== JSON.stringify(reported.length > 1 ? reported : [])
+        )
+          failures.push(`the worker's page names disks ${JSON.stringify(volumes)}`)
+        if ((await detail.innerText()).includes("Running here"))
+          failures.push("the worker's page lists what runs there")
+        await photograph("worker")
+        await detail.locator('[data-devices-action="back"]').click()
+        // Add a computer: a code and the two commands that use it.
+        await page.locator('[data-devices-action="add"]').click()
+        const add = page.locator('[data-devices-page="add"]')
+        const shown = await waitFor(
+          async () => (await add.locator("[data-devices-command]").count()) === 2,
+          10_000,
+        )
+        const lines = await add.locator("[data-devices-command] code").allInnerTexts()
+        if (
+          !shown ||
+          !lines[0]?.startsWith("nessa env enroll ") ||
+          !lines[1]?.startsWith("nessa env dial ")
+        )
+          failures.push(`Add a computer shows ${JSON.stringify(lines)}`)
+        await photograph("add")
+        await add.locator('[data-devices-action="back"]').click()
+      })
+      if (failures.length) return
+      // Stopped, it stays listed, offline, with when it was last seen.
+      if (!(await worker.stop("SIGTERM", 30_000)))
+        failures.push(`worker ${worker.label} did not drain and exit within 30 s`)
+      await run.exclusive(async () => {
+        const page = run.page
+        const tile = page.locator(`[data-devices-worker="${id}"]`)
+        const offline = await waitFor(async () => {
+          const text = (await tile.count()) ? await tile.innerText() : ""
+          return text.includes("Offline") && text.includes("Last seen") ? text : null
+        }, 15_000)
+        if (!offline)
+          failures.push(
+            `the stopped worker's tile reads ${JSON.stringify(await tile.allInnerTexts())}`,
+          )
+        await photograph("offline")
+        await page.locator('[data-rail-item="agents"]').click()
+        await setSideRail(page, false, failures)
+      })
+    } finally {
+      if (worker) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+        await worker.close()
+      }
+      owner?.close()
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+    }
+  },
+
   async tunnel(run, step, failures) {
     const directory = tunnelDirectory(run)
     const on = await run.exclusive(async () => {
@@ -4109,6 +4410,88 @@ const steps = {
       failures.push(`the next message left the lease ${after?.lease?.state ?? "missing"}`)
     else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
       failures.push("the next message ran on the parked agent's lease, not a new one")
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async close(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " close")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // The window shows it, so it is followed: an agent that closed its own
+    // thread is parked anyway, unlike one that is only idle.
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    const closing = prompt(run, STRESS.close, step)
+    const seen = await send(
+      run,
+      conversationId,
+      closing,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const { view: closed } = await settled(
+      run,
+      conversationId,
+      seen,
+      closing,
+      "completed",
+      failures,
+    )
+    if (!closed) return
+    await expectShown(run.page, SAYS.closed, failures)
+    // The parking sweep looks at least every 15 s.
+    const parked = await waitFor(async () => {
+      const lease = (await followedOnce(run, conversationId)).lease
+      return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
+    }, 45_000)
+    if (!parked) {
+      const lease = (await followedOnce(run, conversationId)).lease
+      failures.push(
+        `the closed thread's agent was not parked: its lease is ${lease?.state ?? "missing"}${
+          lease?.cause ? ` (${lease.cause})` : ""
+        }`,
+      )
+      return
+    }
+    const next = prompt(run, STRESS.reply, step, " after close_thread")
+    const after = await send(
+      run,
+      conversationId,
+      next,
+      failures,
+      new Set(closed.messages.map((each) => each.executionId)),
+    )
+    const { view: reopened } = await settled(
+      run,
+      conversationId,
+      after,
+      next,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.echo}${next}`, failures)
+    if (reopened?.lease?.state !== "live")
+      failures.push(
+        `the message after close_thread left the lease ${reopened?.lease?.state ?? "missing"}`,
+      )
+    else if (!(reopened.lease.revision > (closed.lease?.revision ?? 0)))
+      failures.push("the message after close_thread ran on the closed agent's lease")
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
@@ -5562,6 +5945,23 @@ async function reopened(run, conversationId) {
   return { ms, view, reads }
 }
 
+/** Opens Settings › Connections › MCP servers, as a person does, and waits for its list. */
+async function openMcpServers(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.integrations }).click()
+  await page.waitForSelector(selectorFor.mcpServersIn("listed"), { timeout: 10_000 })
+}
+
+/** Chooses `item` from the ⋯ menu of the MCP server row named `name`. */
+async function mcpMenu(page, name, item) {
+  await page.getByRole("button", { name: names.mcp.more(name), exact: true }).click()
+  await page
+    .locator(selectorFor.mcpMenuOf(name))
+    .getByRole("menuitem", { name: item, exact: true })
+    .click()
+}
+
 /** Opens Settings › Connections › Linked devices, as a person does. */
 async function openLinkedDevices(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
@@ -6376,6 +6776,63 @@ async function pairFromWindow(run, failures) {
     .waitFor({ timeout: 10_000 })
     .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
+}
+
+/**
+ * Turns native linking on from Devices › Add a computer, with linking off:
+ * its "Let other computers reach it" button, which starts the gateway again
+ * in the same process. The page then makes a code, the button is gone, the
+ * run's client is connected again, and config.json holds linking on. Leaves
+ * the side rail closed. Called with nothing else in flight
+ * (`run.exclusive`).
+ */
+async function reachFromDevices(run, failures) {
+  const gateway = run.stack.gateway
+  const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+  const pid = gateway.server.pid
+  const page = run.page
+  await setSideRail(page, true, failures)
+  if (failures.length) return false
+  await page.locator('[data-rail-item="devices"]').click()
+  await page.locator('[data-devices-action="add"]').click()
+  const add = page.locator('[data-devices-page="add"]')
+  const reach = add.locator('[data-devices-action="reach"]')
+  if (!(await waitFor(async () => (await reach.count()) === 1, 10_000))) {
+    failures.push("Add a computer offers no way to let others reach the hub")
+    return false
+  }
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await reach.click()
+    const made = await waitFor(
+      async () =>
+        (await reach.count()) === 0 &&
+        (await add.locator("[data-devices-command]").count()) === 2,
+      60_000,
+    )
+    if (!made)
+      failures.push(
+        `after reaching, Add a computer reads ${JSON.stringify(await add.innerText())}`,
+      )
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const saved = JSON.parse(readFileSync(config, "utf8")).native
+    if (saved?.enabled === false || saved?.listenAddress !== run.nativeListen)
+      failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+    const { listening } = await run.client.devices.list()
+    if (listening === undefined) failures.push("devices.list names no listener")
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  await add.locator('[data-devices-action="back"]').click()
+  await page.locator('[data-rail-item="agents"]').click()
+  await setSideRail(page, false, failures)
+  return held
 }
 
 /**

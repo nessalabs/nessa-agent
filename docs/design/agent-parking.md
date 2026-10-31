@@ -36,6 +36,39 @@ longest ago is parked at once, however recently, and the opening is refused
 another conversation's submission lock, since two openings at the bound would
 each wait for the other's; a conversation whose lock is held is in use.
 
+A conversation in a cloud workspace of its own (placed on Boat) follows a
+different rule, because its VM is billed while it runs:
+
+- It is parked once idle for `WORKSPACE_IDLE` (5 minutes,
+  `ConversationLimits.workspace_idle`), whether anyone watches it or not, and
+  even when `agentIdleSeconds` is 0.
+- A background command of it that still runs keeps it in use. Whether one
+  runs is the background task owner's to say (`BackgroundTasks::running_for`),
+  not a guess from its turn: the process supervisor knows what it started.
+  Today no background command can start in a cloud workspace (the task owner
+  refuses one for a conversation with no local workspace), so this never
+  holds a VM yet; running them in the VM under Shepherd, and seeing the
+  commands a provider runs on its own (Codex's built-in shell), is
+  [#1218](https://github.com/nessalabs/nessa-agent/issues/1218).
+- Once its slot is released, its SSH link is let go (`SshEnvironment::let_go`,
+  only while nothing holds it: no lease, and no opening between taking the
+  link and recording its grant; asked again for half a minute while the
+  stopped agent's holders wind down) and its VM is stopped through
+  `Workspaces::rest`. Boat keeps the disk as a snapshot and bills nothing; the
+  VM is never deleted. A rest waits behind an opening of the same thread and
+  skips a VM that an opening holds (`InUse`).
+- The next message opens the conversation, which resumes the VM
+  (`BoatProvider::connect` waits out a stop still in progress) and then the
+  provider session.
+
+An agent may also close its own thread with the `close_thread` tool. Its
+conversation is marked closing and parked as soon as its turn has ended and
+no background command of it runs, watched or not; in a cloud workspace its
+VM rests with it. A message that arrives first clears the mark, since it is
+new work. The tool is refused (`agent_unsupported`) for an agent that cannot
+resume its session, which is never parked. The next message opens it again
+as after any park.
+
 Parking is the stop that already exists for an agent that stopped itself
 (`AgentEnd::Suspend`): the process stops, anything owed stays owed, and the
 provider session id stays recorded, so the next opening sends `session/resume`.
@@ -87,6 +120,12 @@ conversation again, instead of being refused as a desktop stop refuses it.
 | The suspend's close fails or runs past its budget | The slot stays, marked stopping, as after any failed stop; parking goes through the same `stop_and_release` | Refused as closed until the close confirms | covered by `a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go` |
 | An opening past `liveConversations` while an agent could be parked | The parkable one touched longest ago is parked now | The opening goes ahead | `past_the_bound_an_opening_parks_the_idle_agent_used_longest_ago` |
 | An opening past `liveConversations` while every agent is at work | Nothing | Refused `conversation_capacity` | `past_the_bound_an_agent_at_work_is_not_parked` |
+| In a cloud workspace, idle for `workspace_idle`, watched or not | Parked, then its link let go and its VM stopped, never deleted | Resumes the VM, then the provider session | `a_workspace_conversation_rests_its_vm_once_idle_even_when_followed` |
+| In a cloud workspace, a rest waits while an opening holds the VM | The VM stays running | Opens on the running VM | `a_rest_waiting_behind_an_opening_keeps_the_vm_it_opens` |
+| The agent closed its thread (`close_thread`) | Parked once its turn ends, watched or not | Opens again | `an_agent_that_closed_its_thread_is_parked_once_idle` |
+| A message arrives after `close_thread`, before the sweep | Not parked: the message clears the mark | Runs | `a_message_after_close_thread_keeps_the_thread_open` |
+| `close_thread` for a thread not open, or an agent that cannot resume | Refused, nothing marked | | `close_thread_is_refused_where_it_would_do_nothing` |
+| A rest while a lease or an opening holds the workspace's connection | The connection and the VM stay | | `a_workspace_connection_is_let_go_only_while_nothing_uses_it` |
 | The gateway starts retiring | The sweep ends; retirement suspends what is left | | `parking_stops_when_the_gateway_retires` |
 
 ## What parking does not change

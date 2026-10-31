@@ -2009,6 +2009,25 @@ async fn dispatch_authorized(
                 },
             )
         }
+        "devices.list" => {
+            let Ok(params) = serde_json::from_value::<
+                nessa_protocol::product::generated::DevicesListParams,
+            >(frame.params.clone()) else {
+                return failure(&frame.id, "invalid_request");
+            };
+            let Ok(after) = params
+                .after
+                .as_deref()
+                .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::parse)
+                .transpose()
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            let Some(devices) = state.devices.as_ref() else {
+                return failure(&frame.id, "devices_unavailable");
+            };
+            fitted_devices(&frame.id, device_list(devices.list(after).await))
+        }
         "server.health" => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
@@ -2513,6 +2532,93 @@ async fn close_session<S: Sink<Message> + Unpin>(
 #[cfg(test)]
 pub(crate) use tests::host_fixture::HostProductFixture;
 
+/// `list` answered for `request_id` in one frame of at most
+/// [`MAX_PAYLOAD_BYTES`]. A page whose machines report many disks can run
+/// past it, so workers are dropped from its end until it fits, and `next`
+/// names the last one kept: the next page starts right after it. A page
+/// keeps at least one worker, since every report's text is bounded so that
+/// one always fits (`a_page_of_the_largest_reports_fits_one_frame`).
+fn fitted_devices(
+    request_id: &str,
+    mut list: nessa_protocol::product::generated::DevicesListResult,
+) -> OutgoingMessage {
+    let limit = MAX_PAYLOAD_BYTES as usize;
+    loop {
+        let message = success(request_id, &list);
+        let Some(over) = message
+            .to_wire_text()
+            .ok()
+            .and_then(|text| text.len().checked_sub(limit))
+            .filter(|over| *over > 0)
+        else {
+            return message;
+        };
+        // Drop at least `over` bytes' worth of workers from the end,
+        // measured as each is written, then measure the whole frame again.
+        let mut dropped = 0;
+        while dropped < over && list.workers.len() > 1 {
+            let Some(worker) = list.workers.pop() else {
+                break;
+            };
+            dropped += serde_json::to_vec(&worker).map_or(1, |bytes| bytes.len() + 1);
+        }
+        if dropped == 0 {
+            return message;
+        }
+        list.next = list.workers.last().map(|worker| worker.environment.clone());
+    }
+}
+
+/// `devices.list`'s answer, in the protocol's words.
+fn device_list(
+    list: crate::devices::application::DeviceList,
+) -> nessa_protocol::product::generated::DevicesListResult {
+    use nessa_protocol::product::generated::{
+        DeviceDisk, DeviceMachine, DeviceWorker, DevicesListResult,
+    };
+    let machine = |report: nessa_protocol::lease::MachineReport| DeviceMachine {
+        hostname: report.hostname,
+        os: report.os,
+        os_version: report.os_version,
+        arch: report.arch,
+        cpus: u64::from(report.cpus),
+        cpu_permille: u64::from(report.cpu_permille),
+        memory_total_bytes: report.memory_total_bytes,
+        memory_used_bytes: report.memory_used_bytes,
+        disk_total_bytes: report.disk_total_bytes,
+        disk_used_bytes: report.disk_used_bytes,
+        disks: Some(
+            report
+                .disks
+                .into_iter()
+                .map(|disk| DeviceDisk {
+                    mount: disk.mount,
+                    total_bytes: disk.total_bytes,
+                    used_bytes: disk.used_bytes,
+                })
+                .collect(),
+        ),
+    };
+    DevicesListResult {
+        hub: list.hub.map(machine),
+        listening: list.listening.map(|address| address.to_string()),
+        workers: list
+            .workers
+            .into_iter()
+            .map(|worker| DeviceWorker {
+                environment: worker.peer.name(),
+                state: worker.state.as_str().to_owned(),
+                // The schema's bound; no connection carries that many.
+                agents: u64::try_from(worker.agents)
+                    .unwrap_or(u64::MAX)
+                    .min(u64::from(u32::MAX)),
+                machine: worker.machine.map(machine),
+                last_seen_ms: worker.last_seen_ms,
+            })
+            .collect(),
+        next: list.next.map(|peer| peer.name()),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::super::state::SessionSettings;
@@ -4635,6 +4741,194 @@ mod tests {
         );
         status.send_replace(TunnelStatus::Failed(TunnelFailure::NotReady));
         assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+    }
+
+    /// A page of the largest reports a worker may send (every text at its
+    /// bound, each byte written as six, and every disk listed) runs past one
+    /// frame; it is cut to fit, keeps at least one worker, and its `next`
+    /// names the last worker kept, so the next page carries on from there.
+    #[test]
+    fn a_page_of_the_largest_reports_fits_one_frame() {
+        use nessa_protocol::lease::{MAX_MACHINE_DISKS, MAX_MACHINE_TEXT_BYTES};
+        use nessa_protocol::product::generated::{
+            DeviceDisk, DeviceMachine, DeviceWorker, DevicesListResult,
+        };
+        let text = "\u{1}".repeat(MAX_MACHINE_TEXT_BYTES);
+        let machine = || DeviceMachine {
+            hostname: text.clone(),
+            os: text.clone(),
+            os_version: text.clone(),
+            arch: text.clone(),
+            cpus: u64::from(u32::MAX),
+            cpu_permille: 1000,
+            memory_total_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            memory_used_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            disk_total_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            disk_used_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+            disks: Some(
+                (0..MAX_MACHINE_DISKS)
+                    .map(|_| DeviceDisk {
+                        mount: text.clone(),
+                        total_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+                        used_bytes: nessa_protocol::lease::MAX_MACHINE_FIGURE,
+                    })
+                    .collect(),
+            ),
+        };
+        let names: Vec<String> = (0..crate::devices::application::MAX_LISTED_WORKERS)
+            .map(|index| format!("peer:{index:064x}"))
+            .collect();
+        let page = DevicesListResult {
+            hub: Some(machine()),
+            listening: Some("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535".to_owned()),
+            workers: names
+                .iter()
+                .map(|name| DeviceWorker {
+                    environment: name.clone(),
+                    state: "online".to_owned(),
+                    agents: u64::from(u32::MAX),
+                    machine: Some(machine()),
+                    last_seen_ms: Some(u64::MAX),
+                })
+                .collect(),
+            next: names.last().cloned(),
+        };
+        let request_id = "\u{1}".repeat(256);
+        assert!(
+            success(&request_id, &page).to_wire_text().unwrap().len() > MAX_PAYLOAD_BYTES as usize
+        );
+        let message = fitted_devices(&request_id, page);
+        let text = message.to_wire_text().unwrap();
+        assert!(text.len() <= MAX_PAYLOAD_BYTES as usize, "{}", text.len());
+        let OutgoingMessage::Response(answer) = message else {
+            panic!("response expected")
+        };
+        let fitted: DevicesListResult = serde_json::from_value(answer.payload.unwrap()).unwrap();
+        let kept: Vec<&str> = fitted
+            .workers
+            .iter()
+            .map(|worker| worker.environment.as_str())
+            .collect();
+        assert!(!kept.is_empty() && kept.len() < names.len());
+        assert!(kept.iter().zip(&names).all(|(kept, name)| kept == name));
+        assert_eq!(fitted.next.as_deref(), kept.last().copied());
+    }
+
+    /// `devices.list` answers the hub's machine and every worker, in the
+    /// protocol's words, under `server.read`; a gateway that lists no
+    /// devices says so.
+    #[tokio::test]
+    async fn devices_list_names_the_hub_and_its_workers() {
+        use crate::devices::application::{
+            Devices, LiveWorker, LiveWorkers, MachineProbe, PairedKeys, WorkerSightings,
+        };
+        use crate::devices::infrastructure::{FileSightings, SystemWallClock};
+        use nessa_protocol::lease::MachineReport;
+        use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+        fn report(hostname: &str) -> MachineReport {
+            MachineReport {
+                hostname: hostname.into(),
+                os: "macos".into(),
+                os_version: "26.1".into(),
+                arch: "aarch64".into(),
+                cpus: 12,
+                cpu_permille: 230,
+                memory_total_bytes: 48,
+                memory_used_bytes: 14,
+                disk_total_bytes: 1000,
+                disk_used_bytes: 400,
+                disks: vec![nessa_protocol::lease::MachineDisk {
+                    mount: "/".into(),
+                    total_bytes: 1000,
+                    used_bytes: 400,
+                }],
+            }
+        }
+        struct Hub;
+        impl MachineProbe for Hub {
+            fn read(&self) -> Option<MachineReport> {
+                Some(report("studio"))
+            }
+        }
+        struct One;
+        impl LiveWorkers for One {
+            fn live(&self) -> Vec<LiveWorker> {
+                vec![LiveWorker {
+                    peer: PeerEnvironment::new([0xab; PeerEnvironment::KEY_BYTES]),
+                    serving: Some((4, false)),
+                    machine: Some(report("build-box")),
+                }]
+            }
+        }
+        struct AllPaired;
+        impl PairedKeys for AllPaired {
+            fn paired(&self) -> Option<std::collections::BTreeSet<PeerEnvironment>> {
+                None
+            }
+        }
+        let (state, _authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let OutgoingMessage::Response(refused) =
+            dispatch(&state, &session, request("1", "devices.list")).await
+        else {
+            panic!("response expected")
+        };
+        assert_eq!(refused.error.unwrap().code, "devices_unavailable");
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = state.with_devices(Arc::new(Devices::new(
+            Arc::new(Hub),
+            Some((Arc::new(One), Arc::new(AllPaired))),
+            Arc::new(WorkerSightings::new(
+                Arc::new(FileSightings::new(directory.path().join("workers"))),
+                Arc::new(SystemWallClock),
+            )),
+        )));
+        let OutgoingMessage::Response(answer) =
+            dispatch(&state, &session, request("2", "devices.list")).await
+        else {
+            panic!("response expected")
+        };
+        assert!(answer.ok);
+        let mut payload = answer.payload.unwrap();
+        let seen = payload["workers"][0]["lastSeenMs"].take();
+        assert!(seen.as_u64().is_some_and(|seen| seen > 0), "{seen}");
+        let machine = |hostname: &str| {
+            json!({
+                "hostname": hostname, "os": "macos", "osVersion": "26.1",
+                "arch": "aarch64", "cpus": 12, "cpuPermille": 230,
+                "memoryTotalBytes": 48, "memoryUsedBytes": 14,
+                "diskTotalBytes": 1000, "diskUsedBytes": 400,
+                "disks": [{"mount": "/", "totalBytes": 1000, "usedBytes": 400}],
+            })
+        };
+        assert_eq!(
+            payload,
+            json!({
+                "hub": machine("studio"),
+                "workers": [{
+                    "environment": format!("peer:{}", "ab".repeat(32)),
+                    "state": "online",
+                    "agents": 4,
+                    "machine": machine("build-box"),
+                    "lastSeenMs": null,
+                }],
+            })
+        );
+
+        // A page after the last worker is empty; a malformed `after` is refused.
+        let mut after = request("3", "devices.list");
+        after.params = json!({"after": format!("peer:{}", "ff".repeat(32))});
+        let OutgoingMessage::Response(page) = dispatch(&state, &session, after).await else {
+            panic!("response expected")
+        };
+        assert_eq!(page.payload.unwrap()["workers"], json!([]));
+        let mut bad = request("4", "devices.list");
+        bad.params = json!({"after": "peer:zz"});
+        let OutgoingMessage::Response(refused) = dispatch(&state, &session, bad).await else {
+            panic!("response expected")
+        };
+        assert_eq!(refused.error.unwrap().code, "invalid_request");
     }
 
     #[tokio::test]

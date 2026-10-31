@@ -1,4 +1,5 @@
 import { BoatProvider } from "./settings/ui/boat-row"
+import { DevicesProvider } from "./devices"
 import { VaultProvider, nativeVault } from "../vault"
 import { hasNativeHost } from "../host"
 import { nativeAgentApiKeys } from "../onboarding/adapters/agent-api-key"
@@ -13,6 +14,7 @@ import {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  openGatewayConfig,
   onPathsDragged,
   host,
   loadAssignedGatewayEndpoint,
@@ -204,35 +206,48 @@ createRoot(container).render(
               <SubagentsProvider source={dependencies.subagents}>
                 {/* Every icon in the window resolves through the family chosen in Settings. */}
                 <DesktopIconFamilyProvider>
-                  <McpServersProvider gateway={dependencies.mcpServers}>
+                  <McpServersProvider
+                    gateway={dependencies.mcpServers}
+                    // The app's own gateway is on this computer: its config
+                    // file can be opened here, where the host has an opener
+                    // (macOS, Linux). A browser's may be anywhere.
+                    openConfig={
+                      backend === "host" &&
+                      (host.kind === "macos" || host.kind === "linux")
+                        ? openGatewayConfig
+                        : undefined
+                    }
+                  >
                     <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                      <ClipboardProvider write={writeClipboardText}>
-                        <SiteIconProvider render={faviconSiteIcon}>
-                          <HeldFilesProvider
-                            read={dependencies.heldFiles}
-                            save={saveFile}
-                          >
-                            <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                              <PermissionRulesProvider
-                                gateway={dependencies.permissionRules}
-                              >
-                                <BoatProvider gateway={dependencies.boat}>
-                                  <GithubProvider
-                                    gateway={dependencies.github}
-                                    avatar={githubAvatar}
-                                  >
-                                    <DesktopWindow
-                                      hostKind={host.kind}
-                                      browserSurface={host.kind === "browser"}
-                                      inspectable={import.meta.env.DEV}
-                                    />
-                                  </GithubProvider>
-                                </BoatProvider>
-                              </PermissionRulesProvider>
-                            </NativeHooksProvider>
-                          </HeldFilesProvider>
-                        </SiteIconProvider>
-                      </ClipboardProvider>
+                      <DevicesProvider gateway={dependencies.devices}>
+                        <ClipboardProvider write={writeClipboardText}>
+                          <SiteIconProvider render={faviconSiteIcon}>
+                            <HeldFilesProvider
+                              read={dependencies.heldFiles}
+                              save={saveFile}
+                            >
+                              <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                                <PermissionRulesProvider
+                                  gateway={dependencies.permissionRules}
+                                >
+                                  <BoatProvider gateway={dependencies.boat}>
+                                    <GithubProvider
+                                      gateway={dependencies.github}
+                                      avatar={githubAvatar}
+                                    >
+                                      <DesktopWindow
+                                        hostKind={host.kind}
+                                        browserSurface={host.kind === "browser"}
+                                        inspectable={import.meta.env.DEV}
+                                      />
+                                    </GithubProvider>
+                                  </BoatProvider>
+                                </PermissionRulesProvider>
+                              </NativeHooksProvider>
+                            </HeldFilesProvider>
+                          </SiteIconProvider>
+                        </ClipboardProvider>
+                      </DevicesProvider>
                     </LinkedDevicesProvider>
                   </McpServersProvider>
                 </DesktopIconFamilyProvider>
