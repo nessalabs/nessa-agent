@@ -7419,13 +7419,37 @@ async function background(run, n) {
   return { conversationId, failures }
 }
 
-/** What must hold once everything has run, in every conversation the run made. */
+/** The app server the scripted agent's tools come from. */
+const TEST_APP_SERVER = "mcptest"
+
+/**
+ * Whether the gateway keeps `server` trusted: its
+ * `<namespace>/conversations/trusted-apps.json`, `{"servers": [...]}`.
+ */
+function appTrusted(run, server) {
+  const file = join(
+    run.stack.gateway.directory,
+    "ci",
+    "instances",
+    INSTANCE,
+    "conversations",
+    "trusted-apps.json",
+  )
+  try {
+    return (JSON.parse(readFileSync(file, "utf8")).servers ?? []).includes(server)
+  } catch {
+    return false
+  }
+}
+
 /**
  * The `huddle` step in the window: the talk board a voice app stands in
  * for. Its frame is allowed the microphone because its resource asks; it
  * opens in the chat's panel as one tab however often it asks, its card
  * becoming a row; its first message is reviewed, offering Always allow this
- * app, and once that is chosen its next message goes unasked.
+ * app, and once that is chosen its next message goes unasked. Trust is kept
+ * gateway-wide by server, so a later repetition finds it already trusted and
+ * checks that its first message goes unasked too.
  */
 async function talkBoard(run, step, conversationId, failures, shot) {
   const page = run.page
@@ -7490,24 +7514,38 @@ async function talkBoard(run, step, conversationId, failures, shot) {
       return said !== "" && said !== "pending" ? said : null
     }, ms)
   const firstText = `${STRESS.reply} from the talk board r${step.index} first`
-  await ask(firstText)
   const card = page.locator(css.appApprovalCard).filter({ visible: true }).first()
-  const always = card.getByRole("button", { name: /always allow/i })
-  const offered = await always
-    .waitFor({ state: "visible", timeout: 20_000 })
-    .then(() => true)
-    .catch(() => false)
-  if (!offered) {
-    failures.push(
-      "the talk board's first message was not reviewed with Always allow this app",
-    )
-    return
+  const trustedBefore = appTrusted(run, TEST_APP_SERVER)
+  await ask(firstText)
+  if (trustedBefore) {
+    // An earlier repetition chose Always allow: nothing is asked now.
+    const firstSaid = await sent(30_000)
+    if (firstSaid !== "ok")
+      failures.push(
+        `the already trusted talk board's first message ended ${JSON.stringify(firstSaid)}`,
+      )
+    if (await card.isVisible().catch(() => false))
+      failures.push("the already trusted talk board's first message was reviewed")
+  } else {
+    const always = card.getByRole("button", { name: /always allow/i })
+    const offered = await always
+      .waitFor({ state: "visible", timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!offered) {
+      failures.push(
+        "the talk board's first message was not reviewed with Always allow this app",
+      )
+      return
+    }
+    await shot("review")
+    await always.click()
+    const firstSaid = await sent(30_000)
+    if (firstSaid !== "ok")
+      failures.push(`after Always allow the talk board says ${JSON.stringify(firstSaid)}`)
+    if (!(await waitFor(async () => appTrusted(run, TEST_APP_SERVER), 5_000)))
+      failures.push("Always allow this app was not kept in trusted-apps.json")
   }
-  await shot("review")
-  await always.click()
-  const firstSaid = await sent(30_000)
-  if (firstSaid !== "ok")
-    failures.push(`after Always allow the talk board says ${JSON.stringify(firstSaid)}`)
   await expectShown(page, `${SAYS.echo}${firstText}`, failures)
   // Its next message goes as the person, with no review.
   const secondText = `${STRESS.reply} from the talk board r${step.index} second`
@@ -7533,6 +7571,7 @@ async function talkBoard(run, step, conversationId, failures, shot) {
     failures.push("the talk board's panel frame is still drawn after its tab closed")
 }
 
+/** What must hold once everything has run, in every conversation the run made. */
 async function titleOf(run, conversationId) {
   const title = await waitFor(async () => {
     const { conversations } = await run.client.conversation.list({})
