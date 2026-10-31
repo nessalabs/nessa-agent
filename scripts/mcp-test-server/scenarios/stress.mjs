@@ -40,6 +40,7 @@ export const STRESS = {
   githubRead: "stress repository read",
   githubShell: "stress shell github",
   channel: "stress channel",
+  huddle: "stress huddle",
 }
 
 /**
@@ -92,6 +93,7 @@ export const SAYS = {
   carried: "Carried on by ",
   channel: "Working in: ",
   channelPrompt: "System prompt: ",
+  huddle: "Talk board: ",
 }
 
 /**
@@ -275,6 +277,17 @@ export function stressScenario({
       {
         when: STRESS.reply,
         steps: [{ do: "text", chunks: [SAYS.echo, "${prompt.text}"] }, { do: "end" }],
+      },
+      {
+        // The test server's talk app, drawn where the turn shows it: what a
+        // voice app asks of its host (the microphone, the chat's panel, and
+        // messages sent as the person).
+        when: STRESS.huddle,
+        steps: [
+          { do: "tool", tool: "talk_board", arguments: {} },
+          { do: "text", chunks: [SAYS.huddle, "${prompt.text}"] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.long,

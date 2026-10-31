@@ -58,6 +58,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("launch"), knobs.launches)
   assert.equal(count("github"), knobs.githubs)
   assert.equal(count("channel"), knobs.channels)
+  assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
@@ -169,6 +170,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menus: "0",
         githubs: "0",
         channels: "0",
+        huddles: "0",
         webhooks: "0",
         pastes: "0",
         awaits: "0",

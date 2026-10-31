@@ -193,6 +193,10 @@ export const KNOBS = {
     default: 1,
     what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
   },
+  huddles: {
+    default: 1,
+    what: "turns that show a voice app (the test server's talk board): its frame is allowed the microphone, it opens in the chat's panel as one tab, and after Always allow its next message goes unasked",
+  },
   channels: {
     default: 1,
     what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session",
@@ -289,6 +293,7 @@ export function plan(knobs) {
   add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
+  add(knobs.huddles, () => ({ kind: "huddle" }))
   add(knobs.webhooks, () => ({ kind: "webhook" }))
   add(knobs.pastes, () => ({ kind: "paste" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
