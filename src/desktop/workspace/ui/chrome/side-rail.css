@@ -61,13 +61,14 @@
  * Open, the rail is a floating pill (as Outlook's is): it starts below the
  * window bar, so nothing of it runs under or around the traffic lights, and
  * stands clear of the window's edges. It is centred on the items' column
- * and keeps one `--rail-pill-pad` around them. It ends one gutter above the
- * corner row, so the toggle and "nessa Studio" stand below it, never in it.
+ * and keeps one `--rail-pill-pad` around them. It runs down to the corner
+ * and holds the toggle with the same pad below it; "nessa Studio" steps out
+ * past its edge (below).
  */
 .side-rail-pill {
   position: absolute;
   top: var(--desktop-titlebar-height);
-  bottom: calc(2 * var(--desktop-gutter) + 13px + var(--desktop-control-size));
+  bottom: calc(var(--desktop-gutter) + 13px - var(--rail-pill-pad));
   left: calc(var(--rail-column) - var(--rail-pill-pad));
   width: calc(var(--desktop-control-size) + 2 * var(--rail-pill-pad));
   border-radius: var(--desktop-radius-pill);
@@ -258,7 +259,14 @@
   letter-spacing: -0.01em;
   transition:
     opacity var(--desktop-slow) var(--desktop-out),
-    visibility 0s linear 0s;
+    visibility 0s linear 0s,
+    transform var(--desktop-slow) var(--desktop-ease);
+}
+
+/* With the rail open its pill holds the toggle, so the words stand a clear
+   gap past the pill's edge instead of running into it. */
+.workspace-window[data-rail="open"] .side-rail-studio {
+  transform: translateX(calc(var(--rail-pill-pad) + 8px));
 }
 
 .side-rail-studio .desktop-identity-button {

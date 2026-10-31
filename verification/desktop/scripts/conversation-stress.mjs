@@ -714,7 +714,11 @@ async function aroundTheLights(page, rail, failures) {
         near(now.at.pill.left + now.at.pill.width / 2, now.at.item) &&
         now.at.itemTop > now.at.pill.top &&
         // The corner row (the toggle and "nessa Studio") stands below it.
-        now.at.toggleTop >= now.at.pill.bottom
+        // Down to the corner: no more than the toggle's foot room below it.
+        now.at.windowBottom - now.at.pill.bottom <= 24 &&
+        now.at.toggleBottom < now.at.pill.bottom &&
+        // "nessa Studio" stands clear of the pill's edge.
+        now.at.words >= now.at.pill.left + now.at.pill.width + 8 - 0.5
       : near(now.at.workspace, 0)) &&
     // The toggle is nessa's mark: in the footer's mark slot, right before
     // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
@@ -805,6 +809,7 @@ function railLayout(page) {
           toggle: box(toggle)?.left ?? NaN,
           toggleBottom: box(toggle)?.bottom ?? NaN,
           toggleTop: box(toggle)?.top ?? NaN,
+          words: box(".side-rail-studio .desktop-identity-words")?.left ?? NaN,
           toggleMiddle: box(toggle)
             ? [
                 box(toggle).left + box(toggle).width / 2,
@@ -854,9 +859,10 @@ function railLayout(page) {
 
 /**
  * Toggles the rail from the page and follows "nessa Studio" every frame: it
- * stands in the corner beside the toggle, 8px past the toggle's mark, and
- * neither moves, not even for a frame. Settled, the toggle (with the rail
- * closed) stands on Agents' icon column. Returns what it found wrong.
+ * stands in the corner beside the toggle, 8px past the toggle's mark with the
+ * rail closed and 20px with it open (clear of the pill), moving only
+ * between the two. Settled, the toggle (with the rail closed) stands on
+ * Agents' icon column. Returns what it found wrong.
  */
 function footerThroughToggle(page) {
   return page.evaluate(async (toggleSelector) => {
@@ -881,10 +887,16 @@ function footerThroughToggle(page) {
       }
       requestAnimationFrame(frame)
     })
-    const off = seen.find((gap) => Math.abs(gap - 8) > 0.5)
+    const off = seen.find((gap) => gap < 7.5 || gap > 20.5)
     if (off !== undefined)
       failures.push(
-        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8px`,
+        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8-20px`,
+      )
+    const want = toggle.getAttribute("aria-expanded") === "true" ? 20 : 8
+    const last = seen.at(-1)
+    if (last !== undefined && Math.abs(last - want) > 0.5)
+      failures.push(
+        `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
       )
     const icon = document.querySelector(".agents-overview-entry svg")
     if (toggle.getAttribute("aria-expanded") === "false" && icon) {
