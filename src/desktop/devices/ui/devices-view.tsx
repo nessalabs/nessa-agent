@@ -409,7 +409,7 @@ function CloudSection({ cloud }: { cloud: CloudState | null | undefined }) {
                 : cloud === "locked"
                   ? "Unlock the vault to use it"
                   : cloud === "disconnected"
-                    ? "Connect in Settings › Integrations"
+                    ? "Connect in Settings › Accounts"
                     : "Couldn’t read the connection"}
             </span>
           }
