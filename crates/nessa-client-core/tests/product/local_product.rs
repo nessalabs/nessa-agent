@@ -285,3 +285,30 @@ fn value_callers_cannot_trust_malformed_change_envelopes_or_success_payloads() {
         worker.join().unwrap();
     }
 }
+
+#[test]
+fn bounded_valid_notices_preserve_correlation_and_change_uncertainty() {
+    for method in ["vault.status", "vault.changePassphrase"] {
+        let (mut client, worker) = peer(|mut socket, _| {
+            for sequence in 1..=65 {
+                send(
+                    &mut socket,
+                    json!({"type":"event","event":"permission.review.waiting","payload":{},"seq":sequence,"stateVersion":0}),
+                );
+            }
+        });
+        let params = if method == "vault.changePassphrase" {
+            json!({"passphrase":"generated synthetic replacement phrase"})
+        } else {
+            json!({})
+        };
+        let error = client.request::<Value>(method, params).unwrap_err();
+        if method == "vault.changePassphrase" {
+            assert_uncertain(error);
+        } else {
+            assert_eq!(error, LocalProductError::Correlation);
+        }
+        drop(client);
+        worker.join().unwrap();
+    }
+}

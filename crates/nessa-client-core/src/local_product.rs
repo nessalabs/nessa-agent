@@ -203,7 +203,7 @@ impl LocalProduct {
             response = self.read()?;
         }
         let OutgoingMessage::Response(response) = response else {
-            return Err(LocalProductError::Protocol);
+            return Err(LocalProductError::Correlation);
         };
         if response.id != id {
             return Err(LocalProductError::Correlation);

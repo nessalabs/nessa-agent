@@ -420,6 +420,7 @@ until repository work settles.
 | Caller disconnects after admission | Admitted blocking IO may finish; do not promise cancellation |
 | Repository/audit panics | Stay sealed; retain uncertainty or actual commitment; recovery can explicitly unlock |
 | Native/SDK timeout or reply is lost after dispatch | Change-not-confirmed, never generic success or automatic replay |
+| Valid unsolicited notices exhaust the existing response budget | Ordinary commands keep Correlation; passphrase change reports Change-not-confirmed and retires the connection |
 | UI gets successful Locked result | Separate change flow reports completion; protected-access ensure does not resolve |
 
 The adapter holds the existing shared file lock, reloads current entries, derives
