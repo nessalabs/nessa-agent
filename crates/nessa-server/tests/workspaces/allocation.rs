@@ -180,6 +180,7 @@ struct FakeProvider {
     connected_lifetimes: Mutex<Vec<VmLifetime>>,
     connects: Mutex<Vec<String>>,
     deletes: AtomicUsize,
+    stops: Mutex<Vec<String>>,
     entered: Semaphore,
     proceed: Semaphore,
     confirm_remove: AtomicBool,
@@ -200,6 +201,7 @@ impl FakeProvider {
             connected_lifetimes: Mutex::new(vec![]),
             connects: Mutex::new(vec![]),
             deletes: AtomicUsize::new(0),
+            stops: Mutex::new(vec![]),
             entered: Semaphore::new(0),
             proceed: Semaphore::new(0),
         }
@@ -245,6 +247,10 @@ impl Provider for FakeProvider {
         }
         self.connects.lock().unwrap().push(vm.into());
         Ok(Arc::new(Runtime))
+    }
+    async fn stop(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+        self.stops.lock().unwrap().push(vm.into());
+        Ok(())
     }
     async fn remove(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
         self.recovery_steps
@@ -415,6 +421,45 @@ async fn simultaneous_open_and_reopen_create_one_vm_for_the_thread() {
         .unwrap()
         .iter()
         .all(|vm| vm == &format!("vm-{}", id(1))));
+}
+#[tokio::test]
+async fn a_rest_stops_the_vm_only_once_nothing_uses_it_and_never_deletes_it() {
+    let (service, _, provider) = fixture();
+    // No VM yet: nothing to stop.
+    assert_eq!(service.rest(id(1)).await, Ok(false));
+    provider.proceed.add_permits(1);
+    let runtime = service.open(id(1), true, None).await.unwrap();
+    // The runtime an opening handed out holds the VM in use.
+    assert_eq!(service.rest(id(1)).await, Ok(false));
+    assert!(provider.stops.lock().unwrap().is_empty());
+    drop(runtime);
+    assert_eq!(service.rest(id(1)).await, Ok(true));
+    assert_eq!(*provider.stops.lock().unwrap(), [format!("vm-{}", id(1))]);
+    assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
+    // The next opening reaches the same VM again, which resumes it.
+    assert!(service.open(id(1), true, None).await.is_ok());
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.connects.lock().unwrap().len(), 2);
+}
+#[tokio::test]
+async fn a_rest_waiting_behind_an_opening_keeps_the_vm_it_opens() {
+    let (service, _, provider) = fixture();
+    // The opening holds the thread's lock while it creates the VM; a rest
+    // asked meanwhile runs after it, and finds the VM in use.
+    let opening = {
+        let service = service.clone();
+        tokio::spawn(async move { service.open(id(1), true, None).await })
+    };
+    provider.entered.acquire().await.unwrap().forget();
+    let rest = {
+        let service = service.clone();
+        tokio::spawn(async move { service.rest(id(1)).await })
+    };
+    provider.proceed.add_permits(1);
+    let runtime = opening.await.unwrap().unwrap();
+    assert_eq!(rest.await.unwrap(), Ok(false));
+    assert!(provider.stops.lock().unwrap().is_empty());
+    drop(runtime);
 }
 #[tokio::test]
 async fn two_threads_receive_distinct_vm_identities() {

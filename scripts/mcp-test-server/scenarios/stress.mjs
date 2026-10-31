@@ -27,6 +27,7 @@ export const STRESS = {
   limit: "stress usage limit",
   delegate: "stress delegate",
   await: "stress await",
+  close: "stress close",
   watch: "stress watch",
   long: "stress long",
   oversized: "stress oversized",
@@ -72,6 +73,7 @@ export const SAYS = {
   failure: "the stress scenario failed this turn",
   delegated: "Delegated to ",
   awaited: "Awaited ",
+  closed: "Closing this thread: ",
   report: "Report received.",
   backgroundStarted: "Background task started.",
   backgroundFinished: "Background outcome received.",
@@ -543,6 +545,22 @@ export function stressScenario({
             save: "sent",
           },
           { do: "text", chunks: [SAYS.delegated, "${thread.threadId}"] },
+          { do: "end" },
+        ],
+      },
+      // Closes its own thread, as an agent whose work is done is told to:
+      // the agent stops once this turn ends, and the next message opens it.
+      {
+        when: STRESS.close,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "close_thread",
+            arguments: {},
+            save: "closed",
+          },
+          { do: "text", chunks: [SAYS.closed, "${closed}"] },
           { do: "end" },
         ],
       },

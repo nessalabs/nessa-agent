@@ -66,6 +66,10 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
+ *   close       another conversation's agent closes its own thread
+ *               (close_thread) while the window shows it; once the turn ends
+ *               its agent is parked though followed (its lease ends `idle`),
+ *               and the next message sent there starts it again
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
@@ -3217,13 +3221,9 @@ const steps = {
   },
 
   async devices(run, step, failures) {
-    // A worker dials the native listener, off until a step turns it on.
-    const linked = await run.exclusive(async () => {
-      await openLinkedDevices(run.page)
-      const on = await switchLinking(run, true, failures)
-      if (on) await closeSettings(run.page)
-      return on
-    })
+    // A worker dials the native listener, off until a step turns it on:
+    // here Add a computer does, as a person with linking off would.
+    const linked = await run.exclusive(() => reachFromDevices(run, failures))
     if (!linked) return
     // With evidence asked for, each page is photographed as it is checked.
     const photograph = (label) =>
@@ -3261,8 +3261,27 @@ const steps = {
         failures.push(`devices.list never named ${worker.name} online with its machine`)
         return
       }
-      if (!(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0))
+      if (
+        !(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0) ||
+        !listed.machine.disks?.length ||
+        listed.machine.diskTotalBytes !==
+          Math.min(
+            Number.MAX_SAFE_INTEGER,
+            listed.machine.disks.reduce((sum, disk) => sum + disk.totalBytes, 0),
+          )
+      )
         failures.push(`the worker reported ${JSON.stringify(listed.machine)}`)
+      // Each page follows the last; together they name the worker once.
+      const pages = []
+      for (let after; pages.length < 1_024;) {
+        const page = await run.client.devices.list(after)
+        pages.push(page)
+        if (!page.next) break
+        after = page.next
+      }
+      const named = pages.flatMap((page) => page.workers).map((each) => each.environment)
+      if (named.filter((name) => name === worker.name).length !== 1)
+        failures.push(`devices.list pages name the worker ${JSON.stringify(named)}`)
       await run.exclusive(async () => {
         const page = run.page
         await setSideRail(page, true, failures)
@@ -3329,6 +3348,14 @@ const steps = {
         for (const stat of ["Agents", "CPU", "Memory", "Disk"])
           if ((await detail.locator(`[data-devices-stat="${stat}"]`).count()) !== 1)
             failures.push(`the worker's page has no ${stat}`)
+        const volumes = await detail
+          .locator("[data-devices-disks] .devices-stat-label")
+          .allInnerTexts()
+        const reported = listed.machine.disks.map((disk) => disk.mount)
+        if (
+          JSON.stringify(volumes) !== JSON.stringify(reported.length > 1 ? reported : [])
+        )
+          failures.push(`the worker's page names disks ${JSON.stringify(volumes)}`)
         if ((await detail.innerText()).includes("Running here"))
           failures.push("the worker's page lists what runs there")
         await photograph("worker")
@@ -4228,6 +4255,88 @@ const steps = {
       failures.push(`the next message left the lease ${after?.lease?.state ?? "missing"}`)
     else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
       failures.push("the next message ran on the parked agent's lease, not a new one")
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async close(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " close")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // The window shows it, so it is followed: an agent that closed its own
+    // thread is parked anyway, unlike one that is only idle.
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    const closing = prompt(run, STRESS.close, step)
+    const seen = await send(
+      run,
+      conversationId,
+      closing,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const { view: closed } = await settled(
+      run,
+      conversationId,
+      seen,
+      closing,
+      "completed",
+      failures,
+    )
+    if (!closed) return
+    await expectShown(run.page, SAYS.closed, failures)
+    // The parking sweep looks at least every 15 s.
+    const parked = await waitFor(async () => {
+      const lease = (await followedOnce(run, conversationId)).lease
+      return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
+    }, 45_000)
+    if (!parked) {
+      const lease = (await followedOnce(run, conversationId)).lease
+      failures.push(
+        `the closed thread's agent was not parked: its lease is ${lease?.state ?? "missing"}${
+          lease?.cause ? ` (${lease.cause})` : ""
+        }`,
+      )
+      return
+    }
+    const next = prompt(run, STRESS.reply, step, " after close_thread")
+    const after = await send(
+      run,
+      conversationId,
+      next,
+      failures,
+      new Set(closed.messages.map((each) => each.executionId)),
+    )
+    const { view: reopened } = await settled(
+      run,
+      conversationId,
+      after,
+      next,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.echo}${next}`, failures)
+    if (reopened?.lease?.state !== "live")
+      failures.push(
+        `the message after close_thread left the lease ${reopened?.lease?.state ?? "missing"}`,
+      )
+    else if (!(reopened.lease.revision > (closed.lease?.revision ?? 0)))
+      failures.push("the message after close_thread ran on the closed agent's lease")
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
@@ -6390,6 +6499,63 @@ async function pairFromWindow(run, failures) {
     .waitFor({ timeout: 10_000 })
     .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
+}
+
+/**
+ * Turns native linking on from Devices › Add a computer, with linking off:
+ * its "Let other computers reach it" button, which starts the gateway again
+ * in the same process. The page then makes a code, the button is gone, the
+ * run's client is connected again, and config.json holds linking on. Leaves
+ * the side rail closed. Called with nothing else in flight
+ * (`run.exclusive`).
+ */
+async function reachFromDevices(run, failures) {
+  const gateway = run.stack.gateway
+  const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+  const pid = gateway.server.pid
+  const page = run.page
+  await setSideRail(page, true, failures)
+  if (failures.length) return false
+  await page.locator('[data-rail-item="devices"]').click()
+  await page.locator('[data-devices-action="add"]').click()
+  const add = page.locator('[data-devices-page="add"]')
+  const reach = add.locator('[data-devices-action="reach"]')
+  if (!(await waitFor(async () => (await reach.count()) === 1, 10_000))) {
+    failures.push("Add a computer offers no way to let others reach the hub")
+    return false
+  }
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await reach.click()
+    const made = await waitFor(
+      async () =>
+        (await reach.count()) === 0 &&
+        (await add.locator("[data-devices-command]").count()) === 2,
+      60_000,
+    )
+    if (!made)
+      failures.push(
+        `after reaching, Add a computer reads ${JSON.stringify(await add.innerText())}`,
+      )
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const saved = JSON.parse(readFileSync(config, "utf8")).native
+    if (saved?.enabled === false || saved?.listenAddress !== run.nativeListen)
+      failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+    const { listening } = await run.client.devices.list()
+    if (listening === undefined) failures.push("devices.list names no listener")
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  await add.locator('[data-devices-action="back"]').click()
+  await page.locator('[data-rail-item="agents"]').click()
+  await setSideRail(page, false, failures)
+  return held
 }
 
 /**

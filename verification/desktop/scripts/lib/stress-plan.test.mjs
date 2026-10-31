@@ -31,6 +31,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("aside"), knobs.asides)
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
+  assert.equal(count("close"), knobs.closes)
   assert.equal(count("rename"), knobs.renames)
   assert.equal(count("handoff"), knobs.handoffs)
   assert.equal(count("delete"), knobs.deletes)
@@ -167,6 +168,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         webhooks: "0",
         pastes: "0",
         awaits: "0",
+        closes: "0",
         fresh: "0",
         renames: "0",
         deletes: "0",

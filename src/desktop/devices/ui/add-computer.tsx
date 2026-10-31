@@ -8,6 +8,9 @@
  * the computer runs `nessa env enroll` ──▶ status: claimed + key fingerprint
  * Approve ──▶ pairing.approve(key) ──▶ it runs `nessa env dial` and serves
  * leave before approving ──▶ pairing.cancel
+ * no other computer can reach the hub ──▶ "Let other computers reach it"
+ *   ──▶ pairing.setLinking(true) ──▶ the gateway starts again listening on
+ *   every interface ──▶ read until it says so ──▶ a new code
  * ```
  */
 import { Button } from "@nessa-ui/react/button"
@@ -28,6 +31,26 @@ import type {
 
 /** The port the hub's native listener takes when none is named. */
 export const NATIVE_PORT = 47650
+
+/**
+ * The loopback address Settings once saved for the native listener. Turning
+ * linking on moves it to every interface; any other loopback address was
+ * chosen by hand and is left for the person to change.
+ */
+const SUPERSEDED_LISTEN = "127.0.0.1:47650"
+
+/**
+ * Whether turning native linking on lets other computers reach the hub:
+ * linking is off (`null`), or the listener is on the address Settings once
+ * saved for this machine alone.
+ */
+export function reachable(listening: string | null | undefined): boolean {
+  return listening === null || listening === SUPERSEDED_LISTEN
+}
+
+/** How long the page waits for a restarting hub to listen for others. */
+const REACH_WAIT_MS = 30_000
+const REACH_READ_MS = 1_000
 
 /** How the computer reaches the hub. */
 export type Route = "tailscale" | "network"
@@ -105,15 +128,29 @@ export function AddComputer({
   gateway,
   hubName,
   listening,
+  onReached,
   onDone,
 }: {
   gateway: DevicesGateway
   hubName: string | undefined
-  /** Where the hub says its native listener is bound (`devices.list`). */
-  listening: string | undefined
+  /**
+   * Where the hub says its native listener is bound (`devices.list`);
+   * `null` while linking is off, `undefined` before the list is read.
+   */
+  listening: string | null | undefined
+  /** The hub now listens for other computers: read the list again. */
+  onReached: () => void
   onDone: () => void
 }) {
   const [route, setRoute] = useState<Route>("tailscale")
+  const [reach, setReach] = useState<"idle" | "reaching" | "failed">("idle")
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const [step, setStep] = useState<Step>({ kind: "making" })
   const [attempt, setAttempt] = useState(0)
   // The invitation still open, cancelled if the page closes before approval.
@@ -193,7 +230,30 @@ export function AddComputer({
     })
   }
 
-  const address = hubAddress(hubName ?? "", route, listeningPort(listening))
+  const letReach = async () => {
+    setReach("reaching")
+    const turned = await gateway.reach()
+    // A restarting hub answers again once it listens where it now says.
+    const deadline = Date.now() + REACH_WAIT_MS
+    let listens = turned.ok && turned.value === "unchanged"
+    while (turned.ok && !listens && mounted.current && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, REACH_READ_MS))
+      const read = await gateway.list()
+      // Listening, and not on the address the change moves: the hub that
+      // answers has started again with it.
+      listens =
+        read.ok &&
+        read.value.listening !== undefined &&
+        read.value.listening !== SUPERSEDED_LISTEN
+    }
+    if (!mounted.current) return
+    if (!listens) return setReach("failed")
+    setReach("idle")
+    onReached()
+    setAttempt((value) => value + 1)
+  }
+
+  const address = hubAddress(hubName ?? "", route, listeningPort(listening ?? undefined))
   return (
     <div className="devices-page devices-add-page" data-devices-page="add">
       <button
@@ -255,12 +315,32 @@ export function AddComputer({
                 ? "Recommended. Both machines signed in to the same tailnet reach each other from anywhere, with nothing open to the internet."
                 : "Only while both are on the same Wi-Fi or office network."}
             </p>
-            {onlyThisMachine(listening) ? (
+            {reachable(listening) ? (
+              <div className="devices-actions" data-devices-reach>
+                <p className="devices-muted" role="status">
+                  {reach === "failed"
+                    ? `${hubName ?? "The hub"} didn't start listening for other computers. Try again, or turn on native linking in Settings › Linked devices.`
+                    : `No other computer can reach ${hubName ?? "the hub"} yet.`}
+                </p>
+                <Button
+                  variant="tinted"
+                  size="30"
+                  shape="pill"
+                  disabled={reach === "reaching"}
+                  onClick={() => void letReach()}
+                  data-devices-action="reach"
+                >
+                  {reach === "reaching"
+                    ? "Starting again"
+                    : "Let other computers reach it"}
+                </Button>
+              </div>
+            ) : onlyThisMachine(listening ?? undefined) ? (
               <p className="devices-muted" role="status" data-devices-loopback>
                 {hubName ?? "The hub"} listens only to itself now ({listening}), so no
                 other computer can reach it yet. Set native.listenAddress in its
-                config.json to 0.0.0.0:{listeningPort(listening)}, then turn native
-                linking off and on in Settings › Linked devices.
+                config.json to 0.0.0.0:{listeningPort(listening ?? undefined)}, then turn
+                native linking off and on in Settings › Linked devices.
               </p>
             ) : null}
           </section>
@@ -272,8 +352,7 @@ export function AddComputer({
             ) : step.kind === "failed" ? (
               <div className="devices-actions">
                 <p className="devices-muted" role="status">
-                  The hub couldn&apos;t make a code. Native linking may be off in Settings
-                  › Linked devices.
+                  The hub couldn&apos;t make a code.
                 </p>
                 <Button
                   variant="tinted"
