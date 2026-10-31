@@ -64,7 +64,11 @@ export const settingsCategories = [
     tabs: [
       { id: "agents", label: "Agents", keywords: "claude code codex opencode installed" },
       { id: "accounts", label: "Accounts", keywords: "sign in github login" },
-      { id: "integrations", label: "Integrations", keywords: "mcp servers tools" },
+      {
+        id: "integrations",
+        label: "MCP servers",
+        keywords: "mcp servers tools integrations",
+      },
       {
         id: "devices",
         label: "Linked devices",
@@ -361,7 +365,7 @@ export const settingsEntries = [
     detail: "Protect saved credentials on this gateway.",
     keywords: "change password security encryption unlock",
   },
-  // Connections › Integrations
+  // Connections › MCP servers
   {
     id: "mcp-servers",
     tab: "integrations",

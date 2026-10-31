@@ -1,5 +1,5 @@
 /**
- * Settings › Connections › Integrations: the gateway's stored MCP servers, as
+ * Settings › Connections › MCP servers: the gateway's stored MCP servers, as
  * the window manages them (#391). One reducer, from the design's state table
  * (rows U1–U31, issue #391's PR 3 design, U32–U43 from its review,
  * U44–U50 for a list too large to show, #391 comment 5986496625, S1–S8,
@@ -478,7 +478,12 @@ export const sentences = {
   notConfigured: "This gateway isn't managing MCP servers.",
   empty: "No servers yet",
   managed: "Managed by Nessa",
-  storedValue: "Stored value kept",
+  /** A server that runs as a command on the gateway's computer. */
+  local: "Local",
+  /** A stored server's command is changed in the gateway's config file, not here. */
+  commandInConfig: "Change it in the gateway's config.json.",
+  openConfig: "Open config.json",
+  storedValue: "Stored",
   /** A stored variable's placeholder once the launch changed (U33, V2–V5). */
   storedValueAgain: "Enter the value again",
   valuesAgain:
@@ -553,8 +558,8 @@ export const sentences = {
       : count === 1
         ? "It offers 1 tool."
         : `It offers ${count} tools.`,
-  removeAsk: (name: string) =>
-    `Remove ${quoted(name)}? New conversations stop getting it. Open ones keep it until they close.`,
+  removeTitle: (name: string) => `Remove ${quoted(name)}?`,
+  removeAsk: "New conversations stop getting it. Open ones keep it until they close.",
   /** A group's one action: the gateway removes by name, the first stored under it (G3). */
   removeFirst: (name: string) => `Remove the first server named ${quoted(name)}`,
   /** Names the first one's command: the server the gateway will remove (M5). */
@@ -570,7 +575,9 @@ export const sentences = {
     `${quoted(name)} is now stored more than once, so the form was closed.`,
   notOffered: "Not offered",
   /** A stored variable's placeholder once its value was edited to empty (S2). */
-  storedValueCleared: "Empty: the stored value will be cleared",
+  storedValueCleared: "Enter a value, or keep the stored one",
+  /** What holds Save when the one change is a stored value left empty. */
+  valuesCleared: "Enter a value, or keep the stored one.",
   keepStored: "Keep stored value",
   pasted: (lines: number) => `Pasted value: ${lines === 1 ? "1 line" : `${lines} lines`}`,
   endsWithBreak: "ends with a line break",
@@ -889,14 +896,58 @@ export function launchChanged(
 }
 
 /**
- * Whether a stored variable still waits for its value, the launch having
- * changed (U33, V2–V5): one not edited. An edited empty value is one entered (S7).
+ * Why Save waits on stored values, or `null` when it does not: the one
+ * answer both the hold and what is said about it read.
+ *
+ * - `"again"`: the launch changed for a reason other than an emptied stored
+ *   value (names, or another stored value replaced), so every stored value
+ *   not entered again is asked for (U33, V2–V5). With the names changed a
+ *   stored value cannot be kept at all, so an emptied one is asked for again
+ *   too.
+ * - `"cleared"`: the names are kept and a stored value was replaced and left
+ *   empty. An empty value is not one entered: saved, it would blank the
+ *   variable where the person meant to keep it (S7). Typing one, or Keep,
+ *   ends it.
  */
+export function valuesWaiting(
+  form: ServerForm,
+  listed: ListedServer | undefined,
+): "again" | "cleared" | null {
+  if (!launchChanged(form, listed) || listed === undefined) return null
+  const emptied = form.env.some((row) => row.stored && row.edited && row.value === "")
+  const unentered = form.env.some((row) => row.stored && !row.edited)
+  if (!namesKept(form, listed)) return unentered || emptied ? "again" : null
+  const replaced = form.env.some((row) => row.stored && row.edited && row.value !== "")
+  if (replaced && unentered) return "again"
+  return emptied ? "cleared" : null
+}
+
+/** Whether a stored variable still waits for its value ([`valuesWaiting`]). */
 export function valuesNeeded(
   form: ServerForm,
   listed: ListedServer | undefined,
 ): boolean {
-  return launchChanged(form, listed) && form.env.some((row) => row.stored && !row.edited)
+  return valuesWaiting(form, listed) !== null
+}
+
+/**
+ * A stdio server's command as one line: the program (by its name alone when
+ * `short`) and every argument whole. An empty argument, or one with a space
+ * or quote in it, is quoted, the program too, so each part reads as one.
+ */
+export function commandLine(
+  command: string,
+  args: readonly string[],
+  short = false,
+): string {
+  // Quoted with its quotes escaped and nothing else, so a backslash reads as
+  // itself whether or not the part is quoted.
+  const shown = (part: string) =>
+    part === "" || /[\s"]/.test(part) ? `"${part.replaceAll('"', '\\"')}"` : part
+  const program = short
+    ? (command.split(/[\\/]/).filter(Boolean).pop() ?? command)
+    : command
+  return [program, ...args].map(shown).join(" ")
 }
 
 /**
@@ -1007,7 +1058,8 @@ export const linesOf = (value: string) =>
 
 /**
  * The save a form asks for. A stored variable not edited keeps its value
- * (`null`); edited, its value is sent, the empty one too (S1, S2). A row with
+ * (`null`); edited, its value is sent. An edited stored value left empty never
+ * gets here: it holds Save until it is typed or kept (S1, S2). A row with
  * neither name nor value is a blank one and is not sent.
  */
 export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {

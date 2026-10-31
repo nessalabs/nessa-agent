@@ -119,6 +119,13 @@ import {
  *               up with its card, and answering there takes the notice back;
  *               a second review there stays up across a reload of the
  *               window, and is taken back once another client answers it
+ *   mcp         an MCP server added in Settings › Connections › MCP servers
+ *               with one variable, off for new conversations: one closed
+ *               row ("Local · 1 variable", its switch off); edited from its ⋯
+ *               menu, the command is named and not a field, the variable
+ *               rests as stored, and Replace opened and left empty saves
+ *               without changing the stored value; removed once asked in
+ *               its dialog, gone from the row list and config.json
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -2340,6 +2347,106 @@ const steps = {
         )
       await closeSettings(run.page)
     })
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async mcp(run, step, failures) {
+    const name = `stress-mcp-r${step.index}-s${run.knobs.seed}`
+    const variable = "STRESS_TOKEN"
+    // Generated, never printed, and looked for in the page and config.json.
+    const value = randomUUID()
+    const config = join(
+      run.stack.gateway.directory,
+      "ci",
+      "instances",
+      INSTANCE,
+      "config.json",
+    )
+    const stored = () =>
+      (JSON.parse(readFileSync(config, "utf8")).agents?.mcpServers ?? []).find(
+        (server) => server.name === name,
+      )
+    const valueOf = (server) => server?.env?.[variable]
+    const page = run.page
+    const row = () => page.locator(selectorFor.mcpRowNamed(name))
+    const shot = (what) =>
+      run.evidence
+        ? page.screenshot({ path: join(run.evidence, `mcp-${what}.png`) }).catch(() => {})
+        : undefined
+    await run.exclusive(async () => {
+      await openMcpServers(page)
+      await shot("list")
+      // Added from the window, off for new conversations so no agent starts it.
+      await page.getByRole("button", { name: names.mcp.add, exact: true }).click()
+      const form = page.locator(css.mcpForm)
+      await form.getByLabel(names.mcp.name, { exact: true }).fill(name)
+      await form.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
+      await form.getByRole("switch", { name: names.mcp.useInNew }).click()
+      await form.getByRole("button", { name: names.mcp.addVariable, exact: true }).click()
+      const added = form.locator(css.mcpVariableAdded).last()
+      await added.getByLabel(names.mcp.variableName, { exact: true }).fill(variable)
+      await added.locator(css.mcpSecret).fill(value)
+      await form.getByRole("button", { name: names.mcp.save, exact: true }).click()
+      const shown = await row()
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false)
+      if (!shown) {
+        failures.push(`${name} was saved but no row came back for it`)
+        // Left as the next step expects: no dialog, no Settings.
+        if (await form.isVisible().catch(() => false)) await page.keyboard.press("Escape")
+        await closeSettings(page).catch(() => {})
+        return
+      }
+      // A closed row: its name, one short line, a switch and its ⋯ menu.
+      const line = await row().locator('[data-slot="settings-row-detail"]').innerText()
+      if (line !== "Local · 1 variable")
+        failures.push(
+          `${name}'s row says ${JSON.stringify(line)}, not "Local · 1 variable"`,
+        )
+      if ((await row().locator(css.mcpSwitch).getAttribute("aria-checked")) !== "false")
+        failures.push(`${name}'s switch is on, though it was saved off`)
+      if (valueOf(stored()) !== value)
+        failures.push(`config.json does not hold ${variable} as typed after the add`)
+      if ((await page.content()).includes(value))
+        failures.push(`${variable}'s value is in the page after the save`)
+      // Edited: no command to change, the stored value at rest, Replace
+      // opened and left empty, saved. The value stays as stored.
+      await mcpMenu(page, name, names.mcp.edit)
+      await shot("edit")
+      if ((await form.locator(selectorFor.mcpField("command")).count()) > 0)
+        failures.push("the edit form offers the command as a field")
+      const command = await form
+        .locator(css.mcpCommand)
+        .innerText()
+        .catch(() => "")
+      if (command !== basename(process.execPath))
+        failures.push(`the edit form names the command ${JSON.stringify(command)}`)
+      const kept = form.locator(selectorFor.mcpVariableNamed(variable))
+      if ((await kept.locator(css.mcpSecretStored).count()) !== 1)
+        failures.push(`${variable} is not shown as stored in the edit form`)
+      await kept.getByRole("button", { name: names.mcp.replaceValue(variable) }).click()
+      await kept.locator(css.mcpSecret).fill("")
+      await form.getByRole("button", { name: names.mcp.save, exact: true }).click()
+      await page.waitForSelector(css.mcpForm, { state: "detached", timeout: 10_000 })
+      if (valueOf(stored()) !== value)
+        failures.push(
+          `${variable}'s stored value changed on a save that did not type one`,
+        )
+      // Removed, once asked in its dialog.
+      await mcpMenu(page, name, names.mcp.remove)
+      const ask = page.locator(selectorFor.mcpAction("confirm"))
+      await shot("remove")
+      await ask.click()
+      await row()
+        .waitFor({ state: "detached", timeout: 10_000 })
+        .catch(() => {})
+      if ((await row().count()) > 0)
+        failures.push(`${name}'s row is still there after Remove`)
+      if (stored()) failures.push(`config.json still holds ${name} after Remove`)
+      await closeSettings(page)
+    })
+    // The gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
@@ -5714,6 +5821,23 @@ async function reopened(run, conversationId) {
     view = await run.client.conversation.read(conversationId)
   }
   return { ms, view, reads }
+}
+
+/** Opens Settings › Connections › MCP servers, as a person does, and waits for its list. */
+async function openMcpServers(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.integrations }).click()
+  await page.waitForSelector(selectorFor.mcpServersIn("listed"), { timeout: 10_000 })
+}
+
+/** Chooses `item` from the ⋯ menu of the MCP server row named `name`. */
+async function mcpMenu(page, name, item) {
+  await page.getByRole("button", { name: names.mcp.more(name), exact: true }).click()
+  await page
+    .locator(selectorFor.mcpMenuOf(name))
+    .getByRole("menuitem", { name: item, exact: true })
+    .click()
 }
 
 /** Opens Settings › Connections › Linked devices, as a person does. */

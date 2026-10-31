@@ -607,6 +607,17 @@ export async function onPathsDragged(handlers: {
   return () => stops.forEach((stop) => stop())
 }
 
+/**
+ * Opens the local gateway's `config.json` in the person's text editor. The
+ * host names the file from its own service namespace; nothing here names a
+ * path. Rejects with the host's sentence when it can't, and outside Tauri.
+ */
+export async function openGatewayConfig(): Promise<void> {
+  if (!inTauri) throw new Error("This window has no app to open the file with.")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("open_gateway_config")
+}
+
 /** The person's home folder, to write paths under it from `~`; `null` outside Tauri. */
 export async function homeFolder(): Promise<string | null> {
   if (!inTauri) return null
