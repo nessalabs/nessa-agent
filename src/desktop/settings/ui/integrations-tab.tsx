@@ -76,7 +76,7 @@ import {
  *   Remove…              ── a dialog: the confirm
  * ```
  *
- * Focus follows what opens and closes (CHECKLIST › Integrations): each
+ * Focus follows what opens and closes (CHECKLIST › MCP servers): each
  * dialog takes focus as it opens; closing one puts it back on the ⋯ button
  * of the row or group it was opened from, or on Add (`focusAfter`). Escape
  * closes a dialog, and never Settings behind it.
@@ -1060,7 +1060,11 @@ function FormDialog({
             </SettingsRow>
           ) : null}
           {form.kind === "stdio" && !adding ? (
-            <CommandRow form={form} problemId={problems.command} />
+            <CommandRow
+              form={form}
+              problemId={problems.command}
+              argsProblemId={problems.args}
+            />
           ) : null}
           <SettingsRow
             label="Use in new conversations"
@@ -1217,14 +1221,27 @@ function FormDialog({
  * its arguments by their last names, and — where the gateway is this
  * computer's — a button that opens its `config.json`, where it is changed.
  */
-function CommandRow({ form, problemId }: { form: ServerForm; problemId: string }) {
+function CommandRow({
+  form,
+  problemId,
+  argsProblemId,
+}: {
+  form: ServerForm
+  problemId: string
+  argsProblemId: string
+}) {
   const { openConfig } = useContext(McpServersContext)
   const [failed, setFailed] = useState<string | null>(null)
   // The program by its name, its arguments as they are: a shortened
   // argument (a package, a URL, a flag's path) would misstate what runs.
   const program = form.command.split(/[\\/]/).filter(Boolean).pop() ?? form.command
-  const full = [form.command, ...form.args.map((row) => row.value)].join(" ")
-  const command = [program, ...form.args.map((row) => row.value)].join(" ")
+  // An empty argument, or one with a space or quote in it, is quoted, so each
+  // still reads as one.
+  const shown = (part: string) =>
+    part === "" || /[\s"]/.test(part) ? JSON.stringify(part) : part
+  const args = form.args.map((row) => shown(row.value))
+  const full = [shown(form.command), ...args].join(" ")
+  const command = [program, ...args].join(" ")
   return (
     <SettingsRow
       label="Command"
@@ -1262,6 +1279,9 @@ function CommandRow({ form, problemId }: { form: ServerForm; problemId: string }
       >
         {form.problem?.field === "command" ? form.problem.text : failed}
       </p>
+      {/* The arguments are not fields here, so a refusal of them is said under
+          the command they belong to. */}
+      <FieldProblem form={form} field="args" id={argsProblemId} />
     </SettingsRow>
   )
 }

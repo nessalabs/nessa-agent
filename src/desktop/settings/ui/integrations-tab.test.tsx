@@ -367,6 +367,33 @@ describe("Integrations", () => {
     expect(document.body.innerHTML).not.toContain("kept-after-refusal")
   })
 
+  it("editing, a refusal of the arguments is said under the command; one about another server, in a notice naming it", async () => {
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(charts, nessa))
+    await choose("charts", "edit")
+    const args = document.querySelector('[data-mcp-problem="args"]')
+    expect(args?.getAttribute("role")).toBe("alert")
+    expect(args?.textContent).toBe("")
+    await click(button("Save"))
+    await answer(fake, "save", {
+      ok: false,
+      failure: { kind: "invalid", problem: "arguments", server: "charts" },
+    })
+    expect(document.querySelector('[data-mcp-problem="args"]')).toBe(args)
+    expect(args?.textContent).toBe("One of the arguments can't be used.")
+    // Another server stored by hand is refused: not this one's problem.
+    await click(button("Save"))
+    await answer(fake, "save", {
+      ok: false,
+      failure: { kind: "invalid", problem: "command", server: "hand-edited" },
+    })
+    expect(document.querySelector('[data-mcp-problem="command"]')?.textContent).toBe("")
+    expect(document.body.textContent).toContain(
+      "“hand-edited”: This command can't be used.",
+    )
+  })
+
   it("Open config.json asks the host to open the file, and says when it could not", async () => {
     const fake = fakeGateway()
     const opened: string[] = []
