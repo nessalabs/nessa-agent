@@ -638,11 +638,11 @@
   function askAgent(args) {
     var task = String(args.task || "").trim();
     if (!task) return { error: "Say what Claude should do." };
-    var entry = { task: task, el: chip("Waiting for your OK · " + task, "task") };
+    var entry = { task: task, request: crypto.randomUUID(), el: chip("Waiting for your OK · " + task, "task") };
     setChip(entry.el, "waiting");
     tasks.push(entry);
     ask("ui/message", { role: "user", content: [{ type: "text", text: "Huddle (voice) asks: " + task +
-      "\n\nWhen you are done, call huddle_report with a 1–3 sentence summary and the title and session id of any agent threads you started." }] })
+      "\n\nWhen you are done, call huddle_report with request \"" + entry.request + "\", a 1–3 sentence summary, and the title and session id of any agent threads you started." }] })
       .then(function (reply) {
         if (reply.error || (reply.result && reply.result.isError)) {
           setChip(entry.el, "declined", "Not sent · " + task);
@@ -660,10 +660,10 @@
     if (polling || !tasks.some(function (t) { return t.working; })) return;
     polling = setInterval(async function () {
       if (!tasks.some(function (t) { return t.working; })) { clearInterval(polling); polling = null; return; }
-      var inbox;
-      try { inbox = await callTool("huddle_inbox"); } catch (_) { return; }
+      var inbox, requests = tasks.filter(function (t) { return t.working; }).map(function (t) { return t.request; });
+      try { inbox = await callTool("huddle_inbox", { requests: requests }); } catch (_) { return; }
       (inbox.reports || []).forEach(function (report) {
-        var entry = tasks.find(function (t) { return t.working; });
+        var entry = tasks.find(function (t) { return t.working && t.request === report.request; });
         if (entry) { entry.working = false; tasks.splice(tasks.indexOf(entry), 1); setChip(entry.el, "done", "Claude · done · " + entry.task); }
         (report.agents || []).forEach(function (agent) {
           var link = chip(agent.title, "agent");
@@ -813,8 +813,17 @@
       mic.getTracks()[0].enabled = true; phase = "listening"; setState("Listening");
     }
   });
+  // Space released outside the frame never reaches keyup: losing focus stops the
+  // talk and drops what it held, so nothing is sent without Space held.
+  function dropTalk() {
+    if (!pc || alwaysOn || !mic.getTracks()[0].enabled) return;
+    mic.getTracks()[0].enabled = false; send({ type: "input_audio_buffer.clear" });
+    setState(idleText());
+  }
+  window.addEventListener("blur", dropTalk);
+  document.addEventListener("visibilitychange", function () { if (document.hidden) dropTalk(); });
   window.addEventListener("keyup", function (event) {
-    if (!pc || alwaysOn || event.code !== "Space") return;
+    if (!pc || alwaysOn || event.code !== "Space" || !mic.getTracks()[0].enabled) return;
     event.preventDefault(); mic.getTracks()[0].enabled = false;
     send({ type: "input_audio_buffer.commit" }); send({ type: "response.create" });
     setState(idleText());

@@ -156,25 +156,32 @@ function listFiles({ dir = "." }) {
 const INBOX = join(tmpdir(), `huddle-inbox-${createHash("sha256").update(ROOT).digest("hex").slice(0, 16)}.jsonl`)
 const MAX_REPORTS = 20
 
-function report({ summary, agents }) {
+// A request id names the Huddle task a report answers, so each Huddle collects only its own.
+const REQUEST = /^[A-Za-z0-9-]{8,64}$/
+
+function report({ request, summary, agents }) {
+  if (typeof request !== "string" || !REQUEST.test(request)) return failed("Give the request id the Huddle sent.")
   if (typeof summary !== "string" || !summary.trim()) return failed("Give a summary.")
   const started = (Array.isArray(agents) ? agents : [])
     .filter((agent) => agent && typeof agent.title === "string" && typeof agent.sessionId === "string" && agent.sessionId)
     .slice(0, 8)
     .map((agent) => ({ title: agent.title.slice(0, 120), sessionId: agent.sessionId.slice(0, 200) }))
-  appendFileSync(INBOX, JSON.stringify({ summary: summary.trim().slice(0, 2000), agents: started, at: Date.now() }) + "\n", { mode: 0o600 })
+  appendFileSync(INBOX, JSON.stringify({ request, summary: summary.trim().slice(0, 2000), agents: started, at: Date.now() }) + "\n", { mode: 0o600 })
   return text("Reported to the Huddle.")
 }
 
-function collect() {
+function collect({ requests }) {
+  const mine = new Set((Array.isArray(requests) ? requests : []).filter((id) => typeof id === "string" && REQUEST.test(id)))
+  if (!mine.size) return { ...text("0 report(s)."), structuredContent: { reports: [] } }
   // Taken by renaming, so a report appended meanwhile lands in a new file.
+  // Another Huddle's reports are put back for it.
   const taken = `${INBOX}.${process.pid}.${Date.now()}`
   try {
     renameSync(INBOX, taken)
   } catch {
     return { ...text("0 report(s)."), structuredContent: { reports: [] } }
   }
-  const reports = readFileSync(taken, "utf8")
+  const all = readFileSync(taken, "utf8")
     .split("\n")
     .filter(Boolean)
     .flatMap((line) => {
@@ -184,8 +191,11 @@ function collect() {
         return []
       }
     })
-    .slice(-MAX_REPORTS)
   rmSync(taken, { force: true })
+  const others = all.filter((entry) => !mine.has(entry.request)).slice(-MAX_REPORTS * 4)
+  if (others.length)
+    appendFileSync(INBOX, others.map((entry) => JSON.stringify(entry) + "\n").join(""), { mode: 0o600 })
+  const reports = all.filter((entry) => mine.has(entry.request)).slice(-MAX_REPORTS)
   return { ...text(`${reports.length} report(s).`), structuredContent: { reports } }
 }
 
@@ -225,23 +235,24 @@ const TOOLS = {
   },
   huddle_report: {
     description:
-      "Report back to the open Huddle after finishing a task it handed you: a 1-3 sentence summary, and the title and session id of any agent threads you started.",
+      "Report back to the Huddle after finishing a task it handed you: the request id it gave, a 1-3 sentence summary, and the title and session id of any agent threads you started.",
     inputSchema: object(
       {
+        request: { type: "string" },
         summary: { type: "string" },
         agents: {
           type: "array",
           items: object({ title: { type: "string" }, sessionId: { type: "string" } }, ["title", "sessionId"]),
         },
       },
-      ["summary"],
+      ["request", "summary"],
     ),
     annotations: { readOnlyHint: false, destructiveHint: false },
     call: report,
   },
   huddle_inbox: {
-    description: "Collect and clear the reports agents sent this Huddle. For the Huddle app only.",
-    inputSchema: object({}),
+    description: "Collect and clear the reports agents sent for these requests. For the Huddle app only.",
+    inputSchema: object({ requests: { type: "array", items: { type: "string" } } }, ["requests"]),
     annotations: { readOnlyHint: false, destructiveHint: false },
     _meta: { ui: { visibility: ["app"] } },
     call: collect,
