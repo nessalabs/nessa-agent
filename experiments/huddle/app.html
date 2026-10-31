@@ -23,7 +23,7 @@
     text-align: center; font-size: 16px; color: var(--ink); min-height: 24px; }
   #captions .you { color: var(--quiet); }
   #island { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
-    height: 56px; width: 320px; box-sizing: border-box; padding: 0 8px; border-radius: 28px; background: #000;
+    height: 56px; width: auto; min-width: 320px; max-width: calc(100% - 32px); box-sizing: border-box; padding: 0 8px; border-radius: 28px; background: #000;
     box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 18px 40px rgba(0,0,0,0.6); }
   #sand { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; background: #000; box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.18); }
   #state { flex-grow: 1; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -48,6 +48,8 @@
   .chip.agent .dot { background: #9ec1ff; }
   .chip.agent::after { content: "↗"; color: var(--faint); }
   .chip.agent:hover { box-shadow: 0 0 0 1px rgba(255,255,255,0.2); }
+  .chip { transition: opacity 250ms ease-out; }
+  .chip.leaving { opacity: 0; }
   @keyframes pulse { 50% { opacity: 0.35; } }
   @media (prefers-reduced-motion: reduce) { .chip[data-state="working"] .dot { animation: none; } }
   #debug { position: absolute; right: 12px; bottom: 8px; font: 11px ui-monospace, Menlo, monospace; color: var(--faint); max-width: 50%; text-align: right; }
@@ -364,10 +366,10 @@
     var items = [], declared = {}, seen = {}, stack = [], blocks = [], messages = 0, notes = 0;
     var texts = byClass(svg, ".messageText"), arrows = byClass(svg, '[class^="messageLine"]');
     var noteBoxes = byClass(svg, "rect.note"), noteTexts = byClass(svg, ".noteText");
-    // A participant is drawn twice, at the top and the bottom; a circle takes the top one only.
-    function actorEls(name, topOnly) {
+    // A participant is drawn twice, at the top and the bottom; a mark lights both.
+    function actorEls(name) {
       var out = [];
-      byClass(svg, topOnly ? ".actor-top" : ".actor-top, .actor-bottom").forEach(function (el) {
+      byClass(svg, ".actor-top, .actor-bottom").forEach(function (el) {
         if (el.getAttribute("name") !== name) return;
         out.push(el);
         var label = el.nextElementSibling;
@@ -380,7 +382,7 @@
       if (!line || /^%%/.test(line)) return;
       if ((m = line.match(/^(?:create\s+)?(participant|actor)\s+(.+?)(?:\s+as\s+(.+))?$/i))) {
         declared[m[2]] = true; seen[m[2]] = true;
-        items.push({ type: "participant", line: n, names: [m[2], m[3] || m[2]], els: actorEls(m[2]), ring: actorEls(m[2], true) });
+        items.push({ type: "participant", line: n, names: [m[2], m[3] || m[2]], els: actorEls(m[2]) });
       } else if ((m = line.match(/^(loop|alt|opt|par|critical|break|rect|box)\b\s*(.*)$/i))) {
         stack.push({ kind: m[1].toLowerCase(), label: m[2], line: n, branches: [] });
       } else if ((m = line.match(/^(else|and|option)\b\s*(.*)$/i)) && stack.length) {
@@ -392,7 +394,7 @@
         notes++;
       } else if ((m = line.match(/^([^:]+?)\s*(<<-{1,2}>>|-{1,2}>>|-{1,2}>|-{1,2}x|-{1,2}\))\s*[+-]?\s*([^:]+?)\s*:\s*(.*)$/))) {
         [m[1], m[3]].forEach(function (name) {
-          if (!seen[name]) { seen[name] = true; items.push({ type: "participant", line: n, byLine: false, names: [name], els: actorEls(name), ring: actorEls(name, true) }); }
+          if (!seen[name]) { seen[name] = true; items.push({ type: "participant", line: n, byLine: false, names: [name], els: actorEls(name) }); }
         });
         items.push({ type: "message", line: n, names: [m[4]], els: [texts[messages], arrows[messages]].filter(Boolean) });
         messages++;
@@ -507,54 +509,21 @@
     var from = spec.from_line, to = spec.to_line || spec.from_line;
     return items.filter(function (item) { return item.byLine !== false && item.line >= from && item.line <= to; });
   }
-  function boxOf(els) {
-    var base = paper.getBoundingClientRect(), box = null;
-    els.forEach(function (el) {
-      var r = el.getBoundingClientRect();
-      if (!r.width && !r.height) return;
-      box = box ? { left: Math.min(box.left, r.left), top: Math.min(box.top, r.top), right: Math.max(box.right, r.right), bottom: Math.max(box.bottom, r.bottom) }
-        : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-    });
-    if (!box) return null;
-    return { left: (box.left - base.left) / zoom, top: (box.top - base.top) / zoom,
-      width: (box.right - box.left) / zoom, height: (box.bottom - box.top) / zoom };
-  }
-  function ellipse(box, padX, padY) {
-    var e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
-    e.setAttribute("cx", String(box.left + box.width / 2)); e.setAttribute("cy", String(box.top + box.height / 2));
-    e.setAttribute("rx", String(box.width / 2 + padX)); e.setAttribute("ry", String(box.height / 2 + padY));
-    e.setAttribute("fill", "none"); e.setAttribute("stroke", "#E5825B"); e.setAttribute("stroke-width", "2.5");
-    e.setAttribute("stroke-dasharray", "2000"); e.setAttribute("stroke-dashoffset", "2000");
-    e.style.transition = "stroke-dashoffset 600ms ease-out";
-    ink.appendChild(e); requestAnimationFrame(function () { e.setAttribute("stroke-dashoffset", "0"); });
-    return e;
-  }
 
   function removeMark(id) {
     var mark = marks[id]; if (!mark) return;
     mark.rows.forEach(function (row) { row.classList.remove(mark.kind); });
     (mark.parts || []).forEach(function (el) { el.classList.remove("mmd-mark"); });
-    if (mark.shape) mark.shape.remove();
     delete marks[id];
   }
   // A mark on a drawn diagram lands on the pieces its lines (or element) name.
   function drawOnDiagram(spec, row) {
     var targets = diagramTargets(row, spec);
     if (!targets.length) return null;
-    var parts = [], ring = [];
-    targets.forEach(function (item) {
-      item.els.forEach(function (el) { if (parts.indexOf(el) < 0) parts.push(el); });
-      (item.ring || item.els).forEach(function (el) { if (ring.indexOf(el) < 0) ring.push(el); });
-    });
-    var mark = { kind: spec.kind, rows: [], parts: [], line: targets[0].line };
-    if (spec.kind === "circle") {
-      var box = boxOf(ring);
-      if (box) mark.shape = ellipse(box, 14, 10);
-    } else {
-      parts.forEach(function (el) { el.classList.add("mmd-mark"); });
-      mark.parts = parts;
-    }
-    return mark;
+    var parts = [];
+    targets.forEach(function (item) { item.els.forEach(function (el) { if (parts.indexOf(el) < 0) parts.push(el); }); });
+    parts.forEach(function (el) { el.classList.add("mmd-mark"); });
+    return { kind: "highlight", rows: [], parts: parts, line: targets[0].line };
   }
   function draw(args) {
     if (!current) return { error: "Nothing is on the stage. Call show first." };
@@ -575,31 +544,20 @@
         return;
       }
       if (!spec.from_line) { missed.push(spec.element || "?"); return; }
-      var rows = range(spec.from_line, spec.to_line);
-      if (!rows.length) return;
+      // A line of a diagram that names no piece (its header, an end) marks nothing,
+      // rather than tinting the whole drawing.
+      var rows = range(spec.from_line, spec.to_line).filter(function (row) { return !row.classList.contains("diagram"); });
+      if (!rows.length) { missed.push("line " + spec.from_line); return; }
       if (firstLine === null) firstLine = spec.from_line;
-      var id = "m" + (++markId), mark = { kind: spec.kind, rows: rows };
-      if (spec.kind === "circle") {
-        var top = rows[0].offsetTop, bottom = rows[rows.length - 1].offsetTop + rows[rows.length - 1].offsetHeight;
-        var gutter = rows[0].classList.contains("md") ? 0 : 52;
-        var left = rows[0].offsetLeft + gutter, width = Math.min(rows[0].offsetWidth - gutter, 680);
-        var e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
-        e.setAttribute("cx", String(left + width / 2)); e.setAttribute("cy", String((top + bottom) / 2));
-        e.setAttribute("rx", String(width / 2 + 16)); e.setAttribute("ry", String((bottom - top) / 2 + 12));
-        e.setAttribute("fill", "none"); e.setAttribute("stroke", "#E5825B"); e.setAttribute("stroke-width", "2.5");
-        e.setAttribute("stroke-dasharray", "2000"); e.setAttribute("stroke-dashoffset", "2000");
-        e.style.transition = "stroke-dashoffset 600ms ease-out";
-        ink.appendChild(e); requestAnimationFrame(function () { e.setAttribute("stroke-dashoffset", "0"); });
-        mark.shape = e;
-      } else {
-        rows.forEach(function (row) { row.classList.add(spec.kind === "underline" ? "underline" : "highlight"); });
-        mark.kind = spec.kind === "underline" ? "underline" : "highlight";
-      }
-      marks[id] = mark; ids.push(id);
+      // Marks are highlights and underlines: a circle around a range said less than the range lit up.
+      var kind = spec.kind === "underline" ? "underline" : "highlight";
+      rows.forEach(function (row) { row.classList.add(kind); });
+      marks["m" + (++markId)] = { kind: kind, rows: rows }; ids.push("m" + markId);
     });
     if (firstLine !== null) view({ line: firstLine });
     return missed.length ? { ids: ids, not_found: missed } : { ids: ids };
   }
+
   function view(args) {
     if (args.zoom) { zoom = Math.max(0.5, Math.min(3, args.zoom)); paper.style.transform = "scale(" + zoom + ")"; }
     if (args.fit) { zoom = 1; paper.style.transform = ""; }
@@ -637,10 +595,10 @@
       parameters: { type: "object", properties: { path: { type: "string" }, line: { type: "integer" } }, required: ["path"] } },
     { type: "function", name: "draw", description: "Draw marks over the file on the stage. A mark covers a source line range " +
         "(from_line, to_line). On a Mermaid diagram (sequence or flowchart) a mark lands on the exact piece those lines define: " +
-        "a participant, a message arrow, a note, a loop/alt box, a node or an edge. When you know a piece's name but not its line, " +
+        "a participant, a message arrow, a note, a loop/alt box, a node or an edge. Highlight the few lines you are talking about, not whole sections. When you know a piece's name but not its line, " +
         "give element instead: a participant name, a node id or label, or a message's text.",
       parameters: { type: "object", properties: { marks: { type: "array", items: { type: "object",
-        properties: { kind: { type: "string", enum: ["highlight", "underline", "circle"] }, from_line: { type: "integer" }, to_line: { type: "integer" },
+        properties: { kind: { type: "string", enum: ["highlight", "underline"] }, from_line: { type: "integer" }, to_line: { type: "integer" },
           element: { type: "string", description: "A diagram piece by name, instead of from_line." } },
         required: ["kind"] } } }, required: ["marks"] } },
     { type: "function", name: "view", description: "Scroll to a line, zoom (0.5 to 3), or fit.",
@@ -670,6 +628,12 @@
   function setChip(el, state, text) {
     el.dataset.state = state;
     if (text) el.querySelector(".label").textContent = text;
+    // A settled request says so for a moment, then leaves; agent chips stay.
+    if (state === "done" || state === "declined") setTimeout(function () { dropChip(el); }, 4000);
+  }
+  function dropChip(el) {
+    el.classList.add("leaving");
+    setTimeout(function () { el.remove(); $("tasks").hidden = !$("tasks").children.length; }, 250);
   }
   function askAgent(args) {
     var task = String(args.task || "").trim();
