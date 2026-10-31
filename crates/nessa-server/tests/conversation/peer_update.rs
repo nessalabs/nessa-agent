@@ -2,6 +2,7 @@
 //! this build for its platform when it asks; the host's own fetch takes it.
 use super::super::install::{BuildSource, InstallTimings};
 use super::*;
+#[cfg(target_os = "linux")]
 use crate::env_serve::infrastructure::{fetch, kept_for};
 use nessa_protocol::build_update::{from_gateway, part_bytes};
 use std::fs::File;
