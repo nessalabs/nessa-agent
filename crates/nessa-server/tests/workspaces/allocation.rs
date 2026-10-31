@@ -114,8 +114,14 @@ impl RuntimeSettings for WrongRuntimeScope {
 struct Runtime;
 #[async_trait]
 impl WorkspaceRuntime for Runtime {
-    async fn serve(&self) -> Result<WorkspaceStream, Failure> {
+    async fn serve(&self, _: ServedCopy) -> Result<WorkspaceStream, Failure> {
         Err(Failure::Provider)
+    }
+    async fn image_protocol(&self) -> Option<String> {
+        None
+    }
+    async fn run(&self, _: String, _: Option<std::fs::File>) -> std::io::Result<String> {
+        Err(std::io::Error::other("no VM"))
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,6 +136,7 @@ struct Audit {
     fail_receipt: AtomicBool,
     fail_cleanup: AtomicBool,
     panic_receipt: AtomicBool,
+    fail_stop: AtomicBool,
 }
 impl RecoveryAudit for Audit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), Failure> {
@@ -147,6 +154,9 @@ impl RecoveryAudit for Audit {
                 &self.fail_receipt
             }
             RecoveryEvent::RollbackObserved { .. } => &self.fail_cleanup,
+            RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopObserved { .. } => {
+                &self.fail_stop
+            }
         };
         if fail.load(Ordering::SeqCst) {
             return Err(Failure::Storage);
@@ -177,6 +187,7 @@ struct FakeProvider {
     refusal_on_connect: Mutex<Option<AdmissionRejection>>,
     creates: AtomicUsize,
     created_lifetimes: Mutex<Vec<VmLifetime>>,
+    created_images: Mutex<Vec<String>>,
     connected_lifetimes: Mutex<Vec<VmLifetime>>,
     connects: Mutex<Vec<String>>,
     deletes: AtomicUsize,
@@ -185,6 +196,7 @@ struct FakeProvider {
     proceed: Semaphore,
     confirm_remove: AtomicBool,
     panic_remove: AtomicBool,
+    refuse_stop: AtomicBool,
     recovery_steps: Arc<Mutex<Vec<RecoveryStep>>>,
 }
 impl FakeProvider {
@@ -195,9 +207,11 @@ impl FakeProvider {
             refusal_on_connect: Mutex::new(None),
             confirm_remove: AtomicBool::new(false),
             panic_remove: AtomicBool::new(false),
+            refuse_stop: AtomicBool::new(false),
             recovery_steps,
             creates: AtomicUsize::new(0),
             created_lifetimes: Mutex::new(vec![]),
+            created_images: Mutex::new(vec![]),
             connected_lifetimes: Mutex::new(vec![]),
             connects: Mutex::new(vec![]),
             deletes: AtomicUsize::new(0),
@@ -221,6 +235,10 @@ impl Provider for FakeProvider {
             .lock()
             .unwrap()
             .push(connection.auto_stop);
+        self.created_images
+            .lock()
+            .unwrap()
+            .push(connection.image.clone());
         self.creates.fetch_add(1, Ordering::SeqCst);
         self.entered.add_permits(1);
         self.proceed.acquire().await.unwrap().forget();
@@ -249,6 +267,9 @@ impl Provider for FakeProvider {
         Ok(Arc::new(Runtime))
     }
     async fn stop(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+        if self.refuse_stop.load(Ordering::SeqCst) {
+            return Err(Failure::Provider);
+        }
         self.stops.lock().unwrap().push(vm.into());
         Ok(())
     }
@@ -426,20 +447,113 @@ async fn simultaneous_open_and_reopen_create_one_vm_for_the_thread() {
 async fn a_rest_stops_the_vm_only_once_nothing_uses_it_and_never_deletes_it() {
     let (service, _, provider) = fixture();
     // No VM yet: nothing to stop.
-    assert_eq!(service.rest(id(1)).await, Ok(false));
+    assert_eq!(
+        service.rest(id(1), RestCause::Idle).await.stopped,
+        Ok(false)
+    );
     provider.proceed.add_permits(1);
     let runtime = service.open(id(1), true, None).await.unwrap();
     // The runtime an opening handed out holds the VM in use.
-    assert_eq!(service.rest(id(1)).await, Ok(false));
+    assert_eq!(
+        service.rest(id(1), RestCause::Idle).await.stopped,
+        Ok(false)
+    );
     assert!(provider.stops.lock().unwrap().is_empty());
     drop(runtime);
-    assert_eq!(service.rest(id(1)).await, Ok(true));
+    assert_eq!(service.rest(id(1), RestCause::Idle).await.stopped, Ok(true));
     assert_eq!(*provider.stops.lock().unwrap(), [format!("vm-{}", id(1))]);
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 0);
     // The next opening reaches the same VM again, which resumes it.
     assert!(service.open(id(1), true, None).await.is_ok());
     assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
     assert_eq!(provider.connects.lock().unwrap().len(), 2);
+}
+#[tokio::test]
+async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_record_never_holds_it_back(
+) {
+    let (service, _, provider, audit) = fixture_with_audit();
+    provider.proceed.add_permits(1);
+    drop(service.open(id(1), true, None).await.unwrap());
+    let thread = id(1).to_string();
+    let vm = format!("vm-{thread}");
+    let rested = service.rest(id(1), RestCause::Closed).await;
+    assert_eq!(rested.stopped, Ok(true));
+    assert!(!rested.audit_failed);
+    let stops = |audit: &Audit| -> Vec<RecoveryEvent> {
+        audit
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopObserved { .. }
+                )
+            })
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        stops(&audit),
+        [
+            RecoveryEvent::StopRequested {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Closed,
+            },
+            RecoveryEvent::StopObserved {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Closed,
+                stopped: true,
+            },
+        ]
+    );
+    // A store that refuses the record still sees the VM stopped, and says so.
+    audit.fail_stop.store(true, Ordering::SeqCst);
+    let rested = service.rest(id(1), RestCause::Idle).await;
+    assert_eq!(rested.stopped, Ok(true));
+    assert!(rested.audit_failed);
+    assert_eq!(*provider.stops.lock().unwrap(), [vm.clone(), vm.clone()]);
+    // A stop Boat refuses is recorded as not stopped.
+    audit.fail_stop.store(false, Ordering::SeqCst);
+    provider.refuse_stop.store(true, Ordering::SeqCst);
+    let rested = service.rest(id(1), RestCause::Idle).await;
+    assert_eq!(rested.stopped, Err(Failure::Provider));
+    assert!(!rested.audit_failed);
+    assert_eq!(
+        stops(&audit).last(),
+        Some(&RecoveryEvent::StopObserved {
+            thread,
+            vm,
+            cause: RestCause::Idle,
+            stopped: false,
+        })
+    );
+}
+#[tokio::test]
+async fn a_new_vm_is_made_from_the_pinned_image_not_the_one_saved_with_the_account() {
+    let store = Arc::new(Store::default());
+    let audit = Arc::new(Audit::default());
+    let provider = Arc::new(FakeProvider::new(audit.steps.clone()));
+    let service = Workspaces::new(
+        Arc::new(Config),
+        provider.clone(),
+        store.clone(),
+        audit,
+        Arc::new(Config),
+    )
+    .with_image(Some("pinned-image"));
+    // The account was connected while another build pinned "fixture-image".
+    assert_eq!(connection().image, "fixture-image");
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(1), true, None).await.is_ok());
+    assert_eq!(*provider.created_images.lock().unwrap(), ["pinned-image"]);
+    assert!(matches!(
+        store.read(&id(1).to_string()).await,
+        Ok(Some(Assignment::Assigned { image, .. })) if image == "pinned-image"
+    ));
 }
 #[tokio::test]
 async fn a_rest_waiting_behind_an_opening_keeps_the_vm_it_opens() {
@@ -453,7 +567,7 @@ async fn a_rest_waiting_behind_an_opening_keeps_the_vm_it_opens() {
     provider.entered.acquire().await.unwrap().forget();
     let rest = {
         let service = service.clone();
-        tokio::spawn(async move { service.rest(id(1)).await })
+        tokio::spawn(async move { service.rest(id(1), RestCause::Idle).await.stopped })
     };
     provider.proceed.add_permits(1);
     let runtime = opening.await.unwrap().unwrap();
@@ -684,6 +798,14 @@ fn connection_cache_refuses_capacity_without_evicting_borrowed_environments() {
         ),
         audit: DurableEnvironmentAudit::new(directory.path().join("audit"), Arc::new(Clock))
             .unwrap(),
+        installer: Arc::new(
+            crate::conversation::infrastructure::ssh_environment::HostInstaller::this_build(
+                Arc::new(
+                    crate::conversation::infrastructure::ssh_environment::OpenSshConnector::new(),
+                ),
+                directory.path().join("host-builds"),
+            ),
+        ),
         environments: Default::default(),
     };
     let identity =

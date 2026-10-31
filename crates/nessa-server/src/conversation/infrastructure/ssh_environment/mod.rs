@@ -29,7 +29,9 @@ mod sftp;
 mod transfer;
 pub(crate) use durable_audit::DurableEnvironmentAudit;
 pub(crate) use environment::{SshEnvironment, SshTimings};
-pub(crate) use install::HostInstaller;
+#[cfg(test)]
+pub(crate) use install::{Build, BuildSource, InstallTimings};
+pub(crate) use install::{HostInstaller, RemoteShell, ShellFuture};
 pub(crate) use open_ssh::OpenSshConnector;
 pub(crate) use peer::{PeerEnvironments, ServingCredentials, Sightings};
 

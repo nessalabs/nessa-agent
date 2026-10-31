@@ -6925,7 +6925,7 @@ impl ConversationService {
                                 self.release_slot(id, &slot).await;
                             }
                             if rests_workspace(cause) {
-                                self.rest_workspace(id);
+                                self.rest_workspace(id, cause);
                             }
                         }
                         closed
@@ -6943,10 +6943,10 @@ impl ConversationService {
     /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
     /// agent has stopped: nothing for a conversation that has none, nor
     /// while anything still uses it. The next message resumes it.
-    fn rest_workspace(&self, id: &ConversationId) {
+    fn rest_workspace(&self, id: &ConversationId, cause: LeaseEndCause) {
         let service = self.clone();
         let id = id.clone();
-        tokio::spawn(async move { service.inner.environment.rest(&id).await });
+        tokio::spawn(async move { service.inner.environment.rest(&id, cause).await });
     }
 
     /// Close `live`'s agent under its lease for `cause`, on a task of its

@@ -44,7 +44,7 @@
 //! a moved conversation's agent opens new context there.
 use super::{CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
+use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, LeaseEndCause, PeerEnvironment};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -313,8 +313,14 @@ pub(crate) trait ThreadEnvironments: Send + Sync {
         conversation: &ConversationId,
     ) -> Result<Arc<dyn Environment>, ConversationError>;
     /// Stop `conversation`'s VM, keeping its disk, unless something still
-    /// uses it; the next opening resumes it. Answers whether it stopped one.
-    fn rest<'a>(&'a self, conversation: &'a ConversationId) -> EnvironmentFuture<'a, bool>;
+    /// uses it; the next opening resumes it. `cause` is how its agent's
+    /// lease ended, kept with the record of the stop. Answers whether it
+    /// stopped one.
+    fn rest<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+        cause: LeaseEndCause,
+    ) -> EnvironmentFuture<'a, bool>;
     /// Whether a new conversation can get a workspace now: a cloud account
     /// is connected.
     fn available(&self) -> EnvironmentFuture<'_, bool>;
@@ -560,12 +566,12 @@ impl Environments {
     /// Stop `conversation`'s VM, keeping its disk, once its agent has
     /// stopped and nothing else uses the VM; the next message resumes it.
     /// Nothing for a conversation that runs anywhere else.
-    pub(crate) async fn rest(&self, conversation: &ConversationId) {
+    pub(crate) async fn rest(&self, conversation: &ConversationId, cause: LeaseEndCause) {
         if !self.in_workspace(conversation).await {
             return;
         }
         if let Some(workspaces) = &self.workspaces {
-            if workspaces.rest(conversation).await {
+            if workspaces.rest(conversation, cause).await {
                 tracing::info!(conversation_id = %conversation, "stopped the conversation's VM; its next message resumes it");
             }
         }

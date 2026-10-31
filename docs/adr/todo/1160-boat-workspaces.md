@@ -284,3 +284,40 @@ erasure attestation. Prior saved images remain available. The original readiness
 regression failed with the stale pin and passed with this mapping; exact protocol
 refusal is unchanged. See the source-specific
 [publication receipt](../../../verification/desktop/evidence/vault/phone-worker-release-receipt.json).
+
+## A VM keeps working across an update
+
+The image a new VM is made from is the one this build pins
+(`release.rs`), never the image saved with the account when it was connected:
+that one may be an earlier build's, whose `nessa` speaks a lease protocol this
+build no longer does. Before #1219's follow-up, every thread created after an
+update got a VM from the saved image and was refused
+`environment_version_mismatch` on every send.
+
+A VM made from an earlier image keeps its files and is not replaced. Each
+opening first asks the image's own `nessa env protocol`. When that is not this
+build's, the gateway installs this build in the VM over the VM's own SSH
+connection, exactly as it installs on an SSH host (`HostInstaller`, kept under
+`~/.nessa/env/<digest>`, records naming the VM `boat-<thread>`), then serves
+that copy. An account of a lease already held never installs. A development
+build pins no release for Linux, so from a Mac it cannot install and the
+opening is refused `environment_platform_unsupported`.
+
+```mermaid
+sequenceDiagram
+    participant G as Gateway (Connector)
+    participant V as VM
+    G->>V: /opt/nessa/bin/nessa env protocol
+    alt this build's protocol
+        G->>V: serve the image's copy
+    else another, or none
+        G->>V: probe ~/.nessa/env/<digests>
+        opt absent
+            G->>V: upload this build (or its pinned Linux release)
+        end
+        G->>V: serve the installed copy
+    end
+```
+
+Relayed MCP servers still start the image's own `nessa mcp-relay`, and the
+managed shell is the image's `nessa-mcp`; neither speaks the lease protocol.

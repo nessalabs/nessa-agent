@@ -41,6 +41,21 @@ pub(crate) enum EnvironmentEvent {
         vm: String,
         confirmed: bool,
     },
+    /// A thread's VM is about to be stopped, its disk kept, because its
+    /// agent's lease ended for `cause` (`idle` or `closed`): the thread
+    /// joins it to that lease's end.
+    WorkspaceStopRequested {
+        thread: String,
+        vm: String,
+        cause: String,
+    },
+    /// What the provider answered that stop; false means the VM may still run.
+    WorkspaceStopObserved {
+        thread: String,
+        vm: String,
+        cause: String,
+        stopped: bool,
+    },
     /// A host answered with this lease protocol's hello.
     Connected { host: String, workspace: String },
     /// A host answered with another lease protocol's hello, or none: refused.

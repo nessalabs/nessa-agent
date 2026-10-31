@@ -1,16 +1,18 @@
 //! Adapt per-thread workspace streams to the conversation environment contract.
 use super::ssh_environment::{
-    ArtifactTransport, EnvironmentAudit, LeaseConnection, SshEnvironment, WorkspaceConnector,
+    ArtifactTransport, EnvironmentAudit, HostInstaller, LeaseConnection, RemoteShell, ShellFuture,
+    SshEnvironment, WorkspaceConnector,
 };
 use crate::{
     conversation::application::{
         ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
         MAX_RETAINED_ENVIRONMENTS,
     },
-    workspaces::application::Workspaces,
+    env::LEASE_PROTOCOL,
+    workspaces::application::{RestCause, ServedCopy, WorkspaceRuntime, Workspaces},
 };
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::LeaseRefusal;
+use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -25,12 +27,57 @@ pub(crate) struct ThreadWorkspaces {
     pub(crate) service: Arc<Workspaces>,
     pub(crate) channels: Arc<dyn ChannelStore>,
     pub(crate) audit: Arc<dyn EnvironmentAudit>,
+    /// Puts this build in a VM whose image's copy speaks another lease
+    /// protocol, as on an SSH host.
+    pub(crate) installer: Arc<HostInstaller>,
     pub(crate) environments: Mutex<BTreeMap<String, Arc<SshEnvironment>>>,
 }
 struct Connector {
     service: Arc<Workspaces>,
     channels: Arc<dyn ChannelStore>,
+    audit: Arc<dyn EnvironmentAudit>,
+    installer: Arc<HostInstaller>,
     conversation: ConversationId,
+}
+/// The copy of `nessa` in `conversation`'s VM that speaks this build's
+/// lease protocol: the image's own when it does, else this build, installed
+/// in the VM now by `installer` unless it is there already. A VM made from
+/// an image an earlier build pinned keeps its files and gets this build
+/// beside them. An account of a lease already held (`install` false) never
+/// installs: it is served whichever copy is there.
+async fn served_copy(
+    installer: &HostInstaller,
+    audit: &dyn EnvironmentAudit,
+    conversation: &ConversationId,
+    runtime: &dyn WorkspaceRuntime,
+    install: bool,
+) -> Result<ServedCopy, LeaseRefusal> {
+    if runtime.image_protocol().await.as_deref() == Some(LEASE_PROTOCOL) {
+        return Ok(ServedCopy::Image);
+    }
+    if install {
+        // The VM is named by its thread in the install's records, and the
+        // thread stands for the lease: they join the thread's lease records.
+        let host = SshDestination::new(format!("boat-{conversation}"))
+            .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+        installer
+            .ensure_on(&VmShell(runtime), &host, &conversation.to_string(), audit)
+            .await?;
+    }
+    Ok(ServedCopy::Installed(installer.serve_command().await?))
+}
+/// A VM's own connection, as the installer's shell: the host it is given
+/// only names the VM in the records.
+struct VmShell<'a>(&'a dyn WorkspaceRuntime);
+impl RemoteShell for VmShell<'_> {
+    fn run<'a>(
+        &'a self,
+        _: &'a SshDestination,
+        command: String,
+        input: Option<std::fs::File>,
+    ) -> ShellFuture<'a> {
+        self.0.run(command, input)
+    }
 }
 impl WorkspaceConnector for Connector {
     fn connect(
@@ -62,7 +109,15 @@ impl WorkspaceConnector for Connector {
                     tracing::warn!(?error, "Boat workspace could not be prepared");
                     LeaseRefusal::EnvironmentUnreachable
                 })?;
-            let stream = runtime.serve().await.map_err(|error| {
+            let copy = served_copy(
+                &self.installer,
+                self.audit.as_ref(),
+                &self.conversation,
+                runtime.as_ref(),
+                provision,
+            )
+            .await?;
+            let stream = runtime.serve(copy).await.map_err(|error| {
                 tracing::warn!(?error, "Boat environment process could not be started");
                 LeaseRefusal::EnvironmentUnreachable
             })?;
@@ -103,6 +158,8 @@ impl ThreadEnvironments for ThreadWorkspaces {
             Arc::new(Connector {
                 service: self.service.clone(),
                 channels: self.channels.clone(),
+                audit: self.audit.clone(),
+                installer: self.installer.clone(),
                 conversation: conversation.clone(),
             }),
             self.audit.clone(),
@@ -113,8 +170,18 @@ impl ThreadEnvironments for ThreadWorkspaces {
     fn available(&self) -> EnvironmentFuture<'_, bool> {
         Box::pin(async move { self.service.settings.read().await.is_ok() })
     }
-    fn rest<'a>(&'a self, conversation: &'a ConversationId) -> EnvironmentFuture<'a, bool> {
+    fn rest<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+        cause: LeaseEndCause,
+    ) -> EnvironmentFuture<'a, bool> {
         Box::pin(async move {
+            // Only a parked or closed agent lets its VM rest.
+            let cause = match cause {
+                LeaseEndCause::Idle => RestCause::Idle,
+                LeaseEndCause::Closed => RestCause::Closed,
+                _ => return false,
+            };
             let environment = self
                 .environments
                 .lock()
@@ -136,7 +203,11 @@ impl ThreadEnvironments for ThreadWorkspaces {
                     wait *= 2;
                 }
             }
-            match self.service.rest(conversation.clone()).await {
+            let rested = self.service.rest(conversation.clone(), cause).await;
+            if rested.audit_failed {
+                tracing::warn!(conversation_id = %conversation, "the record of the conversation's VM stop could not be kept");
+            }
+            match rested.stopped {
                 Ok(stopped) => stopped,
                 Err(error) => {
                     tracing::warn!(conversation_id = %conversation, ?error, "the conversation's VM could not be stopped; it keeps running until its own time limit");
@@ -146,3 +217,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
         })
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/conversation/workspace_copies.rs"]
+mod tests;

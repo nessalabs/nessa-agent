@@ -369,8 +369,26 @@ impl HostInstaller {
         lease: &str,
         audit: &dyn EnvironmentAudit,
     ) -> Result<Installation, LeaseRefusal> {
+        self.ensure_on(self.shell.as_ref(), host, lease, audit)
+            .await
+    }
+
+    /// [`Self::ensure`], with each command run by `shell` instead of the
+    /// shell this installer was made with: a cloud workspace's VM is
+    /// reached through its own connection, and `host` only names it in the
+    /// records.
+    ///
+    /// # Errors
+    /// As [`Self::ensure`].
+    pub(crate) async fn ensure_on(
+        &self,
+        shell: &dyn RemoteShell,
+        host: &SshDestination,
+        lease: &str,
+        audit: &dyn EnvironmentAudit,
+    ) -> Result<Installation, LeaseRefusal> {
         let name = host.as_str();
-        let platform = match self.probe(host).await {
+        let platform = match self.probe(shell, host).await {
             Some(Probe::Present) => return Ok(Installation::Present),
             Some(Probe::Absent(platform)) => platform,
             None => return Err(LeaseRefusal::EnvironmentUnreachable),
@@ -462,8 +480,7 @@ impl HostInstaller {
         }
         let uploaded = tokio::time::timeout(
             self.timings.upload,
-            self.shell
-                .run(host, upload_command(self.protocol, &digest), Some(file)),
+            shell.run(host, upload_command(self.protocol, &digest), Some(file)),
         )
         .await;
         drop(sending);
@@ -483,7 +500,7 @@ impl HostInstaller {
         // and its word) is asked of the host again rather than recorded as
         // refused: a copy the probe finds there runs and speaks this
         // protocol.
-        if answer.is_none() && self.probe(host).await == Some(Probe::Present) {
+        if answer.is_none() && self.probe(shell, host).await == Some(Probe::Present) {
             let found = EnvironmentEvent::InstallFound {
                 host: name.into(),
                 lease: lease.into(),
@@ -559,11 +576,11 @@ impl HostInstaller {
 
 impl HostInstaller {
     /// What the host's probe says; `None` when it said nothing this reads.
-    async fn probe(&self, host: &SshDestination) -> Option<Probe> {
+    async fn probe(&self, shell: &dyn RemoteShell, host: &SshDestination) -> Option<Probe> {
         let name = host.as_str();
         let probed = tokio::time::timeout(
             self.timings.probe,
-            self.shell.run(
+            shell.run(
                 host,
                 probe_command(self.protocol, &self.builds().await.ok()?),
                 None,

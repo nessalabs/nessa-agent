@@ -3,7 +3,10 @@
 use crate::{
     conversation::application::{ArtifactChannel, ArtifactChannels},
     mcp_servers::domain::{relay_arguments, MANAGED_SERVER_NAME, RELAY_SUBCOMMAND},
-    workspaces::{application::WorkspaceStream, domain::Failure},
+    workspaces::{
+        application::{ServedCopy, WorkspaceStream},
+        domain::Failure,
+    },
 };
 use base64::Engine;
 use nessa_sdk::application::agent_execution::providers::HarnessMcpRelay;
@@ -35,14 +38,27 @@ pub(super) struct SshAccess {
 const VM_SHELL: &str = "/opt/nessa/bin/nessa-mcp";
 /// Where that shell keeps its private record of each command it ran.
 const VM_PROCESS_AUDIT: &str = "/home/user/.nessa/process-audit";
+/// The `nessa` the image was made with.
+const VM_NESSA: &str = "/opt/nessa/bin/nessa";
+/// The environment `env serve` runs with in the VM, whichever copy it is.
+const VM_SERVE_ENVIRONMENT: &str =
+    "env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa";
+/// The most of what a command run in the VM printed that is kept: its end.
+const MAX_RUN_OUTPUT: usize = 64 * 1024;
 
 impl SshAccess {
-    pub(super) fn serve(self: &Arc<Self>) -> io::Result<WorkspaceStream> {
+    pub(super) fn serve(self: &Arc<Self>, copy: &ServedCopy) -> io::Result<WorkspaceStream> {
+        let program = match copy {
+            ServedCopy::Image => format!("{VM_NESSA} env serve"),
+            ServedCopy::Installed(command) => command.clone(),
+        };
         let mut command = ssh(&self.directory, self.endpoint);
-        command.args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
+        command
+            .args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
             .arg(format!("user@{}", self.endpoint.ip()))
-            .arg("env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa /opt/nessa/bin/nessa env serve")
-            .stdin(Stdio::piped()).stdout(Stdio::piped());
+            .arg(format!("{VM_SERVE_ENVIRONMENT} {program}"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
         let mut child = command.spawn()?;
         let output = Box::new(
             child
@@ -63,6 +79,56 @@ impl SshAccess {
             files: Some(self.clone()),
             mcp_relay: Some(self.clone()),
         })
+    }
+    /// The lease protocol the image's own `nessa` says it speaks.
+    pub(super) async fn image_protocol(&self) -> Option<String> {
+        let said = tokio::time::timeout(
+            Duration::from_secs(30),
+            self.run(format!("{VM_NESSA} env protocol 2>/dev/null"), None),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        let protocol = said.lines().last()?.trim();
+        (!protocol.is_empty()).then(|| protocol.to_owned())
+    }
+    /// Run `command` in the VM, `input` on its standard input, answering
+    /// the last [`MAX_RUN_OUTPUT`] bytes it printed.
+    pub(super) async fn run(
+        &self,
+        command: String,
+        input: Option<std::fs::File>,
+    ) -> io::Result<String> {
+        use tokio::io::AsyncReadExt;
+        let mut ssh = ssh(&self.directory, self.endpoint);
+        // A build sent is compressed on the way.
+        if input.is_some() {
+            ssh.args(["-o", "Compression=yes"]);
+        }
+        ssh.args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
+            .arg(format!("user@{}", self.endpoint.ip()))
+            .arg(command)
+            .stdin(input.map_or_else(Stdio::null, Stdio::from))
+            .stdout(Stdio::piped());
+        let mut child = ssh.spawn()?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("missing command stdout"))?;
+        let mut tail = Vec::new();
+        let mut chunk = [0; 4096];
+        loop {
+            let read = stdout.read(&mut chunk).await?;
+            if read == 0 {
+                break;
+            }
+            tail.extend_from_slice(&chunk[..read]);
+            if tail.len() > MAX_RUN_OUTPUT {
+                tail.drain(..tail.len() - MAX_RUN_OUTPUT);
+            }
+        }
+        child.wait().await?;
+        Ok(String::from_utf8_lossy(&tail).into_owned())
     }
     pub(super) async fn connect(
         api: &Api,
@@ -292,7 +358,7 @@ fn vm_command(
         ));
     }
     Some((
-        "/opt/nessa/bin/nessa".into(),
+        VM_NESSA.into(),
         relay_arguments(remote_socket, server, configuration),
     ))
 }
