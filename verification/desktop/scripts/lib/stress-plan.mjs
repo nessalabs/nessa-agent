@@ -173,6 +173,10 @@ export const KNOBS = {
     default: 1,
     what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
+  passphrases: {
+    default: 1,
+    what: "vault passphrase changes through Settings, each sealed and explicitly unlocked, followed by a conversation reply",
+  },
   githubs: {
     default: 1,
     what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
@@ -278,6 +282,7 @@ export function plan(knobs) {
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
   add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   add(knobs.webhooks, () => ({ kind: "webhook" }))
   add(knobs.pastes, () => ({ kind: "paste" }))
@@ -359,4 +364,23 @@ export function describe(steps) {
       return `${step.index}. ${step.kind}${extra}`
     })
     .join("\n")
+}
+
+/** Select existing planned steps without changing a single knob or deadline.
+ * The unfiltered plan remains the full qualification; a selected run reports
+ * its scope explicitly and cannot stand in for the unselected feature checks. */
+export function selectedPlan(knobs, only) {
+  const planned = plan(knobs)
+  if (!only) return planned
+  const selected = new Set(
+    only
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  )
+  const available = new Set(planned.map((step) => step.kind))
+  const unknown = [...selected].filter((kind) => !available.has(kind))
+  if (selected.size === 0 || unknown.length)
+    throw new Error(`No planned stress step matches: ${unknown.join(",") || only}`)
+  return planned.filter((step) => selected.has(step.kind))
 }

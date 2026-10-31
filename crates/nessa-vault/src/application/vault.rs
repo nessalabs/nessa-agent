@@ -1,8 +1,9 @@
 use super::{Audit, AuditRecord, Caller, Clock, Repository};
 use crate::{
     contract,
-    domain::{EntryName, Failure, Passphrase, Secret, Status, VaultKey},
+    domain::{ChangePublication, EntryName, Failure, Passphrase, Secret, Status, VaultKey},
 };
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex, Weak,
@@ -54,11 +55,101 @@ struct Unlocked {
     key: VaultKey,
     lease: Weak<LeaseState>,
 }
-struct State {
-    unlocked: Option<Unlocked>,
+struct CallerAttempts {
+    principal: Box<str>,
+    credential: Box<str>,
     failures: usize,
     retry_at: u64,
+    expires_at: u64,
+    verified: bool,
+}
+impl CallerAttempts {
+    fn matches(&self, caller: &Caller) -> bool {
+        self.principal.as_ref() == caller.principal && self.credential.as_ref() == caller.credential
+    }
+    fn deadline(now: u64) -> u64 {
+        now.saturating_add(contract::COOLDOWN_SECONDS as u64)
+    }
+    fn pending(now: u64, deadline: u64) -> bool {
+        // A saturated monotonic deadline cannot be proven elapsed.
+        deadline == u64::MAX || now < deadline
+    }
+}
+struct State {
+    unlocked: Option<Unlocked>,
+    pending: Option<Weak<LeaseState>>,
+    attempts: Vec<CallerAttempts>,
     generation: u64,
+}
+impl State {
+    fn attempts(&mut self, caller: &Caller, now: u64) -> Result<&mut CallerAttempts, Failure> {
+        if caller
+            .principal
+            .len()
+            .saturating_add(caller.credential.len())
+            > contract::MAXIMUM_COOLDOWN_IDENTITY_BYTES
+        {
+            return Err(Failure::Capacity);
+        }
+        // Do not evict active penalties or known successful controllers. A new
+        // identity at capacity is refused rather than resetting another budget.
+        self.attempts
+            .retain(|attempt| attempt.verified || CallerAttempts::pending(now, attempt.expires_at));
+        let index = match self
+            .attempts
+            .iter()
+            .position(|attempt| attempt.matches(caller))
+        {
+            Some(index) => index,
+            None => {
+                if self.attempts.len() >= contract::MAXIMUM_COOLDOWN_CALLERS {
+                    return Err(Failure::Capacity);
+                }
+                self.attempts.push(CallerAttempts {
+                    principal: caller.principal.as_str().into(),
+                    credential: caller.credential.as_str().into(),
+                    failures: 0,
+                    retry_at: 0,
+                    expires_at: CallerAttempts::deadline(now),
+                    verified: false,
+                });
+                self.attempts.len() - 1
+            }
+        };
+        let attempt = &mut self.attempts[index];
+        if !CallerAttempts::pending(now, attempt.expires_at) {
+            attempt.failures = 0;
+            attempt.retry_at = 0;
+        }
+        Ok(attempt)
+    }
+}
+// Dropped before the derivation permit, including on early refusal or unwind.
+// The permit ensures that this reservation cannot belong to another opening.
+struct PendingOpening<'a>(&'a Mutex<State>);
+impl Drop for PendingOpening<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.lock() {
+            state.pending = None;
+        }
+    }
+}
+/// Receipt for an admitted passphrase change. Shared key state has been sealed;
+/// publication truth and audit availability remain independent facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChangeReceipt {
+    publication: ChangePublication,
+    audit_failed: bool,
+}
+impl ChangeReceipt {
+    /// Whether replacement was unchanged, committed or not confirmed.
+    pub fn publication(&self) -> ChangePublication {
+        self.publication
+    }
+    /// Whether required evidence delivery failed independently of file publication.
+    pub fn audit_failed(&self) -> bool {
+        self.audit_failed
+    }
 }
 /// Session-scoped unlock and reusable secret access; no process-global store.
 pub struct Vault {
@@ -83,8 +174,8 @@ impl Vault {
             clock,
             state: Mutex::new(State {
                 unlocked: None,
-                failures: 0,
-                retry_at: 0,
+                pending: None,
+                attempts: Vec::new(),
                 generation: 0,
             }),
             derivation: Mutex::new(()),
@@ -161,11 +252,11 @@ impl Vault {
             })
             .map_err(|_| Failure::AuditUnavailable)
     }
-    fn admit(&self, lease: &Lease) -> Result<(), Failure> {
+    fn admit(&self, lease: &Lease) -> Result<(u64, PendingOpening<'_>), Failure> {
         if !lease.is_active() {
             return Err(Failure::SessionClosed);
         }
-        let state = self.state()?;
+        let mut state = self.state()?;
         if state
             .unlocked
             .as_ref()
@@ -174,10 +265,13 @@ impl Vault {
         {
             return Err(Failure::SessionOwned);
         }
-        if self.clock.seconds() < state.retry_at {
+        let now = self.clock.seconds();
+        let attempts = state.attempts(&lease.0.caller, now)?;
+        if attempts.retry_at != 0 && CallerAttempts::pending(now, attempts.retry_at) {
             return Err(Failure::Cooldown);
         }
-        Ok(())
+        state.pending = Some(Arc::downgrade(&lease.0));
+        Ok((state.generation, PendingOpening(&self.state)))
     }
     /// Publish a new encrypted repository and retain its key for this live owner.
     /// Existing storage is not replaced. Busy, ownership, policy, capacity and
@@ -188,12 +282,94 @@ impl Vault {
         passphrase: Passphrase,
         initial: &[(EntryName, Secret)],
     ) -> Result<Status, Failure> {
+        passphrase.validate_setup()?;
         self.open(lease, passphrase, Some(initial))
     }
     /// Derive/verify a key with bounded KDF admission and failed-attempt cooldown.
     /// Publication rechecks the owning connection and explicit-lock generation.
     pub fn unlock(&self, lease: &Lease, passphrase: Passphrase) -> Result<Status, Failure> {
         self.open(lease, passphrase, None)
+    }
+    /// Change only the encrypted file's passphrase, then require explicit unlock.
+    /// Errors are pre-admission refusals; every returned receipt means the shared
+    /// key was sealed, including unchanged and uncertain storage outcomes. An
+    /// already-admitted change may finish after connection close. Never replay.
+    pub fn change_passphrase(
+        &self,
+        lease: &Lease,
+        new_passphrase: Passphrase,
+    ) -> Result<ChangeReceipt, Failure> {
+        new_passphrase.validate_setup()?;
+        let _derivation = self.derivation.try_lock().map_err(|_| Failure::Busy)?;
+        if !lease.is_active() {
+            return Err(Failure::SessionClosed);
+        }
+        let mut state = self.state()?;
+        if !lease.is_active() {
+            return Err(Failure::SessionClosed);
+        }
+        let owner = Self::live(&mut state).ok_or(Failure::Locked)?;
+        if !Arc::ptr_eq(&owner, &lease.0) {
+            return Err(Failure::SessionOwned);
+        }
+        let generation = state.generation;
+        // A substituted effect may unwind. Keep its typed failure inside this
+        // operation so shared state is not poisoned while holding key authority.
+        let evidence = |action, transition, cause, result| {
+            catch_unwind(AssertUnwindSafe(|| {
+                self.evidence(lease, action, transition, cause, result, None)
+            }))
+            .unwrap_or(Err(Failure::AuditUnavailable))
+        };
+        evidence(
+            "passphrase_change",
+            (Status::Unlocked, Status::Unlocked),
+            "explicit_request",
+            "requested",
+        )?;
+        // Close can invalidate this lease independently while audit holds the mutex.
+        if !lease.is_active() {
+            return Err(Failure::SessionClosed);
+        }
+        if state.generation != generation {
+            return Err(Failure::Locked);
+        }
+        let key = state.unlocked.take().ok_or(Failure::Locked)?.key;
+        state.generation = state.generation.wrapping_add(1);
+        let seal_audit_failed = evidence(
+            "lock",
+            (Status::Unlocked, Status::Locked),
+            "explicit_request",
+            "key_cleared",
+        )
+        .is_err();
+        let publication = if seal_audit_failed {
+            ChangePublication::Unchanged(Failure::AuditUnavailable)
+        } else {
+            catch_unwind(AssertUnwindSafe(|| {
+                self.repository.change_passphrase(&key, &new_passphrase)
+            }))
+            .unwrap_or(ChangePublication::Uncertain(Failure::Unavailable))
+        };
+        drop(key);
+        let (cause, result) = match publication {
+            ChangePublication::Committed => ("encrypted_receipt", "committed"),
+            ChangePublication::Unchanged(_) if seal_audit_failed => ("audit_refused", "unchanged"),
+            ChangePublication::Unchanged(_) => ("storage_refused", "unchanged"),
+            ChangePublication::Uncertain(_) => ("storage_unavailable", "not_confirmed"),
+        };
+        // Terminal evidence is attempted even if the sink rejected sealing.
+        let terminal_audit_failed = evidence(
+            "passphrase_change",
+            (Status::Locked, Status::Locked),
+            cause,
+            result,
+        )
+        .is_err();
+        Ok(ChangeReceipt {
+            publication,
+            audit_failed: seal_audit_failed || terminal_audit_failed,
+        })
     }
     fn open(
         &self,
@@ -202,8 +378,7 @@ impl Vault {
         initial: Option<&[(EntryName, Secret)]>,
     ) -> Result<Status, Failure> {
         let _derivation = self.derivation.try_lock().map_err(|_| Failure::Busy)?;
-        self.admit(lease)?;
-        let generation = self.state()?.generation;
+        let (generation, _pending) = self.admit(lease)?;
         let before = self.status()?;
         let action = if initial.is_some() { "setup" } else { "unlock" };
         self.evidence(
@@ -224,13 +399,16 @@ impl Vault {
                 {
                     let mut state = self.state()?;
                     if problem == Failure::WrongPassphrase {
-                        state.failures += 1;
-                        if state.failures >= contract::FAILED_ATTEMPTS {
-                            state.retry_at = self
-                                .clock
-                                .seconds()
-                                .saturating_add(contract::COOLDOWN_SECONDS as u64);
-                            state.failures = 0;
+                        let attempts = state
+                            .attempts
+                            .iter_mut()
+                            .find(|attempt| attempt.matches(&lease.0.caller))
+                            .ok_or(Failure::Unavailable)?;
+                        attempts.failures += 1;
+                        attempts.expires_at = CallerAttempts::deadline(self.clock.seconds());
+                        if attempts.failures >= contract::FAILED_ATTEMPTS {
+                            attempts.retry_at = attempts.expires_at;
+                            attempts.failures = 0;
                         }
                     }
                 }
@@ -308,8 +486,14 @@ impl Vault {
             )?;
             return Err(Failure::SessionClosed);
         }
-        state.failures = 0;
-        state.retry_at = 0;
+        let attempts = state
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.matches(&lease.0.caller))
+            .ok_or(Failure::Unavailable)?;
+        attempts.failures = 0;
+        attempts.retry_at = 0;
+        attempts.verified = true;
         Ok(Status::Unlocked)
     }
     /// Locking erases the retained key before reporting an audit failure.
@@ -323,7 +507,9 @@ impl Vault {
                 .unlocked
                 .as_ref()
                 .and_then(|u| u.lease.upgrade())
-                .is_some_and(|owner| !Arc::ptr_eq(&owner, &lease.0))
+                .into_iter()
+                .chain(state.pending.as_ref().and_then(Weak::upgrade))
+                .any(|owner| !Arc::ptr_eq(&owner, &lease.0))
             {
                 return Err(Failure::SessionOwned);
             }

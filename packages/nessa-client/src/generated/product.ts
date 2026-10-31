@@ -3409,6 +3409,14 @@ export interface VaultStatus {
   /** Whether protected local credentials are unconfigured, locked, or available to this app session. */
   state: VaultState
 }
+/** A confirmed passphrase change seals the vault; explicitly unlock again with the new phrase. */
+export const VaultPassphraseChangeState = { Locked: "locked" } as const
+export type VaultPassphraseChangeState =
+  (typeof VaultPassphraseChangeState)[keyof typeof VaultPassphraseChangeState]
+/** Confirmed passphrase replacement. Its complete success payload is locked; this does not confirm audit-failed or unknown publication outcomes. */
+export interface VaultPassphraseChangeStatus {
+  state: VaultPassphraseChangeState
+}
 /** Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed. */
 export interface VaultPassphraseParams {
   /** Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json. */
@@ -3417,6 +3425,7 @@ export interface VaultPassphraseParams {
 /** Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault. */
 export const VaultErrorCode = {
   VaultUnavailable: "vault_unavailable",
+  VaultForbidden: "vault_forbidden",
   VaultLocked: "vault_locked",
   VaultPassphrasePolicy: "vault_passphrase_policy",
   VaultWrongPassphrase: "vault_wrong_passphrase",
@@ -3428,6 +3437,11 @@ export const VaultErrorCode = {
   VaultCapacity: "vault_capacity",
   VaultAuditUnavailable: "vault_audit_unavailable",
   VaultMigrationUnavailable: "vault_migration_unavailable",
+  VaultChangeUnchanged: "vault_change_unchanged",
+  VaultChangeUnchangedAuditUnavailable: "vault_change_unchanged_audit_unavailable",
+  VaultChangeNotConfirmed: "vault_change_not_confirmed",
+  VaultChangeNotConfirmedAuditUnavailable: "vault_change_not_confirmed_audit_unavailable",
+  VaultChangedAuditUnavailable: "vault_changed_audit_unavailable",
 } as const
 export type VaultErrorCode = (typeof VaultErrorCode)[keyof typeof VaultErrorCode]
 /** Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription. */
@@ -3606,7 +3620,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 105,
+  maxReadyMethods: 106,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3925,6 +3939,7 @@ export const ProductMethod = {
   VaultStatus: "vault.status",
   VaultSetup: "vault.setup",
   VaultUnlock: "vault.unlock",
+  VaultChangePassphrase: "vault.changePassphrase",
   VaultLock: "vault.lock",
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
@@ -4043,6 +4058,7 @@ export const productReadyMethods = [
   "vault.status",
   "vault.setup",
   "vault.unlock",
+  "vault.changePassphrase",
   "vault.lock",
   "boat.status",
   "boat.save",
@@ -4152,6 +4168,7 @@ export const productMethodGrants = {
   "vault.status": "credential.manage",
   "vault.setup": "credential.manage",
   "vault.unlock": "credential.manage",
+  "vault.changePassphrase": "credential.manage",
   "vault.lock": "credential.manage",
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",

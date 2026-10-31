@@ -354,6 +354,13 @@ export const settingsEntries = [
     detail: "Cloud workspaces using your connected agent subscriptions.",
     keywords: "cloud vm compute workspace token chatgpt claude",
   },
+  {
+    id: "vault-passphrase",
+    tab: "accounts",
+    label: "Vault passphrase",
+    detail: "Protect saved credentials on this gateway.",
+    keywords: "change password security encryption unlock",
+  },
   // Connections › Integrations
   {
     id: "mcp-servers",

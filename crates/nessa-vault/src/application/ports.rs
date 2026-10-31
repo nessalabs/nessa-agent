@@ -1,4 +1,4 @@
-use crate::domain::{EntryName, Failure, Passphrase, Secret, Status, VaultKey};
+use crate::domain::{ChangePublication, EntryName, Failure, Passphrase, Secret, Status, VaultKey};
 /// The authenticated initiator; fields contain identifiers, never credentials.
 #[derive(Clone, Debug)]
 pub struct Caller {
@@ -39,6 +39,13 @@ pub trait Repository: Send + Sync {
         entries: &[(EntryName, Secret)],
     ) -> Result<VaultKey, Failure>;
     fn unlock(&self, passphrase: &Passphrase) -> Result<VaultKey, Failure>;
+    /// Replace only the passphrase encryption, preserving every entry. The caller
+    /// seals shared key state before dispatch and never automatically retries.
+    fn change_passphrase(
+        &self,
+        current_key: &VaultKey,
+        new_passphrase: &Passphrase,
+    ) -> ChangePublication;
     fn read(&self, key: &VaultKey, name: &EntryName) -> Result<Option<Secret>, Failure>;
     fn write(&self, key: &VaultKey, name: &EntryName, value: &[u8]) -> Result<(), Failure>;
     fn delete(&self, key: &VaultKey, name: &EntryName) -> Result<(), Failure>;

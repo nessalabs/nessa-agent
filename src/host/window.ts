@@ -1355,7 +1355,7 @@ export async function writeClipboardText(text: string): Promise<void> {
 /** Transient local-vault input; the native host retains one app-owned connection.
  * Browser composition uses the gateway adapter instead of invoking this seam. */
 export async function vaultCommand(request: {
-  operation: "status" | "setup" | "unlock" | "lock"
+  operation: "status" | "setup" | "unlock" | "lock" | "changePassphrase"
   passphrase?: string
 }): Promise<unknown> {
   if (!inTauri) return undefined

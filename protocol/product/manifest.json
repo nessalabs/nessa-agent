@@ -394,6 +394,10 @@
       "params": "VaultPassphraseParams",
       "grant": "credential.manage"
     },
+    "vault.changePassphrase": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
     "vault.lock": {
       "params": null,
       "grant": "credential.manage"

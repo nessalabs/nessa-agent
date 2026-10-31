@@ -2,7 +2,12 @@
 //! The connection lifetime owns server-side session resources; dropping it closes
 //! the socket. Consumers own command interpretation and authorization remains at
 //! the gateway. No protocol payload or server message enters diagnostics.
-use nessa_protocol::product::generated::{ProductSessionReady, SessionChallenge};
+use nessa_protocol::{
+    product::generated::{
+        ProductSessionReady, SessionChallenge, VaultErrorCode, VaultPassphraseChangeStatus,
+    },
+    protocol::OutgoingMessage,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
@@ -103,11 +108,13 @@ impl LocalProduct {
                 expires_at: None,
             },
         };
-        let challenge = result.read()?;
-        if challenge["type"] != "event" || challenge["event"] != "session.challenge" {
+        let OutgoingMessage::Event(challenge) = result.read()? else {
+            return Err(LocalProductError::Protocol);
+        };
+        if challenge.event != "session.challenge" {
             return Err(LocalProductError::Protocol);
         }
-        let challenge: SessionChallenge = decode(challenge["payload"].clone())?;
+        let challenge: SessionChallenge = decode(challenge.payload)?;
         if challenge.min_version > 1 || challenge.max_version < 1 {
             return Err(LocalProductError::Protocol);
         }
@@ -130,7 +137,7 @@ impl LocalProduct {
         };
         Ok(result)
     }
-    fn read(&mut self) -> Result<Value, LocalProductError> {
+    fn read(&mut self) -> Result<OutgoingMessage, LocalProductError> {
         loop {
             let remaining = self
                 .deadline
@@ -147,7 +154,7 @@ impl LocalProduct {
                 .map_err(|_| LocalProductError::Transport)?
             {
                 Message::Text(text) if text.len() <= 1_048_576 => {
-                    return serde_json::from_str(&text).map_err(|_| LocalProductError::Protocol)
+                    return OutgoingMessage::decode(&text).map_err(|_| LocalProductError::Protocol)
                 }
                 Message::Ping(_) | Message::Pong(_) => continue,
                 _ => return Err(LocalProductError::Protocol),
@@ -156,7 +163,21 @@ impl LocalProduct {
     }
     /// Send one correlated command and decode its bounded reply. Calls are serialized
     /// by the mutable borrow; no command replay occurs after an uncertain delivery.
+    /// An unconfirmed passphrase-change delivery retires the connection so a late
+    /// response cannot be consumed by the next request.
     pub fn request<T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<T, LocalProductError> {
+        let result = self.request_once(method, params);
+        after_dispatch(method, result, || {
+            // A late answer must not be consumed by a subsequent explicit unlock.
+            // Closing also retires this connection's prior unlock authority.
+            let _ = self.socket.get_ref().shutdown(std::net::Shutdown::Both);
+        })
+    }
+    fn request_once<T: DeserializeOwned>(
         &mut self,
         method: &str,
         params: Value,
@@ -176,33 +197,66 @@ impl LocalProduct {
         // as well as bytes and time so a stream cannot starve correlation.
         let mut response = self.read()?;
         for _ in 0..64 {
-            if response["type"] != "event" {
+            if !matches!(response, OutgoingMessage::Event(_)) {
                 break;
             }
             response = self.read()?;
         }
-        if response["type"] != "res" || response["id"] != id {
+        let OutgoingMessage::Response(response) = response else {
+            return Err(LocalProductError::Protocol);
+        };
+        if response.id != id {
             return Err(LocalProductError::Correlation);
         }
-        if response["ok"] != true {
-            // No arbitrary server message is allowed into diagnostics (it may contain secrets).
-            return Err(match response["error"]["code"].as_str() {
-                Some("unauthorized") => LocalProductError::Unauthorized,
-                Some("forbidden") => LocalProductError::Denied,
-                Some("credential_capacity") => LocalProductError::Capacity,
-                Some(code) => match serde_json::from_value::<
-                    nessa_protocol::product::generated::VaultErrorCode,
-                >(Value::String(code.to_owned()))
-                {
-                    Ok(code) => LocalProductError::Vault(code),
-                    Err(_) => LocalProductError::Rejected,
-                },
-                None => LocalProductError::Rejected,
+        if !response.ok {
+            // The shared envelope decoder has already proved a boolean outcome
+            // with exactly one error/payload. Arbitrary server text stays private.
+            let error = response.error.ok_or(LocalProductError::Protocol)?;
+            return Err(match error.code.as_str() {
+                "unauthorized" => LocalProductError::Unauthorized,
+                "forbidden" => LocalProductError::Denied,
+                "credential_capacity" => LocalProductError::Capacity,
+                code => {
+                    match serde_json::from_value::<VaultErrorCode>(Value::String(code.to_owned())) {
+                        Ok(code) => LocalProductError::Vault(code),
+                        Err(_) => LocalProductError::Rejected,
+                    }
+                }
             });
         }
-        decode(response["payload"].clone())
+        let payload = response.payload.ok_or(LocalProductError::Protocol)?;
+        // Validate before generic decoding: Value callers must obey the same
+        // Locked-only change contract as callers requesting the generated DTO.
+        if method == "vault.changePassphrase" {
+            let _: VaultPassphraseChangeStatus = decode(payload.clone())?;
+        }
+        decode(payload)
     }
 }
+// A recognized response preserves the gateway's publication/audit fact. Any
+// unrecognized or missing answer after sending change is an uncertain mutation,
+// including partial writes, correlation/decode errors and reader cancellation.
+fn after_dispatch<T>(
+    method: &str,
+    result: Result<T, LocalProductError>,
+    retire: impl FnOnce(),
+) -> Result<T, LocalProductError> {
+    match result {
+        Err(error) if method == "vault.changePassphrase" => match error {
+            LocalProductError::Vault(_)
+            | LocalProductError::Unauthorized
+            | LocalProductError::Denied => Err(error),
+            _ => {
+                retire();
+                Err(LocalProductError::Vault(
+                    VaultErrorCode::VaultChangeNotConfirmed,
+                ))
+            }
+        },
+        other => other,
+    }
+}
+
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, LocalProductError> {
     serde_json::from_value(value).map_err(|_| LocalProductError::Protocol)
 }
@@ -216,7 +270,7 @@ impl Drop for LocalProduct {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalProductError {
     /// A recognized redacted vault refusal; arbitrary server text is discarded.
-    Vault(nessa_protocol::product::generated::VaultErrorCode),
+    Vault(VaultErrorCode),
     /// The requested address is not numeric loopback.
     NonLocal,
     /// The private credential file cannot be read.
@@ -272,3 +326,7 @@ impl Drop for LocalProductCancellation {
 
 /// Largest integer exactly represented by product JSON consumers.
 pub const MAX_SAFE_TIMESTAMP: u64 = 9_007_199_254_740_991;
+
+#[cfg(test)]
+#[path = "../tests/product/local_product.rs"]
+mod tests;
