@@ -228,15 +228,26 @@ async fn approved_then_served(
         let Some(protocol) = served? else {
             return Ok(());
         };
-        match fetch_update(
-            address,
-            Beyond { relay, tunnel },
-            identity.clone(),
-            pin,
-            &protocol,
-        )
-        .await
-        {
+        // Every lease has ended here, so a stop or drain asked while the
+        // build arrives has nothing left to wait for: it ends the fetch
+        // (nothing half-fetched is kept) and the process, and is never
+        // passed over by running the build fetched.
+        let fetched = tokio::select! {
+            biased;
+            () = stopped(stopping.clone()) => return Ok(()),
+            () = stopped(draining.clone()) => return Ok(()),
+            fetched = fetch_update(
+                address,
+                Beyond { relay, tunnel },
+                identity.clone(),
+                pin,
+                &protocol,
+            ) => fetched,
+        };
+        if *stopping.borrow() || *draining.borrow() {
+            return Ok(());
+        }
+        match fetched {
             Ok(copy) => {
                 tracing::info!(copy = %copy.display(), "running the gateway's build");
                 let error = run_in_place(&copy);
@@ -245,7 +256,12 @@ async fn approved_then_served(
             Err(reason) => tracing::warn!(%reason, "the gateway's build was not taken"),
         }
         fetch_after = Some(std::time::Instant::now() + FETCH_AGAIN_AFTER);
-        composed = compose().await.map_err(|(_, failure)| failure)?;
+        composed = tokio::select! {
+            biased;
+            () = stopped(stopping.clone()) => return Ok(()),
+            () = stopped(draining.clone()) => return Ok(()),
+            composed = compose() => composed.map_err(|(_, failure)| failure)?,
+        };
     }
 }
 

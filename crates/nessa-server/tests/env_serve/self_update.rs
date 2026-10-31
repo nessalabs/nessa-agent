@@ -20,6 +20,16 @@ async fn fetched(
     protocol: &str,
     builds: &Path,
 ) -> Result<PathBuf, NotUpdated> {
+    fetched_by(frames, protocol, builds, OLD).await
+}
+
+/// As [`fetched`], by the build whose SHA-256 is `this_build`.
+async fn fetched_by(
+    frames: Vec<FromGateway>,
+    protocol: &str,
+    builds: &Path,
+    this_build: &str,
+) -> Result<PathBuf, NotUpdated> {
     let (host, gateway) = tokio::io::duplex(1 << 20);
     let (_from_host, mut to_host) = tokio::io::split(gateway);
     let sending = tokio::spawn(async move {
@@ -31,7 +41,7 @@ async fn fetched(
         _from_host
     });
     let (input, output) = tokio::io::split(host);
-    let fetched = fetch(input, output, protocol, builds, OLD).await;
+    let fetched = fetch(input, output, protocol, builds, this_build).await;
     drop(sending.await.unwrap());
     fetched
 }
@@ -102,6 +112,27 @@ async fn a_build_kept_removes_every_earlier_one_and_whatever_a_cut_fetch_left() 
         left(&builds),
         ["current".to_owned(), digest_of(&build), "other".to_owned()]
     );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_copy_that_fetches_another_hands_it_to_the_image_build_it_runs_for() {
+    let home = tempfile::tempdir().unwrap();
+    let builds = home.path().join("builds");
+    // The image's build (OLD) fetches B; B, running in its place, fetches C.
+    let b = script("one");
+    fetched(sent(&b, "one"), "one", &builds).await.unwrap();
+    let c = script("two");
+    let kept = fetched_by(sent(&c, "two"), "two", &builds, &digest_of(&b))
+        .await
+        .unwrap();
+    // The image started again runs C at once; B is gone; C runs itself.
+    assert_eq!(kept_for(&builds, OLD), Some(kept));
+    let mut expected = ["current".to_owned(), digest_of(&c)];
+    expected.sort();
+    assert_eq!(left(&builds), expected);
+    assert_eq!(kept_for(&builds, &digest_of(&c)), None);
+    assert_eq!(kept_for(&builds, &digest_of(&b)), None);
 }
 
 #[cfg(target_os = "linux")]

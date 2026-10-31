@@ -11,7 +11,9 @@
 //!   ──▶ UpdateEnd: size and SHA-256 are the ones said?        no ──▶ removed, Refused
 //!   ──▶ made runnable; `<it> env protocol` says that protocol? no ──▶ removed, Refused
 //!   ──▶ renamed to <builds>/<digest>/nessa
-//!   ──▶ <builds>/current: "<digest> <this build's digest>"
+//!   ──▶ <builds>/current: "<digest> <the build it runs in place of>": this
+//!       build, or, when this build is itself a copy current names, the one
+//!       that copy runs in place of
 //!   ──▶ every other build kept in `builds` removed
 //! start of `nessa env dial`: current names a copy, put in place of this very
 //!   build (its digest is the second word), and the copy is there?
@@ -164,7 +166,7 @@ where
         return Err(NotUpdated::Unverified("the protocol it says"));
     }
     let kept = part.place(&builds.join(&digest))?;
-    record_current(builds, &digest, this_build)?;
+    record_current(builds, &digest, &replaced_by(builds, this_build))?;
     prune(builds, &digest);
     Ok(kept)
 }
@@ -336,9 +338,19 @@ fn record_current(builds: &Path, digest: &str, replaced: &str) -> io::Result<()>
     File::open(builds)?.sync_all()
 }
 
-/// The copy kept in `builds` to run in place of the build whose SHA-256 is
-/// `this_build`, when one was fetched for it and is still there.
-pub(crate) fn kept_for(builds: &Path, this_build: &str) -> Option<PathBuf> {
+/// The build a copy fetched now is run in place of: the one `current`
+/// already names when `this_build` is the copy run for it, so a machine
+/// started from its image again (A, which fetched B, which fetched C) runs
+/// the newest copy (C) rather than fetching it once more; else this build.
+fn replaced_by(builds: &Path, this_build: &str) -> String {
+    match recorded(builds) {
+        Some((digest, replaced)) if digest == this_build && is_digest(&replaced) => replaced,
+        _ => this_build.to_owned(),
+    }
+}
+
+/// What `current` says: the copy kept, and the build it is run in place of.
+fn recorded(builds: &Path) -> Option<(String, String)> {
     let mut recorded = String::new();
     File::open(current_file(builds))
         .ok()?
@@ -346,8 +358,14 @@ pub(crate) fn kept_for(builds: &Path, this_build: &str) -> Option<PathBuf> {
         .read_to_string(&mut recorded)
         .ok()?;
     let mut words = recorded.split_whitespace();
-    let (digest, replaced) = (words.next()?, words.next()?);
-    if replaced != this_build || digest == this_build || !is_digest(digest) {
+    Some((words.next()?.to_owned(), words.next()?.to_owned()))
+}
+
+/// The copy kept in `builds` to run in place of the build whose SHA-256 is
+/// `this_build`, when one was fetched for it and is still there.
+pub(crate) fn kept_for(builds: &Path, this_build: &str) -> Option<PathBuf> {
+    let (digest, replaced) = recorded(builds)?;
+    if replaced != this_build || digest == this_build || !is_digest(&digest) {
         return None;
     }
     let kept = builds.join(digest).join("nessa");
