@@ -176,6 +176,7 @@ struct FakeProvider {
     created_disposition: Mutex<RefusalDisposition>,
     refusal_on_connect: Mutex<Option<AdmissionRejection>>,
     creates: AtomicUsize,
+    created_images: Mutex<Vec<String>>,
     created_lifetimes: Mutex<Vec<VmLifetime>>,
     connected_lifetimes: Mutex<Vec<VmLifetime>>,
     connects: Mutex<Vec<String>>,
@@ -198,6 +199,7 @@ impl FakeProvider {
             recovery_steps,
             creates: AtomicUsize::new(0),
             created_lifetimes: Mutex::new(vec![]),
+            created_images: Mutex::new(vec![]),
             connected_lifetimes: Mutex::new(vec![]),
             connects: Mutex::new(vec![]),
             deletes: AtomicUsize::new(0),
@@ -221,6 +223,10 @@ impl Provider for FakeProvider {
             .lock()
             .unwrap()
             .push(connection.auto_stop);
+        self.created_images
+            .lock()
+            .unwrap()
+            .push(connection.image.clone());
         self.creates.fetch_add(1, Ordering::SeqCst);
         self.entered.add_permits(1);
         self.proceed.acquire().await.unwrap().forget();
@@ -1008,4 +1014,29 @@ async fn failed_refusal_storage_or_audit_never_deletes_existing_workspace_data()
             assert_eq!(provider.connects.lock().unwrap().len(), 1);
         }
     }
+}
+
+#[tokio::test]
+async fn a_new_vm_uses_the_image_this_build_pins_not_the_one_saved_with_the_token() {
+    // The token was saved by an older Nessa, whose worker image speaks an
+    // older lease protocol; a VM made from it would refuse this build.
+    let (_, store, provider, audit) = fixture_with_audit();
+    let service = Workspaces::new(
+        Arc::new(Config),
+        provider.clone(),
+        store.clone(),
+        audit,
+        Arc::new(Config),
+    )
+    .with_image(Some("current-image"));
+    provider.proceed.add_permits(1);
+    service.open(id(301), true, None).await.unwrap();
+    assert_eq!(
+        *provider.created_images.lock().unwrap(),
+        vec!["current-image".to_owned()]
+    );
+    assert!(matches!(
+        store.read(&id(301).to_string()).await.unwrap(),
+        Some(Assignment::Assigned { image, .. }) if image == "current-image"
+    ));
 }

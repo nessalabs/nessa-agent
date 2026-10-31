@@ -392,6 +392,11 @@ Experimental turns it on; the rail stands beside the workspace in
   the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
   moves the window and a double-click zooms it, as over a chat. _Check:_
   `conversation-stress` step `devices` (Chromium and WebKit, `local-auth.yml`).
+- [ ] **A chat says where its agent runs**: the heading names This computer,
+  Boat workspace, an SSH host or a paired machine, from the lease once there
+  is one and from the channel's placement before. _Check:_
+  `conversation-stress` step `channel` (a local channel's chat says This
+  computer) and `transcript-heading.test.ts`.
 - [ ] **Devices adds and manages each kind in place**: one grid of every
   device; Add device offers computer, phone and cloud; Add a phone draws
   Settings' pairing rows as cards and its code modal on top, giving focus

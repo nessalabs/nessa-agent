@@ -281,6 +281,13 @@ impl Workspaces {
             return Err(Failure::Storage);
         }
         connection.auto_stop = lifetimes.effective();
+        // A new VM is made from the worker image this build pins: only its
+        // `nessa env serve` speaks this build's lease protocol. The image
+        // saved with the token is the one pinned when the token was saved,
+        // which an update of Nessa leaves behind.
+        if let Some(image) = &self.image {
+            connection.image.clone_from(image);
+        }
         let vm = match self.assignments.read(&id).await? {
             Some(Assignment::Assigned {
                 thread,

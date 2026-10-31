@@ -1705,6 +1705,19 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
   for (const path of run.stack.agent === "claude" ? attached : [])
     if (!reply.includes(path))
       failures.push(`the agent in ${channel.name} was not told of ${path}`)
+  // The chat says where its agent runs: a local channel's, on this computer.
+  const place = run.page.locator(
+    `${css.focusedPane} .workspace-heading [data-workspace-place]`,
+  )
+  const placed = await waitFor(
+    async () =>
+      (await place.count()) === 1 && (await place.innerText()) === "This computer",
+    10_000,
+  )
+  if (!placed)
+    failures.push(
+      `the chat in ${channel.name} does not say it runs on this computer: ${(await place.count()) ? await place.innerText() : "nothing"}`,
+    )
 }
 
 const steps = {
