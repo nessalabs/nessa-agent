@@ -52,6 +52,10 @@
   @media (prefers-reduced-motion: reduce) { .chip[data-state="working"] .dot { animation: none; } }
   #debug { position: absolute; right: 12px; bottom: 8px; font: 11px ui-monospace, Menlo, monospace; color: var(--faint); max-width: 50%; text-align: right; }
   [hidden] { display: none !important; }
+  #openPanel { display: none; position: absolute; right: 12px; top: -4px; height: 24px; padding: 0 10px; border: 0; border-radius: 12px;
+    background: #000; box-shadow: 0 0 0 1px rgba(255,255,255,0.1); color: var(--ink); font-size: 12px; cursor: pointer; }
+  #openPanel:hover { box-shadow: 0 0 0 1px rgba(255,255,255,0.22); }
+  body.inline #openPanel { display: block; }
   /* A card in the message: a fixed height (reported to the host), the stage
      clipped inside it, and nothing drawn past its edges. */
   body.inline { height: 440px; position: relative; overflow: hidden; border-radius: 12px; }
@@ -100,7 +104,7 @@
 </style>
 </head>
 <body>
-<div id="title"><b>Huddle</b><span id="file"></span></div>
+<div id="title"><b>Huddle</b><span id="file"></span><button id="openPanel" type="button">Open ↗</button></div>
 <div id="stage"><div id="paper"><p id="empty">Start a huddle and ask about a file.</p><svg id="ink"></svg></div></div>
 <div id="captions" hidden></div>
 <div id="island" role="group" aria-label="Call">
@@ -147,6 +151,7 @@
     if (m.method === "ui/notifications/tool-result") {
       var opened = (m.params && m.params.structuredContent) || {};
       if (opened.path) show({ path: opened.path }).catch(function () {});
+      if (typeof opened.openedAt === "number") { openedAt = opened.openedAt; expandIfFresh(); }
     }
     if (m.method === "ui/notifications/host-context-changed" && m.params && m.params.displayMode) placeIn(m.params.displayMode);
     if (m.method === "ui/resource-teardown") { endCall(); post({ jsonrpc: "2.0", id: m.id, result: {} }); }
@@ -157,15 +162,25 @@
   function placeIn(mode) {
     var inline = mode === "inline";
     document.body.classList.toggle("inline", inline);
-    if (inline) tell("ui/notifications/size-changed", { height: INLINE_HEIGHT });
+    if (inline) { tell("ui/notifications/size-changed", { height: INLINE_HEIGHT }); expandIfFresh(); }
   }
+  // The card asks for the panel once, for a huddle_open that just ran. An old card
+  // drawn again (scrolling back, or its panel tab closed) stays a card, so a tab
+  // the person closed is not opened again; the card's Open button still opens it.
+  var FRESH_MS = 30000, openedAt = null, expandAsked = false;
+  function expandIfFresh() {
+    if (expandAsked || !document.body.classList.contains("inline") || openedAt === null) return;
+    if (Date.now() - openedAt > FRESH_MS) return;
+    expandAsked = true;
+    openPanel();
+  }
+  function openPanel() { ask("ui/request-display-mode", { mode: "fullscreen" }); }
   ask("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "huddle", version: "0.0.1" },
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] } }).then(function (reply) {
     tell("ui/notifications/initialized");
     placeIn(((reply.result || {}).hostContext || {}).displayMode);
     var granted = (((reply.result || {}).hostCapabilities || {}).sandbox || {}).permissions || {};
     debug(granted.microphone ? "mic granted by host" : "host did not grant the mic");
-    ask("ui/request-display-mode", { mode: "fullscreen" });
   });
 
   // ---- Stage: show, draw, view, clear ----
@@ -816,6 +831,7 @@
   }
 
   $("start").addEventListener("click", startCall);
+  $("openPanel").addEventListener("click", openPanel);
   $("end").addEventListener("click", endCall);
   $("mode").addEventListener("click", function () { setMode(!alwaysOn); });
   $("captionsButton").addEventListener("click", function () {

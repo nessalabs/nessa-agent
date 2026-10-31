@@ -195,7 +195,8 @@ const TOOLS = {
     _meta: { ui: { resourceUri: APP_URI } },
     call: ({ path }) => ({
       ...text("Huddle is open."),
-      structuredContent: { root: ROOT, path: typeof path === "string" ? path : null },
+      // openedAt lets the app tell a fresh open from an old card drawn again.
+      structuredContent: { root: ROOT, path: typeof path === "string" ? path : null, openedAt: Date.now() },
     }),
   },
   huddle_start_call: {
