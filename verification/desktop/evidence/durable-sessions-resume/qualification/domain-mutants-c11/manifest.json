@@ -1,0 +1,171 @@
+{
+  "source_head": "6d1b413b19d2af4355fdf331778fe98fa4a683a4",
+  "source": "/workspace/nessa-agent/crates/nessa-sdk/src/domain/agent_execution/sessions/value_objects/attachment.rs",
+  "source_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538",
+  "tests": "/workspace/nessa-agent/crates/nessa-sdk/tests/domain/agent_execution/provider_context.rs",
+  "tests_sha256": "6726da7473a6fd09ff4278cf25c888a8f5bb04a89594d5317a5f811b3254b148",
+  "identity_rlib_origin": "/workspace/nessa-agent/target/debug/deps/libnessa_sdk-b4680c98ea90b2e2.rlib",
+  "identity_rlib": "/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+  "identity_rlib_sha256": "9533c6010c6ac5e388e9fac9e81c53fe45e1b788ae0ee430f0731d30a595059a",
+  "rustc_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "results": [
+    {
+      "name": "baseline",
+      "mutation_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538",
+      "compile_exit": 0,
+      "test_exit": 0,
+      "expected_failure": null,
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "--test",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs",
+        "--crate-name",
+        "durable_domain_baseline",
+        "--extern",
+        "current_sdk=/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+        "-L",
+        "dependency=/workspace/nessa-agent/target/debug/deps",
+        "-o",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/baseline.test"
+      ],
+      "restored_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538"
+    },
+    {
+      "name": "watermark_bound",
+      "mutation_sha256": "eda84cdde85e4820bd1765242277e3e7baabfe7108129a154fb199e51477b35d",
+      "compile_exit": 0,
+      "test_exit": 101,
+      "expected_failure": "admission_boundary_cannot_skip_pending_work_or_exceed_history",
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "--test",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs",
+        "--crate-name",
+        "durable_domain_watermark_bound",
+        "--extern",
+        "current_sdk=/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+        "-L",
+        "dependency=/workspace/nessa-agent/target/debug/deps",
+        "-o",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/watermark_bound.test"
+      ],
+      "restored_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538"
+    },
+    {
+      "name": "reinstate_exact_publication_prefix",
+      "mutation_sha256": "e71f251e0ff303a19b67a986b1705c862335c4e9b7bf958422f9ce1aa8ed622a",
+      "compile_exit": 0,
+      "test_exit": 101,
+      "expected_failure": "replacement_preserves_opening_boundary_after_terminal_prefix_grows",
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "--test",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs",
+        "--crate-name",
+        "durable_domain_reinstate_exact_publication_prefix",
+        "--extern",
+        "current_sdk=/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+        "-L",
+        "dependency=/workspace/nessa-agent/target/debug/deps",
+        "-o",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/reinstate_exact_publication_prefix.test"
+      ],
+      "restored_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538"
+    },
+    {
+      "name": "same_id_boundary",
+      "mutation_sha256": "30d3fb831b3f39de36f6d3ca66fc5e0109f2ce92fc7f6e7235194cab8eeb85ee",
+      "compile_exit": 0,
+      "test_exit": 101,
+      "expected_failure": "repeated_native_context_preserves_its_admission_boundary",
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "--test",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs",
+        "--crate-name",
+        "durable_domain_same_id_boundary",
+        "--extern",
+        "current_sdk=/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+        "-L",
+        "dependency=/workspace/nessa-agent/target/debug/deps",
+        "-o",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/same_id_boundary.test"
+      ],
+      "restored_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538"
+    },
+    {
+      "name": "clear_admitted",
+      "mutation_sha256": "4b6fe4dcc9cc77f32e90e34b3fcb46de2743eb112f43214d7cdf35e0c1a27c23",
+      "compile_exit": 0,
+      "test_exit": 101,
+      "expected_failure": "missing_observations_do_not_authorize_clearing_an_admitted_context",
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "--test",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs",
+        "--crate-name",
+        "durable_domain_clear_admitted",
+        "--extern",
+        "current_sdk=/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+        "-L",
+        "dependency=/workspace/nessa-agent/target/debug/deps",
+        "-o",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/clear_admitted.test"
+      ],
+      "restored_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538"
+    },
+    {
+      "name": "classify_admission",
+      "mutation_sha256": "a329b2f74ee8481f2e7b4da26b748787b12dd258fede2505300f81f93af986ef",
+      "compile_exit": 0,
+      "test_exit": 101,
+      "expected_failure": "admission_watermark_distinguishes_old_history_from_new_context_work",
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "--test",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs",
+        "--crate-name",
+        "durable_domain_classify_admission",
+        "--extern",
+        "current_sdk=/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+        "-L",
+        "dependency=/workspace/nessa-agent/target/debug/deps",
+        "-o",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/classify_admission.test"
+      ],
+      "restored_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538"
+    },
+    {
+      "name": "restored",
+      "mutation_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538",
+      "compile_exit": 0,
+      "test_exit": 0,
+      "expected_failure": null,
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "--test",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs",
+        "--crate-name",
+        "durable_domain_restored",
+        "--extern",
+        "current_sdk=/workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib",
+        "-L",
+        "dependency=/workspace/nessa-agent/target/debug/deps",
+        "-o",
+        "/workspace/scratch/durable-qualification/domain-mutants-c11/restored.test"
+      ],
+      "restored_sha256": "6799f560d58ac906b7c09c452c75725453fe45b152610b6b0ed4312e67b42538"
+    }
+  ],
+  "root_source_unchanged": true,
+  "root_tests_unchanged": true,
+  "root_head_unchanged": true,
+  "identity_rlib_unchanged": true
+}

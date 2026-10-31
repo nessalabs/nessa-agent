@@ -1,0 +1,9 @@
+52b45eb6e49c53c0a35ef45555a9457b094482eafef27d27cd777b916a2f06de  /workspace/scratch/durable-browser-runtime/packages/libcairo-script-interpreter2_1.18.4-1+b1_amd64.deb
+e12c18aa77939d122ee1dea520ba0440b97dc19200b7396e03dff03a3ece74c1  /workspace/scratch/durable-browser-runtime/packages/libgles2_1.7.0-1+b2_amd64.deb
+ddcf98f17f6c0a7c76974d7238be1468e59c186034c1b806638d32d9f446ea6e  /workspace/scratch/durable-browser-runtime/packages/libgraphene-1.0-0_1.10.8-5_amd64.deb
+51ab1114a57702e703cce745c24caf5bd31ec1d2a900c72fd15fe47c6c030e68  /workspace/scratch/durable-browser-runtime/packages/libgtk-4-1_4.18.6+ds-2_amd64.deb
+0b45d951629e98673c0da73b2bcd0886a467d833bb3b7499892a168f247165d2  /workspace/scratch/durable-browser-runtime/packages/libharfbuzz-icu0_10.2.0-1+deb13u1_amd64.deb
+89c546cb55be403ce63fe668baff2515979100a30fa07e2b97de186b9c07f01e  /workspace/scratch/durable-browser-runtime/packages/libhidapi-hidraw0_0.14.0-1+b2_amd64.deb
+fa9dca7b8cf1381fd52800c44a385c5725a78a88bd705f7c39b1046a5293435e  /workspace/scratch/durable-browser-runtime/packages/libhyphen0_2.8.8-7+b2_amd64.deb
+f3032201fe2928a87e13f05ce256ff3ac2a7860c7e594dc51ae6d7348a4466ce  /workspace/scratch/durable-browser-runtime/packages/liblzo2-2_2.10-3+b1_amd64.deb
+98841a467692c46fd1870275113235691ebbfe71a3524f6b2a0fa7e9c33c6e56  /workspace/scratch/durable-browser-runtime/packages/libmanette-0.2-0_0.2.12-1_amd64.deb

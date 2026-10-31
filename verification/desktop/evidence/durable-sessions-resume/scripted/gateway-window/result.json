@@ -1,0 +1,15 @@
+{
+  "check": "gateway-window",
+  "ok": false,
+  "started": "2026-10-30T04:48:48.573Z",
+  "finished": "2026-10-30T04:49:34.458Z",
+  "results": [
+    {
+      "name": "gateway-window",
+      "cannotRun": true,
+      "error": "could not run: the gateway refused the claude conversation (a live claude: is it signed in on this machine?): Conversation command failed",
+      "failures": [],
+      "ok": false
+    }
+  ]
+}

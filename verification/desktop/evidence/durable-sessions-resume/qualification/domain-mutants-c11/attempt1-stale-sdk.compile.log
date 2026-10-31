@@ -1,0 +1,28 @@
+error[E0460]: found possibly newer version of crate `nessa_local_database` which `nessa_sdk` depends on
+ --> /workspace/scratch/durable-qualification/domain-mutants-c11/harness.rs:2:1
+  |
+2 | extern crate current_sdk;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: perhaps that crate needs to be recompiled?
+  = note: the following crate versions were found:
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-1f6284b0281a8472.rmeta
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-1f6284b0281a8472.rlib
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-27eaa8086a738540.rmeta
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-27eaa8086a738540.rlib
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-284155aababced9c.rmeta
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-284155aababced9c.rlib
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-2ab026eff57c0d83.rmeta
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-2ab026eff57c0d83.rlib
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-458418c4c5de15a2.rmeta
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-458418c4c5de15a2.rlib
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-487dc3bb006f05be.rmeta
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-487dc3bb006f05be.rlib
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-571fcfae5c2569ce.rmeta
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-571fcfae5c2569ce.rlib
+          crate `nessa_local_database`: /workspace/nessa-agent/target/debug/deps/libnessa_local_database-5fbdf61cf84f4a34.rmeta
+          crate `nessa_sdk`: /workspace/scratch/durable-qualification/domain-mutants-c11/libcurrent_sdk.rlib
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0460`.

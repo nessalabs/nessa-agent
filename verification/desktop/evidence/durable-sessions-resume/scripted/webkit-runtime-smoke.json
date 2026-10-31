@@ -1,0 +1,11 @@
+{
+  "purpose": "isolated private-runtime dependency smoke; not product E2E",
+  "hostValidation": "supported PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1; private libGLES missing from system cache",
+  "verdict": "pass",
+  "version": "26.6",
+  "assertions": [
+    "actual WebKit process launched",
+    "page DOM mounted",
+    "button click updates DOM"
+  ]
+}

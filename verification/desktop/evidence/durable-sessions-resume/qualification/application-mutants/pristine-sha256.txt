@@ -1,0 +1,4 @@
+a321e0d0d4601de16c584a12ab26b51058fa54bdc43869e2876bd8b516fd92f9  crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
+3577b9434f06a60aa00f67cd9f9acfab15fa9cbc1e88f6773a8266086e8de59e  crates/nessa-sdk/src/application/agent_execution/sessions/records.rs
+fbc300404fe2361381754eb8ab2dd9af87708d4d56d9e0945240c22f679fbcb0  crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs
+48c6a863330149247ee9940b6ff475c6514ac8e847ce974a2046b9876c6b71ff  crates/nessa-sdk/src/infrastructure/session_storage/transcript.rs

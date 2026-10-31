@@ -1,0 +1,13 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/scratch/durable-probes/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.84s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-b3cb60bcd5999a3f)
+
+running 5 tests
+test infrastructure::acp::tests::contracts::current_context::unused_switched_claude_context_reopens_without_replaying_old_history ... ok
+test infrastructure::acp::tests::contracts::current_context::used_fingerprint_changed_claude_context_requires_exact_native_history_after_restart ... ok
+test infrastructure::acp::tests::contracts::current_context::admission_while_fresh_context_opens_still_requires_native_resume_after_settlement ... ok
+test infrastructure::acp::tests::contracts::current_context::unused_fingerprint_changed_claude_context_reopens_without_replaying_old_history ... ok
+test infrastructure::acp::tests::contracts::current_context::used_switched_claude_context_requires_exact_native_history_after_restart ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1586 filtered out; finished in 0.74s
+

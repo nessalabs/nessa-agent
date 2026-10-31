@@ -1,0 +1,39 @@
+{
+  "head": "ffe03e860cda1344a895aa605a2400d3b268a8b0",
+  "authorized_scope": [
+    "docs/design/weak-link-measurements.json",
+    "crates/nessa-server/tests/conversation/golden/local_conversation.txt"
+  ],
+  "measurement_validation": {
+    "source_fixture": "nessa-client-core/src/read_only_sync/infrastructure/measure.rs:544 source_records",
+    "semantic_bytes_before": 999,
+    "semantic_bytes_current": 1080,
+    "non_null_context_occurrences": 3,
+    "context_object_extra_bytes_each": 27,
+    "unchanged_physical_framing_bytes": 404,
+    "payload_before": 1403,
+    "payload_current": 1484,
+    "independent_json_diff": "only profiles[0].payloadBytes and profiles[1].payloadBytes changed; every other field identical"
+  },
+  "golden_validation": {
+    "producer": "nessa-server/tests/conversation/local_golden.rs:256 format!(provider_context: {:#?})",
+    "type": "ProviderContext::Recorded(ProviderContextRecord { id: ExecutionSessionId, admitted_before: usize }) with derived Debug",
+    "watermark_reason": "source waits for initial context publication before first submission; native context baseline is0 and no provider switch/replacement occurs",
+    "independent_byte_diff": "exact context block replacement only; all identities, invocation, audit and cleanup evidence unchanged"
+  },
+  "checks": [
+    "JSON parsed successfully",
+    "independent byte accounting matched1403old and1484current",
+    "complete JSON equality with only authorized2fields changed",
+    "golden exact byte comparison with only known context block replaced"
+  ],
+  "cargo_tests_run": false,
+  "requested_parent_tests": [
+    "cargo test -p nessa-client-core paced_and_unpaced_keep_the_same_bytes_and_reopen",
+    "cargo test -p nessa-server a_local_conversation_leaves_the_golden_records_audit_and_cleanup_evidence"
+  ],
+  "limits": [
+    "No runtime regression claimed by source-only accounting; parent owns shared Cargo validation",
+    "No product logic, test assertions, schema/protocol versions, coverage or dependency changed"
+  ]
+}

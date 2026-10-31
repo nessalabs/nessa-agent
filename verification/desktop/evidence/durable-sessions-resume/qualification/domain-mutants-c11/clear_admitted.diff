@@ -1,0 +1,11 @@
+--- pristine/attachment.rs
++++ clear_admitted/attachment.rs
+@@ -109,7 +109,7 @@
+     ) -> Result<(), ProviderContextAdmissionError> {
+         self.validate_admission(invocation_count, terminal_prefix)?;
+         if self.admission_watermark().is_none() {
+-            return if previous.has_admitted_work(invocation_count) {
++            return if false {
+                 Err(ProviderContextAdmissionError::InvalidTransition)
+             } else {
+                 Ok(())

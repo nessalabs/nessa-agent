@@ -1,0 +1,38 @@
+{
+  "check": "resize-observers",
+  "ok": false,
+  "started": "2026-10-30T04:48:14.369Z",
+  "finished": "2026-10-30T04:48:48.137Z",
+  "target": {
+    "url": "http://127.0.0.1:46375/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "fit-after-delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "viewportChanges": 30,
+      "nativeErrorCount": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "fit-after-delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "viewportChanges": 30,
+      "nativeErrorCount": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "launch",
+      "engine": "webkit",
+      "cannotRun": true,
+      "error": "webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit",
+      "failures": [],
+      "ok": false
+    }
+  ]
+}

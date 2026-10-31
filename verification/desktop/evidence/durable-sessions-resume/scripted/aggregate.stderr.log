@@ -1,0 +1,100 @@
+$ node verification/desktop/scripts/scripted-e2e.mjs --mode prod --channel bundled --evidence verification/desktop/evidence/durable-sessions-resume/scripted
+building nessa-server…
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent/crates/nessa-local-storage)
+   Compiling nessa-vault v0.1.0 (/workspace/nessa-agent/crates/nessa-vault)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent/crates/nessa-server)
+   Compiling nessa-images v0.1.0 (/workspace/nessa-agent/crates/nessa-images)
+   Compiling nessa-agent-credentials v0.1.0 (/workspace/nessa-agent/crates/nessa-agent-credentials)
+   Compiling nessa-local-database v0.1.0 (/workspace/nessa-agent/crates/nessa-local-database)
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-agent/crates/nessa-auth)
+   Compiling nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent/crates/nessa-gateway-endpoint)
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent/crates/nessa-sdk)
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent/crates/nessa-protocol)
+   Compiling nessa-client-core v0.1.0 (/workspace/nessa-agent/crates/nessa-client-core)
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1050:24
+     |
+1050 |                 hash = (hash ^ source[at] as u64).wrapping_mul(PRIME);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:51:9
+     |
+  51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  63 | / lease_protocol!(
+  64 | |     "../../../nessa-protocol/src/lease.rs",
+  65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  66 | |     "../env_serve/mod.rs",
+...    |
+ 106 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 107 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 12s
+
+resize-observers
+building production into /workspace/.setup/tmp/nessa-desktop-verify-PXDtyk…
+previewing production at http://127.0.0.1:46375/desktop.html
+ok    fit-after-delivery [chromium columns]
+ok    fit-after-delivery [chromium sidebar]
+ERROR launch [webkit]
+        ! webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+wrote /workspace/nessa-agent/verification/desktop/evidence/durable-sessions-resume/scripted/resize-observers/result.json
+resize-observers: 2/3 held (some could not run)
+mcp-apps-gateway: not run: dev server only
+
+gateway-window
+building production into /workspace/.setup/tmp/nessa-desktop-verify-9m7z3d…
+previewing production at http://127.0.0.1:45473/desktop.html
+ERROR gateway-window
+        ! could not run: the gateway refused the claude conversation (a live claude: is it signed in on this machine?): Conversation command failed
+wrote /workspace/nessa-agent/verification/desktop/evidence/durable-sessions-resume/scripted/gateway-window/result.json
+gateway-window: 0/1 held (some could not run)
+
+scripted-scenarios
+building production into /workspace/.setup/tmp/nessa-desktop-verify-0EgBhc…
+previewing production at http://127.0.0.1:43537/desktop.html
+ERROR ask [chromium columns]
+        ! could not run: the gateway refused the claude conversation (a live claude: is it signed in on this machine?): Conversation command failed
+ERROR permission [chromium columns]
+        ! not run: the permission was not asked
+ERROR allow [chromium columns]
+        ! not run: the permission was not asked
+ERROR fail [chromium columns]
+        ! not run: the permission was not asked
+ERROR cancel [chromium columns]
+        ! not run: the permission was not asked
+ERROR launch [webkit]
+        ! webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+wrote /workspace/nessa-agent/verification/desktop/evidence/durable-sessions-resume/scripted/scripted-scenarios/result.json
+scripted-scenarios: 0/6 held (some could not run)
+
+Verdict: could-not-run
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| resize-observers | pass | could-not-run |
+| mcp-apps-gateway | not run: dev server only | not run: dev server only |
+| gateway-window | could-not-run | could-not-run |
+| scripted-scenarios | could-not-run | could-not-run |
+
+Relevant log lines:
+
+- launch webkit: webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+- gateway-window: could not run: the gateway refused the claude conversation (a live claude: is it signed in on this machine?): Conversation command failed
+- 2026-10-30T04:49:27.394141Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=fcba4505-96b5-489c-aaec-1433fd1fe829 error=agent: OperationAndCleanupFailure { operation_error: Transport("provider stdout closed"), cleanup_error: CleanupUncertain }
+- 2026-10-30T04:49:34.446304Z ERROR nessa_server::composition::root: gateway shutdown did not confirm all cleanup error=stage reached: complete; webhooks ok; record reader ok; catalogue reader ok; review audit ok; conversations failed Retirement([("fcba4505-96b5-489c-aaec-1433fd1fe829", OperationAndCleanupFailure { operation_error: Transport("provider stdout closed"), cleanup_error: CleanupUncertain })]); MCP stop ok; native drain ok
+- 2026-10-30T04:49:34.446955Z ERROR nessa_server::core::ending: nessa failed error=shutdown did not confirm all cleanup: stage reached: complete; webhooks ok; record reader ok; catalogue reader ok; review audit ok; conversations failed Retirement([("fcba4505-96b5-489c-aaec-1433fd1fe829", OperationAndCleanupFailure { operation_error: Transport("provider stdout closed"), cleanup_error: CleanupUncertain })]); MCP stop ok; native drain ok exit_code=27 reason="shutdown" restart=Worthwhile recorded=false
+- ask chromium: could not run: the gateway refused the claude conversation (a live claude: is it signed in on this machine?): Conversation command failed
+- permission chromium: not run: the permission was not asked
+- allow chromium: not run: the permission was not asked
+- fail chromium: not run: the permission was not asked
+- cancel chromium: not run: the permission was not asked
+- launch webkit: webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+- 2026-10-30T04:50:15.583705Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=c9962288-659d-4f96-b45f-7d73adb55b41 error=agent: OperationAndCleanupFailure { operation_error: Transport("provider stdout closed"), cleanup_error: CleanupUncertain }
+- 2026-10-30T04:50:22.940415Z ERROR nessa_server::composition::root: gateway shutdown did not confirm all cleanup error=stage reached: complete; webhooks ok; record reader ok; catalogue reader ok; review audit ok; conversations failed Retirement([("c9962288-659d-4f96-b45f-7d73adb55b41", OperationAndCleanupFailure { operation_error: Transport("provider stdout closed"), cleanup_error: CleanupUncertain })]); MCP stop ok; native drain ok
+- 2026-10-30T04:50:22.941267Z ERROR nessa_server::core::ending: nessa failed error=shutdown did not confirm all cleanup: stage reached: complete; webhooks ok; record reader ok; catalogue reader ok; review audit ok; conversations failed Retirement([("c9962288-659d-4f96-b45f-7d73adb55b41", OperationAndCleanupFailure { operation_error: Transport("provider stdout closed"), cleanup_error: CleanupUncertain })]); MCP stop ok; native drain ok exit_code=27 reason="shutdown" restart=Worthwhile recorded=false

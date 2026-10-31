@@ -1,0 +1,65 @@
+{
+  "check": "scripted-scenarios",
+  "ok": false,
+  "started": "2026-10-30T04:49:34.887Z",
+  "finished": "2026-10-30T04:50:15.762Z",
+  "target": {
+    "url": "http://127.0.0.1:43537/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "ask",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "could not run: the gateway refused the claude conversation (a live claude: is it signed in on this machine?): Conversation command failed",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the permission was not asked",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "allow",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the permission was not asked",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "fail",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the permission was not asked",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "cancel",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the permission was not asked",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "launch",
+      "engine": "webkit",
+      "cannotRun": true,
+      "error": "webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit",
+      "failures": [],
+      "ok": false
+    }
+  ]
+}

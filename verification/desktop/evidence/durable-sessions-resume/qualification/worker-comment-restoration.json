@@ -1,0 +1,10 @@
+{
+  "source": "ae6e33529887746079702d4eca5f528ec42146bd",
+  "base": "56c3c475a47b87d1c9ec26ba648f59cdab47b47e",
+  "restored_protocol": "a8e6fff6643172a9",
+  "pre_restore_protocol": "40ab4c5e00271b21",
+  "only_change": "Restore accurate original binding.rs comment: Used histories still require a successful native resume.",
+  "independent_review": "admission_design_review verified45/45 protocol sources exactbasebytes, unchangedpin andhashfunction; nofindings",
+  "compiled_gate": "pendingfreshfullhostpackagequalification",
+  "resources": "No workerimage/pin/hashfunction/testchanges"
+}

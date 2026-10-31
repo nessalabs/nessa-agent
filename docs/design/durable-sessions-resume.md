@@ -64,6 +64,7 @@ cannot erase evidence merely because a provider reuses a native ID.
 | C10 | Additional old-context event or native resume failure | Neither event absence nor error shape changes admission evidence. |
 | C11 | Input admitted during held fresh opening, then withdrawn before context publication | Retain the pre-open boundary; cancellation does not erase the admission. Publishing a conservative watermark below the now-grown terminal prefix is valid. |
 | C12 | Composed local Claude uses the credential wrapper and LeaseFence | The wrapper delegates restoration classification to its validated Claude configuration without reading credentials or launching a process. Unused context opens fresh; admitted context still requires resume. |
+| C13 | Real gateway/browser keeps old completed work, publishes a fresh Claude context after a fingerprint change, then restarts before any new admission | The next message sent through the window completes without resuming the missing unused native ID or replaying old prompts. The existing drift stress step supplies this ordering in both engines. |
 
 ```mermaid
 sequenceDiagram
@@ -199,6 +200,70 @@ atomicity.
 | M9 | Foreign conversation, stale revision, replaced store incarnation | Token validation refuses ABA/foreign evidence; unchanged valid source still publishes. |
 
 ## Verification and checkpoints
+
+### C13 conversation stress design
+
+The harness now extends the existing `drift` step and its `drifts` count.
+Its fixed/mutant/restored browser proof is recorded in the qualification packet;
+full-plan results remain separate. Preserve the current
+PATH/TMPDIR/staged-runtime restart and reply checks. Do not change Rust source,
+provider authorization, worker images or the #981 dependency to add this check.
+
+The existing scripted ACP agent gets paired, opt-in CLI arguments naming a
+private native-context marker directory and one canonical workspace. Claude
+sessions in that workspace alone use the stricter fixture behavior: `session/new`
+does not create a used marker, an accepted `session/prompt` marks its exact native
+ID before awaited work, and `session/resume` refuses a missing ID with JSON-RPC
+`-32002`. A typed fixture failure preserves this code through the existing
+dispatcher; unrelated failures retain `-32603`. Markers use safe identity-derived
+filenames. Focused trace rows contain only method, native ID and outcome, never
+prompt text or credentials. Other workspaces and existing unconfigured fixtures
+keep their existing behavior. This models native record existence; SDK code
+continues to own the decision whether to restore or replace a context.
+
+Each browser engine establishes the same owned disposable app-vault baseline before its page opens. A prior engine's intentional gateway restarts can seal or retire that native fixture session. This setup uses the existing fixture owner's initialization; it does not add a protected UI intent or an arbitrary unlock inside the C13 ordering.
+
+Before gateway startup, create the run-owned workspace/marker directories and
+an explicit isolated baseline `CLAUDE_CONFIG_DIR`. Keep the opt-in arguments and
+target paths identical through every restart. Configure Claude even when the
+main stress agent is Codex and handoffs are disabled. Through the existing
+channel creation UI, choose that folder and explicitly select Claude. Use the
+channel coordinator as the focused conversation and assert its identity and
+canonical folder; reuse it for raised counts and the other browser engine.
+No other conversation is created in that workspace.
+
+Setup and recovery follow the existing surface owners. Creating the channel
+reserves its coordinator ID; the first message sent through the home composer
+materializes the conversation, so the initial send uses an empty prior-execution
+set and performs no conversation read beforehand. Later sends read the existing
+conversation. After a gateway restart, reconnect the client and require the
+existing browser-readable recovery proof. This scenario makes no protected UI
+request, so restart alone must not invoke `unlockRequestedVault`; that helper
+belongs after an actual protected intent requesting the unlock dialog. The two
+setup failures found by the focused pilot clarify this ordering and do not count
+as negative-control evidence.
+
+| Stage | Required evidence |
+| --- | --- |
+| Prior history | An old message sent in the window completes; retain its execution ID, prompt and reply. |
+| Fresh context | Restart with a different isolated `CLAUDE_CONFIG_DIR`; reopen through the window. Wait for a new outer audit record identity with `attachment_transition`, matching conversation and `context_published`, paired with a focused native `session/new` ID. Generation alone is not a restart identity. |
+| Zero new admission | Gateway execution IDs stay unchanged; no fresh `queue_admitted` audit exists for the conversation; the new native ID has no prompt trace or used marker. |
+| Cold reopen | Restart again with the same changed environment, before sending anything. Focused ACP evidence shows replacement with another new ID, without attempting to resume the missing unused ID. |
+| First new message | Send through the focused pane's composer. Gateway retains the earlier execution and exactly one new completed execution; that pane shows the old prompt/reply and exactly one new reply. Native trace shows one new prompt, with no replay. |
+| Cleanup | In `finally`, restore the explicitly configured isolated baseline environment with an actual gateway restart, reconnect and reopen the main conversation. Await existing stack shutdown before deleting private fixture state. |
+
+Transport-level fixture tests must cover untouched new context across process
+restart returning actual `-32002`, used context resuming its exact ID, a different
+ID failing, and non-target/default behavior remaining unchanged. Test the paired
+CLI wiring and canonical target path in the gateway helper. Run the complete
+default stress plan and a raised `drifts` count in Chromium and WebKit. A negative
+control restoring whole-snapshot admission classification, or removing the
+credential-wrapper delegation, must fail this actual stress phase at missing
+native resume/new-message completion. It must not be counted if it fails earlier
+on unrelated fixture setup. No assertion, timeout, profile or required step is
+weakened to make the run pass.
+
+### Qualification sequence
 
 For each implemented row, record its actual test name and result before claiming
 coverage. Use channels/barriers and the shared manual timer for deterministic

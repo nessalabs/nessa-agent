@@ -1,0 +1,311 @@
+    Blocking waiting for file lock on build directory
+    Checking log v0.4.34
+    Checking libc v0.2.189
+    Checking subtle v2.6.1
+    Checking memchr v2.8.3
+    Checking zeroize v1.9.0
+    Checking serde_core v1.0.229
+    Checking equivalent v1.0.2
+    Checking generic-array v0.14.7
+    Checking tracing-core v0.1.36
+    Checking indexmap v2.14.1
+    Checking num-traits v0.2.19
+    Checking tracing v0.1.44
+    Checking thiserror v2.0.20
+    Checking aho-corasick v1.1.5
+    Checking block-buffer v0.10.4
+    Checking regex-syntax v0.8.11
+    Checking rustls-pki-types v1.15.1
+    Checking futures-core v0.3.34
+   Compiling cfg-if v1.0.4
+    Checking smallvec v1.16.0
+    Checking untrusted v0.9.0
+    Checking futures-sink v0.3.34
+    Checking chrono v0.4.45
+    Checking getrandom v0.2.16
+    Checking rand_core v0.6.4
+    Checking socket2 v0.6.5
+    Checking crypto-common v0.1.7
+    Checking errno v0.3.14
+    Checking mio v1.2.2
+    Checking signal-hook-registry v1.4.8
+    Checking digest v0.10.7
+    Checking serde v1.0.229
+    Checking getrandom v0.3.4
+    Checking serde_json v1.0.151
+    Checking tokio v1.53.1
+    Checking getrandom v0.4.3
+    Checking regex-automata v0.4.18
+    Checking tempfile v3.27.0
+    Checking sha2 v0.10.9
+    Checking ring v0.17.14
+   Compiling typenum v1.20.1
+    Checking fs2 v0.4.3
+    Checking rustls-webpki v0.103.15
+   Compiling scopeguard v1.2.0
+    Checking slab v0.4.12
+    Checking futures-io v0.3.34
+    Checking futures-task v0.3.34
+    Checking percent-encoding v2.3.2
+    Checking rustls v0.23.45
+    Checking futures-util v0.3.34
+   Compiling lock_api v0.4.14
+   Compiling parking_lot_core v0.9.12
+    Checking base64ct v1.8.3
+    Checking password-hash v0.5.0
+   Compiling parking_lot v0.12.5
+    Checking blake2 v0.10.6
+    Checking nessa-local-storage v0.1.0 (/workspace/nessa-agent/crates/nessa-local-storage)
+   Compiling string_cache v0.8.9
+   Compiling sha3 v0.10.9
+   Compiling petgraph v0.7.1
+   Compiling regex v1.13.1
+   Compiling lalrpop-util v0.22.2
+    Checking argon2 v0.5.3
+    Checking icu_normalizer v2.3.0
+    Checking form_urlencoded v1.2.2
+    Checking tinyvec_macros v0.1.1
+   Compiling semver v1.0.28
+    Checking idna_adapter v1.2.2
+    Checking tinyvec v1.12.0
+   Compiling rustc_version v0.4.1
+   Compiling lalrpop v0.22.2
+    Checking const-oid v0.9.6
+   Compiling fnv v1.0.7
+   Compiling logos-codegen v0.16.1
+   Compiling curve25519-dalek v4.1.3
+    Checking der v0.7.10
+    Checking psm v0.1.32
+    Checking unicode-normalization v0.1.25
+    Checking idna v1.1.0
+    Checking linked-hash-map v0.5.6
+    Checking ff v0.13.1
+    Checking base16ct v0.2.0
+    Checking either v1.18.0
+    Checking unicode-script v0.5.8
+    Checking unicode-width v0.1.14
+    Checking itertools v0.15.0
+    Checking unicode-security v0.1.2
+    Checking miette v7.6.0
+    Checking sec1 v0.7.3
+    Checking linked_hash_set v0.1.6
+    Checking group v0.13.0
+    Checking ref-cast v1.0.27
+    Checking url v2.5.8
+    Checking serde_with v3.22.0
+    Checking stacker v0.1.25
+    Checking nonempty v0.12.0
+    Checking hmac v0.12.1
+    Checking smol_str v0.3.6
+    Checking crypto-bigint v0.5.5
+    Checking unicode-width v0.2.2
+    Checking typed-arena v2.0.2
+    Checking arrayvec v0.5.2
+    Checking rustc-literal-escaper v0.0.8
+    Checking pretty v0.12.5
+    Checking elliptic-curve v0.13.8
+    Checking hkdf v0.12.4
+    Checking openssl-sys v0.9.117
+    Checking rand v0.8.8
+    Checking voprf v0.5.0
+    Checking uuid v1.26.0
+    Checking libsqlite3-sys v0.38.2
+    Checking opaque-ke v4.0.1
+    Checking http v1.5.0
+    Checking rusqlite v0.40.2
+    Checking nessa-sync v0.1.0 (https://github.com/nessalabs/sync-engine?rev=f2a05ef24fcff66df9d55e508539cec718e2d805#f2a05ef2)
+    Checking nessa-local-database v0.1.0 (/workspace/nessa-agent/crates/nessa-local-database)
+    Checking event-stream v0.1.0 (https://github.com/nessalabs/event-stream?rev=e16580f#e16580f3)
+    Checking zerocopy v0.8.56
+    Checking httparse v1.10.1
+    Checking block-padding v0.3.3
+    Checking inout v0.1.4
+    Checking webpki-roots v1.0.9
+    Checking cipher v0.4.4
+    Checking tokio-rustls v0.26.5
+    Checking lazy_static v1.5.0
+    Checking sharded-slab v0.1.7
+    Checking http-body v1.1.0
+    Checking matchers v0.2.0
+    Checking nessa-sdk v0.1.0 (/workspace/nessa-agent/crates/nessa-sdk)
+    Checking rand_core v0.9.5
+    Checking tracing-log v0.2.0
+    Checking ppv-lite86 v0.2.21
+    Checking thread_local v1.1.10
+    Checking nu-ansi-term v0.50.3
+    Checking rand_chacha v0.9.0
+    Checking memoffset v0.9.1
+    Checking universal-hash v0.5.1
+    Checking futures-channel v0.3.34
+    Checking tracing-subscriber v0.3.23
+    Checking shepherd-domain v0.1.0 (https://github.com/nessalabs/shepherd?rev=85ee0d55acabf5f91b8cac2e925872d044514864#85ee0d55)
+   Compiling zmij v1.0.23
+    Checking tower-service v0.3.3
+    Checking opaque-debug v0.3.1
+   Compiling itoa v1.0.18
+    Checking poly1305 v0.8.0
+    Checking shepherd-app v0.1.0 (https://github.com/nessalabs/shepherd?rev=85ee0d55acabf5f91b8cac2e925872d044514864#85ee0d55)
+    Checking nix v0.29.0
+    Checking rand v0.9.5
+   Compiling logos-derive v0.16.1
+    Checking logos v0.16.1
+    Checking chacha20 v0.9.1
+    Checking tokio-util v0.7.19
+    Checking sha1 v0.10.7
+    Checking aead v0.5.2
+    Checking sysinfo v0.33.1
+    Checking atomic-waker v1.1.2
+    Checking try-lock v0.2.5
+    Checking simd-adler32 v0.3.10
+    Checking openssl-probe v0.2.1
+    Checking rustls-native-certs v0.8.4
+    Checking want v0.3.1
+    Checking h2 v0.4.19
+    Checking tungstenite v0.29.0
+    Checking chacha20poly1305 v0.10.1
+    Checking webpki-roots v0.26.11
+    Checking sync_wrapper v1.0.2
+    Checking adler2 v2.0.1
+    Checking tower-layer v0.3.3
+    Checking httpdate v1.0.3
+    Checking tokio-tungstenite v0.29.0
+    Checking rustls-platform-verifier v0.7.0
+    Checking shepherd-infra v0.1.0 (https://github.com/nessalabs/shepherd?rev=85ee0d55acabf5f91b8cac2e925872d044514864#85ee0d55)
+    Checking ipnet v2.12.1
+    Checking crc32fast v1.5.1
+    Checking tower v0.5.3
+    Checking miniz_oxide v0.9.1
+   Compiling nessa-vault v0.1.0 (/workspace/nessa-agent/crates/nessa-vault)
+    Checking http-body-util v0.1.5
+    Checking flate2 v1.1.10
+    Checking shepherd v0.1.0 (https://github.com/nessalabs/shepherd?rev=85ee0d55acabf5f91b8cac2e925872d044514864#85ee0d55)
+    Checking num-integer v0.1.47
+    Checking ryu v1.0.23
+    Checking crossbeam-utils v0.8.22
+    Checking serde_urlencoded v0.7.1
+    Checking tower-http v0.6.11
+   Compiling anyhow v1.0.104
+    Checking pty-runtime-domain v0.1.0 (https://github.com/nessalabs/pty-runtime?rev=c68837e2b7bf1c9009e1a4587a1a58107ec0425c#c68837e2)
+   Compiling linux-raw-sys v0.12.1
+    Checking weezl v0.1.12
+    Checking zune-core v0.5.3
+    Checking quick-error v2.0.1
+   Compiling bitflags v2.13.1
+   Compiling uniffi_internal_macros v0.32.2
+    Checking zune-jpeg v0.5.15
+   Compiling rustix v1.1.4
+    Checking hyper v1.11.1
+    Checking pty-runtime-application v0.1.0 (https://github.com/nessalabs/pty-runtime?rev=c68837e2b7bf1c9009e1a4587a1a58107ec0425c#c68837e2)
+    Checking crossbeam-epoch v0.9.21
+    Checking num-bigint v0.4.8
+    Checking hyper-util v0.1.20
+    Checking miniz_oxide v0.8.9
+    Checking fdeflate v0.3.7
+    Checking half v2.7.1
+    Checking hyper-rustls v0.27.9
+    Checking bstr v1.13.1
+    Checking pxfm v0.1.30
+    Checking color_quant v1.1.0
+   Compiling fastrand v2.5.0
+    Checking byteorder-lite v0.1.0
+   Compiling once_cell v1.21.4
+    Checking fax v0.2.7
+    Checking same-file v1.0.6
+    Checking bytemuck v1.25.2
+    Checking walkdir v2.5.0
+    Checking tiff v0.11.3
+    Checking qoi v0.4.1
+    Checking moxcms v0.8.1
+    Checking image-webp v0.2.4
+    Checking globset v0.4.20
+    Checking gif v0.14.2
+    Checking png v0.18.1
+    Checking reqwest v0.12.28
+    Checking num-rational v0.4.2
+    Checking crossbeam-deque v0.8.8
+    Checking libdbus-sys v0.2.7
+    Checking pty-runtime-infrastructure v0.1.0 (https://github.com/nessalabs/pty-runtime?rev=c68837e2b7bf1c9009e1a4587a1a58107ec0425c#c68837e2)
+    Checking spin v0.9.9
+    Checking num-iter v0.1.46
+    Checking num-complex v0.4.6
+   Compiling heck v0.5.0
+    Checking mime v0.3.17
+    Checking axum-core v0.5.6
+    Checking num v0.4.3
+    Checking pty-runtime v0.1.0 (https://github.com/nessalabs/pty-runtime?rev=c68837e2b7bf1c9009e1a4587a1a58107ec0425c#c68837e2)
+    Checking flume v0.12.0
+    Checking boat_client v0.1.0 (https://github.com/nessalabs/workspace-sdk?rev=33b8382d72657d176baca19797d8d146803f3d89#33b8382d)
+    Checking ignore v0.4.33
+    Checking image v0.25.10
+    Checking dbus v0.9.12
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent/crates/nessa-server)
+    Checking aes v0.8.4
+    Checking cbc v0.1.2
+    Checking socket-pktinfo v0.4.1
+    Checking serde_path_to_error v0.1.20
+    Checking filetime v0.2.29
+    Checking if-addrs v0.15.0
+    Checking xattr v1.6.1
+   Compiling uniffi_pipeline v0.32.2
+    Checking matchit v0.8.4
+    Checking mdns-sd v0.21.6
+    Checking axum v0.8.9
+    Checking nessa-images v0.1.0 (/workspace/nessa-agent/crates/nessa-images)
+   Compiling uniffi_meta v0.32.2
+    Checking tar v0.4.46
+    Checking dbus-secret-service v4.1.0
+    Checking reqwest v0.13.4
+    Checking nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent/crates/nessa-gateway-endpoint)
+    Checking keyring v3.6.3
+    Checking workspace_sdk v0.2.0 (https://github.com/nessalabs/workspace-sdk?rev=33b8382d72657d176baca19797d8d146803f3d89#33b8382d)
+    Checking static_assertions v1.1.0
+    Checking dunce v1.0.5
+    Checking nessa-agent-credentials v0.1.0 (/workspace/nessa-agent/crates/nessa-agent-credentials)
+    Checking uniffi_core v0.32.2
+    Checking time-core v0.1.9
+    Checking deranged v0.5.8
+    Checking powerfmt v0.2.0
+    Checking num-conv v0.2.2
+    Checking unicode-id v0.3.6
+    Checking markdown v1.0.0
+    Checking time v0.3.55
+   Compiling uniffi_macros v0.32.2
+    Checking yasna v0.6.0
+    Checking rcgen v0.14.10
+   Compiling cedar-policy-core v4.12.0
+    Checking uniffi v0.32.2
+    Checking cedar-policy-formatter v4.12.0
+    Checking cedar-policy v4.12.0
+    Checking nessa-auth v0.1.0 (/workspace/nessa-agent/crates/nessa-auth)
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-agent/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-agent/crates/nessa-client-core)
+    Checking nessa-device-client v0.1.0 (/workspace/nessa-agent/crates/nessa-device-client)
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1126:9
+     |
+1126 | /         while at < source.len() {
+1127 | |             if source[at] != b'\r' {
+1128 | |                 hash = (hash ^ source[at] as u64).wrapping_mul(PRIME);
+...    |
+1131 | |         }
+     | |_________^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:51:9
+     |
+  51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  63 | / lease_protocol!(
+  64 | |     "../../../nessa-protocol/src/lease.rs",
+  65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  66 | |     "../env_serve/mod.rs",
+...    |
+ 108 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 109 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 37s

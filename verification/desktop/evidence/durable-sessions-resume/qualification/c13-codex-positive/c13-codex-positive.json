@@ -1,0 +1,60 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-31T01:06:36.686Z",
+  "finished": "2026-10-31T01:07:28.406Z",
+  "target": {
+    "url": "http://127.0.0.1:38061/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 16937,
+      "seen": {
+        "index": 1,
+        "kind": "drift"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: WebSocket connection to 'ws://127.0.0.1:34173/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:38061/assets/index-CcGhYiYR.js) [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

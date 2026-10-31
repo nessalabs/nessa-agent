@@ -1,0 +1,13 @@
+building production into /workspace/.setup/tmp/nessa-desktop-verify-rvitJ2…
+previewing production at http://127.0.0.1:40791/desktop.html
+conversation-stress {"backgroundTasks":0,"inputFiles":0,"pairedCatalogues":0,"modelSwitches":0,"seed":1,"rounds":0,"asides":0,"parallel":0,"turns":0,"switches":0,"stops":0,"fails":0,"usageLimits":0,"reviews":0,"large":0,"restarts":0,"threads":0,"awaits":0,"watches":0,"followers":0,"parks":0,"renames":0,"handoffs":0,"deletes":0,"fresh":0,"windows":0,"rails":0,"waitingRows":0,"streams":0,"panels":0,"onboardings":0,"linkings":0,"pastes":0,"tables":0,"traces":0,"notices":0,"pools":0,"devices":0,"tunnels":0,"drifts":1,"upgrades":0,"menus":0,"menuPanels":0,"githubs":0,"launches":0,"webhooks":0,"channels":0,"long":0}
+1. drift
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+FAIL  001 drift [webkit columns]
+        - native context: cold reopen tried to resume the missing unused native ID
+ok    background [webkit columns]
+ok    at rest [webkit columns]
+ok    followers [webkit columns]
+ok    console [webkit columns]
+wrote /workspace/scratch/durable-qualification/c13-negative-webkit.json
+conversation-stress: 4/5 held

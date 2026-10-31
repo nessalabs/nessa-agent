@@ -1,0 +1,44 @@
+✔ codex: handshake, options, one replayed call, then an idle prompt, and exit on close (153.62365ms)
+✔ claude: the model from session/new, and the recorded four frames (91.54033ms)
+✔ focused Claude rejects an unused native ID after restart with the real resource-not-found envelope (151.497981ms)
+✔ focused Claude persists recorded prompt admission and restores only its exact native ID (215.849993ms)
+✔ focused Claude persists scenario prompt admission and restores only its exact native ID (122.731883ms)
+✔ native strictness is confined to its focused workspace and default launches remain unchanged (282.899213ms)
+✔ incomplete or invalid native context options fail before any protocol or MCP session starts (203.623519ms)
+✔ claude: the tools/call names the call in _meta, by the frames' toolCallId (83.717212ms)
+✔ codex: the tools/call names no call id (no _meta["claudecode/toolUseId"]) (90.114587ms)
+✔ a stand-in that does not start fails session/new (68.132367ms)
+✔ a prompt with no mcptest server fails the turn (67.537314ms)
+✔ a call the server refuses fails the turn, and nothing is reported (87.050903ms)
+✔ a stand-in that never answers initialize fails session/new within the deadline, and is stopped (10165.183288ms)
+✔ two sessions in one agent: each keeps its own options and servers (134.492299ms)
+✔ an agent not named, or with no tool to call, exits 2 saying how to run it (263.210025ms)
+✔ a session/new that fails stops the stand-ins it had already started (287.714665ms)
+✔ an agent whose input closes stops its stand-ins (239.690325ms)
+✔ closing the agent's input stops a stand-in still connecting (282.371112ms)
+✔ a call its stand-in does not answer within the deadline fails the turn, and nothing is reported (10221.275656ms)
+✔ a call the recorded one cannot stand for fails the turn, and nothing is reported (257.856473ms)
+✔ a cancel while the call is in flight ends the turn cancelled, and nothing is reported (1854.485031ms)
+✔ a cancel while the call is in flight ends the turn cancelled even when the call then fails (1795.106353ms)
+✔ a cancel while the call is in flight ends the turn cancelled even when the call's deadline passes (20262.547775ms)
+✔ a cancel while the call is in flight ends the turn cancelled even when the stand-in exits (1790.905553ms)
+✔ a cancel for another session leaves the prompt in flight alone (1828.508399ms)
+✔ a cancel with nothing in flight leaves the session's next prompt to end its turn (215.481713ms)
+✔ an agent whose output fails stops its stand-ins and exits 0 (218.117635ms)
+✔ an agent whose input closes kills a stand-in that ignores SIGTERM, and exits 0 once it is gone (2250.780254ms)
+✔ an agent whose output fails kills a stand-in that ignores SIGTERM, and exits 0 once it is gone (2233.237066ms)
+✔ a stand-in whose own process holds its output open does not keep the agent from exiting (2422.183588ms)
+✔ a session/new during the stop's grace starts no stand-in (2257.903093ms)
+✔ a second prompt while one is in flight is refused (1743.747534ms)
+✔ a stand-in that stops reading fails the call, not the agent, and is stopped on close (539.896381ms)
+✔ a stand-in that refuses initialize fails session/new, and is stopped (340.884187ms)
+✔ two MCP servers of one name are refused before either starts (163.451208ms)
+✔ two MCP servers with no name are refused as alike (145.456418ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 78739.330496

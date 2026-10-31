@@ -1,0 +1,20 @@
+diff --git a/crates/nessa-server/src/agents/infrastructure/credentialed_claude.rs b/crates/nessa-server/src/agents/infrastructure/credentialed_claude.rs
+index cf4e9b078..8ad55a6e8 100644
+--- a/crates/nessa-server/src/agents/infrastructure/credentialed_claude.rs
++++ b/crates/nessa-server/src/agents/infrastructure/credentialed_claude.rs
+@@ -176,15 +176,6 @@ impl ProviderSessionDeleter for CredentialedClaudeProvider {
+ }
+ 
+ impl AgentProvider for CredentialedClaudeProvider {
+-    fn restores_saved_context(&self, saved: &ExecutionSessionId, has_invocations: bool) -> bool {
+-        // Classification uses only immutable configuration. A configuration
+-        // failure cannot authorize reset; opening reports its typed failure.
+-        self.configured(self.config.clone())
+-            .map_or(true, |provider| {
+-                provider.restores_saved_context(saved, has_invocations)
+-            })
+-    }
+-
+     fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+         HarnessHostIdentity::local()
+     }

@@ -1,0 +1,32 @@
+{
+  "conversationId": "b917515f-59d9-5921-8911-4d98cdca049b",
+  "oldExecutionIds": [
+    "751a24f6-0ebb-4143-b797-40204d99088d",
+    "c61c2ac8-3491-414a-a4b9-be0b6e981274",
+    "31d79c3a-817c-489d-8e94-d2c4429e6526"
+  ],
+  "newExecutionId": "07d8da90-94e4-4fcb-9d58-110c5e9024e5",
+  "oldNative": "40623c34-cfa2-46d5-8866-3126e0d5adba",
+  "firstUnusedNative": "bc61acaa-e3dc-4070-9b1f-58bd249070e6",
+  "replacementNative": "b8a21bd6-af62-4d57-9608-18f99d3a791b",
+  "firstPhase": [
+    {
+      "method": "session/new",
+      "sessionId": "bc61acaa-e3dc-4070-9b1f-58bd249070e6",
+      "outcome": "opened"
+    }
+  ],
+  "coldPhase": [
+    {
+      "method": "session/new",
+      "sessionId": "b8a21bd6-af62-4d57-9608-18f99d3a791b",
+      "outcome": "opened"
+    },
+    {
+      "method": "session/prompt",
+      "sessionId": "b8a21bd6-af62-4d57-9608-18f99d3a791b",
+      "outcome": "accepted"
+    }
+  ],
+  "focusedPane": true
+}

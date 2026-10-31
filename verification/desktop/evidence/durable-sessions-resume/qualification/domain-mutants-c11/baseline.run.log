@@ -1,0 +1,15 @@
+
+running 10 tests
+test provider_context::absent_context_accepts_a_checkpoint_without_provider_evidence ... ok
+test provider_context::absent_context_rejects_every_combination_of_provider_facts ... ok
+test provider_context::admission_watermark_distinguishes_old_history_from_new_context_work ... ok
+test provider_context::missing_observations_do_not_authorize_clearing_an_admitted_context ... ok
+test provider_context::recorded_context_accepts_a_checkpoint_without_provider_evidence ... ok
+test provider_context::recorded_context_accepts_every_combination_of_provider_facts ... ok
+test provider_context::repeated_native_context_preserves_its_admission_boundary ... ok
+test provider_context::replacement_preserves_opening_boundary_after_terminal_prefix_grows ... ok
+test provider_context::absent_context_rejects_each_provider_fact_independently ... ok
+test provider_context::admission_boundary_cannot_skip_pending_work_or_exceed_history ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

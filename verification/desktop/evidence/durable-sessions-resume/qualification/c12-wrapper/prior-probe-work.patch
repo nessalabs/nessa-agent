@@ -1,0 +1,142 @@
+diff --git a/crates/nessa-sdk/tests/infrastructure/acp/contracts/current_context.rs b/crates/nessa-sdk/tests/infrastructure/acp/contracts/current_context.rs
+index 44c4ea9c4..5a128c0d5 100644
+--- a/crates/nessa-sdk/tests/infrastructure/acp/contracts/current_context.rs
++++ b/crates/nessa-sdk/tests/infrastructure/acp/contracts/current_context.rs
+@@ -340,3 +340,137 @@ async fn admission_while_fresh_context_opens_still_requires_native_resume_after_
+     drop(restored);
+     restored_storage.shutdown().await.unwrap();
+ }
++
++/// Withdrawal during a held native opening must not erase that context's
++/// admission boundary when the cancelled input extends the terminal prefix.
++#[tokio::test]
++async fn withdrawal_while_fresh_context_opens_preserves_admitted_work_after_restart() {
++    let _process_slot = process_test_slot().await;
++    let (root, mut config, model) = test_acp_configuration("uninvoked-context", 16);
++    config.environment.insert(
++        "CLAUDE_CONFIG_DIR".into(),
++        "/fixture/pending-context-a".into(),
++    );
++    let original = Arc::new(provider(config.clone(), &model));
++    let storage_root = tempfile::tempdir().unwrap();
++    let storage_path = storage_root.path().join("sessions");
++    let id = SessionId::new("withdrawal-during-native-open").unwrap();
++    let (first, first_storage) = open(original, &storage_path, &id, false).await.unwrap();
++    assert_eq!(
++        first
++            .invoke(
++                prompt("old-context-input"),
++                Submitter::owner(close_action())
++            )
++            .await,
++        Ok(ExecutionOutcome::Completed)
++    );
++    let old = first.session_manager().snapshot().await.unwrap();
++    first.close(close_action()).await.unwrap();
++    drop(first);
++    first_storage.shutdown().await.unwrap();
++
++    config.environment.insert(
++        "CLAUDE_CONFIG_DIR".into(),
++        "/fixture/pending-context-b".into(),
++    );
++    let current = Arc::new(provider(config, &model));
++    let storage = Arc::new(RecordStorage::new(&storage_path).unwrap());
++    let manager = SessionManager::open(
++        Some(id.clone()),
++        storage.clone(),
++        Arc::new(RuntimeMessageCommitClock::new()),
++    )
++    .await
++    .unwrap();
++    let agent = Agent::prepare(
++        current.clone(),
++        manager,
++        Arc::new(RecordingAudit::default()),
++    )
++    .await
++    .unwrap();
++    std::fs::write(root.path().join("hold-new-context"), "hold").unwrap();
++    let authorization = agent
++        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
++        .unwrap();
++    let attachment = agent.start_attachment(authorization).unwrap();
++    wait_for_file(&root, "new-context-waiting").await;
++
++    let receipt = promptly(agent.enqueue(
++        prompt("withdrawn-during-open"),
++        Submitter::owner(close_action()),
++    ))
++    .await
++    .unwrap();
++    let waiting = agent.session_manager().snapshot().await.unwrap();
++    assert_eq!(waiting.invocations.len(), 2);
++    assert_eq!(waiting.invocations[0], old.invocations[0]);
++    assert!(waiting.invocations[1].result.is_none());
++    assert_eq!(waiting.provider_context, old.provider_context);
++    assert_eq!(count(root.path(), "prompt-count"), 1);
++    assert!(!root.path().join("prompt-before-release").exists());
++
++    let withdraw =
++        ActionContext::new("fixture-host", "fixture-tests", "withdraw-during-open").unwrap();
++    assert_eq!(
++        promptly(agent.remove_queued(
++            ExecutionId::new("withdrawn-during-open").unwrap(),
++            withdraw.clone(),
++        ))
++        .await,
++        Ok(QueueRemoval::Removed)
++    );
++    assert_eq!(promptly(receipt.wait()).await, Err(AgentError::Closed));
++    let withdrawn = agent.session_manager().snapshot().await.unwrap();
++    assert_eq!(withdrawn.invocations.len(), 2);
++    assert_eq!(withdrawn.invocations[0], old.invocations[0]);
++    let cancelled = withdrawn.invocations[1].scheduling.last().unwrap();
++    assert_eq!(cancelled.stage, InvocationStage::Cancelled);
++    assert_eq!(cancelled.cause, SchedulingCause::Withdrawn);
++    assert_eq!(cancelled.actor, Some(withdraw));
++    assert_eq!(withdrawn.provider_context, old.provider_context);
++    assert_eq!(count(root.path(), "prompt-count"), 1);
++    assert!(!root.path().join("prompt-before-release").exists());
++
++    std::fs::write(root.path().join("release-new-context"), "release").unwrap();
++    promptly(attachment.wait()).await.unwrap();
++    let used = agent.session_manager().snapshot().await.unwrap();
++    // Confirm cleanup before the load-bearing assertion, so its fail-before
++    // result leaves neither a native process nor a writer lease outstanding.
++    agent.close(close_action()).await.unwrap();
++    drop(agent);
++    storage.shutdown().await.unwrap();
++    assert_eq!(used.invocations, withdrawn.invocations);
++    assert_eq!(used.provider_context.admission_watermark(), Some(1));
++    assert!(used
++        .provider_context
++        .has_admitted_work(used.invocations.len()));
++    assert_ne!(
++        used.provider_context.recorded(),
++        old.provider_context.recorded()
++    );
++    assert_eq!(count(root.path(), "new-session-count"), 2);
++    assert_eq!(count(root.path(), "prompt-count"), 1);
++    // The fixture persisted only the old context: withdrawal never sent a
++    // prompt to the new native context. Admitted work still forbids reset.
++    let native: serde_json::Value =
++        serde_json::from_slice(&std::fs::read(root.path().join("saved-session")).unwrap()).unwrap();
++    assert_eq!(
++        native["id"].as_str(),
++        Some(old.provider_context.recorded().unwrap().as_str())
++    );
++    let error = open(current, &storage_path, &id, false)
++        .await
++        .err()
++        .expect("admitted then withdrawn work still requires the saved native context");
++    assert!(matches!(error, AgentError::Provider { code: -32002, .. }));
++    let restored_storage = RecordStorage::new(&storage_path).unwrap();
++    let committed = restored_storage.read_committed(id).await.unwrap().unwrap();
++    let restored = committed.snapshot().unwrap();
++    assert_eq!(restored.provider_context, used.provider_context);
++    assert_eq!(restored.invocations, used.invocations);
++    assert_eq!(count(root.path(), "new-session-count"), 2);
++    assert_eq!(count(root.path(), "prompt-count"), 1);
++    restored_storage.shutdown().await.unwrap();
++}

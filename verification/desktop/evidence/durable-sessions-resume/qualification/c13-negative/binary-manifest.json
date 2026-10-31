@@ -1,0 +1,7 @@
+{
+  "source": "ae6e33529887746079702d4eca5f528ec42146bd",
+  "mutation": "only CredentialedClaudeProvider restoration delegation removed; applied.patch",
+  "binary_sha256": "8093e551622b912d8e2def7dea66ed96c715aaa88b4525c59c72a4d093b6401d",
+  "compiled_protocol": "a8e6fff6643172a9",
+  "test_result": "not run yet; requires positive C13 hold first"
+}

@@ -1,0 +1,76 @@
+{
+  "source_head": "ffe03e860cda1344a895aa605a2400d3b268a8b0",
+  "dirty_paths": [],
+  "host": "Debian13 trixie amd64",
+  "private_library_root": "/tmp/durable-browser-libs",
+  "private_apt_root": "/tmp/durable-browser-apt",
+  "signed_sources": "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg check-valid-until=no] https://snapshot.debian.org/archive/debian/20260828T000000Z/ trixie main\ndeb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg check-valid-until=no] https://snapshot.debian.org/archive/debian/20260828T000000Z/ trixie-updates main\ndeb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260828T000000Z/ trixie-security main\n",
+  "packages": [
+    {
+      "file": "libcairo-script-interpreter2_1.18.4-1+b1_amd64.deb",
+      "sha256": "52b45eb6e49c53c0a35ef45555a9457b094482eafef27d27cd777b916a2f06de",
+      "metadata": "Package: libcairo-script-interpreter2\nVersion: 1.18.4-1+b1\nArchitecture: amd64"
+    },
+    {
+      "file": "libgles2_1.7.0-1+b2_amd64.deb",
+      "sha256": "e12c18aa77939d122ee1dea520ba0440b97dc19200b7396e03dff03a3ece74c1",
+      "metadata": "Package: libgles2\nVersion: 1.7.0-1+b2\nArchitecture: amd64"
+    },
+    {
+      "file": "libgraphene-1.0-0_1.10.8-5_amd64.deb",
+      "sha256": "ddcf98f17f6c0a7c76974d7238be1468e59c186034c1b806638d32d9f446ea6e",
+      "metadata": "Package: libgraphene-1.0-0\nVersion: 1.10.8-5\nArchitecture: amd64"
+    },
+    {
+      "file": "libgtk-4-1_4.18.6+ds-2_amd64.deb",
+      "sha256": "51ab1114a57702e703cce745c24caf5bd31ec1d2a900c72fd15fe47c6c030e68",
+      "metadata": "Package: libgtk-4-1\nVersion: 4.18.6+ds-2\nArchitecture: amd64"
+    },
+    {
+      "file": "libharfbuzz-icu0_10.2.0-1+deb13u1_amd64.deb",
+      "sha256": "0b45d951629e98673c0da73b2bcd0886a467d833bb3b7499892a168f247165d2",
+      "metadata": "Package: libharfbuzz-icu0\nVersion: 10.2.0-1+deb13u1\nArchitecture: amd64"
+    },
+    {
+      "file": "libhidapi-hidraw0_0.14.0-1+b2_amd64.deb",
+      "sha256": "89c546cb55be403ce63fe668baff2515979100a30fa07e2b97de186b9c07f01e",
+      "metadata": "Package: libhidapi-hidraw0\nVersion: 0.14.0-1+b2\nArchitecture: amd64"
+    },
+    {
+      "file": "libhyphen0_2.8.8-7+b2_amd64.deb",
+      "sha256": "fa9dca7b8cf1381fd52800c44a385c5725a78a88bd705f7c39b1046a5293435e",
+      "metadata": "Package: libhyphen0\nVersion: 2.8.8-7+b2\nArchitecture: amd64"
+    },
+    {
+      "file": "liblzo2-2_2.10-3+b1_amd64.deb",
+      "sha256": "f3032201fe2928a87e13f05ce256ff3ac2a7860c7e594dc51ae6d7348a4466ce",
+      "metadata": "Package: liblzo2-2\nVersion: 2.10-3+b1\nArchitecture: amd64"
+    },
+    {
+      "file": "libmanette-0.2-0_0.2.12-1_amd64.deb",
+      "sha256": "98841a467692c46fd1870275113235691ebbfe71a3524f6b2a0fa7e9c33c6e56",
+      "metadata": "Package: libmanette-0.2-0\nVersion: 0.2.12-1\nArchitecture: amd64"
+    }
+  ],
+  "webkit_ldd_missing": [],
+  "chromium_real_page_probe": "passed",
+  "host_packages_installed": false,
+  "host_validation_skipped": false,
+  "product_or_verifier_source_modified": false,
+  "webkit_default_launch_probe": "could-not-run: Playwright missingDLOPENLibraries checks /sbin/ldconfig -p and ignores private LD_LIBRARY_PATH; libGLESv2.so.2 is privately available but absent in host ldconfig cache",
+  "webkit_supported_private_runtime_smoke": {
+    "verdict": "pass",
+    "browser_version": "26.6",
+    "artifact": "webkit-runtime-smoke.json",
+    "env": "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1",
+    "actual_assertions": ["process launch", "DOM mounted", "button click updates DOM"]
+  },
+  "private_reaper": {
+    "executable": "/tmp/durable-browser-libs/usr/bin/tini",
+    "version": "tini version 0.19.0",
+    "package": "tini_0.19.0-3+b7_amd64.deb",
+    "sha256": "191c0d4de3c34413b98ad425d3a2e7d74dbde3a1702a5e941cdbcf39e2596831",
+    "usage": "tini -s -- <command>",
+    "host_install": false
+  }
+}

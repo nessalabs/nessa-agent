@@ -19,8 +19,14 @@ import { appVault } from "./vault.mjs"
  * printed, and removed with it.
  */
 import { DatabaseSync } from "node:sqlite"
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
-import { join, sep } from "node:path"
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs"
+import { isAbsolute, join, sep } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import {
@@ -84,10 +90,25 @@ const recorder = join(repoRoot, "scripts/mcp-test-server/acp-recorder.mjs")
  * same direction names the live check records). Always signed out: the
  * scripted agent reads no credential.
  */
-export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
+export function scriptedLaunch(agent, { tool, scenario, evidence, nativeContext } = {}) {
   if (!scenario && !tool) throw new Error("a scripted launch names a tool or a scenario")
   const script = join(repoRoot, "scripts/mcp-test-server/scripted-agent.mjs")
   const semanticArgs = scenario ? [agent, "--scenario", scenario] : [agent, tool]
+  if (nativeContext && agent === "claude") {
+    if (
+      typeof nativeContext.directory !== "string" ||
+      typeof nativeContext.workspace !== "string" ||
+      !isAbsolute(nativeContext.directory) ||
+      !isAbsolute(nativeContext.workspace)
+    )
+      throw new Error("focused native context requires absolute directory and workspace")
+    semanticArgs.push(
+      "--native-context-directory",
+      realpathSync(nativeContext.directory),
+      "--native-context-workspace",
+      realpathSync(nativeContext.workspace),
+    )
+  }
   let stagedRuntime = [script]
   let mcp = { command: process.execPath, args: [serverScript] }
   if (evidence) {
@@ -140,6 +161,7 @@ export async function startGatewayStack(
     scripted,
     scenario,
     evidence,
+    nativeContext,
     limits,
     native,
     webhooks,
@@ -153,14 +175,18 @@ export async function startGatewayStack(
     throw new CannotRun(`--agent ${agent}: claude or codex`)
   const launch =
     scenario || scripted
-      ? scriptedLaunch(agent, { tool: scripted, scenario, evidence })
+      ? scriptedLaunch(agent, { tool: scripted, scenario, evidence, nativeContext })
       : null
   const command = launch?.command ?? agentCommand(agent)
   if (others.length > 0 && !launch)
     throw new Error("other agents are configured only for a scripted launch")
   const runtimes = Object.fromEntries(
     others.map((other) => {
-      const { command: each } = scriptedLaunch(other, { tool: scripted, scenario })
+      const { command: each } = scriptedLaunch(other, {
+        tool: scripted,
+        scenario,
+        nativeContext,
+      })
       return [
         other,
         {
