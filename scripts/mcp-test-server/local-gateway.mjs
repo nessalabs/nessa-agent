@@ -209,9 +209,11 @@ export async function exited(child, ms) {
  *   assigned onto the environment for that launch and the ones after it,
  *   unless it has `overlay` or `whileStopped`: then `overlay` is that
  *   assignment and `whileStopped` is the function that runs in between;
- *   `server` the process running now; `stop()`
+ *   `server` the process running now; `stop(beforeRemove?)`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
- *   removes its directory, and says whether it exited. On a failed start, the
+ *   calls an optional async `beforeRemove({ stopped, exitCode, signal })` while
+ *   its final files remain readable, removes its directory, and says whether
+ *   it exited. On a failed start, the
  *   error carries the gateway's output as `gatewayLog`.
  */
 export async function startLocalGateway(o) {
@@ -230,7 +232,7 @@ export async function startLocalGateway(o) {
   let server = null
   // Its output streams closed: everything it wrote has been read.
   let closed = null
-  const stop = async () => {
+  const stop = async (beforeRemove = async () => {}) => {
     let stopped = true
     // Stop the gateway, and wait for it, before its directory is removed: it
     // stops the agent and the MCP server it started, and its last words go
@@ -245,26 +247,37 @@ export async function startLocalGateway(o) {
       // that kept the streams open does not hold the stop up for long.
       if (stopped) await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
     }
+    const status = {
+      stopped,
+      exitCode: server?.exitCode ?? null,
+      signal: server?.signalCode ?? null,
+    }
+    let failure
+    try {
+      await beforeRemove(status)
+    } catch (error) {
+      failure = error
+    }
     try {
       if (o.evidence) {
         mkdirSync(o.evidence, { recursive: true })
         writeFileSync(join(o.evidence, "gateway.log"), output.join(""))
         writeFileSync(
           join(o.evidence, "gateway-status.json"),
-          `${JSON.stringify(
-            {
-              stopped,
-              exitCode: server?.exitCode ?? null,
-              signal: server?.signalCode ?? null,
-            },
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(status, null, 2)}\n`,
         )
       }
+    } catch (error) {
+      failure = failure
+        ? new AggregateError(
+            [failure, error],
+            "Final inspection and evidence retention failed",
+          )
+        : error
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
+    if (failure) throw failure
     return stopped
   }
   try {
