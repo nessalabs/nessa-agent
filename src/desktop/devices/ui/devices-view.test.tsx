@@ -199,7 +199,7 @@ it("shows every device in one list, each saying what it is, with Add device last
     ),
   ).toEqual(["ab", "cd", "cloud", "phone", "add-tile"])
   expect(text(host, "[data-devices-cloud] .devices-tile-body .devices-muted")).toBe(
-    "Cloud VMs for channels set to run there",
+    "Cloud VMs",
   )
   expect(host.querySelectorAll("h2:not(#devices-hub-name)")).toHaveLength(0)
   expect(text(host, '[data-devices-action="add"]')).toBe("Add device")
@@ -423,6 +423,45 @@ it("lets other computers reach a hub with linking off, then makes a new code", a
   await act(async () => {})
   expect(calls.filter((call) => call === "pair")).toHaveLength(2)
   expect(host.querySelector('[data-devices-action="reach"]')).toBeNull()
+  await act(async () => root.unmount())
+})
+
+it("offers turning linking on where a code could not be made, with no trip to Settings", async () => {
+  let on = false
+  const { gateway, calls } = fakeGateway({
+    list: async () => (
+      calls.push("list"),
+      { ok: true, value: { ...listed, listening: on ? "0.0.0.0:47650" : undefined } }
+    ),
+    // With linking off the hub makes no code.
+    pair: async () =>
+      on
+        ? (calls.push("pair"),
+          { ok: true, value: { code: "ABCD-2345", pairing: pairing("available") } })
+        : (calls.push("refused"), { ok: false }),
+    reach: async () => (
+      (on = true),
+      calls.push("reach"),
+      { ok: true, value: "restarting" }
+    ),
+  })
+  const { host, root } = await mount(gateway)
+  await addComputer(host)
+  await act(async () => {})
+  // One button, beside the failure it explains, and no "Try again" that would fail the same way.
+  const reaches = host.querySelectorAll('[data-devices-action="reach"]')
+  expect(reaches).toHaveLength(1)
+  expect(reaches[0]?.closest("[data-devices-reach]")?.textContent).toContain(
+    "couldn't make a code",
+  )
+  expect(host.textContent).not.toContain("Try again")
+  expect(host.textContent).not.toContain("Settings ›")
+  await act(async () => (reaches[0] as HTMLButtonElement).click())
+  await act(async () => vi.advanceTimersByTime(1_000))
+  await act(async () => {})
+  await act(async () => {})
+  expect(calls).toContain("pair")
+  expect(host.querySelectorAll("[data-devices-command]")).toHaveLength(2)
   await act(async () => root.unmount())
 })
 

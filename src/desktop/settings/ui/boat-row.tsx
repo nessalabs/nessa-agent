@@ -129,7 +129,6 @@ export function BoatConnectionFields({ connection }: { connection: BoatConnectio
         </a>{" "}
         once, then choose Boat when creating a channel.
       </p>
-      {status?.state === "locked" && <p>Unlock Nessa to manage Boat.</p>}
       <form
         onSubmit={(event) => {
           event.preventDefault()

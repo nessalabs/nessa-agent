@@ -6559,6 +6559,9 @@ async function reachFromDevices(run, failures) {
     failures.push("Add a computer offers no way to let others reach the hub")
     return false
   }
+  // The way to turn linking on is right here, never a pointer to Settings.
+  if ((await add.innerText()).includes("Settings ›"))
+    failures.push("Add a computer sends linking to Settings")
   let held = false
   await run.restartConsole.during(run.opened, async () => {
     const before = failures.length

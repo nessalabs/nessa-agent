@@ -411,15 +411,13 @@ function Tile({
   )
 }
 
-/** Where the cloud stands, in a few words under its tile. */
+/** Where the cloud stands, in a word or two: what to do about it is on its page. */
 function cloudWord(cloud: CloudState | null): string {
   return cloud === "connected"
     ? "Connected"
-    : cloud === "locked"
-      ? "Unlock the vault to use it"
-      : cloud === "disconnected"
-        ? "Not connected"
-        : "Couldn’t read the connection"
+    : cloud === null
+      ? "Unavailable"
+      : "Not connected"
 }
 
 function CloudTile({
@@ -434,7 +432,7 @@ function CloudTile({
     <Tile
       art="cloud"
       name="Boat"
-      kind="Cloud VMs for channels set to run there"
+      kind="Cloud VMs"
       status={cloud === "connected" ? "ready" : "offline"}
       onClick={onOpen}
       data-devices-cloud={cloud ?? "unknown"}
@@ -537,9 +535,7 @@ function CloudPage({ onBack, onChanged }: { onBack: () => void; onChanged: () =>
           <p className="devices-status devices-detail-status" data-devices-cloud-state>
             <Dot status={state === "connected" ? "ready" : "offline"} />
             {state === undefined ? "Reading…" : cloudWord(state)}
-            <span className="devices-muted">
-              {" · "}Cloud VMs for channels set to run there
-            </span>
+            <span className="devices-muted">{" · "}Cloud VMs</span>
           </p>
         </div>
         {state === "connected" ? (

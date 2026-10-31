@@ -253,6 +253,30 @@ export function AddComputer({
     setAttempt((value) => value + 1)
   }
 
+  // Turning linking on is offered where the person meets the problem,
+  // never as a trip to Settings.
+  const reachBlock = (
+    <div className="devices-actions" data-devices-reach>
+      <p className="devices-muted" role="status">
+        {reach === "failed"
+          ? `${hubName ?? "The hub"} didn't start listening for other computers. Try again.`
+          : step.kind === "failed"
+            ? `The hub couldn't make a code: no other computer can reach ${hubName ?? "it"} yet.`
+            : `No other computer can reach ${hubName ?? "the hub"} yet.`}
+      </p>
+      <Button
+        variant="tinted"
+        size="30"
+        shape="pill"
+        disabled={reach === "reaching"}
+        onClick={() => void letReach()}
+        data-devices-action="reach"
+      >
+        {reach === "reaching" ? "Starting again" : "Let other computers reach it"}
+      </Button>
+    </div>
+  )
+
   const address = hubAddress(hubName ?? "", route, listeningPort(listening ?? undefined))
   return (
     <div className="devices-page devices-add-page" data-devices-page="add">
@@ -316,25 +340,9 @@ export function AddComputer({
                 : "Only while both are on the same Wi-Fi or office network."}
             </p>
             {reachable(listening) ? (
-              <div className="devices-actions" data-devices-reach>
-                <p className="devices-muted" role="status">
-                  {reach === "failed"
-                    ? `${hubName ?? "The hub"} didn't start listening for other computers. Try again, or turn on native linking in Settings › Linked devices.`
-                    : `No other computer can reach ${hubName ?? "the hub"} yet.`}
-                </p>
-                <Button
-                  variant="tinted"
-                  size="30"
-                  shape="pill"
-                  disabled={reach === "reaching"}
-                  onClick={() => void letReach()}
-                  data-devices-action="reach"
-                >
-                  {reach === "reaching"
-                    ? "Starting again"
-                    : "Let other computers reach it"}
-                </Button>
-              </div>
+              step.kind === "failed" ? null : (
+                reachBlock
+              )
             ) : onlyThisMachine(listening ?? undefined) ? (
               <p className="devices-muted" role="status" data-devices-loopback>
                 {hubName ?? "The hub"} listens only to itself now ({listening}), so no
@@ -349,6 +357,8 @@ export function AddComputer({
             <h2>2. On the computer, run</h2>
             {step.kind === "making" ? (
               <LoadingText>Making a code</LoadingText>
+            ) : step.kind === "failed" && reachable(listening) ? (
+              reachBlock
             ) : step.kind === "failed" ? (
               <div className="devices-actions">
                 <p className="devices-muted" role="status">
