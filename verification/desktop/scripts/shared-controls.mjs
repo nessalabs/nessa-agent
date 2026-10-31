@@ -641,11 +641,15 @@ const checks = {
         failures.push(`no kit row with a ${kind} beside it on load`)
     // Pointed at, a count or a running glyph at a row's end leaves the row its fill.
     for (const kind of ["count", "glyph"]) {
-      const beside = page
-        .locator(
-          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${kind === "count" ? css.countBadge : ".workspace-status"}`,
-        )
-        .first()
+      // A row with actions first, where they swap with the count or glyph.
+      const mark = kind === "count" ? css.countBadge : ".workspace-status"
+      const trailing = `+ [data-slot="sidebar-menu-item-trailing"] ${mark}`
+      const withActions = page.locator(`${css.sidebar} [data-row-actions] ${trailing}`)
+      const beside = (
+        (await withActions.count())
+          ? withActions
+          : page.locator(`${css.sidebar} [data-trailing="${kind}"] ${trailing}`)
+      ).first()
       if (!(await beside.count())) {
         // The tree lays its folded summary in the kit's own badge slot, with no `data-trailing`.
         measured.hover[`kit row under its ${kind}`] = "none on this layout"

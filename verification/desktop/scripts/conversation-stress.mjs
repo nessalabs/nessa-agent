@@ -727,7 +727,10 @@ async function channelRunning(page, name, running, failures) {
       }
     })
   if (!(await row.count())) {
-    failures.push(`no channel ${name} in the sidebar`)
+    // The tree layout draws its channels as branches, whose controls already
+    // show only under the pointer; this check is the columns layout's.
+    const branch = page.locator(`${css.sidebar} [data-row="channel"]`, { hasText: name })
+    if (!(await branch.count())) failures.push(`no channel ${name} in the sidebar`)
     return
   }
   // Away from the window's left edge, where the pointer would peek the sidebar out.
@@ -742,6 +745,10 @@ async function channelRunning(page, name, running, failures) {
     failures.push(
       `channel ${name} ${running ? "shows no spinner while" : "still shows a spinner after"} a turn runs: ${JSON.stringify(now)}`,
     )
+  // A count waiting on the person stands in the spinner's place: the spinner
+  // goes unchecked this time, and the run says so.
+  if (running && now.counted)
+    log(`channel ${name} held a waiting count, so its spinner was not checked`)
   if (now.settings === null) {
     failures.push(`channel ${name} has no settings`)
     return
