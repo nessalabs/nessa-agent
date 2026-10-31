@@ -277,7 +277,7 @@ import {
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { appFrame } from "./lib/apps.mjs"
 import { browse } from "./lib/mdns-probe.mjs"
-import { openPage, withEngines } from "./lib/browser.mjs"
+import { noteLiveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
 import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
 import {
@@ -7478,6 +7478,9 @@ async function talkBoard(run, step, conversationId, failures, shot) {
   // In the chat's panel, one tab, and the card gives way to a row.
   const tabs = page.locator(`${css.chatPanelTabs} [title^="Close "]`)
   const tabsBefore = await tabs.count()
+  const sidePanel = page.locator("#workspace-panel")
+  const panelShown = async () => (await sidePanel.getAttribute("aria-hidden")) === null
+  const panelWasShown = await panelShown()
   await inline.app.click('[data-talk="panel"]')
   let panel
   try {
@@ -7496,6 +7499,10 @@ async function talkBoard(run, step, conversationId, failures, shot) {
   )
   if (!rowOnly)
     failures.push("the talk board is drawn inline while it is open in the panel")
+  // Its panel mount went live and the card stayed a row, so an unsized
+  // `/mcp-resources` abort from the gateway that serves it is the delivered
+  // fetch (#473). Every other abort stays a failure.
+  else noteLiveMountResourceAbort(run.opened, "live", run.stack.gateway.url)
   await panel.app.click('[data-talk="panel"]')
   await sleep(1_000)
   const opened = (await tabs.count()) - tabsBefore
@@ -7569,6 +7576,13 @@ async function talkBoard(run, step, conversationId, failures, shot) {
   )
   if (!closed)
     failures.push("the talk board's panel frame is still drawn after its tab closed")
+  // The right panel stays open with its last tab gone; leave it as found,
+  // or the next step that toggles it closes it instead.
+  if (!panelWasShown && (await panelShown())) {
+    await page.keyboard.press("Meta+Alt+KeyB")
+    if (!(await waitFor(async () => !(await panelShown()), 3_000)))
+      failures.push("⌥⌘B did not close the right panel after the talk board")
+  }
 }
 
 /** What must hold once everything has run, in every conversation the run made. */
