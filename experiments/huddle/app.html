@@ -38,6 +38,14 @@
   #mode { background: transparent; border: 0; color: var(--quiet); font-size: 12px; cursor: pointer; padding: 0 4px; }
   #debug { position: absolute; right: 12px; bottom: 8px; font: 11px ui-monospace, Menlo, monospace; color: var(--faint); max-width: 50%; text-align: right; }
   [hidden] { display: none !important; }
+  /* A card in the message: a fixed height (reported to the host), the stage
+     clipped inside it, and nothing drawn past its edges. */
+  body.inline { height: 440px; position: relative; overflow: hidden; border-radius: 12px; }
+  body.inline #stage { inset: 40px 0 84px 0; }
+  body.inline #island { bottom: 16px; }
+  body.inline #captions { bottom: 80px; }
+  body.inline #debug { bottom: 4px; }
+  body.inline #empty { margin-top: 90px; }
   /* Markdown is drawn as a document. Each block keeps the source lines it came
      from (data-n to data-to), so draw, view and pointing still speak in lines. */
   #paper.doc { max-width: 780px; margin: 0 auto; }
@@ -113,11 +121,21 @@
       var opened = (m.params && m.params.structuredContent) || {};
       if (opened.path) show({ path: opened.path }).catch(function () {});
     }
+    if (m.method === "ui/notifications/host-context-changed" && m.params && m.params.displayMode) placeIn(m.params.displayMode);
     if (m.method === "ui/resource-teardown") { endCall(); post({ jsonrpc: "2.0", id: m.id, result: {} }); }
   });
+  // Inline, the card's height is the app's to say. Unsaid, the host draws a
+  // strip, and the stage's bottom-anchored parts bleed into the message above.
+  var INLINE_HEIGHT = 440;
+  function placeIn(mode) {
+    var inline = mode === "inline";
+    document.body.classList.toggle("inline", inline);
+    if (inline) tell("ui/notifications/size-changed", { height: INLINE_HEIGHT });
+  }
   ask("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "huddle", version: "0.0.1" },
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] } }).then(function (reply) {
     tell("ui/notifications/initialized");
+    placeIn(((reply.result || {}).hostContext || {}).displayMode);
     var granted = (((reply.result || {}).hostCapabilities || {}).sandbox || {}).permissions || {};
     debug(granted.microphone ? "mic granted by host" : "host did not grant the mic");
     ask("ui/request-display-mode", { mode: "fullscreen" });
