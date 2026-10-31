@@ -26,33 +26,64 @@ export function BoatProvider({
 export function useBoatGateway() {
   return useContext(BoatContext)
 }
-/** The token stays in this transient field, then in the encrypted gateway vault.
- * A saved infrastructure connection is distinct from model authentication. */
-export function BoatRow() {
+/** What the Boat connection reads and does: its status, the token being entered, save and disconnect. */
+export interface BoatConnection {
+  readonly gateway: BoatGateway | undefined
+  readonly status: BoatStatus | undefined
+  /** No status will come: there is no gateway, or its read failed. */
+  readonly unread: boolean
+  readonly token: string
+  readonly setToken: (token: string) => void
+  readonly busy: boolean
+  readonly error: string
+  readonly save: () => Promise<void>
+  readonly disconnect: () => Promise<void>
+  /** Asks for the vault, then reads the status again. */
+  readonly unlock: () => Promise<void>
+}
+
+/**
+ * The token stays in this transient field, then in the encrypted gateway vault.
+ * A saved infrastructure connection is distinct from model authentication.
+ * `onChange` hears each status a save or disconnect answers; a change of
+ * `seen`, what another read last said about the connection, reads it again.
+ */
+export function useBoatConnection(
+  onChange?: (status: BoatStatus) => void,
+  seen?: unknown,
+): BoatConnection {
   const gateway = useContext(BoatContext)
   const ensure = useVaultUnlock()
-  const tokenId = useId()
   const reads = useRef(0)
   const [status, setStatus] = useState<BoatStatus>()
   const [token, setToken] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  const [readFailed, setReadFailed] = useState(false)
+  const [round, setRound] = useState(0)
   useEffect(() => {
     let current = true
     const revision = ++reads.current
+    setReadFailed(false)
     void gateway
       ?.read()
       .then((value) => {
         if (current && revision === reads.current) setStatus(value)
       })
       .catch(() => {
-        if (current && revision === reads.current)
+        if (current && revision === reads.current) {
+          setReadFailed(true)
           setError("Boat status could not be read.")
+        }
       })
     return () => {
       current = false
     }
-  }, [gateway])
+  }, [gateway, round, seen])
+  const answered = (value: BoatStatus) => {
+    setStatus(value)
+    onChange?.(value)
+  }
   const save = async () => {
     if (!gateway || busy) return
     reads.current += 1
@@ -60,7 +91,7 @@ export function BoatRow() {
     setError("")
     try {
       if (!(await ensure())) return
-      setStatus(await gateway.save(token.trim()))
+      answered(await gateway.save(token.trim()))
       setToken("")
     } catch (cause) {
       setError(
@@ -75,8 +106,6 @@ export function BoatRow() {
       setBusy(false)
     }
   }
-  const entry = setting("boat")
-  const found = useContext(FoundSetting) === "boat"
   const disconnect = async () => {
     if (!gateway || busy) return
     reads.current += 1
@@ -84,7 +113,7 @@ export function BoatRow() {
     setError("")
     try {
       if (!(await ensure())) return
-      setStatus(await gateway.disconnect())
+      answered(await gateway.disconnect())
       setToken("")
     } catch {
       setError("Boat could not be disconnected. Try again.")
@@ -92,52 +121,52 @@ export function BoatRow() {
       setBusy(false)
     }
   }
+  const unlock = async () => {
+    if (await ensure()) setRound((value) => value + 1)
+  }
+  return {
+    gateway,
+    status,
+    unread: status === undefined && (!gateway || readFailed),
+    token,
+    setToken,
+    busy,
+    error,
+    save,
+    disconnect,
+    unlock,
+  }
+}
+
+/** The token form, the VM lifetime, and any error: Boat's settings wherever they are shown. */
+export function BoatConnectionFields({ connection }: { connection: BoatConnection }) {
+  const tokenId = useId()
+  const { gateway, status, token, setToken, busy, error } = connection
   return (
-    <ItemRow
-      unavailable={!gateway}
-      setting="boat"
-      found={found}
-      label={entry.label}
-      detail={entry.detail}
-      control={
-        status?.state === "connected" ? (
-          <span className="settings-boat-status" role="status">
-            Connected{" "}
-            <RowAction
-              disabled={busy}
-              onClick={() => {
-                void disconnect()
-              }}
-            >
-              Disconnect
-            </RowAction>
-          </span>
-        ) : undefined
-      }
-    >
-      <div className="settings-boat">
-        {!gateway && (
-          <p role="status">Connect this window to a Nessa gateway to manage Boat.</p>
-        )}
-        <p>
-          Connect ChatGPT or Claude in{" "}
-          <a
-            href="https://boat.dev/dashboard?tab=agents"
-            target="_blank"
-            rel="noreferrer"
+    <div className="settings-boat">
+      {!gateway && <p role="status">Connect a gateway to manage Boat.</p>}
+      {status?.state === "locked" ? (
+        // Whether a token is saved is unknown until the vault opens: unlock,
+        // never a form that would replace a token already there.
+        <div className="settings-boat-fields">
+          <button
+            className="settings-button settings-button-primary"
+            type="button"
+            disabled={busy}
+            onClick={() => void connection.unlock()}
+            data-boat-action="unlock"
           >
-            Boat
-          </a>{" "}
-          once, then choose Boat when creating a channel.
-        </p>
-        {status?.state === "locked" && <p>Unlock Nessa to manage Boat.</p>}
+            Unlock
+          </button>
+        </div>
+      ) : (
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            void save()
+            void connection.save()
           }}
         >
-          <label htmlFor={tokenId}>Boat API token</label>
+          <label htmlFor={tokenId}>API token</label>
           <div className="settings-boat-fields">
             <input
               id={tokenId}
@@ -145,6 +174,7 @@ export function BoatRow() {
               type="password"
               autoComplete="off"
               spellCheck={false}
+              placeholder="Paste your Boat token"
               value={token}
               onChange={(event) => setToken(event.target.value)}
               disabled={busy || !gateway}
@@ -162,13 +192,62 @@ export function BoatRow() {
             </button>
           </div>
         </form>
+      )}
+      {status?.state !== "connected" && status?.state !== "locked" && gateway && (
         <p className="settings-boat-note">
-          The token is stored in Nessa’s encrypted vault. Disconnecting forgets it here;
-          existing Boat VMs keep running until stopped in Boat.
+          Get one, and connect ChatGPT or Claude, in{" "}
+          <a
+            href="https://boat.dev/dashboard?tab=agents"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Boat
+          </a>
+          .
         </p>
-        <BoatRuntimeControl gateway={gateway} />
-        {error && <p role="alert">{error}</p>}
-      </div>
+      )}
+      <BoatRuntimeControl gateway={gateway} />
+      {error && <p role="alert">{error}</p>}
+    </div>
+  )
+}
+
+/** "Connected" and its Disconnect, once Boat is connected. */
+export function BoatConnected({ connection }: { connection: BoatConnection }) {
+  if (connection.status?.state !== "connected") return null
+  return (
+    <span className="settings-boat-status" role="status">
+      Connected{" "}
+      <RowAction
+        disabled={connection.busy}
+        onClick={() => {
+          void connection.disconnect()
+        }}
+      >
+        Disconnect
+      </RowAction>
+    </span>
+  )
+}
+
+export function BoatRow() {
+  const connection = useBoatConnection()
+  const entry = setting("boat")
+  const found = useContext(FoundSetting) === "boat"
+  return (
+    <ItemRow
+      unavailable={!connection.gateway}
+      setting="boat"
+      found={found}
+      label={entry.label}
+      detail={entry.detail}
+      control={
+        connection.status?.state === "connected" ? (
+          <BoatConnected connection={connection} />
+        ) : undefined
+      }
+    >
+      <BoatConnectionFields connection={connection} />
     </ItemRow>
   )
 }

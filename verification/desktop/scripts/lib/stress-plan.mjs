@@ -159,7 +159,7 @@ export const KNOBS = {
   },
   devices: {
     default: 1,
-    what: "times a paired worker is shown in the side rail's Devices with its machine, opened, offered by Add a computer's commands, and kept as offline with when it was last seen once it stops",
+    what: "times a paired worker is shown in the side rail's Devices with its machine in one list beside the cloud, opened, Boat's page opened, offered by Add device's computer commands, and kept as offline with when it was last seen once it stops",
   },
   tunnels: {
     default: 1,

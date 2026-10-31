@@ -1753,6 +1753,19 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
   for (const path of run.stack.agent === "claude" ? attached : [])
     if (!reply.includes(path))
       failures.push(`the agent in ${channel.name} was not told of ${path}`)
+  // The chat says where its agent runs: a local channel's, on this computer.
+  const place = run.page.locator(
+    `${css.focusedPane} .workspace-heading [data-workspace-place]`,
+  )
+  const placed = await waitFor(
+    async () =>
+      (await place.count()) === 1 && (await place.innerText()) === "This computer",
+    10_000,
+  )
+  if (!placed)
+    failures.push(
+      `the chat in ${channel.name} does not say it runs on this computer: ${(await place.count()) ? await place.innerText() : "nothing"}`,
+    )
 }
 
 const steps = {
@@ -3495,7 +3508,7 @@ const steps = {
             return { fill: style.backgroundColor, ink: style.color }
           })
         if (ink.fill === ink.ink)
-          failures.push(`Add a computer is drawn ${ink.ink} on ${ink.fill}`)
+          failures.push(`Add device is drawn ${ink.ink} on ${ink.fill}`)
         // Its own page: its load, never the agents it runs.
         await tile.click()
         const detail = page.locator('[data-devices-page="worker"]')
@@ -3515,8 +3528,166 @@ const steps = {
           failures.push("the worker's page lists what runs there")
         await photograph("worker")
         await detail.locator('[data-devices-action="back"]').click()
-        // Add a computer: a code and the two commands that use it.
+        // One list: the computer and the cloud side by side, no sections.
+        const list = page.locator("[data-devices-list]")
+        await list.waitFor({ timeout: 5_000 })
+        if (
+          (await list.locator(`[data-devices-worker="${id}"]`).count()) !== 1 ||
+          (await list.locator("[data-devices-cloud]").count()) !== 1
+        )
+          failures.push("the worker and the cloud are not in one list")
+        if (
+          (await list
+            .locator("[data-devices-cloud] [data-slot=device-figure]")
+            .getAttribute("data-kind")) !== "boat"
+        )
+          failures.push("Boat's tile is not drawn as a boat")
+        const headings = await page
+          .locator('[data-devices-page="list"] h2:not(#devices-hub-name)')
+          .allInnerTexts()
+        if (headings.length) failures.push(`Devices splits its list: ${headings}`)
+        // Boat is managed on its own page, not sent to Settings.
+        if (
+          (await page.locator('[data-devices-page="list"]').innerText()).includes(
+            "Settings ›",
+          )
+        )
+          failures.push("Devices still sends Boat to Settings")
+        await list.locator("[data-devices-cloud]").click()
+        const cloud = page.locator('[data-devices-page="cloud"]')
+        await cloud.waitFor({ timeout: 5_000 })
+        // It says where Boat stands, and offers the one thing to do about it:
+        // unlock while the vault is locked, else a live token field.
+        const settled = await waitFor(async () => {
+          const word = await cloud
+            .locator("[data-devices-cloud-state]")
+            .getAttribute("data-devices-cloud-state")
+          if (word === "Unavailable") return word
+          if (word === "Locked")
+            return (await cloud
+              .locator('[data-boat-action="unlock"]')
+              .isEnabled({ timeout: 500 })
+              .catch(() => false))
+              ? word
+              : null
+          if (word === "Connected" || word === "Not connected")
+            return (await cloud
+              .locator('input[type="password"]')
+              .isEnabled({ timeout: 500 })
+              .catch(() => false))
+              ? word
+              : null
+          return null
+        }, 10_000)
+        if (!settled)
+          failures.push(
+            `Boat's page reads ${await cloud.locator("[data-devices-cloud-state]").innerText()} without its action`,
+          )
+        // Boat is drawn as a boat, on its tile and its page, and floats only
+        // while connected.
+        const boat = await cloud
+          .locator("[data-slot=device-figure]")
+          .evaluate((figure) => ({
+            kind: figure.getAttribute("data-kind"),
+            afloat: figure.hasAttribute("data-afloat"),
+          }))
+        if (boat.kind !== "boat" || boat.afloat !== (settled === "Connected"))
+          failures.push(`Boat's page draws ${JSON.stringify(boat)} while ${settled}`)
+        await photograph("cloud")
+        await cloud.locator('[data-devices-action="back"]').click()
+        // Add device offers each kind; a computer gets a code and the two commands that use it.
         await page.locator('[data-devices-action="add"]').click()
+        const kinds = await page
+          .locator("[data-devices-add]")
+          .evaluateAll((each) =>
+            each.map((button) => button.getAttribute("data-devices-add")),
+          )
+        if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
+          failures.push(`Add device offers ${JSON.stringify(kinds)}`)
+        // A phone pairs right here: Settings' rows, drawn as cards on Devices,
+        // and the code's modal on top of the page, giving focus back on Escape.
+        await page.locator('[data-devices-add="phone"]').click()
+        const phone = page.locator('[data-devices-page="add-phone"]')
+        await phone.waitFor({ timeout: 5_000 })
+        const pair = phone.locator(selectorFor.linkedAction("pair"))
+        if (
+          !(await waitFor(
+            async () => (await pair.count()) === 1 && (await pair.isEnabled()),
+            10_000,
+          ))
+        )
+          failures.push("Add a phone offers no live Pair a device")
+        else {
+          const card = await phone
+            .locator('[data-slot="settings-group-card"]')
+            .first()
+            .evaluate((node) => {
+              const style = getComputedStyle(node)
+              return {
+                fill: style.backgroundColor,
+                radius: parseFloat(style.borderTopLeftRadius),
+              }
+            })
+            .catch(() => null)
+          if (!card || card.fill === "rgba(0, 0, 0, 0)" || !(card.radius > 0))
+            failures.push(
+              `Add a phone draws its rows without a card: ${JSON.stringify(card)}`,
+            )
+          await photograph("phone")
+          await pair.click()
+          const dialog = page.locator(css.pairingDialog)
+          const code = await waitFor(
+            async () => (await dialog.locator(css.pairingCode).count()) > 0,
+            10_000,
+          )
+          if (!code) failures.push("Add a phone's Pair a device opened no code")
+          else {
+            const onTop = await dialog.evaluate((node) => {
+              const box = node.getBoundingClientRect()
+              const hit = document.elementFromPoint(
+                box.left + box.width / 2,
+                box.top + box.height / 2,
+              )
+              return hit !== null && node.contains(hit)
+            })
+            if (!onTop) failures.push("the pairing modal is drawn under the Devices page")
+            await photograph("phone-code")
+            await page.keyboard.press("Escape")
+            await dialog
+              .waitFor({ state: "detached", timeout: 10_000 })
+              .catch(() =>
+                failures.push("Escape did not close the pairing modal on Devices"),
+              )
+            const focusedIn = () =>
+              page.evaluate(() => ({
+                page:
+                  document.activeElement
+                    ?.closest("[data-devices-page]")
+                    ?.getAttribute("data-devices-page") ?? null,
+                tag: document.activeElement?.tagName ?? null,
+                text: document.activeElement?.textContent?.slice(0, 40) ?? null,
+              }))
+            const back = await waitFor(
+              async () => ((await focusedIn()).page === "add-phone" ? true : null),
+              2_000,
+            )
+            const focused = back ? "add-phone" : JSON.stringify(await focusedIn())
+            if (focused !== "add-phone")
+              failures.push(
+                `closing the pairing modal left focus on ${focused ?? "the body"}`,
+              )
+            // Leave no code open: cancel it from its row.
+            await phone.locator(selectorFor.linkedAction("cancel")).click()
+            await pair
+              .waitFor({ timeout: 10_000 })
+              .catch(() =>
+                failures.push("Pair a device was not offered again after cancelling"),
+              )
+          }
+        }
+        await phone.locator('[data-devices-action="back"]').click()
+        await page.locator('[data-devices-action="add"]').click()
+        await page.locator('[data-devices-add="computer"]').click()
         const add = page.locator('[data-devices-page="add"]')
         const shown = await waitFor(
           async () => (await add.locator("[data-devices-command]").count()) === 2,
@@ -6795,12 +6966,23 @@ async function reachFromDevices(run, failures) {
   if (failures.length) return false
   await page.locator('[data-rail-item="devices"]').click()
   await page.locator('[data-devices-action="add"]').click()
+  await page.locator('[data-devices-add="computer"]').click()
   const add = page.locator('[data-devices-page="add"]')
   const reach = add.locator('[data-devices-action="reach"]')
   if (!(await waitFor(async () => (await reach.count()) === 1, 10_000))) {
     failures.push("Add a computer offers no way to let others reach the hub")
     return false
   }
+  // The way to turn linking on sits with the code it lets the hub make.
+  if (
+    (await add
+      .locator("section", {
+        has: page.locator("h2", { hasText: "On the computer, run" }),
+      })
+      .locator('[data-devices-action="reach"]')
+      .count()) !== 1
+  )
+    failures.push("Let other computers reach it is not beside the code")
   let held = false
   await run.restartConsole.during(run.opened, async () => {
     const before = failures.length

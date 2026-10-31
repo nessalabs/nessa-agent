@@ -130,19 +130,6 @@
   gap: 14px;
 }
 
-.devices-section-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-}
-
-.devices-section-head h2 {
-  margin: 0;
-  font-size: var(--desktop-text-read);
-  font-weight: 600;
-}
-
 .devices-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -425,4 +412,17 @@ button.devices-tile:focus-visible,
 
 :root[data-motion="reduced"] button.devices-tile:hover {
   transform: none;
+}
+
+/* ——— Settings shown on a device's page ——— */
+
+/* The detail head's one action stands at its far end. */
+.devices-detail-action {
+  margin-left: auto;
+}
+
+/* Boat's and the phone's settings, drawn by Settings' own rows, at a reading width. */
+.devices-settings {
+  width: 100%;
+  max-width: 720px;
 }

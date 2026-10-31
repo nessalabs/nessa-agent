@@ -9,9 +9,9 @@ import type { BoatGateway } from "../adapters/boat-gateway"
 
 const durations = [3600, 14_400, 28_800, 86_400] as const
 function label(lifetime: BoatVmLifetime): string {
-  if (lifetime.mode === "never") return "No automatic stop"
+  if (lifetime.mode === "never") return "never"
   const seconds = lifetime.seconds
-  if (seconds === undefined) return "Unknown lifetime"
+  if (seconds === undefined) return "unknown"
   return seconds % 3600 === 0
     ? `${seconds / 3600} ${seconds === 3600 ? "hour" : "hours"}`
     : `${seconds} seconds`
@@ -56,8 +56,7 @@ export function BoatRuntimeControl({
         )
       })
       .catch(() => {
-        if (current === revision.current)
-          setError("VM settings could not be read. Try again.")
+        if (current === revision.current) setError("Couldn’t read this.")
       })
     return () => {
       revision.current += 1
@@ -66,7 +65,7 @@ export function BoatRuntimeControl({
   const saved =
     settings &&
     key(channelId === undefined ? settings.defaultLifetime : settings.channelOverride)
-  const submit = async () => {
+  const submit = async (selection: string) => {
     if (!gateway || !settings || busy || savePending.current || selection === saved)
       return
     let choice: Pick<BoatRuntimeSetParams, "mode" | "seconds">
@@ -93,7 +92,7 @@ export function BoatRuntimeControl({
       )
     } catch {
       if (current === revision.current) {
-        setError("VM settings could not be confirmed. Reload them before trying again.")
+        setError("Couldn’t confirm the change.")
         setSettings(undefined)
       }
     } finally {
@@ -103,76 +102,58 @@ export function BoatRuntimeControl({
       }
     }
   }
+  // A choice saves as it is made: there is no draft to keep or discard.
   return (
-    <form
+    <div
+      role="group"
       data-boat-runtime-settings={channelId ?? "global"}
       aria-label="Boat VM runtime settings"
-      onSubmit={(event) => {
-        event.preventDefault()
-        void submit()
-      }}
+      className="settings-boat-runtime"
     >
-      <label htmlFor={id}>
-        {channelId === undefined ? "Default Boat VM auto-stop" : "Boat VM auto-stop"}
-      </label>
-      <div className="settings-boat-fields">
-        <select
-          id={id}
-          className="settings-input"
-          value={selection}
-          disabled={!gateway || !settings || busy}
-          onChange={(event) => setSelection(event.target.value)}
-        >
-          {!settings && (
-            <option value="">
-              {gateway
-                ? error
-                  ? "Settings unavailable"
-                  : "Loading…"
-                : "Connect a gateway"}
+      <label htmlFor={id}>Auto-stop VMs</label>
+      <select
+        id={id}
+        className="settings-input settings-boat-select"
+        value={selection}
+        disabled={!gateway || !settings || busy}
+        onChange={(event) => {
+          setSelection(event.target.value)
+          void submit(event.target.value)
+        }}
+      >
+        {!settings && (
+          <option value="">
+            {gateway ? (error ? "Unavailable" : "Loading…") : "Connect a gateway"}
+          </option>
+        )}
+        {channelId !== undefined && (
+          <option value="default">
+            Use Nessa default{settings ? ` (${label(settings.defaultLifetime)})` : ""}
+          </option>
+        )}
+        <option value="never">Never</option>
+        {durations.map((seconds) => (
+          <option key={seconds} value={String(seconds)}>
+            After {seconds / 3600} {seconds === 3600 ? "hour" : "hours"}
+          </option>
+        ))}
+        {settings &&
+          saved !== "default" &&
+          saved !== "never" &&
+          !durations.some((value) => String(value) === saved) && (
+            <option value={saved}>
+              After{" "}
+              {label(
+                channelId === undefined
+                  ? settings.defaultLifetime
+                  : (settings.channelOverride ?? settings.defaultLifetime),
+              )}
             </option>
           )}
-          {channelId !== undefined && (
-            <option value="default">
-              Use Nessa default{settings ? ` (${label(settings.defaultLifetime)})` : ""}
-            </option>
-          )}
-          <option value="never">No automatic stop</option>
-          {durations.map((seconds) => (
-            <option key={seconds} value={String(seconds)}>
-              After {seconds / 3600} {seconds === 3600 ? "hour" : "hours"}
-            </option>
-          ))}
-          {settings &&
-            saved !== "default" &&
-            saved !== "never" &&
-            !durations.some((value) => String(value) === saved) && (
-              <option value={saved}>
-                Current:{" "}
-                {label(
-                  channelId === undefined
-                    ? settings.defaultLifetime
-                    : (settings.channelOverride ?? settings.defaultLifetime),
-                )}
-              </option>
-            )}
-        </select>
-        <Button
-          className="settings-button"
-          type="submit"
-          disabled={!settings || busy || selection === saved}
-        >
-          {busy ? "Saving…" : "Save VM settings"}
-        </Button>
-      </div>
-      <p className="settings-boat-note">
-        Applies to new and resumed VMs for main agents and threads. Active VM deadlines
-        stay unchanged. Timed limits include active work. With no auto-stop, VMs keep
-        running and billing until you stop them in Boat. Account limits apply.
-      </p>
-      {channelId === undefined && (
+      </select>
+      {selection === "never" && (
         <p className="settings-boat-note">
-          Channels inherit this default unless they override it in their own settings.
+          VMs keep billing until you stop them in Boat.
         </p>
       )}
       {error && (
@@ -183,10 +164,10 @@ export function BoatRuntimeControl({
             type="button"
             onClick={() => setRetry((value) => value + 1)}
           >
-            Reload VM settings
+            Reload
           </Button>
         </p>
       )}
-    </form>
+    </div>
   )
 }
