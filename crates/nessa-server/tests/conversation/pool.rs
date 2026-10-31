@@ -151,6 +151,7 @@ impl crate::conversation::application::ThreadEnvironments for Cloud {
     fn rest<'a>(
         &'a self,
         _: &'a ConversationId,
+        _: crate::conversation::application::WorkspaceRest,
     ) -> crate::conversation::application::EnvironmentFuture<'a, bool> {
         Box::pin(async { false })
     }

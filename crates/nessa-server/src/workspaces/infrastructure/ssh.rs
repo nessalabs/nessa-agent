@@ -1,9 +1,15 @@
 //! Connection-scoped SSH access. Boat authorizes an ephemeral public key and
 //! supplies the host identity; no user's SSH configuration or agent is consulted.
 use crate::{
-    conversation::application::{ArtifactChannel, ArtifactChannels},
+    conversation::{
+        application::{ArtifactChannel, ArtifactChannels},
+        infrastructure::ssh_environment::{log_stderr, read_tail},
+    },
     mcp_servers::domain::{relay_arguments, MANAGED_SERVER_NAME, RELAY_SUBCOMMAND},
-    workspaces::{application::WorkspaceStream, domain::Failure},
+    workspaces::{
+        application::{ServedCopy, WorkspaceStream},
+        domain::Failure,
+    },
 };
 use base64::Engine;
 use nessa_sdk::application::agent_execution::providers::HarnessMcpRelay;
@@ -28,6 +34,8 @@ pub(super) struct SshAccess {
     remote_socket: String,
     /// The thread's workspace in the VM, where its shell runs.
     workspace: String,
+    /// The VM, as its SSH diagnostics name it.
+    vm: String,
 }
 
 /// Nessa's own shell server in the image: the managed server runs here, in
@@ -35,14 +43,27 @@ pub(super) struct SshAccess {
 const VM_SHELL: &str = "/opt/nessa/bin/nessa-mcp";
 /// Where that shell keeps its private record of each command it ran.
 const VM_PROCESS_AUDIT: &str = "/home/user/.nessa/process-audit";
+/// The `nessa` the image was made with.
+const VM_NESSA: &str = "/opt/nessa/bin/nessa";
+/// The environment `env serve` runs with in the VM, whichever copy it is.
+const VM_SERVE_ENVIRONMENT: &str =
+    "env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa";
 
 impl SshAccess {
-    pub(super) fn serve(self: &Arc<Self>) -> io::Result<WorkspaceStream> {
+    pub(super) fn serve(self: &Arc<Self>, copy: &ServedCopy) -> io::Result<WorkspaceStream> {
+        // One copy, chosen before it starts: when it ends, the connection
+        // does.
+        let program = match copy {
+            ServedCopy::Image => format!("{VM_SERVE_ENVIRONMENT} {VM_NESSA} env serve"),
+            ServedCopy::Installed(command) => format!("{VM_SERVE_ENVIRONMENT} {command}"),
+        };
         let mut command = ssh(&self.directory, self.endpoint);
-        command.args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
+        command
+            .args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
             .arg(format!("user@{}", self.endpoint.ip()))
-            .arg("env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa /opt/nessa/bin/nessa env serve")
-            .stdin(Stdio::piped()).stdout(Stdio::piped());
+            .arg(program)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
         let mut child = command.spawn()?;
         let output = Box::new(
             child
@@ -63,6 +84,54 @@ impl SshAccess {
             files: Some(self.clone()),
             mcp_relay: Some(self.clone()),
         })
+    }
+    /// The lease protocol the image's own `nessa` says it speaks, empty
+    /// when it says none; `None` when the VM did not answer.
+    pub(super) async fn image_protocol(&self) -> Option<String> {
+        let said = tokio::time::timeout(
+            Duration::from_secs(30),
+            self.run(
+                posix(&format!(
+                    "p=$({VM_NESSA} env protocol 2>/dev/null); echo \"protocol $p\""
+                )),
+                None,
+            ),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        let protocol = said.lines().last()?.strip_prefix("protocol")?;
+        Some(protocol.trim().to_owned())
+    }
+    /// Run `command` in the VM, `input` on its standard input, answering
+    /// the end of what it printed, as on an SSH host.
+    pub(super) async fn run(
+        &self,
+        command: String,
+        input: Option<std::fs::File>,
+    ) -> io::Result<String> {
+        let mut ssh = ssh(&self.directory, self.endpoint);
+        // A build sent is compressed on the way.
+        if input.is_some() {
+            ssh.args(["-o", "Compression=yes"]);
+        }
+        ssh.args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
+            .arg(format!("user@{}", self.endpoint.ip()))
+            .arg(command)
+            .stdin(input.map_or_else(Stdio::null, Stdio::from))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = ssh.spawn()?;
+        if let Some(stderr) = child.stderr.take() {
+            log_stderr(&format!("boat {}", self.vm), stderr);
+        }
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("missing command stdout"))?;
+        let output = read_tail(stdout).await?;
+        child.wait().await?;
+        Ok(String::from_utf8_lossy(&output).into_owned())
     }
     pub(super) async fn connect(
         api: &Api,
@@ -195,8 +264,14 @@ impl SshAccess {
             local_program,
             remote_socket,
             workspace,
+            vm: vm.to_owned(),
         }))
     }
+}
+/// `script` run by `sh`, whatever the VM account's login shell is, as the
+/// installer's own commands are.
+fn posix(script: &str) -> String {
+    format!("sh -c '{}'", script.replace('\'', "'\\''"))
 }
 fn ssh(directory: &tempfile::TempDir, endpoint: SocketAddr) -> Command {
     let mut command = Command::new("ssh");
@@ -292,7 +367,7 @@ fn vm_command(
         ));
     }
     Some((
-        "/opt/nessa/bin/nessa".into(),
+        VM_NESSA.into(),
         relay_arguments(remote_socket, server, configuration),
     ))
 }
@@ -335,6 +410,17 @@ impl ArtifactChannels for SshAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_with_its_own_quotes_reaches_sh_whole() {
+        let script = posix("echo 'a  b'; echo \"$(echo c)\"");
+        // The VM's sshd hands the command to the account's login shell.
+        let said = std::process::Command::new("bash")
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&said.stdout), "a  b\nc\n");
+    }
 
     fn stand_in(server: &str) -> Vec<String> {
         relay_arguments("/gateway/mcp.sock", server, "digest")

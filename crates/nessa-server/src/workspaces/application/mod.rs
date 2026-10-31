@@ -6,6 +6,6 @@ pub(crate) use runtime_settings::{
     RuntimeSettings,
 };
 pub(crate) use workspaces::{
-    Assignments, Provider, RecoveryAudit, RecoveryEvent, Settings, WorkspaceReceipt,
-    WorkspaceRuntime, WorkspaceStream, Workspaces,
+    Assignments, Provider, RecoveryAudit, RecoveryEvent, RestCause, ServedCopy, Settings,
+    WorkspaceReceipt, WorkspaceRuntime, WorkspaceStream, Workspaces,
 };

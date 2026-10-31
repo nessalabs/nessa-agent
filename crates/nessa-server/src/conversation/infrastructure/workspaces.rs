@@ -1,16 +1,19 @@
 //! Adapt per-thread workspace streams to the conversation environment contract.
 use super::ssh_environment::{
-    ArtifactTransport, EnvironmentAudit, LeaseConnection, SshEnvironment, WorkspaceConnector,
+    ArtifactTransport, EnvironmentAudit, HostInstaller, LeaseConnection, RemoteShell, ShellFuture,
+    SshEnvironment, WorkspaceConnector,
 };
 use crate::{
     conversation::application::{
         ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
-        MAX_RETAINED_ENVIRONMENTS,
+        WorkspaceRest, MAX_RETAINED_ENVIRONMENTS,
     },
-    workspaces::application::Workspaces,
+    env::LEASE_PROTOCOL,
+    workspaces::application::{RestCause, ServedCopy, WorkspaceRuntime, Workspaces},
 };
+use futures_util::future::{BoxFuture, FutureExt, Shared};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::LeaseRefusal;
+use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -25,12 +28,133 @@ pub(crate) struct ThreadWorkspaces {
     pub(crate) service: Arc<Workspaces>,
     pub(crate) channels: Arc<dyn ChannelStore>,
     pub(crate) audit: Arc<dyn EnvironmentAudit>,
+    /// Puts this build in a VM whose image's copy speaks another lease
+    /// protocol, as on an SSH host.
+    pub(crate) installer: Arc<HostInstaller>,
     pub(crate) environments: Mutex<BTreeMap<String, Arc<SshEnvironment>>>,
 }
+/// The VM's copy being chosen, and installed if it must be, on a task of
+/// its own: an install outlasts the opening that started it.
+type PendingCopy = Shared<BoxFuture<'static, Result<ServedCopy, LeaseRefusal>>>;
 struct Connector {
     service: Arc<Workspaces>,
     channels: Arc<dyn ChannelStore>,
     conversation: ConversationId,
+    copies: VmCopies,
+}
+/// Which copy of `nessa` serves one thread's VM.
+struct VmCopies {
+    audit: Arc<dyn EnvironmentAudit>,
+    installer: Arc<HostInstaller>,
+    conversation: ConversationId,
+    /// The one [`PendingCopy`] of this thread's VM, while it runs.
+    choosing: Arc<Mutex<Option<PendingCopy>>>,
+}
+impl VmCopies {
+    /// [`served_copy`] for this thread's VM, carried through on a task of
+    /// its own. An install of a build into a VM can take longer than one
+    /// opening may wait: one that gives up leaves it running, and the
+    /// next opening waits on the same one, never a second.
+    async fn copy(
+        &self,
+        runtime: Arc<dyn WorkspaceRuntime>,
+        install: bool,
+    ) -> Result<ServedCopy, LeaseRefusal> {
+        let pending = {
+            let mut choosing = self
+                .choosing
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match choosing.as_ref() {
+                Some(pending) => pending.clone(),
+                None => {
+                    let installer = self.installer.clone();
+                    let audit = self.audit.clone();
+                    let conversation = self.conversation.clone();
+                    let done = self.choosing.clone();
+                    let task = tokio::spawn(async move {
+                        // Let go once done, a panic included, so the next
+                        // opening asks the VM again.
+                        let _done = Done(done);
+                        served_copy(
+                            &installer,
+                            audit.as_ref(),
+                            &conversation,
+                            runtime.as_ref(),
+                            install,
+                        )
+                        .await
+                    });
+                    let pending = async move {
+                        task.await
+                            .unwrap_or(Err(LeaseRefusal::EnvironmentUnreachable))
+                    }
+                    .boxed()
+                    .shared();
+                    *choosing = Some(pending.clone());
+                    pending
+                }
+            }
+        };
+        pending.await
+    }
+}
+/// The copy of `nessa` in `conversation`'s VM that serves its leases,
+/// chosen before either starts: the image's own when it speaks this build's
+/// lease protocol; else this build, where it is installed in the VM, or is
+/// installed now by `installer`. A VM made from an image an earlier build
+/// pinned keeps its files and gets this build beside them. An account of a
+/// lease already held (`install` false) never installs, and nothing is
+/// installed on a guess: a VM that could not be asked, with no copy found,
+/// is served its image's.
+async fn served_copy(
+    installer: &HostInstaller,
+    audit: &dyn EnvironmentAudit,
+    conversation: &ConversationId,
+    runtime: &dyn WorkspaceRuntime,
+    install: bool,
+) -> Result<ServedCopy, LeaseRefusal> {
+    let image = runtime.image_protocol().await;
+    if image.as_deref() == Some(LEASE_PROTOCOL) {
+        return Ok(ServedCopy::Image);
+    }
+    // The VM is named by its thread in the install's records, and the
+    // thread stands for the lease: they join the thread's lease records.
+    let host = SshDestination::new(format!("boat-{conversation}"))
+        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+    let shell = VmShell(runtime);
+    if installer.installed_on(&shell, &host).await != Some(true) {
+        if !(install && image.is_some()) {
+            return Ok(ServedCopy::Image);
+        }
+        installer
+            .ensure_on(&shell, &host, &conversation.to_string(), audit)
+            .await?;
+    }
+    Ok(ServedCopy::Installed(installer.serve_command().await?))
+}
+/// Clears a thread's [`PendingCopy`] when its task ends, however it ends.
+struct Done(Arc<Mutex<Option<PendingCopy>>>);
+impl Drop for Done {
+    fn drop(&mut self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
+/// A VM's own connection, as the installer's shell: the host it is given
+/// only names the VM in the records.
+struct VmShell<'a>(&'a dyn WorkspaceRuntime);
+impl RemoteShell for VmShell<'_> {
+    fn run<'a>(
+        &'a self,
+        _: &'a SshDestination,
+        command: String,
+        input: Option<std::fs::File>,
+    ) -> ShellFuture<'a> {
+        self.0.run(command, input)
+    }
 }
 impl WorkspaceConnector for Connector {
     fn connect(
@@ -62,7 +186,8 @@ impl WorkspaceConnector for Connector {
                     tracing::warn!(?error, "Boat workspace could not be prepared");
                     LeaseRefusal::EnvironmentUnreachable
                 })?;
-            let stream = runtime.serve().await.map_err(|error| {
+            let copy = self.copies.copy(runtime.clone(), provision).await?;
+            let stream = runtime.serve(copy).await.map_err(|error| {
                 tracing::warn!(?error, "Boat environment process could not be started");
                 LeaseRefusal::EnvironmentUnreachable
             })?;
@@ -104,6 +229,12 @@ impl ThreadEnvironments for ThreadWorkspaces {
                 service: self.service.clone(),
                 channels: self.channels.clone(),
                 conversation: conversation.clone(),
+                copies: VmCopies {
+                    audit: self.audit.clone(),
+                    installer: self.installer.clone(),
+                    conversation: conversation.clone(),
+                    choosing: Arc::default(),
+                },
             }),
             self.audit.clone(),
         ));
@@ -113,8 +244,16 @@ impl ThreadEnvironments for ThreadWorkspaces {
     fn available(&self) -> EnvironmentFuture<'_, bool> {
         Box::pin(async move { self.service.settings.read().await.is_ok() })
     }
-    fn rest<'a>(&'a self, conversation: &'a ConversationId) -> EnvironmentFuture<'a, bool> {
+    fn rest<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+        cause: WorkspaceRest,
+    ) -> EnvironmentFuture<'a, bool> {
         Box::pin(async move {
+            let cause = match cause {
+                WorkspaceRest::Idle => RestCause::Idle,
+                WorkspaceRest::Closed => RestCause::Closed,
+            };
             let environment = self
                 .environments
                 .lock()
@@ -136,7 +275,11 @@ impl ThreadEnvironments for ThreadWorkspaces {
                     wait *= 2;
                 }
             }
-            match self.service.rest(conversation.clone()).await {
+            let rested = self.service.rest(conversation.clone(), cause).await;
+            if rested.audit_failed {
+                tracing::warn!(conversation_id = %conversation, "the record of the conversation's VM stop could not be kept");
+            }
+            match rested.stopped {
                 Ok(stopped) => stopped,
                 Err(error) => {
                     tracing::warn!(conversation_id = %conversation, ?error, "the conversation's VM could not be stopped; it keeps running until its own time limit");
@@ -146,3 +289,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
         })
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/conversation/workspace_copies.rs"]
+mod tests;

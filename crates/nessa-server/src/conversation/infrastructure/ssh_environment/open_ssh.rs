@@ -109,8 +109,8 @@ const MAX_STDERR_LINES: usize = 32;
 const MAX_SHELL_OUTPUT: usize = 4096;
 
 /// Log the first lines of `ssh`'s own standard error.
-fn log_stderr(host: &SshDestination, stderr: impl AsyncRead + Send + Unpin + 'static) {
-    let host = host.as_str().to_owned();
+pub(crate) fn log_stderr(host: &str, stderr: impl AsyncRead + Send + Unpin + 'static) {
+    let host = host.to_owned();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         let mut kept = 0;
@@ -143,7 +143,7 @@ impl LeaseConnector for OpenSshConnector {
             .take()
             .ok_or_else(|| io::Error::other("no ssh stdin"))?;
         if let Some(stderr) = child.stderr.take() {
-            log_stderr(host, stderr);
+            log_stderr(host.as_str(), stderr);
         }
         Ok(LeaseConnection {
             mcp_relay: None,
@@ -182,7 +182,7 @@ impl ArtifactChannels for Channels {
             .take()
             .ok_or_else(|| io::Error::other("no ssh stdin"))?;
         if let Some(stderr) = child.stderr.take() {
-            log_stderr(&self.host, stderr);
+            log_stderr(self.host.as_str(), stderr);
         }
         Ok(ArtifactChannel {
             from_host: Box::new(stdout),
@@ -215,7 +215,7 @@ impl RemoteShell for OpenSshConnector {
                 .kill_on_drop(true)
                 .spawn()?;
             if let Some(stderr) = child.stderr.take() {
-                log_stderr(host, stderr);
+                log_stderr(host.as_str(), stderr);
             }
             let stdout = child
                 .stdout
@@ -231,7 +231,7 @@ impl RemoteShell for OpenSshConnector {
 /// Reads `stream` to its end, keeping only its last [`MAX_SHELL_OUTPUT`]
 /// bytes: a login shell may say anything first, and the answer is the last
 /// line.
-async fn read_tail(mut stream: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
+pub(crate) async fn read_tail(mut stream: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
     let mut tail = Vec::new();
     let mut chunk = [0; 1024];
     loop {

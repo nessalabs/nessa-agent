@@ -284,3 +284,58 @@ erasure attestation. Prior saved images remain available. The original readiness
 regression failed with the stale pin and passed with this mapping; exact protocol
 refusal is unchanged. See the source-specific
 [publication receipt](../../../verification/desktop/evidence/vault/phone-worker-release-receipt.json).
+
+## A VM keeps working across an update
+
+The image a new VM is made from is the one this build pins
+(`release.rs`), never the image saved with the account when it was connected:
+that one may be an earlier build's, whose `nessa` speaks a lease protocol this
+build no longer does. Before #1219's follow-up, every thread created after an
+update got a VM from the saved image and was refused
+`environment_version_mismatch` on every send.
+
+A VM made from an earlier image keeps its files and is not replaced. Each
+opening first asks the image's own `nessa env protocol`. When that is not this
+build's, the gateway installs this build in the VM over the VM's own SSH
+connection, exactly as it installs on an SSH host (`HostInstaller`, kept under
+`~/.nessa/env/<digest>`, records naming the VM `boat-<thread>`), and serves
+that copy. Which copy serves is chosen before either starts, so when it ends
+the connection ends with it. A VM that could not be asked gets nothing
+installed on a guess: it is served this build's copy if one is there, else its
+image's, and the next opening asks again. An account of a lease already held
+never installs: it is served the copy that is there. A development build pins no release for Linux, so from a
+Mac it cannot install and the opening is refused
+`environment_platform_unsupported`.
+
+The install runs on a task of its own, one per thread: an opening whose 120 s
+connect wait runs out while the build is still being sent is refused
+`environment_unreachable`, the install goes on, and the next send waits on that
+same install rather than starting another.
+
+```mermaid
+sequenceDiagram
+    participant G as Gateway (Connector)
+    participant V as VM
+    G->>V: sh -c '/opt/nessa/bin/nessa env protocol'
+    alt this build's protocol
+        G->>V: serve the image's copy
+    else another, none, or could not be asked
+        G->>V: probe ~/.nessa/env/<digests>
+        alt present
+            G->>V: serve the installed copy
+        else absent, and the image said another protocol
+            G->>V: upload this build (or its pinned Linux release), on its own task
+            G->>V: serve the installed copy
+        else absent otherwise
+            G->>V: serve the image's copy
+        end
+    end
+```
+
+Relayed MCP servers still start the image's own `nessa mcp-relay`, and the
+managed shell is the image's `nessa-mcp`; neither speaks the lease protocol.
+
+Each stop of a VM is recorded before Boat is asked (`workspace_stop_requested`)
+and once it answers (`workspace_stop_answered`, `accepted` or the failure's
+kind). Accepted means Boat took the stop: the VM archives after it, which an
+opening waits out.
