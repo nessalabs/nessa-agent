@@ -982,6 +982,7 @@ function FormDialog({
           <Button
             variant="outline"
             data-mcp-action="cancel"
+            disabled={busy}
             onClick={() => dispatch({ type: "cancelForm" })}
           >
             Cancel
@@ -1219,16 +1220,17 @@ function FormDialog({
 function CommandRow({ form, problemId }: { form: ServerForm; problemId: string }) {
   const { openConfig } = useContext(McpServersContext)
   const [failed, setFailed] = useState<string | null>(null)
-  const shortName = (part: string) => part.split(/[\\/]/).filter(Boolean).pop() ?? part
-  const command = [form.command, ...form.args.map((row) => row.value)]
-    .map(shortName)
-    .join(" ")
+  // The program by its name, its arguments as they are: a shortened
+  // argument (a package, a URL, a flag's path) would misstate what runs.
+  const program = form.command.split(/[\\/]/).filter(Boolean).pop() ?? form.command
+  const full = [form.command, ...form.args.map((row) => row.value)].join(" ")
+  const command = [program, ...form.args.map((row) => row.value)].join(" ")
   return (
     <SettingsRow
       label="Command"
       detail={
         <>
-          <code className="settings-server-command" data-mcp-command>
+          <code className="settings-server-command" data-mcp-command title={full}>
             {command}
           </code>
           {sentences.commandInConfig}

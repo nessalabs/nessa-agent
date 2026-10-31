@@ -1017,7 +1017,8 @@ export const linesOf = (value: string) =>
 
 /**
  * The save a form asks for. A stored variable not edited keeps its value
- * (`null`); edited, its value is sent, the empty one too (S1, S2). A row with
+ * (`null`); edited, its value is sent. An edited stored value left empty never
+ * gets here: it holds Save until it is typed or kept (S1, S2). A row with
  * neither name nor value is a blank one and is not sent.
  */
 export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {

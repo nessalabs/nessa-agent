@@ -892,6 +892,7 @@ html:not(.dark) .settings .settings-card {
 
 /* Where the managed row has no menu: its switch stays in line with the rest. */
 .settings-server-actions-space {
+  /* The small IconButton's square (icon-button.css, data-size="sm"). */
   width: 26px;
 }
 
@@ -1005,8 +1006,10 @@ html:not(.dark) .settings .settings-card {
 .settings-mcp-dialog .settings-server-command {
   display: block;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
   color: var(--foreground);
+  /* Arguments are shown whole, so a long one wraps rather than widening the dialog. */
+  overflow-wrap: anywhere;
 }
 
 .settings-field {
@@ -1104,7 +1107,7 @@ html:not(.dark) .settings .settings-card {
   justify-content: flex-end;
   gap: 4px;
   color: var(--desktop-muted);
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
 }
 
 .settings-variable .settings-input,
@@ -1178,7 +1181,7 @@ html:not(.dark) .settings .settings-card {
 .settings-tools code,
 .settings-tool-ui code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
   overflow-wrap: anywhere;
 }
 

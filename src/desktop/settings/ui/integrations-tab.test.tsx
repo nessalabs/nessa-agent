@@ -340,6 +340,10 @@ describe("Integrations", () => {
     expect(document.querySelector("[data-mcp-command]")?.textContent).toBe(
       "node server.mjs",
     )
+    // The program by its name, the arguments as they are; the whole path on hover.
+    expect(document.querySelector("[data-mcp-command]")?.getAttribute("title")).toBe(
+      "/usr/bin/node server.mjs",
+    )
     const problem = document.querySelector('[data-mcp-problem="command"]')
     // Drawn, empty, before any refusal: what arrives in it is read out.
     expect(problem?.getAttribute("role")).toBe("alert")

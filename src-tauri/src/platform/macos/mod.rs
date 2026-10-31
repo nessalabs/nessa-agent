@@ -118,7 +118,8 @@ impl Host for Macos {
     }
 
     fn open_file(&self, path: &std::path::Path) -> Result<(), String> {
-        // `-t`: the default text editor, whatever app claims `.json`.
+        // `-t`: the person's default text editor, whatever app claims `.json`
+        // (often a viewer that cannot save).
         let mut child = Command::new("/usr/bin/open")
             .arg("-t")
             .arg(path)

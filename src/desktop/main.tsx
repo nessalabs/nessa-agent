@@ -209,8 +209,14 @@ createRoot(container).render(
                   <McpServersProvider
                     gateway={dependencies.mcpServers}
                     // The app's own gateway is on this computer: its config
-                    // file can be opened here. A browser's may be anywhere.
-                    openConfig={backend === "host" ? openGatewayConfig : undefined}
+                    // file can be opened here, where the host has an opener
+                    // (macOS, Linux). A browser's may be anywhere.
+                    openConfig={
+                      backend === "host" &&
+                      (host.kind === "macos" || host.kind === "linux")
+                        ? openGatewayConfig
+                        : undefined
+                    }
                   >
                     <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
                       <DevicesProvider gateway={dependencies.devices}>

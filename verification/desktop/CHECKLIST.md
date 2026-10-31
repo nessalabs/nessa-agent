@@ -1174,45 +1174,48 @@ phone's scanner is not this screen.
   raised count), `crates/nessa-mcp/src/main.rs`'s command environment test, and
   `crates/nessa-server/tests/github/mod.rs`'s read/disconnect tests.
 
-### Integrations: the gateway's MCP servers
+### MCP servers: the gateway's MCP servers
 
 #391 PR 3's design (the issue's comments of its state table, rows U1–U31,
 U32–U43 from its review, U44–U50 for a list too large to show, and S1–S8,
 G1–G9 and F8–F12 for the secret field and names stored more than once):
-Settings › Connections › Integrations manages the gateway's stored MCP
-servers over `client.mcpServers`. Every row is a test of
+Settings › Connections › MCP servers manages the gateway's stored MCP
+servers over `client.mcpServers`. Each server is one row (tile, name, a short
+line, its switch, a ⋯ menu with Edit…, Show Tools… and Remove…); each of
+those opens a dialog. Every row is a test of
 `settings/model/mcp-servers.test.ts`, `settings/ui/integrations-tab.test.tsx`
 or the script below. Gate 13: the window shows no limit the protocol does not
 publish, and refuses nothing the gateway would judge.
 
-- [ ] **With no gateway, Integrations is pending** — the sample preview,
+- [ ] **With no gateway, MCP servers is pending** — the sample preview,
   whose workspace is the in-memory one (U1); the app window and the
   `?gateway` preview have one. _Check:_ unit test `integrations-tab.test.tsx`.
 - [ ] **Each write is the gateway's, and the list is what is shown** (gate 16):
-  added with a variable, one row, its switch on, "1 variable", and the
+  added with a variable, one row, its switch on, "Local · 1 variable", and the
   variable's value nowhere in the page — markup or field — after the save
   (U7, U8, U31); inspected, seen running — the test server slow to start
   (`--initialize-delay-ms`), so the running state is read, not raced — with
-  Inspect and Close resting, then `show_chart` badged UI and `app_delete_row`
+  Done resting and no corner close, then `show_chart` badged UI and `app_delete_row`
   destructive, complete (U22, U23); the switch
-  rests while its save is in flight and shows the new list's state (U12);
-  renamed, one row, its variable kept, the stored value "Stored value kept"
-  (U10, U11); given another command, the gateway refusing a kept value under
-  it, the value asked for again, why said, and Save held until it is typed,
-  then saved with the row showing the new command (U33); a conflict made by
+  and the row's ⋯ rest while its save is in flight and show the new list's
+  state (U12); renamed, one row, its variable kept, at rest as "Stored" (U10,
+  U11); the command is named in the edit dialog, not a field (it is changed in
+  config.json); the gateway refuses a kept value under another command, and in
+  the window a variable added asks for the stored value again, says why, and
+  holds Save until it is typed, then "Local · 2 variables" (U33); a conflict made by
   another writer first is refused, said, the list reloaded, what was typed
   kept and what was not refilled from the reload (U15, U42); removal asked first, nothing
   sent until confirmed, then the row gone (U13, U14), and an inspection
-  running as its server is removed says the server is gone; Inspect rests
+  running as its server is removed says the server is gone; the row's ⋯ rests
   while a write is in flight (U21). Each write is exactly
   one `mcpServers` request and one list after it. _Check:_
   `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,relaunch,conflict,remove`
   (needs the gateway built and an agent's harness installed).
 - [ ] **Focus follows what opens and closes** — Add and Edit put it on the
   form's first field; Remove on the confirm's Cancel, which its sentence
-  describes; Inspect on the panel's heading; Cancel, Escape, Save and Close
-  put it back on the row's button that opened the part, or on Add (a save's
-  once the list after it is read). Escape closes the form and the confirm,
+  describes; Show Tools inside its dialog; Cancel, Escape, Save and Done
+  put it back on the row's ⋯, or on Add (a save's once the list after it is
+  read; a row renamed or removed, on Add). Escape closes the form and the confirm,
   and never Settings. _Check:_ `mcp-servers-gateway.mjs --only focus`
   (`document.activeElement` after each); unit tests `integrations-tab.test.tsx`
   (`focus`).
@@ -1223,16 +1226,17 @@ publish, and refuses nothing the gateway would judge.
   Add (F11, F12). A variable's value is a password field, so a typed value is
   in no accessibility tree; a paste with line breaks is held and never drawn,
   "Pasted value: N lines", a trailing line break pointed out and trimmed only
-  when asked, Clear to drop it (S3–S6). A stored value not edited is kept; edited
-  to empty, it is cleared, said so, with "Keep stored value" (S1, S2, Codex
-  P1). _Check:_ `mcp-servers-gateway.mjs --only secret` (the accessibility
+  when asked, Clear to drop it (S3–S6). A stored value rests as "Stored" until
+  Replace; Replace left untouched keeps it; typed and then erased, Save is
+  held, said so, until a value is typed or Keep is pressed. A save never
+  blanks a stored value (S1, S2, Codex P1). _Check:_ `mcp-servers-gateway.mjs --only secret` (the accessibility
   tree over CDP in Chromium, the ARIA snapshot in WebKit); unit tests
   `mcp-servers.test.ts`, `integrations-tab.test.tsx`.
 - [ ] **A name stored more than once is one read-only group** — config.json
   edited to store three servers under one name: "3 servers share this name",
-  each read-only with no Edit, Inspect or switch, and one action "Remove the
-  first server named …", asked first in those words; each removal takes the
-  first stored, focus staying on the group while it lasts, then on the row
+  each read-only with no Edit, Show Tools or switch, and one ⋯ action "Remove
+  the first server named …", asked first in those words; each removal takes the
+  first stored, focus staying on the group's ⋯ while it lasts, then on the row
   left (G3–G6). _Check:_ `mcp-servers-gateway.mjs --only duplicate-names`;
   unit tests (G1–G9).
 - [ ] **What the gateway says is read out** — the notices, each field's
@@ -1259,6 +1263,14 @@ publish, and refuses nothing the gateway would judge.
   typed kept, no notice, nothing listed again and config.json unchanged (U48).
   _Check:_ `mcp-servers-gateway.mjs --only too-large,save-too-large`; unit
   tests `mcp-servers.test.ts`, `integrations-tab.test.tsx` (U46, U47, U49, U50).
+- [ ] **Edit opens config.json in the person's app** — the edit dialog's
+  "Open config.json" asks the host for the gateway's own config.json (the page
+  names no path); the host opens it only when it is a regular file, never
+  through a link. The button is there in the app on macOS and Linux, and absent
+  in a browser and on Windows, which have no opener. A refusal is said under
+  Command. _Check:_ unit tests `integrations-tab.test.tsx` ("Open config.json",
+  "no host"); `src-tauri/src/gateway_config.rs` tests. The OS openers
+  (`open -t`, `xdg-open`) are owner-run.
 - [ ] **A credential without `credential.manage` sees "Only an administrator
   can manage MCP servers", no control, and sends no `mcpServers` request**
   (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.

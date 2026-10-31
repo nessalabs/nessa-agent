@@ -71,7 +71,8 @@ impl Host for Linux {
     }
 
     fn open_file(&self, path: &std::path::Path) -> Result<(), String> {
-        // The person's default app for the file.
+        // The app registered for the file's type (application/json): an
+        // editor or a viewer, as the person set it.
         let mut child = Command::new("xdg-open")
             .arg(path)
             .spawn()

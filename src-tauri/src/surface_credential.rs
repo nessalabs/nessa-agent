@@ -970,6 +970,25 @@ mod tests {
         );
     }
 
+    /// `config.json` sits at the top of the namespace, as the gateway's
+    /// `runtime_config::config_path` puts it: the host opens the same file the
+    /// gateway reads, prod and staged alike.
+    #[test]
+    fn the_config_file_is_the_one_the_gateway_reads() {
+        let base = || Some(absolute("data"));
+        let prod = service_namespace(base(), "prod", None).expect("prod namespace");
+        assert_eq!(prod.config_file(), absolute("data").join("config.json"));
+        let staged = service_namespace(base(), "dev", Some("wt")).expect("dev namespace");
+        assert_eq!(
+            staged.config_file(),
+            absolute("data")
+                .join("dev")
+                .join("instances")
+                .join("wt")
+                .join("config.json")
+        );
+    }
+
     /// A namespace that cannot be trusted yields no root, and a credential with
     /// no root is unreadable rather than read from somewhere unintended. These
     /// values come from the environment and are joined into a path.

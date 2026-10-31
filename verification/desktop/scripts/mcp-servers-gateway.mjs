@@ -41,7 +41,7 @@
  */
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import {
@@ -1033,8 +1033,8 @@ const checks = {
         `the gateway answered a kept value under another command with ${JSON.stringify(refused)}`,
       )
     if (command.field !== 0) failures.push("the edit form offers the command as a field")
-    const short = (part) => part.split("/").pop()
-    if (command.named !== [process.execPath, ...server.args].map(short).join(" "))
+    // The program by its name, its arguments whole.
+    if (command.named !== [basename(process.execPath), ...server.args].join(" "))
       failures.push(`the edit form names the command "${command.named}"`)
     if (before.atRest !== 1 || before.note !== "" || !before.saveEnabled)
       failures.push(`before the change: ${JSON.stringify(before)}`)
