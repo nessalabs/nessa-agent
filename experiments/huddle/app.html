@@ -189,7 +189,7 @@
   });
 
   // ---- Stage: show, draw, view, clear ----
-  var current = null, marks = {}, markId = 0, zoom = 1;
+  var current = null, marks = {}, markId = 0, zoom = 1, shows = 0;
   var paper = $("paper"), stage = $("stage"), ink = $("ink");
   // A row is one source line, or one markdown block covering data-n to data-to.
   function lineEl(n) {
@@ -210,6 +210,7 @@
   async function show(args) {
     var file = await callTool("huddle_read_file", { path: args.path });
     current = file.path;
+    var shown = ++shows;
     $("file").textContent = file.path;
     Object.keys(marks).forEach(function (id) { removeMark(id); });
     Array.prototype.slice.call(paper.children).forEach(function (el) { if (el !== ink) el.remove(); });
@@ -227,8 +228,11 @@
       row.appendChild(no); row.appendChild(tx); frag.appendChild(row);
     });
     paper.insertBefore(frag, ink);
+    // Diagrams are drawn before show answers, so a mark the model makes next lands
+    // on the drawing and is not wiped when the drawing replaces the code rows.
+    await upgradeDiagrams();
+    if (shown !== shows) return { shown: file.path, replaced: true };
     if (args.line) view({ line: args.line }); else stage.scrollTop = 0;
-    upgradeDiagrams();
     shownText = numbered(lines);
     return { shown: file.path, lines: lines.length, content: shownText.text, cut: shownText.cut };
   }
