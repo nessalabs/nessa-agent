@@ -144,16 +144,7 @@ export function BoatConnectionFields({ connection }: { connection: BoatConnectio
   const { gateway, status, token, setToken, busy, error } = connection
   return (
     <div className="settings-boat">
-      {!gateway && (
-        <p role="status">Connect this window to a Nessa gateway to manage Boat.</p>
-      )}
-      <p>
-        Connect ChatGPT or Claude in{" "}
-        <a href="https://boat.dev/dashboard?tab=agents" target="_blank" rel="noreferrer">
-          Boat
-        </a>{" "}
-        once, then choose Boat when creating a channel.
-      </p>
+      {!gateway && <p role="status">Connect a gateway to manage Boat.</p>}
       {status?.state === "locked" ? (
         // Whether a token is saved is unknown until the vault opens: unlock,
         // never a form that would replace a token already there.
@@ -175,7 +166,7 @@ export function BoatConnectionFields({ connection }: { connection: BoatConnectio
             void connection.save()
           }}
         >
-          <label htmlFor={tokenId}>Boat API token</label>
+          <label htmlFor={tokenId}>API token</label>
           <div className="settings-boat-fields">
             <input
               id={tokenId}
@@ -183,6 +174,7 @@ export function BoatConnectionFields({ connection }: { connection: BoatConnectio
               type="password"
               autoComplete="off"
               spellCheck={false}
+              placeholder="Paste your Boat token"
               value={token}
               onChange={(event) => setToken(event.target.value)}
               disabled={busy || !gateway}
@@ -201,10 +193,19 @@ export function BoatConnectionFields({ connection }: { connection: BoatConnectio
           </div>
         </form>
       )}
-      <p className="settings-boat-note">
-        The token is stored in Nessa’s encrypted vault. Disconnecting forgets it here;
-        existing Boat VMs keep running until stopped in Boat.
-      </p>
+      {status?.state !== "connected" && status?.state !== "locked" && gateway && (
+        <p className="settings-boat-note">
+          Get one, and connect ChatGPT or Claude, in{" "}
+          <a
+            href="https://boat.dev/dashboard?tab=agents"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Boat
+          </a>
+          .
+        </p>
+      )}
       <BoatRuntimeControl gateway={gateway} />
       {error && <p role="alert">{error}</p>}
     </div>

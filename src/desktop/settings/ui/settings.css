@@ -1562,13 +1562,31 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-boat-fields .settings-button {
   flex: none;
 }
+/* A token is one short paste: the field need not span the page. */
+.settings-boat-fields .settings-input {
+  flex: 0 1 260px;
+}
+.settings-boat-runtime {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.settings-boat-runtime > p {
+  flex-basis: 100%;
+}
+.settings-boat-select {
+  width: auto;
+  min-width: 140px;
+}
 .settings-boat-status {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 .settings-boat-note {
-  color: var(--desktop-faint);
+  /* A dialog is portaled outside the desktop surface that defines its tones. */
+  color: var(--desktop-faint, var(--muted-foreground));
   line-height: 1.5;
 }
 @media (max-width: 480px) {
