@@ -339,11 +339,7 @@ export function AddComputer({
                 ? "Recommended. Both machines signed in to the same tailnet reach each other from anywhere, with nothing open to the internet."
                 : "Only while both are on the same Wi-Fi or office network."}
             </p>
-            {reachable(listening) ? (
-              step.kind === "failed" ? null : (
-                reachBlock
-              )
-            ) : onlyThisMachine(listening ?? undefined) ? (
+            {!reachable(listening) && onlyThisMachine(listening ?? undefined) ? (
               <p className="devices-muted" role="status" data-devices-loopback>
                 {hubName ?? "The hub"} listens only to itself now ({listening}), so no
                 other computer can reach it yet. Set native.listenAddress in its
@@ -357,9 +353,8 @@ export function AddComputer({
             <h2>2. On the computer, run</h2>
             {step.kind === "making" ? (
               <LoadingText>Making a code</LoadingText>
-            ) : step.kind === "failed" && reachable(listening) ? (
-              reachBlock
-            ) : step.kind === "failed" ? (
+            ) : step.kind === "failed" && reachable(listening) ? null : step.kind ===
+              "failed" ? (
               <div className="devices-actions">
                 <p className="devices-muted" role="status">
                   The hub couldn&apos;t make a code.
@@ -403,6 +398,8 @@ export function AddComputer({
                 ))}
               </>
             )}
+            {/* Its own slot, so the button keeps focus as the step above changes. */}
+            {reachable(listening) ? reachBlock : null}
           </section>
 
           {step.kind === "waiting" || step.kind === "approving" ? (

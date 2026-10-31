@@ -3382,8 +3382,22 @@ const steps = {
         await list.locator("[data-devices-cloud]").click()
         const cloud = page.locator('[data-devices-page="cloud"]')
         await cloud.waitFor({ timeout: 5_000 })
-        if ((await cloud.locator('input[type="password"]').count()) !== 1)
-          failures.push("Boat's page has no token field")
+        // It says where Boat stands, and offers the one thing to do about it:
+        // unlock while the vault is locked, else a live token field.
+        const word = await waitFor(async () => {
+          const text = await cloud.locator("[data-devices-cloud-state]").innerText()
+          return /^(Connected|Not connected|Locked|Unavailable)\b/.test(text.trim())
+            ? text.trim().split(" ·")[0]
+            : null
+        }, 10_000)
+        if (!word) failures.push("Boat's page never said where Boat stands")
+        else if (word === "Locked") {
+          if (!(await cloud.locator('[data-boat-action="unlock"]').isEnabled()))
+            failures.push("Boat is locked and its page offers no Unlock")
+        } else if (word !== "Unavailable") {
+          if (!(await cloud.locator('input[type="password"]').isEnabled()))
+            failures.push(`Boat reads ${word} and its token field is not live`)
+        }
         await photograph("cloud")
         await cloud.locator('[data-devices-action="back"]').click()
         // Add device offers each kind; a computer gets a code and the two commands that use it.
@@ -6559,9 +6573,16 @@ async function reachFromDevices(run, failures) {
     failures.push("Add a computer offers no way to let others reach the hub")
     return false
   }
-  // The way to turn linking on is right here, never a pointer to Settings.
-  if ((await add.innerText()).includes("Settings ›"))
-    failures.push("Add a computer sends linking to Settings")
+  // The way to turn linking on sits with the code it lets the hub make.
+  if (
+    (await add
+      .locator("section", {
+        has: page.locator("h2", { hasText: "On the computer, run" }),
+      })
+      .locator('[data-devices-action="reach"]')
+      .count()) !== 1
+  )
+    failures.push("Let other computers reach it is not beside the code")
   let held = false
   await run.restartConsole.during(run.opened, async () => {
     const before = failures.length

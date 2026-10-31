@@ -149,12 +149,13 @@ export function DevicesView() {
             Pair the Nessa app to talk to the hub from anywhere.
           </p>
         </div>
-        <div className="devices-settings">
+        <div className="devices-settings settings-surface">
           <LinkedDevicesTab />
         </div>
       </div>
     )
-  if (page.kind === "cloud") return <CloudPage onBack={list} onChanged={devices.reload} />
+  if (page.kind === "cloud")
+    return <CloudPage cloud={devices.cloud} onBack={list} onChanged={devices.reload} />
   if (page.kind === "add-computer")
     return (
       <AddComputer
@@ -415,9 +416,11 @@ function Tile({
 function cloudWord(cloud: CloudState | null): string {
   return cloud === "connected"
     ? "Connected"
-    : cloud === null
-      ? "Unavailable"
-      : "Not connected"
+    : cloud === "locked"
+      ? "Locked"
+      : cloud === null
+        ? "Unavailable"
+        : "Not connected"
 }
 
 function CloudTile({
@@ -518,8 +521,18 @@ function AddDevice({
 }
 
 /** Boat's own page: its connection and VM settings, managed here. */
-function CloudPage({ onBack, onChanged }: { onBack: () => void; onChanged: () => void }) {
-  const connection = useBoatConnection(onChanged)
+function CloudPage({
+  cloud,
+  onBack,
+  onChanged,
+}: {
+  cloud: CloudState | null | undefined
+  onBack: () => void
+  onChanged: () => void
+}) {
+  // The list's poll is what notices the vault opening elsewhere: a new
+  // answer there reads Boat's status here again.
+  const connection = useBoatConnection(onChanged, cloud)
   const state = connection.status?.state
   return (
     <div className="devices-page" data-devices-page="cloud">
@@ -534,7 +547,11 @@ function CloudPage({ onBack, onChanged }: { onBack: () => void; onChanged: () =>
           <h1>Boat</h1>
           <p className="devices-status devices-detail-status" data-devices-cloud-state>
             <Dot status={state === "connected" ? "ready" : "offline"} />
-            {state === undefined ? "Reading…" : cloudWord(state)}
+            {state !== undefined
+              ? cloudWord(state)
+              : connection.unread
+                ? cloudWord(null)
+                : "Reading…"}
             <span className="devices-muted">{" · "}Cloud VMs</span>
           </p>
         </div>
@@ -552,7 +569,7 @@ function CloudPage({ onBack, onChanged }: { onBack: () => void; onChanged: () =>
           </Button>
         ) : null}
       </header>
-      <div className="devices-settings">
+      <div className="devices-settings settings-surface">
         <BoatConnectionFields connection={connection} />
       </div>
     </div>

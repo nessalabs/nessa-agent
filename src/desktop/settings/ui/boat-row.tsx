@@ -30,21 +30,27 @@ export function useBoatGateway() {
 export interface BoatConnection {
   readonly gateway: BoatGateway | undefined
   readonly status: BoatStatus | undefined
+  /** No status will come: there is no gateway, or its read failed. */
+  readonly unread: boolean
   readonly token: string
   readonly setToken: (token: string) => void
   readonly busy: boolean
   readonly error: string
   readonly save: () => Promise<void>
   readonly disconnect: () => Promise<void>
+  /** Asks for the vault, then reads the status again. */
+  readonly unlock: () => Promise<void>
 }
 
 /**
  * The token stays in this transient field, then in the encrypted gateway vault.
  * A saved infrastructure connection is distinct from model authentication.
- * `onChange` hears each status a save or disconnect answers.
+ * `onChange` hears each status a save or disconnect answers; a change of
+ * `seen`, what another read last said about the connection, reads it again.
  */
 export function useBoatConnection(
   onChange?: (status: BoatStatus) => void,
+  seen?: unknown,
 ): BoatConnection {
   const gateway = useContext(BoatContext)
   const ensure = useVaultUnlock()
@@ -53,22 +59,27 @@ export function useBoatConnection(
   const [token, setToken] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  const [readFailed, setReadFailed] = useState(false)
+  const [round, setRound] = useState(0)
   useEffect(() => {
     let current = true
     const revision = ++reads.current
+    setReadFailed(false)
     void gateway
       ?.read()
       .then((value) => {
         if (current && revision === reads.current) setStatus(value)
       })
       .catch(() => {
-        if (current && revision === reads.current)
+        if (current && revision === reads.current) {
+          setReadFailed(true)
           setError("Boat status could not be read.")
+        }
       })
     return () => {
       current = false
     }
-  }, [gateway])
+  }, [gateway, round, seen])
   const answered = (value: BoatStatus) => {
     setStatus(value)
     onChange?.(value)
@@ -110,7 +121,21 @@ export function useBoatConnection(
       setBusy(false)
     }
   }
-  return { gateway, status, token, setToken, busy, error, save, disconnect }
+  const unlock = async () => {
+    if (await ensure()) setRound((value) => value + 1)
+  }
+  return {
+    gateway,
+    status,
+    unread: status === undefined && (!gateway || readFailed),
+    token,
+    setToken,
+    busy,
+    error,
+    save,
+    disconnect,
+    unlock,
+  }
 }
 
 /** The token form, the VM lifetime, and any error: Boat's settings wherever they are shown. */
@@ -129,37 +154,53 @@ export function BoatConnectionFields({ connection }: { connection: BoatConnectio
         </a>{" "}
         once, then choose Boat when creating a channel.
       </p>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault()
-          void connection.save()
-        }}
-      >
-        <label htmlFor={tokenId}>Boat API token</label>
+      {status?.state === "locked" ? (
+        // Whether a token is saved is unknown until the vault opens: unlock,
+        // never a form that would replace a token already there.
         <div className="settings-boat-fields">
-          <input
-            id={tokenId}
-            className="settings-input settings-input-mono"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            disabled={busy || !gateway}
-          />
           <button
-            className="settings-button"
-            type="submit"
-            disabled={!token.trim() || busy || !gateway}
+            className="settings-button settings-button-primary"
+            type="button"
+            disabled={busy}
+            onClick={() => void connection.unlock()}
+            data-boat-action="unlock"
           >
-            {busy
-              ? "Connecting…"
-              : status?.state === "connected"
-                ? "Replace token"
-                : "Connect Boat"}
+            Unlock
           </button>
         </div>
-      </form>
+      ) : (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            void connection.save()
+          }}
+        >
+          <label htmlFor={tokenId}>Boat API token</label>
+          <div className="settings-boat-fields">
+            <input
+              id={tokenId}
+              className="settings-input settings-input-mono"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              disabled={busy || !gateway}
+            />
+            <button
+              className="settings-button"
+              type="submit"
+              disabled={!token.trim() || busy || !gateway}
+            >
+              {busy
+                ? "Connecting…"
+                : status?.state === "connected"
+                  ? "Replace token"
+                  : "Connect Boat"}
+            </button>
+          </div>
+        </form>
+      )}
       <p className="settings-boat-note">
         The token is stored in Nessa’s encrypted vault. Disconnecting forgets it here;
         existing Boat VMs keep running until stopped in Boat.

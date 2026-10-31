@@ -11,7 +11,13 @@
  * a 4px scale (4 8 12 16 24 32 48); type to four sizes (title, body 13.5,
  * small 12, label 11 set in capitals).
  */
-.settings {
+/*
+ * Settings' tones, and (below) its groups, rows and fields, also hold on a
+ * `.settings-surface`: another page that shows a setting where it is
+ * used — Boat on Devices, linking on Add a phone — draws it the same way.
+ */
+.settings,
+.settings-surface {
   /* The desktop's own tones, under Settings' names for what they do here. */
   --settings-hairline: var(--desktop-rim);
   --settings-fill: var(--desktop-pane-fill);
@@ -32,7 +38,9 @@
   --settings-column-w: min(var(--settings-column), 100% - 2 * var(--settings-margin));
   /* How a page arrives: quick, and only confirming what is already there. */
   --settings-arrive: 220ms;
+}
 
+.settings {
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -554,7 +562,7 @@ html:not(.dark) .settings-glass {
 
 /* ——— Groups and rows: the UI kit's, set for this page ——— */
 
-.settings .settings-group {
+:is(.settings, .settings-surface) .settings-group {
   gap: 10px;
 }
 
@@ -564,7 +572,7 @@ html:not(.dark) .settings-glass {
 }
 
 /* A group's title, where a tab has several: small and quiet, over its card. */
-.settings .settings-group > h2 {
+:is(.settings, .settings-surface) .settings-group > h2 {
   margin: 0;
   padding: 0 16px;
   color: var(--desktop-muted);
@@ -574,7 +582,7 @@ html:not(.dark) .settings-glass {
 }
 
 /* A group named like its tab: the tab already says it; the name stays for assistive technology. */
-.settings .settings-group[data-title="hidden"] > h2 {
+:is(.settings, .settings-surface) .settings-group[data-title="hidden"] > h2 {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -583,8 +591,8 @@ html:not(.dark) .settings-glass {
   white-space: nowrap;
 }
 
-.settings [data-slot="settings-group-card"],
-.settings .settings-card {
+:is(.settings, .settings-surface) [data-slot="settings-group-card"],
+:is(.settings, .settings-surface) .settings-card {
   overflow: hidden;
   border: 0;
   border-radius: var(--desktop-radius);
@@ -592,15 +600,15 @@ html:not(.dark) .settings-glass {
   box-shadow: inset 0 0 0 1px var(--settings-hairline);
 }
 
-html:not(.dark) .settings [data-slot="settings-group-card"],
-html:not(.dark) .settings .settings-card {
+html:not(.dark) :is(.settings, .settings-surface) [data-slot="settings-group-card"],
+html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   background: color-mix(in oklab, var(--background) 70%, white);
   box-shadow:
     inset 0 0 0 1px var(--settings-hairline),
     0 1px 2px rgb(0 0 0 / 4%);
 }
 
-.settings [data-slot="settings-group-footnote"] {
+:is(.settings, .settings-surface) [data-slot="settings-group-footnote"] {
   padding: 0 16px;
   color: var(--desktop-faint);
   font-size: var(--desktop-text-footnote);
@@ -621,19 +629,22 @@ html:not(.dark) .settings .settings-card {
   font-weight: 500;
 }
 
-.settings .settings-row {
+:is(.settings, .settings-surface) .settings-row {
   position: relative;
   gap: 8px;
   padding: 12px 16px;
 }
 
-.settings .settings-row > :first-child {
+:is(.settings, .settings-surface) .settings-row > :first-child {
   min-height: 28px;
   gap: 16px;
 }
 
 /* Hairlines between rows, starting where the words do, as a list's rules do. */
-.settings [data-slot="settings-group-card"] > .settings-row + .settings-row {
+:is(.settings, .settings-surface)
+  [data-slot="settings-group-card"]
+  > .settings-row
+  + .settings-row {
   border-top: 0;
 }
 
@@ -654,14 +665,14 @@ html:not(.dark) .settings .settings-card {
   background: var(--settings-hairline);
 }
 
-.settings [data-slot="settings-row-label"] {
+:is(.settings, .settings-surface) [data-slot="settings-row-label"] {
   color: var(--foreground);
   font-size: var(--desktop-text-body);
   line-height: 1.35;
   letter-spacing: -0.01em;
 }
 
-.settings [data-slot="settings-row-detail"] {
+:is(.settings, .settings-surface) [data-slot="settings-row-detail"] {
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
   line-height: 1.4;
@@ -701,15 +712,17 @@ html:not(.dark) .settings .settings-card {
 /* ——— Controls ——— */
 
 /* The kit's switch, in this page's ink: a satisfying, springy thumb. */
-.settings .settings-switch {
+:is(.settings, .settings-surface) .settings-switch {
   cursor: default;
 }
 
-.settings .settings-switch [data-slot="switch-thumb"] {
+:is(.settings, .settings-surface) .settings-switch [data-slot="switch-thumb"] {
   transition: transform 220ms var(--desktop-spring);
 }
 
-.settings .settings-switch:active:not(:disabled) [data-slot="switch-thumb"] {
+:is(.settings, .settings-surface)
+  .settings-switch:active:not(:disabled)
+  [data-slot="switch-thumb"] {
   width: 19px;
 }
 
@@ -720,13 +733,13 @@ html:not(.dark) .settings .settings-card {
 }
 
 /* The same ring, with the weight to outrank the kit's own. */
-.settings .settings-switch:focus-visible,
-.settings .settings-segmented button:focus-visible {
+:is(.settings, .settings-surface) .settings-switch:focus-visible,
+:is(.settings, .settings-surface) .settings-segmented button:focus-visible {
   outline: var(--settings-focus-outline);
   outline-offset: var(--settings-focus-offset);
 }
 
-.settings .settings-segmented button {
+:is(.settings, .settings-surface) .settings-segmented button {
   height: 26px;
   font-size: var(--desktop-text-footnote);
   font-weight: 500;
@@ -771,7 +784,7 @@ html:not(.dark) .settings .settings-card {
 }
 
 /* A list of keys reads as a list: its rows sit closer than a setting's. */
-.settings .settings-row:has(.settings-kbd) {
+:is(.settings, .settings-surface) .settings-row:has(.settings-kbd) {
   padding-block: 8px;
 }
 
@@ -849,15 +862,15 @@ html:not(.dark) .settings .settings-card {
  * A server's row wraps rather than squeezes: in a narrow page its actions go
  * under its name instead of pushing past the card, whatever the width.
  */
-.settings .settings-server > :first-child {
+:is(.settings, .settings-surface) .settings-server > :first-child {
   flex-wrap: wrap;
 }
 
-.settings .settings-server > :first-child > :not([data-slot]) {
+:is(.settings, .settings-surface) .settings-server > :first-child > :not([data-slot]) {
   flex: 1 1 12rem;
 }
 
-.settings .settings-server [data-slot="settings-row-control"] {
+:is(.settings, .settings-surface) .settings-server [data-slot="settings-row-control"] {
   max-width: 100%;
   flex-shrink: 1;
 }

@@ -218,8 +218,12 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
       return { state: "disconnected" }
     },
   }
-  const { gateway, calls: reads } = fakeGateway()
+  // Not connected is where the list once said "Connect in Settings ›".
+  const { gateway, calls: reads } = fakeGateway({
+    cloud: async () => ({ ok: true, value: "disconnected" }),
+  })
   const { host, root } = await mount(gateway, false, boat)
+  expect(text(host, "[data-devices-cloud] .devices-tile-foot")).toBe("Not connected")
   expect(host.textContent).not.toContain("Settings ›")
   await act(async () =>
     (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
@@ -237,6 +241,47 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
   expect(text(host, "[data-devices-cloud-state]")).toContain("Not connected")
   // The list reads again, so going back shows the new state.
   expect(reads.filter((call) => call === "list").length).toBeGreaterThan(before)
+  await act(async () => root.unmount())
+})
+
+it("offers Unlock, not a token field, while the vault is locked, then reads Boat again", async () => {
+  let locked = true
+  let cloud: "locked" | "connected" = "locked"
+  const boat: BoatGateway = {
+    runtimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
+    setRuntimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
+    read: async () =>
+      locked ? { state: "locked" } : { state: "connected", environment: "nessa" },
+    save: async () => ({ state: "connected", environment: "nessa" }),
+    disconnect: async () => ({ state: "disconnected" }),
+  }
+  const { gateway } = fakeGateway({ cloud: async () => ({ ok: true, value: cloud }) })
+  const { host, root } = await mount(gateway, false, boat)
+  expect(text(host, "[data-devices-cloud] .devices-tile-foot")).toBe("Locked")
+  await act(async () =>
+    (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
+  )
+  await act(async () => {})
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Locked")
+  expect(host.querySelector('input[type="password"]')).toBeNull()
+  expect(host.querySelector('[data-boat-action="unlock"]')).not.toBeNull()
+  // The vault opens elsewhere: the list's next read notices, and the page reads again.
+  locked = false
+  cloud = "connected"
+  await act(async () => vi.advanceTimersByTime(5_000))
+  await act(async () => {})
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Connected")
+  expect(host.querySelector('input[type="password"]')).not.toBeNull()
+  await act(async () => root.unmount())
+})
+
+it("says Unavailable, not Reading, when there is no Boat to read", async () => {
+  const { host, root } = await mount(fakeGateway().gateway)
+  await act(async () =>
+    (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
+  )
+  await act(async () => {})
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Unavailable")
   await act(async () => root.unmount())
 })
 
@@ -456,12 +501,34 @@ it("offers turning linking on where a code could not be made, with no trip to Se
   )
   expect(host.textContent).not.toContain("Try again")
   expect(host.textContent).not.toContain("Settings ›")
+  // It sits in the card the code goes in.
+  expect(reaches[0]?.closest(".devices-card")?.querySelector("h2")?.textContent).toBe(
+    "2. On the computer, run",
+  )
   await act(async () => (reaches[0] as HTMLButtonElement).click())
   await act(async () => vi.advanceTimersByTime(1_000))
   await act(async () => {})
   await act(async () => {})
   expect(calls).toContain("pair")
   expect(host.querySelectorAll("[data-devices-command]")).toHaveLength(2)
+  await act(async () => root.unmount())
+})
+
+it("a hub that does not come back listening says so, with no pointer to Settings", async () => {
+  const { gateway } = fakeGateway({
+    list: async () => ({ ok: true, value: { ...listed, listening: undefined } }),
+    reach: async () => ({ ok: false }),
+  })
+  const { host, root } = await mount(gateway)
+  await addComputer(host)
+  await act(async () => {})
+  const reach = host.querySelector('[data-devices-action="reach"]') as HTMLElement
+  await act(async () => reach.click())
+  await act(async () => {})
+  expect(text(host, "[data-devices-reach]")).toContain("didn't start listening")
+  expect(host.textContent).not.toContain("Settings ›")
+  // Still one button, in the same place.
+  expect(host.querySelectorAll('[data-devices-action="reach"]')).toHaveLength(1)
   await act(async () => root.unmount())
 })
 
