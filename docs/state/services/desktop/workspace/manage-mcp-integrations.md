@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: Settings reads stored MCP servers, submits revision-bound changes and rereads uncertain outcomes; inspection has its own request owner.
 parent: desktop-workspace
-sourceRevision: "7f434845423686cdd01a17300c47d10d46911f50"
+sourceRevision: "aea04b729148734756fe2539f262c9613d8c55bb"
 sources:
   - src/desktop/settings/model/mcp-servers.ts
   - src/desktop/settings/model/mcp-servers.test.ts
@@ -31,7 +31,7 @@ diagramDetails:
 
 # Manage MCP integrations
 
-Settings → Connections → Integrations manages the gateway's stored MCP server configuration. Add, edit, enable, remove, remote authorization and inspection are separate actions from opening an MCP App inside a conversation. A sample window without a gateway shows a pending entry rather than pretending to save configuration.
+Settings → Connections → MCP servers manages the gateway's stored MCP server configuration. Add, edit, enable, remove, remote authorization and inspection are separate actions from opening an MCP App inside a conversation. A sample window without a gateway shows a pending entry rather than pretending to save configuration.
 
 The desktop reducer owns the current administrative request, correlated by sequence number. The gateway owns configuration validity and authorization. The chart follows that request and its list evidence; an edit form, consent link and inspection can coexist with it.
 
@@ -57,7 +57,7 @@ stateDiagram-v2
 
 A successful list supplies management access and the revision a later write must name. Local write admission requires that evidence, a connected transport and no pending administrative request. The gateway still decides who may manage and whether a proposed configuration is valid. A false local guard leaves the request unsent.
 
-Add and Edit retain a draft; Save additionally requires the form's published bounds and kept-value requirements to be satisfied. Managed rows cannot be edited or toggled. Duplicate names form a read-only group because the gateway targets by name; removal confirms the first matching stored row. An oversized list exposes removal by a typed name at the refusal's revision, rather than inventing a partial list. Stored secret values are not listed: keeping one is an explicit null value in the save contract, with launch-change restrictions enforced by the form model and gateway.
+Each server is one row with its switch and a ⋯ menu; Add, Edit, Show Tools and Remove each open a dialog. Add and Edit retain a draft; a stored server's command and arguments are named but not edited in the window: Edit's "Open config.json" asks the desktop host to open the gateway's own config file (macOS and Linux app only). Save additionally requires the form's published bounds and kept-value requirements to be satisfied. Managed rows cannot be edited or toggled. Duplicate names form a read-only group because the gateway targets by name; removal confirms the first matching stored row. An oversized list exposes removal by a typed name at the refusal's revision, rather than inventing a partial list. Stored secret values are not listed: a stored variable rests as "Stored" until Replace, and keeping one is an explicit null value in the save contract. A replaced value left empty holds Save until a value is typed or Keep restores the stored one, so a save never blanks a stored value. Launch-change restrictions are enforced by the form model and gateway.
 
 ## Write outcomes and recovery
 
