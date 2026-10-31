@@ -832,7 +832,12 @@ function RemoveDialog({
       size="sm"
       title={first ? `${sentences.removeFirst(name)}?` : sentences.removeTitle(name)}
       description={
-        first ? sentences.removeFirstAsk(name, first.server.command) : sentences.removeAsk
+        first
+          ? sentences.removeFirstAsk(
+              name,
+              commandLine(first.server.command, first.server.args),
+            )
+          : sentences.removeAsk
       }
       showCloseButton={false}
       onReturnFocus={onReturnFocus}
@@ -1213,7 +1218,7 @@ function FormDialog({
               {waiting === "again"
                 ? sentences.valuesAgain
                 : waiting === "cleared"
-                  ? `${sentences.storedValueCleared}.`
+                  ? sentences.valuesCleared
                   : null}
             </p>
             <FieldProblem form={form} field="env" id={problems.env} />
@@ -1520,7 +1525,10 @@ function SecretField({
           row.stored
             ? row.edited
               ? row.empty
-                ? sentences.storedValueCleared
+                ? // Keep is offered only where the stored value can be kept.
+                  keepable
+                  ? sentences.storedValueCleared
+                  : sentences.storedValueAgain
                 : undefined
               : relaunched
                 ? sentences.storedValueAgain

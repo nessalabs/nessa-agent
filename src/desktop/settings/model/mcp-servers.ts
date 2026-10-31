@@ -576,6 +576,8 @@ export const sentences = {
   notOffered: "Not offered",
   /** A stored variable's placeholder once its value was edited to empty (S2). */
   storedValueCleared: "Enter a value, or keep the stored one",
+  /** What holds Save when the one change is a stored value left empty. */
+  valuesCleared: "Enter a value, or keep the stored one.",
   keepStored: "Keep stored value",
   pasted: (lines: number) => `Pasted value: ${lines === 1 ? "1 line" : `${lines} lines`}`,
   endsWithBreak: "ends with a line break",
@@ -899,22 +901,25 @@ export function launchChanged(
  *
  * - `"again"`: the launch changed for a reason other than an emptied stored
  *   value (names, or another stored value replaced), so every stored value
- *   not entered again is asked for (U33, V2–V5).
- * - `"cleared"`: the only change is a stored value replaced and left empty.
- *   An empty value is not one entered: saved, it would blank the variable
- *   where the person meant to keep it (S7). Typing one, or Keep, ends it.
+ *   not entered again is asked for (U33, V2–V5). With the names changed a
+ *   stored value cannot be kept at all, so an emptied one is asked for again
+ *   too.
+ * - `"cleared"`: the names are kept and a stored value was replaced and left
+ *   empty. An empty value is not one entered: saved, it would blank the
+ *   variable where the person meant to keep it (S7). Typing one, or Keep,
+ *   ends it.
  */
 export function valuesWaiting(
   form: ServerForm,
   listed: ListedServer | undefined,
 ): "again" | "cleared" | null {
   if (!launchChanged(form, listed) || listed === undefined) return null
-  const emptied = (row: VariableRow) => row.stored && row.edited && row.value === ""
-  const otherChange =
-    !namesKept(form, listed) ||
-    form.env.some((row) => row.stored && row.edited && row.value !== "")
-  if (otherChange && form.env.some((row) => row.stored && !row.edited)) return "again"
-  return form.env.some(emptied) ? "cleared" : null
+  const emptied = form.env.some((row) => row.stored && row.edited && row.value === "")
+  const unentered = form.env.some((row) => row.stored && !row.edited)
+  if (!namesKept(form, listed)) return unentered || emptied ? "again" : null
+  const replaced = form.env.some((row) => row.stored && row.edited && row.value !== "")
+  if (replaced && unentered) return "again"
+  return emptied ? "cleared" : null
 }
 
 /** Whether a stored variable still waits for its value ([`valuesWaiting`]). */

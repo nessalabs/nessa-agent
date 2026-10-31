@@ -82,11 +82,19 @@ mod tests {
     fn no_namespace_or_no_file_opens_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let host = Recording::default();
+        let unwritten = Err("The gateway hasn't written its configuration file yet.".into());
+        let irregular = Err("config.json isn't a regular file, so it wasn't opened.".into());
         assert!(open_config(None, &host).is_err());
-        assert!(open_config(Some(&dir.path().join("config.json")), &host).is_err());
+        assert_eq!(
+            open_config(Some(&dir.path().join("config.json")), &host),
+            unwritten
+        );
         // A folder by that name is not the file either.
         std::fs::create_dir(dir.path().join("config.json")).unwrap();
-        assert!(open_config(Some(&dir.path().join("config.json")), &host).is_err());
+        assert_eq!(
+            open_config(Some(&dir.path().join("config.json")), &host),
+            irregular
+        );
         assert!(opened(&host).is_empty());
     }
 
@@ -99,7 +107,10 @@ mod tests {
         let link = dir.path().join("config.json");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         let host = Recording::default();
-        assert!(open_config(Some(&link), &host).is_err());
+        assert_eq!(
+            open_config(Some(&link), &host),
+            Err("config.json isn't a regular file, so it wasn't opened.".into())
+        );
         assert!(opened(&host).is_empty());
     }
 }

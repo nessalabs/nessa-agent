@@ -1720,8 +1720,8 @@ describe("a variable's value (S1–S8)", () => {
     )
     expect(valuesWaiting(state.form!, editedServer(state))).toBe("cleared")
     state = run(state, { type: "change", patch: { command: "/usr/bin/other" } })
-    // Nothing else stored is left unentered, so the emptied one is still the reason.
-    expect(valuesWaiting(state.form!, editedServer(state))).toBe("cleared")
+    // Another launch: no stored value can be kept, so it is asked for again.
+    expect(valuesWaiting(state.form!, editedServer(state))).toBe("again")
     state = run(state, { type: "changeVariable", key, patch: { value: "y" } })
     expect(valuesWaiting(state.form!, editedServer(state))).toBeNull()
   })

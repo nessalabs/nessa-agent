@@ -1325,7 +1325,7 @@ const checks = {
     // Nothing else changed: what holds Save is the emptied value, said so.
     expectShown("the added one removed, the value emptied", seen.keepRemovedEdited, {
       placeholder: names.mcp.storedValueCleared,
-      note: `${names.mcp.storedValueCleared}.`,
+      note: names.mcp.valuesCleared,
       saveEnabled: false,
       keep: true,
     })
@@ -1788,7 +1788,7 @@ const checks = {
       seen.sentOnAsk = context.opened.sent.length - before
       if (
         !seen.asked?.startsWith(
-          `${names.mcp.removeFirst(DUPLICATE)}?${names.mcp.removeFirstAsk(DUPLICATE, process.execPath)}`,
+          `${names.mcp.removeFirst(DUPLICATE)}?${names.mcp.removeFirstAsk(DUPLICATE, [process.execPath, serverScript, "first"].join(" "))}`,
         )
       )
         failures.push(`the group asked "${seen.asked}"`)

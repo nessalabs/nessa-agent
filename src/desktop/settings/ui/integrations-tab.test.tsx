@@ -722,9 +722,13 @@ describe("Integrations", () => {
     await type(value, "again")
     expect(note?.textContent).toBe("")
     expect(button("Save")?.disabled).toBe(false)
-    // Emptied, it is not a value entered (S7): Save waits for one.
+    // Emptied, it is not a value entered (S7): Save waits for one, and with C
+    // added it cannot be kept, so it is asked for again.
     await type(value, "")
-    expect(value.placeholder).toBe("Enter a value, or keep the stored one")
+    expect(value.placeholder).toBe("Enter the value again")
+    expect(note?.textContent).toBe(
+      "Changing the command, arguments or variables needs every stored value entered again.",
+    )
     expect(button("Save")?.disabled).toBe(true)
     // C removed and kept: kept again, back at rest.
     await click(form().querySelector('[aria-label="Remove C"]') ?? undefined)
@@ -908,6 +912,19 @@ describe("Integrations", () => {
       })
     })
 
+    it("V3: one value emptied and another variable removed asks again, offering no Keep", async () => {
+      await editing()
+      await replace("A")
+      await type(value("A"), "a")
+      await type(value("A"), "")
+      await click(form().querySelector('[aria-label="Remove B"]') ?? undefined)
+      // Another set of names: no stored value can be kept, so none is offered.
+      expect(note()).toBe(again)
+      expect(value("A").placeholder).toBe("Enter the value again")
+      expect(button("Keep stored value", variable("A"))).toBeUndefined()
+      expect(button("Save")?.disabled).toBe(true)
+    })
+
     it("V4: one value replaced while another is kept asks for the other again", async () => {
       const fake = await editing()
       await replace("A")
@@ -1015,7 +1032,7 @@ describe("Integrations", () => {
       const ask = () => document.querySelector('[data-mcp-confirm="charts"]')
       expect(ask()?.textContent).toContain(`${action}?`)
       expect(ask()?.textContent).toContain(
-        "Remove the first server named “charts”, which runs /usr/bin/node? New conversations stop getting it. Open ones keep it until they close.",
+        "Remove the first server named “charts”, which runs /usr/bin/node first.mjs? New conversations stop getting it. Open ones keep it until they close.",
       )
       await click(button("Cancel", ask() ?? undefined))
       await settle()

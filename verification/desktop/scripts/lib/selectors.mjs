@@ -681,6 +681,7 @@ export const names = {
     nameShared: (count) =>
       `${count} servers share this name. Only the first can be removed here, and none edited.`,
     storedValueCleared: "Enter a value, or keep the stored one",
+    valuesCleared: "Enter a value, or keep the stored one.",
     keepStored: "Keep stored value",
     pasted: (lines, endsWithBreak) =>
       `Pasted value: ${lines === 1 ? "1 line" : `${lines} lines`}${endsWithBreak ? ", ends with a line break" : ""}`,
