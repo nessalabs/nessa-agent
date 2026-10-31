@@ -150,6 +150,13 @@ struct Gated {
     resume: Mutex<mpsc::Receiver<()>>,
 }
 impl Repository for Gated {
+    fn change_passphrase(
+        &self,
+        key: &nessa_vault::domain::VaultKey,
+        passphrase: &Passphrase,
+    ) -> nessa_vault::domain::ChangePublication {
+        self.inner.change_passphrase(key, passphrase)
+    }
     fn configured(&self) -> Result<bool, Failure> {
         self.inner.configured()
     }
@@ -244,6 +251,41 @@ fn an_explicit_lock_fences_an_unlock_still_deriving_its_key() {
     assert_eq!(worker.join().unwrap(), Err(Failure::Locked));
     assert_eq!(vault.status(), Ok(Status::Locked));
 }
+#[test]
+fn another_connection_cannot_cancel_an_unlock_still_deriving_its_key() {
+    let f = Fixture::new();
+    f.repository.create(&password(), &[]).unwrap();
+    let (started, waiting) = mpsc::sync_channel(1);
+    let (resume, released) = mpsc::sync_channel(1);
+    let vault = Vault::new(
+        Arc::new(Gated {
+            inner: f.repository.clone(),
+            started,
+            resume: Mutex::new(released),
+        }),
+        f.audit.clone(),
+        f.clock.clone(),
+    );
+    let owner = vault.session("pending-owner".into(), caller());
+    let stranger = vault.session("other-connection".into(), caller());
+    let opening = {
+        let vault = vault.clone();
+        let lease = owner.lease();
+        std::thread::spawn(move || vault.unlock(&lease, password()))
+    };
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let refused = vault.lock(&stranger.lease());
+    // Release the worker even when testing the pre-fix behavior.
+    resume.send(()).unwrap();
+    let opened = opening.join().unwrap();
+    assert_eq!(refused, Err(Failure::SessionOwned));
+    assert_eq!(opened, Ok(Status::Unlocked));
+    assert_eq!(vault.lock(&stranger.lease()), Err(Failure::SessionOwned));
+    assert_eq!(vault.status(), Ok(Status::Unlocked));
+}
+
 struct FailableAudit {
     inner: Arc<FileAudit>,
     fail: AtomicBool,
@@ -433,5 +475,381 @@ fn stale_consumer_reads_writes_and_rollbacks_cannot_touch_a_new_unlock() {
             .unwrap()
             .as_slice(),
         b"new"
+    );
+}
+
+#[test]
+fn failed_opening_releases_its_reservation_for_another_connection() {
+    let f = Fixture::new();
+    f.repository.create(&password(), &[]).unwrap();
+    let first = f.vault.session("failed-opening".into(), caller());
+    let second = f.vault.session("next-opening".into(), caller());
+    assert_eq!(
+        f.vault.unlock(
+            &first.lease(),
+            Passphrase::new("wrong synthetic passphrase".into()).unwrap()
+        ),
+        Err(Failure::WrongPassphrase)
+    );
+    assert_eq!(f.vault.lock(&second.lease()), Ok(Status::Locked));
+    assert_eq!(
+        f.vault.unlock(&second.lease(), password()),
+        Ok(Status::Unlocked)
+    );
+}
+
+#[test]
+fn failed_opening_audit_releases_its_reservation_for_another_connection() {
+    let f = Fixture::new();
+    let audit = Arc::new(FailableAudit {
+        inner: f.audit.clone(),
+        fail: AtomicBool::new(true),
+    });
+    let vault = Vault::new(f.repository.clone(), audit.clone(), f.clock.clone());
+    let first = vault.session("audit-refused-opening".into(), caller());
+    let second = vault.session("after-audit-refusal".into(), caller());
+    assert_eq!(
+        vault.create(&first.lease(), password(), &[]),
+        Err(Failure::AuditUnavailable)
+    );
+    assert_eq!(vault.lock(&second.lease()), Ok(Status::Unconfigured));
+    audit.fail.store(false, Ordering::SeqCst);
+    assert_eq!(
+        vault.create(&second.lease(), password(), &[]),
+        Ok(Status::Unlocked)
+    );
+}
+
+struct QuietAudit;
+impl Audit for QuietAudit {
+    fn record(&self, _: &AuditRecord) -> Result<(), Failure> {
+        Ok(())
+    }
+}
+struct RejectGuesses {
+    inner: Arc<EncryptedFileVault>,
+    reject: AtomicBool,
+}
+impl Repository for RejectGuesses {
+    fn change_passphrase(
+        &self,
+        key: &nessa_vault::domain::VaultKey,
+        passphrase: &Passphrase,
+    ) -> nessa_vault::domain::ChangePublication {
+        self.inner.change_passphrase(key, passphrase)
+    }
+    fn configured(&self) -> Result<bool, Failure> {
+        self.inner.configured()
+    }
+    fn create(
+        &self,
+        passphrase: &Passphrase,
+        initial: &[(EntryName, nessa_vault::domain::Secret)],
+    ) -> Result<nessa_vault::domain::VaultKey, Failure> {
+        self.inner.create(passphrase, initial)
+    }
+    fn unlock(&self, passphrase: &Passphrase) -> Result<nessa_vault::domain::VaultKey, Failure> {
+        if self.reject.load(Ordering::SeqCst) {
+            Err(Failure::WrongPassphrase)
+        } else {
+            self.inner.unlock(passphrase)
+        }
+    }
+    fn read(
+        &self,
+        key: &nessa_vault::domain::VaultKey,
+        name: &EntryName,
+    ) -> Result<Option<nessa_vault::domain::Secret>, Failure> {
+        self.inner.read(key, name)
+    }
+    fn write(
+        &self,
+        key: &nessa_vault::domain::VaultKey,
+        name: &EntryName,
+        value: &[u8],
+    ) -> Result<(), Failure> {
+        self.inner.write(key, name, value)
+    }
+    fn delete(&self, key: &nessa_vault::domain::VaultKey, name: &EntryName) -> Result<(), Failure> {
+        self.inner.delete(key, name)
+    }
+}
+fn controller(principal: &str, credential: &str) -> Caller {
+    Caller {
+        principal: principal.into(),
+        credential: credential.into(),
+    }
+}
+fn rejecting_vault(f: &Fixture) -> (Arc<Vault>, Arc<RejectGuesses>) {
+    let repository = Arc::new(RejectGuesses {
+        inner: f.repository.clone(),
+        reject: AtomicBool::new(true),
+    });
+    (
+        Vault::new(repository.clone(), Arc::new(QuietAudit), f.clock.clone()),
+        repository,
+    )
+}
+#[test]
+fn controller_cooldowns_are_independent_and_survive_reconnect_and_other_success() {
+    let f = Fixture::new();
+    let (vault, repository) = rejecting_vault(&f);
+    let owner = vault.session("owner-first".into(), controller("owner", "desktop"));
+    vault.create(&owner.lease(), password(), &[]).unwrap();
+    vault.lock(&owner.lease()).unwrap();
+    let adversary = vault.session("bad-first".into(), controller("owner", "other-device"));
+    for _ in 0..5 {
+        assert_eq!(
+            vault.unlock(&adversary.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    drop(adversary);
+    let adversary = vault.session(
+        "bad-reconnected".into(),
+        controller("owner", "other-device"),
+    );
+    assert_eq!(
+        vault.unlock(&adversary.lease(), password()),
+        Err(Failure::Cooldown)
+    );
+    repository.reject.store(false, Ordering::SeqCst);
+    assert_eq!(
+        vault.unlock(&owner.lease(), password()),
+        Ok(Status::Unlocked)
+    );
+    vault.lock(&owner.lease()).unwrap();
+    // A different successful controller must not reset this penalty.
+    assert_eq!(
+        vault.unlock(&adversary.lease(), password()),
+        Err(Failure::Cooldown)
+    );
+    f.clock.0.store(30, Ordering::SeqCst);
+    assert_eq!(
+        vault.unlock(&adversary.lease(), password()),
+        Ok(Status::Unlocked)
+    );
+}
+#[test]
+fn controller_partial_failures_survive_reconnect_and_distinct_principals_are_separate() {
+    let f = Fixture::new();
+    let (vault, _) = rejecting_vault(&f);
+    let initial = vault.session("first".into(), controller("first-owner", "surface"));
+    for _ in 0..4 {
+        assert_eq!(
+            vault.unlock(&initial.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    drop(initial);
+    let next = vault.session("reconnected".into(), controller("first-owner", "surface"));
+    assert_eq!(
+        vault.unlock(&next.lease(), password()),
+        Err(Failure::WrongPassphrase)
+    );
+    assert_eq!(
+        vault.unlock(&next.lease(), password()),
+        Err(Failure::Cooldown)
+    );
+    let independent = vault.session("independent".into(), controller("other-owner", "surface"));
+    assert_eq!(
+        vault.unlock(&independent.lease(), password()),
+        Err(Failure::WrongPassphrase)
+    );
+}
+#[test]
+fn bounded_caller_capacity_preserves_existing_controllers_and_penalties() {
+    let f = Fixture::new();
+    let (vault, repository) = rejecting_vault(&f);
+    let owner = vault.session("owner".into(), caller());
+    vault.create(&owner.lease(), password(), &[]).unwrap();
+    vault.lock(&owner.lease()).unwrap();
+    // This published library bound includes the successful owner above.
+    for index in 0..nessa_vault::contract::MAXIMUM_COOLDOWN_CALLERS - 1 {
+        let session = vault.session(
+            format!("lease-{index}"),
+            controller("other", &format!("credential-{index}")),
+        );
+        assert_eq!(
+            vault.unlock(&session.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    let first = vault.session(
+        "first-reconnected".into(),
+        controller("other", "credential-0"),
+    );
+    for _ in 0..4 {
+        assert_eq!(
+            vault.unlock(&first.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    let overflow = vault.session("overflow".into(), controller("other", "untracked"));
+    assert_eq!(
+        vault.unlock(&overflow.lease(), password()),
+        Err(Failure::Capacity)
+    );
+    assert_eq!(
+        vault.unlock(&first.lease(), password()),
+        Err(Failure::Cooldown)
+    );
+    repository.reject.store(false, Ordering::SeqCst);
+    assert_eq!(
+        vault.unlock(&owner.lease(), password()),
+        Ok(Status::Unlocked)
+    );
+    vault.lock(&owner.lease()).unwrap();
+    // Quiet unverified slots expire, while the successful controller stays known.
+    f.clock.0.store(30, Ordering::SeqCst);
+    assert_eq!(
+        vault.unlock(&overflow.lease(), password()),
+        Ok(Status::Unlocked)
+    );
+}
+#[test]
+fn caller_budget_identity_allocation_is_bounded_before_derivation() {
+    let f = Fixture::new();
+    let (vault, _) = rejecting_vault(&f);
+    let session = vault.session(
+        "oversized".into(),
+        controller(
+            &"a".repeat(nessa_vault::contract::MAXIMUM_COOLDOWN_IDENTITY_BYTES + 1),
+            "credential",
+        ),
+    );
+    assert_eq!(
+        vault.unlock(&session.lease(), password()),
+        Err(Failure::Capacity)
+    );
+    let maximum = nessa_vault::contract::MAXIMUM_COOLDOWN_IDENTITY_BYTES;
+    let accepted = vault.session(
+        "bounded".into(),
+        controller(&"a".repeat(maximum / 2), &"b".repeat(maximum - maximum / 2)),
+    );
+    assert_eq!(
+        vault.unlock(&accepted.lease(), password()),
+        Err(Failure::WrongPassphrase)
+    );
+}
+
+#[test]
+fn caller_quiet_window_expires_partial_failures_without_erasing_active_cooldown() {
+    let f = Fixture::new();
+    let (vault, _) = rejecting_vault(&f);
+    let caller = vault.session("quiet-window".into(), caller());
+    for _ in 0..4 {
+        assert_eq!(
+            vault.unlock(&caller.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    f.clock.0.store(30, Ordering::SeqCst);
+    for _ in 0..5 {
+        assert_eq!(
+            vault.unlock(&caller.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    f.clock.0.store(59, Ordering::SeqCst);
+    assert_eq!(
+        vault.unlock(&caller.lease(), password()),
+        Err(Failure::Cooldown)
+    );
+    f.clock.0.store(60, Ordering::SeqCst);
+    assert_eq!(
+        vault.unlock(&caller.lease(), password()),
+        Err(Failure::WrongPassphrase)
+    );
+}
+
+#[test]
+fn saturated_caller_cooldown_deadline_cannot_wrap_or_appear_elapsed() {
+    let f = Fixture::new();
+    let (vault, _) = rejecting_vault(&f);
+    let session = vault.session("saturated-clock".into(), caller());
+    f.clock.0.store(u64::MAX - 10, Ordering::SeqCst);
+    for _ in 0..5 {
+        assert_eq!(
+            vault.unlock(&session.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    f.clock.0.store(u64::MAX, Ordering::SeqCst);
+    assert_eq!(
+        vault.unlock(&session.lease(), password()),
+        Err(Failure::Cooldown)
+    );
+}
+
+struct RejectFailureEvidence;
+impl Audit for RejectFailureEvidence {
+    fn record(&self, record: &AuditRecord) -> Result<(), Failure> {
+        if record.result == "wrong_passphrase_or_ciphertext" {
+            Err(Failure::AuditUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+}
+#[test]
+fn failed_guess_evidence_failure_cannot_reset_a_reconnecting_callers_budget() {
+    let f = Fixture::new();
+    let repository = Arc::new(RejectGuesses {
+        inner: f.repository.clone(),
+        reject: AtomicBool::new(true),
+    });
+    let vault = Vault::new(repository, Arc::new(RejectFailureEvidence), f.clock.clone());
+    for index in 0..5 {
+        let session = vault.session(format!("evidence-failure-{index}"), caller());
+        assert_eq!(
+            vault.unlock(&session.lease(), password()),
+            Err(Failure::AuditUnavailable)
+        );
+    }
+    let reconnected = vault.session("after-evidence-failures".into(), caller());
+    assert_eq!(
+        vault.unlock(&reconnected.lease(), password()),
+        Err(Failure::Cooldown)
+    );
+    let independent = vault.session(
+        "other-evidence-caller".into(),
+        controller("other", "credential"),
+    );
+    assert_eq!(
+        vault.unlock(&independent.lease(), password()),
+        Err(Failure::AuditUnavailable)
+    );
+}
+
+#[test]
+fn successful_controller_budget_survives_quiet_expiry_and_new_caller_pressure() {
+    let f = Fixture::new();
+    let (vault, _) = rejecting_vault(&f);
+    let owner = vault.session("known-controller".into(), caller());
+    vault.create(&owner.lease(), password(), &[]).unwrap();
+    vault.lock(&owner.lease()).unwrap();
+    f.clock.0.store(30, Ordering::SeqCst);
+    for index in 0..nessa_vault::contract::MAXIMUM_COOLDOWN_CALLERS - 1 {
+        let caller = vault.session(
+            format!("new-{index}"),
+            controller("other", &format!("new-credential-{index}")),
+        );
+        assert_eq!(
+            vault.unlock(&caller.lease(), password()),
+            Err(Failure::WrongPassphrase)
+        );
+    }
+    let overflow = vault.session(
+        "untracked-after-quiet".into(),
+        controller("other", "overflow-after-quiet"),
+    );
+    assert_eq!(
+        vault.unlock(&overflow.lease(), password()),
+        Err(Failure::Capacity)
+    );
+    assert_eq!(
+        vault.unlock(&owner.lease(), password()),
+        Err(Failure::WrongPassphrase)
     );
 }

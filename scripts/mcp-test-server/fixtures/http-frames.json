@@ -1,12 +1,12 @@
 {
   "source": {
     "kind": "local-developer-http-server",
-    "capturedAt": "2026-10-06T09:34:01.184Z",
+    "capturedAt": "2026-10-31T20:26:48.393Z",
     "recoveredFrom": "b93383c3d",
     "protocolVersion": "2025-06-18",
     "transport": "streamable-http-json",
     "sessionIds": "omitted",
-    "serverSha256": "415ed9d359dd323e18de169c15f12836650f7914a1381d13dfc3e2e403988aa4",
+    "serverSha256": "447b688d8ee307234b79b8bc2a42be19bf1f919b3325abb3018c0ba3e320d56c",
     "transportSha256": "ccdc1511691f5ee055d5681e8b2bf9d05750cf7e4c30c812090b7cb54bdc2b5d",
     "probeSha256": "892610acb6ce62ed63ae1abc50c2e5519ad69966f9e02538fb3bb23c9b3de6e3"
   },

@@ -1,7 +1,8 @@
 //! Process bootstrap and cross-cutting infrastructure.
 //!
 //! Owns everything that applies to the whole binary before any feature runs:
-//! tracing setup, the gateway log's size bound, fatal error reporting, the
+//! tracing setup, Linux process-local dump/inspection protection, the gateway
+//! log's size bound, fatal error reporting, the
 //! tokio runtime wrapper in `bootstrap`, and the trusted-origin predicate every
 //! context shares in `trusted_origin`. `read_workers` owns tracked blocking
 //! source work and retained drain shared by record and catalogue infrastructure.
@@ -40,6 +41,8 @@ mod log_file;
 pub mod logging;
 #[cfg(unix)]
 mod open_files;
+#[cfg(target_os = "linux")]
+mod process_memory;
 pub(crate) mod read_workers;
 mod restart;
 #[cfg(unix)]

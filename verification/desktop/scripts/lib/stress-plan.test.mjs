@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
-import { KNOBS, describe, knobsFrom, plan, random } from "./stress-plan.mjs"
+import { KNOBS, describe, knobsFrom, plan, random, selectedPlan } from "./stress-plan.mjs"
 
 test("the same numbers and seed give the same plan, and another seed another", () => {
   const knobs = knobsFrom({}, {})
@@ -57,7 +57,9 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("upgrade"), knobs.upgrades)
   assert.equal(count("launch"), knobs.launches)
   assert.equal(count("github"), knobs.githubs)
+  assert.equal(count("passphrase"), knobs.passphrases)
   assert.equal(count("channel"), knobs.channels)
+  assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
@@ -168,7 +170,9 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menuPanels: "0",
         menus: "0",
         githubs: "0",
+        passphrases: "0",
         channels: "0",
+        huddles: "0",
         webhooks: "0",
         pastes: "0",
         awaits: "0",
@@ -223,4 +227,29 @@ test("webhook capture/no-send runs once by default and three times at the raised
   assert.equal(count({ webhooks: "3" }), 3)
   assert.equal(count({ webhooks: "0" }), 0)
   assert.equal(knobsFrom({}, { NESSA_STRESS_WEBHOOKS: "3" }).webhooks, 3)
+})
+
+test("passphrase change count raises independently and can be disabled", () => {
+  assert.equal(
+    plan(knobsFrom({ passphrases: "3" }, {})).filter((step) => step.kind === "passphrase")
+      .length,
+    3,
+  )
+  assert.ok(
+    !plan(knobsFrom({ passphrases: "0" }, {})).some((step) => step.kind === "passphrase"),
+  )
+})
+
+test("selected stress preserves the full plan, knobs and step identities", () => {
+  const knobs = knobsFrom({}, {})
+  const before = structuredClone(knobs)
+  assert.deepEqual(selectedPlan(knobs), plan(knobs))
+  assert.deepEqual(
+    selectedPlan(knobs, "passphrase"),
+    plan(knobs).filter((step) => step.kind === "passphrase"),
+  )
+  assert.deepEqual(knobs, before)
+  assert.throws(() => selectedPlan(knobs, "unknown"), /No planned stress step/)
+  assert.throws(() => selectedPlan(knobs, ","), /No planned stress step/)
+  assert.equal(selectedPlan({ ...knobs, passphrases: 3 }, "passphrase").length, 3)
 })

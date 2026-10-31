@@ -25,7 +25,7 @@ fn adapter_bounds_unsolicited_notices_and_rejects_mismatched_request_ids_and_sco
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut socket = accept(stream).unwrap();
-            socket.send(Message::Text(json!({"type":"event","event":"session.challenge","payload":{"minVersion":1,"maxVersion":1,"nonce":"challenge","expiresAt":9999999999_u64}}).to_string().into())).unwrap();
+            socket.send(Message::Text(json!({"type":"event","event":"session.challenge","seq":0,"stateVersion":0,"payload":{"minVersion":1,"maxVersion":1,"nonce":"challenge","expiresAt":9999999999_u64}}).to_string().into())).unwrap();
             let auth: Value =
                 serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
             assert_eq!(auth["params"]["client"]["id"], "nessa-cli");
@@ -38,10 +38,10 @@ fn adapter_bounds_unsolicited_notices_and_rejects_mismatched_request_ids_and_sco
             let issue: Value =
                 serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
             assert_eq!(issue["params"]["membership"]["role"], "member");
-            for _ in 0..if mode == "notice-flood" { 65 } else { 1 } {
+            for sequence in 0..if mode == "notice-flood" { 65 } else { 1 } {
                 socket
                     .send(Message::Text(
-                        json!({"type":"event","event":"permission.review.waiting","payload":{}})
+                        json!({"type":"event","event":"permission.review.waiting","payload":{},"seq":sequence+1,"stateVersion":0})
                             .to_string()
                             .into(),
                     ))
@@ -94,7 +94,7 @@ fn adapter_rejects_an_authenticated_identity_with_nonportable_expiry() {
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let mut socket = accept(stream).unwrap();
-        socket.send(Message::Text(json!({"type":"event","event":"session.challenge","payload":{"minVersion":1,"maxVersion":1,"nonce":"challenge","expiresAt":9999999999_u64}}).to_string().into())).unwrap();
+        socket.send(Message::Text(json!({"type":"event","event":"session.challenge","seq":0,"stateVersion":0,"payload":{"minVersion":1,"maxVersion":1,"nonce":"challenge","expiresAt":9999999999_u64}}).to_string().into())).unwrap();
         let auth: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
         socket.send(Message::Text(json!({"type":"res","id":auth["id"],"ok":true,"payload":{
             "version":1,"gatewayId":"gateway","organizationId":"org","principalId":"caller","membershipId":"member","credentialId":"cli","audienceId":"gateway","expiresAt":9_007_199_254_740_992_u64,"grants":[],"methods":[]

@@ -5,6 +5,7 @@ export interface VaultSource {
   status(): Promise<VaultState>
   setup(passphrase: string): Promise<VaultState>
   unlock(passphrase: string): Promise<VaultState>
+  changePassphrase(passphrase: string): Promise<VaultState>
   lock(): Promise<VaultState>
 }
 export type { VaultState } from "@nessa/client"
