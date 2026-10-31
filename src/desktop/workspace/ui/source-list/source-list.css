@@ -222,9 +222,24 @@
   pointer-events: none;
 }
 
+/*
+ * A row's actions take clicks only while shown: under the pointer or keyboard
+ * focus, or always under a coarse pointer, where the kit keeps them shown.
+ */
 .workspace-sidebar .workspace-row-actions {
   display: inline-flex;
+}
+
+.workspace-sidebar
+  [data-slot="sidebar-menu-item-row"]:is(:hover, :has(:focus-visible))
+  .workspace-row-actions {
   pointer-events: auto;
+}
+
+@media not ((hover: hover) and (pointer: fine)) {
+  .workspace-sidebar .workspace-row-actions {
+    pointer-events: auto;
+  }
 }
 
 .workspace-sidebar [data-slot="sidebar-menu-item-badge"] {

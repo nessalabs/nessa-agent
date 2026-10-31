@@ -717,6 +717,8 @@ async function channelRunning(page, name, running, failures) {
         return opacity
       }
       return {
+        // A count waiting on the person takes the spinner's place.
+        counted: frame.querySelector("[data-trailing='count']") !== null,
         spinner: shown(frame.querySelector('.workspace-status[data-status="running"]')),
         settings: shown(frame.querySelector("[data-channel-settings-open]")),
         said: (
@@ -730,7 +732,10 @@ async function channelRunning(page, name, running, failures) {
   }
   // Away from the window's left edge, where the pointer would peek the sidebar out.
   await page.mouse.move(600, 400)
-  const wanted = (now) => (now.spinner !== null) === running && now.said === running
+  const wanted = (now) =>
+    now.counted
+      ? !running || now.spinner === null
+      : (now.spinner !== null) === running && now.said === running
   let now = await read()
   await waitFor(async () => wanted((now = await read())), 10_000)
   if (!wanted(now))
@@ -741,18 +746,26 @@ async function channelRunning(page, name, running, failures) {
     failures.push(`channel ${name} has no settings`)
     return
   }
-  await sleep(250)
-  const atRest = await read()
+  // Settled, not after a fixed wait: the kit fades them over its transition.
+  const spins = running && !now.counted
+  const atRest =
+    (await waitFor(async () => {
+      const at = await read()
+      return at.settings === 0 && (!spins || at.spinner === 1) ? at : null
+    }, 5_000)) ?? (await read())
   if (atRest.settings !== 0)
     failures.push(`channel ${name} shows its settings at rest (${atRest.settings})`)
-  if (running && atRest.spinner !== null && atRest.spinner !== 1)
+  if (spins && atRest.spinner !== 1)
     failures.push(`channel ${name}'s spinner shows at ${atRest.spinner} at rest`)
   await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
-  await sleep(300)
-  const pointed = await read()
+  const pointed =
+    (await waitFor(async () => {
+      const at = await read()
+      return at.settings === 1 && !(at.spinner > 0) ? at : null
+    }, 5_000)) ?? (await read())
   if (pointed.settings !== 1)
     failures.push(`channel ${name} pointed at shows its settings at ${pointed.settings}`)
-  if (running && pointed.spinner > 0)
+  if (pointed.spinner > 0)
     failures.push(
       `channel ${name} pointed at still shows its spinner (${pointed.spinner})`,
     )
