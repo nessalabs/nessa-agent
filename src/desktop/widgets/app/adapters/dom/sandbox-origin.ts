@@ -23,6 +23,13 @@ import type { PageContext } from "../../model/host-context"
  */
 export const proxyFrameSandbox = "allow-scripts allow-same-origin"
 
+/**
+ * The proxy frame's `allow`: the device permissions the proxy may hand on to
+ * an app's frame. The proxy itself uses none; it passes the microphone only
+ * to an app the host granted it (`model/resource.ts`, `frameAllow`).
+ */
+export const proxyFrameAllow = "microphone *"
+
 /** The meta element the browser build's dev server writes the proxy's URL into. */
 export const sandboxMetaName = "nessa-app-sandbox"
 

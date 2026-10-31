@@ -1,8 +1,9 @@
 /**
  * An app's UI resource, read from a `resources/read` result (MCP Apps, *UI
  * Resource Format*): the content item for the URI the tool declared, of type
- * `text/html;profile=mcp-app`, its HTML from `text` or base64 `blob`, and the
- * CSP its `_meta.ui` declares. Anything else is not an app this host can load.
+ * `text/html;profile=mcp-app`, its HTML from `text` or base64 `blob`, the
+ * CSP its `_meta.ui` declares, and the device permissions it asks for. Anything
+ * else is not an app this host can load.
  */
 import { appliedCsp, type AppliedCsp } from "./csp"
 import { field, isObject, type Json, type JsonObject } from "./json-rpc"
@@ -10,9 +11,34 @@ import { field, isObject, type Json, type JsonObject } from "./json-rpc"
 /** The one type an app's resource may have. */
 export const appMimeType = "text/html;profile=mcp-app"
 
+/**
+ * The device permissions this host grants an app that asks (`_meta.ui.permissions`,
+ * a flag or an object per permission). Only the microphone: a voice app needs it,
+ * and nothing asks for the others yet.
+ */
+export interface AppPermissions {
+  readonly microphone: boolean
+}
+
 export interface UiResource {
   readonly html: string
   readonly csp: AppliedCsp
+  readonly permissions: AppPermissions
+}
+
+function asked(permissions: Json | undefined, name: string): boolean {
+  if (!isObject(permissions)) return false
+  const value = field(permissions, name)
+  return value === true || isObject(value)
+}
+
+/**
+ * The app frame's `allow` attribute for what was granted: the one place the
+ * permissions policy is written, for the proxy to set on the app's frame
+ * (`sandbox/proxy.html` accepts only this spelling or nothing).
+ */
+export function frameAllow(permissions: AppPermissions): string {
+  return permissions.microphone ? "microphone *" : ""
 }
 
 function decodeBase64(blob: string): string | undefined {
@@ -43,5 +69,10 @@ export function uiResource(result: JsonObject, uri: string): UiResource | undefi
         : undefined
   if (html === undefined || html.trim() === "") return undefined
   const meta = field(item, "_meta")
-  return { html, csp: appliedCsp(isObject(meta) ? field(meta, "ui") : undefined) }
+  const ui = isObject(meta) ? field(meta, "ui") : undefined
+  return {
+    html,
+    csp: appliedCsp(ui),
+    permissions: { microphone: asked(isObject(ui) ? field(ui, "permissions") : undefined, "microphone") },
+  }
 }

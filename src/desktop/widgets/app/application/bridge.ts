@@ -43,7 +43,7 @@ import {
   type Initialize,
 } from "../model/messages"
 import { requestMode } from "../model/places"
-import { uiResource, type UiResource } from "../model/resource"
+import { frameAllow, uiResource, type UiResource } from "../model/resource"
 import {
   callView,
   nothingTold,
@@ -178,7 +178,10 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       serverTools: {},
       serverResources: {},
       logging: {},
-      sandbox: { permissions: {}, csp: resource ? approvedDomains(resource.csp) : {} },
+      sandbox: {
+        permissions: resource?.permissions.microphone ? { microphone: {} } : {},
+        csp: resource ? approvedDomains(resource.csp) : {},
+      },
       ...(ports.links ? { openLinks: {} } : {}),
       ...(ports.downloads ? { downloadFile: {} } : {}),
       ...(ports.conversation
@@ -213,6 +216,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
             notify(sandboxMethods.resourceReady, {
               html: appDocument(resource.html, resource.csp),
               policy: cspPolicy(resource.csp),
+              // The device permissions the app's frame is let use.
+              allow: frameAllow(resource.permissions),
               // How long the proxy waits, after each load of the app's frame,
               // for its document to answer (design L32).
               checkWithin: deadlines.initialize,

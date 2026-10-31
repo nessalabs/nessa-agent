@@ -266,6 +266,43 @@ describe("the handshake", () => {
     expect(app.posted.every((each) => each.origin === sandbox.origin)).toBe(true)
   })
 
+  it("lets the app's frame use the microphone only when its resource asks, and says so", async () => {
+    const asking = {
+      ...fixtureServerPort(),
+      readResource: async (_address: unknown, uri: string) => ({
+        kind: "ok" as const,
+        result: {
+          contents: [
+            {
+              uri,
+              mimeType: "text/html;profile=mcp-app",
+              text: fixtureAppHtml,
+              _meta: { ui: { permissions: { microphone: {} } } },
+            },
+          ],
+        },
+      }),
+    }
+    for (const [server, allow, granted] of [
+      [asking, "microphone *", { microphone: {} }],
+      [fixtureServerPort(), "", {}],
+    ] as const) {
+      const app = harness({ server })
+      await flush()
+      app.say({ jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} })
+      const [ready] = app.take()
+      expect((ready as unknown as { params: { allow: string } }).params.allow).toBe(allow)
+      app.say({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "ui/initialize",
+        params: { protocolVersion: "2026-01-26", appInfo: { name: "t", version: "1" }, appCapabilities: {} },
+      })
+      const [answer] = app.take() as unknown as [{ result: { hostCapabilities: JsonObject } }]
+      expect(answer.result.hostCapabilities.sandbox).toMatchObject({ permissions: granted })
+    }
+  })
+
   it("L6: answers ui/initialize with the spec's result: version, host, capabilities, context", async () => {
     const app = harness()
     await flush()

@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Huddle</title>
+<style>
+  :root { color-scheme: dark; --ground: #0d0d0e; --ink: #ececee; --quiet: #8a8a8f; --faint: #5c5c62; --mark: #E5825B; }
+  html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; letter-spacing: -0.005em; overflow: hidden; }
+  #title { position: absolute; top: 14px; left: 0; right: 0; text-align: center; font-size: 13px; color: var(--quiet); }
+  #title b { color: var(--ink); font-weight: 600; margin-right: 6px; }
+  #stage { position: absolute; inset: 44px 0 110px 0; overflow: auto; }
+  #paper { position: relative; transform-origin: 0 0; padding: 8px 48px 48px; }
+  #empty { color: var(--faint); text-align: center; margin-top: 18vh; font-size: 15px; }
+  .line { display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 16px; border-radius: 6px;
+    font: 13px/1.65 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+  .line .no { color: var(--faint); text-align: right; user-select: none; }
+  .line.highlight { background: rgba(229,130,91,0.14); }
+  .line.underline .tx { text-decoration: underline; text-decoration-color: var(--mark); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+  .line.pointed { outline: 1px solid rgba(255,255,255,0.18); }
+  #ink { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+  #captions { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); width: min(720px, 90%);
+    text-align: center; font-size: 16px; color: var(--ink); min-height: 24px; }
+  #captions .you { color: var(--quiet); }
+  #island { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+    height: 56px; width: 320px; box-sizing: border-box; padding: 0 8px; border-radius: 28px; background: #000;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 18px 40px rgba(0,0,0,0.6); }
+  #sand { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; background: #000; box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.18); }
+  #state { flex-grow: 1; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #state .k { color: var(--ink); font-weight: 500; }
+  #state.quiet { color: var(--quiet); font-weight: 400; }
+  button { font: inherit; }
+  .round { width: 40px; height: 40px; border-radius: 20px; border: 0; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  #captionsButton { background: transparent; color: #a8a8ad; }
+  #captionsButton[aria-pressed="true"] { background: #2a2a2c; color: #fff; }
+  #end { background: #ff453a; color: #fff; }
+  #start { height: 40px; border-radius: 20px; border: 0; padding: 0 16px; background: #f4f4f5; color: #111; font-weight: 600; cursor: pointer; flex-shrink: 0; }
+  #mode { background: transparent; border: 0; color: var(--quiet); font-size: 12px; cursor: pointer; padding: 0 4px; }
+  #debug { position: absolute; right: 12px; bottom: 8px; font: 11px ui-monospace, Menlo, monospace; color: var(--faint); max-width: 50%; text-align: right; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="title"><b>Huddle</b><span id="file"></span></div>
+<div id="stage"><div id="paper"><p id="empty">Start a huddle and ask about a file.</p><svg id="ink"></svg></div></div>
+<div id="captions" hidden></div>
+<div id="island" role="group" aria-label="Call">
+  <canvas id="sand" width="80" height="80" aria-hidden="true"></canvas>
+  <span id="state" class="quiet">Your voice goes to OpenAI</span>
+  <button id="mode" hidden>Always on</button>
+  <button id="start">Start</button>
+  <button id="captionsButton" class="round" aria-label="Captions" aria-pressed="false" hidden>
+    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="4"/><path d="M7 12h4M13 12h4M7 15.5h7"/></svg>
+  </button>
+  <button id="end" class="round" aria-label="End call" hidden>
+    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path transform="translate(0 -1.6)" d="M3.5 13.6c4.6-4.1 12.4-4.1 17 0 .5.5.6 1.2.2 1.8l-1.2 1.6c-.4.5-1.1.7-1.7.4l-2.3-1c-.5-.2-.8-.7-.8-1.3v-1.4a12 12 0 0 0-5.4 0v1.4c0 .6-.3 1.1-.8 1.3l-2.3 1c-.6.3-1.3.1-1.7-.4l-1.2-1.6c-.4-.6-.3-1.3.2-1.8z"/></svg>
+  </button>
+</div>
+<div id="debug"></div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var debug = function (text) { $("debug").textContent = text; };
+
+  // ---- MCP Apps bridge, by hand (2026-01-26) ----
+  var host = window.parent, next = 1, waiting = {};
+  function post(message) { host.postMessage(message, "*"); }
+  function ask(method, params) {
+    var id = next++;
+    post({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    return new Promise(function (done) { waiting[id] = done; });
+  }
+  function tell(method, params) { post({ jsonrpc: "2.0", method: method, params: params || {} }); }
+  async function callTool(name, args) {
+    var reply = await ask("tools/call", { name: name, arguments: args || {} });
+    if (reply.error) throw new Error(reply.error.message || "refused");
+    var result = reply.result || {};
+    if (result.isError) throw new Error(((result.content || [])[0] || {}).text || name + " failed");
+    return result.structuredContent || {};
+  }
+  window.addEventListener("message", function (event) {
+    if (event.source !== host) return;
+    var m = event.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && waiting[m.id] && !m.method) { var done = waiting[m.id]; delete waiting[m.id]; done(m); return; }
+    if (m.method === "ui/notifications/tool-result") {
+      var opened = (m.params && m.params.structuredContent) || {};
+      if (opened.path) show({ path: opened.path }).catch(function () {});
+    }
+    if (m.method === "ui/resource-teardown") { endCall(); post({ jsonrpc: "2.0", id: m.id, result: {} }); }
+  });
+  ask("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "huddle", version: "0.0.1" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] } }).then(function (reply) {
+    tell("ui/notifications/initialized");
+    var granted = (((reply.result || {}).hostCapabilities || {}).sandbox || {}).permissions || {};
+    debug(granted.microphone ? "mic granted by host" : "host did not grant the mic");
+    ask("ui/request-display-mode", { mode: "fullscreen" });
+  });
+
+  // ---- Stage: show, draw, view, clear ----
+  var current = null, marks = {}, markId = 0, zoom = 1;
+  var paper = $("paper"), stage = $("stage"), ink = $("ink");
+  function lineEl(n) { return paper.querySelector('.line[data-n="' + n + '"]'); }
+  function range(from, to) {
+    var out = [];
+    for (var n = from; n <= (to || from); n++) { var el = lineEl(n); if (el) out.push(el); }
+    return out;
+  }
+  async function show(args) {
+    var file = await callTool("huddle_read_file", { path: args.path });
+    current = file.path;
+    $("file").textContent = file.path;
+    Object.keys(marks).forEach(function (id) { removeMark(id); });
+    paper.querySelectorAll(".line, #empty").forEach(function (el) { el.remove(); });
+    var lines = file.content.split("\n");
+    var frag = document.createDocumentFragment();
+    lines.forEach(function (text, i) {
+      var row = document.createElement("div");
+      row.className = "line"; row.dataset.n = String(i + 1);
+      var no = document.createElement("span"); no.className = "no"; no.textContent = String(i + 1);
+      var tx = document.createElement("span"); tx.className = "tx"; tx.textContent = text || " ";
+      row.appendChild(no); row.appendChild(tx); frag.appendChild(row);
+    });
+    paper.insertBefore(frag, ink);
+    if (args.line) view({ line: args.line }); else stage.scrollTop = 0;
+    return { shown: file.path, lines: lines.length };
+  }
+  function removeMark(id) {
+    var mark = marks[id]; if (!mark) return;
+    mark.rows.forEach(function (row) { row.classList.remove(mark.kind); });
+    if (mark.shape) mark.shape.remove();
+    delete marks[id];
+  }
+  function draw(args) {
+    if (!current) return { error: "Nothing is on the stage. Call show first." };
+    var ids = [];
+    (args.marks || []).forEach(function (spec) {
+      var rows = range(spec.from_line, spec.to_line);
+      if (!rows.length) return;
+      var id = "m" + (++markId), mark = { kind: spec.kind, rows: rows };
+      if (spec.kind === "circle") {
+        var top = rows[0].offsetTop, bottom = rows[rows.length - 1].offsetTop + rows[rows.length - 1].offsetHeight;
+        var left = rows[0].offsetLeft + 52, width = Math.min(rows[0].offsetWidth - 52, 680);
+        var e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+        e.setAttribute("cx", String(left + width / 2)); e.setAttribute("cy", String((top + bottom) / 2));
+        e.setAttribute("rx", String(width / 2 + 16)); e.setAttribute("ry", String((bottom - top) / 2 + 12));
+        e.setAttribute("fill", "none"); e.setAttribute("stroke", "#E5825B"); e.setAttribute("stroke-width", "2.5");
+        e.setAttribute("stroke-dasharray", "2000"); e.setAttribute("stroke-dashoffset", "2000");
+        e.style.transition = "stroke-dashoffset 600ms ease-out";
+        ink.appendChild(e); requestAnimationFrame(function () { e.setAttribute("stroke-dashoffset", "0"); });
+        mark.shape = e;
+      } else {
+        rows.forEach(function (row) { row.classList.add(spec.kind === "underline" ? "underline" : "highlight"); });
+        mark.kind = spec.kind === "underline" ? "underline" : "highlight";
+      }
+      marks[id] = mark; ids.push(id);
+    });
+    if (ids.length) view({ line: args.marks[0].from_line });
+    return { ids: ids };
+  }
+  function view(args) {
+    if (args.zoom) { zoom = Math.max(0.5, Math.min(3, args.zoom)); paper.style.transform = "scale(" + zoom + ")"; }
+    if (args.fit) { zoom = 1; paper.style.transform = ""; }
+    var row = args.line && lineEl(args.line);
+    if (row) stage.scrollTo({ top: row.offsetTop * zoom - stage.clientHeight / 3, behavior: "smooth" });
+    return { ok: true };
+  }
+  function clear(args) {
+    var ids = args.ids && args.ids.length ? args.ids : Object.keys(marks);
+    ids.forEach(removeMark);
+    return { cleared: ids };
+  }
+  // The person points back: a click on a line is sent with their next words.
+  var pointed = null;
+  paper.addEventListener("click", function (event) {
+    var row = event.target.closest && event.target.closest(".line");
+    if (!row) return;
+    if (pointed) pointed.classList.remove("pointed");
+    pointed = row; row.classList.add("pointed");
+    send({ type: "conversation.item.create", item: { type: "message", role: "user",
+      content: [{ type: "input_text", text: "(The person is pointing at " + current + " line " + row.dataset.n + ".)" }] } });
+  });
+
+  var stageTools = {
+    show: show, draw: draw, view: view, clear: clear,
+    list_files: function (args) { return callTool("huddle_list_files", { dir: args.dir || "." }); },
+  };
+  var toolSpecs = [
+    { type: "function", name: "show", description: "Put a file on the stage, optionally scrolled to a line.",
+      parameters: { type: "object", properties: { path: { type: "string" }, line: { type: "integer" } }, required: ["path"] } },
+    { type: "function", name: "draw", description: "Draw marks over the file on the stage. Each mark covers a line range.",
+      parameters: { type: "object", properties: { marks: { type: "array", items: { type: "object",
+        properties: { kind: { type: "string", enum: ["highlight", "underline", "circle"] }, from_line: { type: "integer" }, to_line: { type: "integer" } },
+        required: ["kind", "from_line"] } } }, required: ["marks"] } },
+    { type: "function", name: "view", description: "Scroll to a line, zoom (0.5 to 3), or fit.",
+      parameters: { type: "object", properties: { line: { type: "integer" }, zoom: { type: "number" }, fit: { type: "boolean" } } } },
+    { type: "function", name: "clear", description: "Remove marks by id, or all marks.",
+      parameters: { type: "object", properties: { ids: { type: "array", items: { type: "string" } } } } },
+    { type: "function", name: "list_files", description: "List files under a folder of the project, relative to its root.",
+      parameters: { type: "object", properties: { dir: { type: "string" } } } },
+  ];
+
+  // ---- The call ----
+  var pc = null, dc = null, mic = null, audio = null, alwaysOn = true, phase = "idle";
+  var audioCtx = null, micLevel = null, voiceLevel = null, pendingOutputs = false;
+  function send(event) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(event)); }
+  function setState(text, quiet) { var s = $("state"); s.innerHTML = text; s.className = quiet ? "quiet" : ""; }
+  function analyser(stream) {
+    var node = audioCtx.createAnalyser(); node.fftSize = 512;
+    audioCtx.createMediaStreamSource(stream).connect(node);
+    var data = new Uint8Array(node.fftSize);
+    return function () {
+      node.getByteTimeDomainData(data);
+      var sum = 0; for (var i = 0; i < data.length; i++) { var v = (data[i] - 128) / 128; sum += v * v; }
+      return Math.min(1, Math.sqrt(sum / data.length) * 4);
+    };
+  }
+  function idleText() { return alwaysOn ? "Listening" : 'Hold <span class="k">Space</span> to talk'; }
+
+  async function startCall() {
+    $("start").disabled = true;
+    setState("Connecting…", true);
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch (error) {
+      setState("No microphone", true); debug("getUserMedia: " + (error && error.name) + " " + (error && error.message));
+      $("start").disabled = false; return;
+    }
+    audioCtx = new AudioContext();
+    micLevel = analyser(mic);
+    pc = new RTCPeerConnection();
+    audio = new Audio(); audio.autoplay = true;
+    pc.ontrack = function (event) { audio.srcObject = event.streams[0]; voiceLevel = analyser(event.streams[0]); };
+    pc.addTrack(mic.getTracks()[0], mic);
+    dc = pc.createDataChannel("oai-events");
+    dc.onopen = function () {
+      send({ type: "session.update", session: { type: "realtime", tools: toolSpecs, tool_choice: "auto",
+        audio: { input: { turn_detection: { type: "semantic_vad", interrupt_response: true },
+          transcription: { model: "gpt-4o-mini-transcribe" } } } } });
+      phase = "listening"; setState(idleText());
+      $("start").hidden = true; $("end").hidden = false; $("captionsButton").hidden = false; $("mode").hidden = false;
+    };
+    dc.onmessage = function (event) { onEvent(JSON.parse(event.data)); };
+    var offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    var answer = null, route = "";
+    try {
+      var key = await callTool("huddle_start_call");
+      var response = await fetch("https://api.openai.com/v1/realtime/calls", { method: "POST", body: offer.sdp,
+        headers: { Authorization: "Bearer " + key.clientSecret, "Content-Type": "application/sdp" } });
+      if (!response.ok) throw new Error("OpenAI answered " + response.status + ": " + (await response.text()).slice(0, 200));
+      answer = await response.text(); route = "page → OpenAI";
+    } catch (error) {
+      debug("direct call failed (" + (error && error.message) + "), trying the server");
+      try { answer = (await callTool("huddle_connect", { sdp: offer.sdp })).sdp; route = "server → OpenAI"; }
+      catch (second) { setState("Couldn't connect", true); debug(String(second && second.message)); endCall(); return; }
+    }
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+    debug("connected: " + route);
+    loop();
+  }
+
+  async function onEvent(e) {
+    switch (e.type) {
+      case "input_audio_buffer.speech_started": phase = "listening"; setState("Listening"); break;
+      case "output_audio_buffer.started": phase = "talking"; setState('Huddle is talking <span style="color:#7c7c82;font-weight:400">· esc to stop</span>'); break;
+      case "output_audio_buffer.stopped": case "output_audio_buffer.cleared": phase = "listening"; setState(idleText()); break;
+      case "response.output_audio_transcript.delta": caption("them", e.delta, true); break;
+      case "conversation.item.input_audio_transcription.completed": caption("you", e.transcript, false); break;
+      case "response.function_call_arguments.done": {
+        var args = {}; try { args = JSON.parse(e.arguments || "{}"); } catch (_) {}
+        var output;
+        try { output = await stageTools[e.name](args); } catch (error) { output = { error: String(error && error.message) }; }
+        send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: e.call_id, output: JSON.stringify(output || {}) } });
+        pendingOutputs = true; break;
+      }
+      case "response.done":
+        if (pendingOutputs) { pendingOutputs = false; send({ type: "response.create" }); }
+        break;
+      case "error": debug("OpenAI: " + ((e.error && e.error.message) || "error")); break;
+    }
+  }
+
+  var captionText = "";
+  function caption(who, text, append) {
+    var box = $("captions");
+    if (who === "you") { captionText = ""; box.innerHTML = ""; var s = document.createElement("span"); s.className = "you"; s.textContent = text; box.appendChild(s); return; }
+    captionText = append ? captionText + text : text;
+    box.textContent = captionText.slice(-220);
+  }
+
+  function interrupt() { send({ type: "response.cancel" }); send({ type: "output_audio_buffer.clear" }); }
+  function endCall() {
+    if (dc) try { dc.close(); } catch (_) {}
+    if (pc) try { pc.close(); } catch (_) {}
+    if (mic) mic.getTracks().forEach(function (t) { t.stop(); });
+    if (audioCtx) audioCtx.close();
+    pc = dc = mic = audioCtx = micLevel = voiceLevel = null; phase = "idle";
+    $("start").hidden = false; $("start").disabled = false; $("end").hidden = true; $("captionsButton").hidden = true; $("mode").hidden = true;
+    setState("Your voice goes to OpenAI", true);
+  }
+  function setMode(on) {
+    alwaysOn = on; $("mode").textContent = on ? "Always on" : "Push to talk";
+    if (mic) mic.getTracks()[0].enabled = on;
+    send({ type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: on ? { type: "semantic_vad", interrupt_response: true } : null } } } });
+    if (phase !== "talking") setState(idleText());
+  }
+
+  $("start").addEventListener("click", startCall);
+  $("end").addEventListener("click", endCall);
+  $("mode").addEventListener("click", function () { setMode(!alwaysOn); });
+  $("captionsButton").addEventListener("click", function () {
+    var on = this.getAttribute("aria-pressed") !== "true";
+    this.setAttribute("aria-pressed", String(on)); $("captions").hidden = !on;
+  });
+  window.addEventListener("keydown", function (event) {
+    if (!pc) return;
+    if (event.key === "Escape") { interrupt(); event.preventDefault(); }
+    if (event.code === "Space" && !alwaysOn && !event.repeat) {
+      event.preventDefault(); interrupt(); send({ type: "input_audio_buffer.clear" });
+      mic.getTracks()[0].enabled = true; phase = "listening"; setState("Listening");
+    }
+  });
+  window.addEventListener("keyup", function (event) {
+    if (!pc || alwaysOn || event.code !== "Space") return;
+    event.preventDefault(); mic.getTracks()[0].enabled = false;
+    send({ type: "input_audio_buffer.commit" }); send({ type: "response.create" });
+    setState(idleText());
+  });
+
+  // ---- The sand avatar: Nessa's halftone disc, moved by the voice that is speaking ----
+  var canvas = $("sand"), g = canvas.getContext("2d"), cells = 15, frame = 0;
+  var blooms = [{ x: 0.32, y: 0.3, r: 0.78, s: 0.95 }, { x: 0.8, y: 0.72, r: 0.6, s: 0.7 }, { x: 0.62, y: 0.12, r: 0.5, s: 0.5 }];
+  function paint(level, mode, t) {
+    var size = canvas.width, cell = size / cells;
+    g.clearRect(0, 0, size, size); g.fillStyle = "#ebe6dc";
+    for (var j = 0; j < cells; j++) for (var i = 0; i < cells; i++) {
+      var cx = (i + 0.5) / cells, cy = (j + 0.5) / cells, d = Math.hypot(cx - 0.5, cy - 0.5);
+      if (d > 0.5) continue;
+      var lit = 0;
+      blooms.forEach(function (b) { var f = Math.max(0, 1 - Math.hypot(cx - b.x, cy - b.y) / b.r); lit += b.s * f * f; });
+      var light = 0.1 + 0.9 * Math.min(1, lit), push = 0, dx = 0, dy = 0;
+      if (mode === "listening") {
+        // Rings travel out from the middle, pushed by your voice.
+        var ring = Math.max(0, Math.cos((d * 14 - t * 0.12) * 1.0));
+        push = level * ring; dx = (cx - 0.5) / (d || 1) * push * cell * 0.6; dy = (cy - 0.5) / (d || 1) * push * cell * 0.6;
+        light = Math.min(1, light * (0.75 + push));
+      } else if (mode === "talking") {
+        // The grains shiver with its words.
+        var grain = Math.sin(i * 12.9898 + j * 78.233 + t * 0.35);
+        dx = grain * level * cell * 0.35; dy = Math.cos(i * 4.1 + j * 7.7 + t * 0.3) * level * cell * 0.35;
+        light = Math.min(1, light * (0.8 + level * 0.6));
+      }
+      var w = cell * 0.95 * Math.sqrt(light);
+      if (w < cell * 0.25) continue;
+      g.beginPath(); g.arc(i * cell + cell / 2 + dx, j * cell + cell / 2 + dy, w / 2, 0, Math.PI * 2); g.fill();
+    }
+  }
+  function loop() {
+    if (!pc) { paint(0, "resting", 0); return; }
+    frame++;
+    var level = phase === "talking" ? (voiceLevel ? voiceLevel() : 0) : (micLevel && (alwaysOn || mic.getTracks()[0].enabled) ? micLevel() : 0);
+    paint(level, phase === "talking" ? "talking" : "listening", frame);
+    requestAnimationFrame(loop);
+  }
+  paint(0, "resting", 0);
+})();
+</script>
+</body>
+</html>

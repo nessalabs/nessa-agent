@@ -1,7 +1,7 @@
 /** An app's UI resource, from `resources/read` (#349, L1–L2). */
 import { describe, expect, it } from "vitest"
 import { appliedCsp } from "./csp"
-import { appMimeType, uiResource } from "./resource"
+import { appMimeType, frameAllow, uiResource } from "./resource"
 
 const uri = "ui://weather-server/dashboard-template"
 const item = (fields: Record<string, unknown>) => ({
@@ -39,7 +39,21 @@ describe("the UI resource", () => {
           resourceDomains: ["https://cdn.jsdelivr.net"],
         },
       }),
+      permissions: { microphone: false },
     })
+  })
+
+  it("grants the microphone only to an app that asks for it, as a flag or an object", () => {
+    const asking = (microphone: unknown) =>
+      uiResource(item({ text: "<p></p>", _meta: { ui: { permissions: { microphone } } } }), uri)
+        ?.permissions.microphone
+    expect(asking({})).toBe(true)
+    expect(asking(true)).toBe(true)
+    expect(asking(false)).toBe(false)
+    expect(asking("yes")).toBe(false)
+    expect(uiResource(item({ text: "<p></p>" }), uri)?.permissions.microphone).toBe(false)
+    expect(frameAllow({ microphone: true })).toBe("microphone *")
+    expect(frameAllow({ microphone: false })).toBe("")
   })
 
   it("decodes a base64 blob as UTF-8", () => {
