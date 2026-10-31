@@ -64,7 +64,11 @@ export const settingsCategories = [
     tabs: [
       { id: "agents", label: "Agents", keywords: "claude code codex opencode installed" },
       { id: "accounts", label: "Accounts", keywords: "sign in github login" },
-      { id: "integrations", label: "Integrations", keywords: "mcp servers tools" },
+      {
+        id: "integrations",
+        label: "MCP servers",
+        keywords: "mcp servers tools integrations",
+      },
       {
         id: "devices",
         label: "Linked devices",
@@ -354,7 +358,7 @@ export const settingsEntries = [
     detail: "Cloud workspaces using your connected agent subscriptions.",
     keywords: "cloud vm compute workspace token chatgpt claude",
   },
-  // Connections › Integrations
+  // Connections › MCP servers
   {
     id: "mcp-servers",
     tab: "integrations",
