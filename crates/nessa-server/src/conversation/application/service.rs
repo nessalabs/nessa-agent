@@ -2917,10 +2917,11 @@ impl ConversationService {
                 }
                 return saved_result(&existing);
             }
-            // A control a restart or failed cleanup left pending is settled
-            // first, as a send settles it, rather than refusing every mode
-            // change until something else opens the conversation.
-            service.recover_mode_change(&id, &caller).await?;
+            // A model change a restart or failed cleanup left pending is
+            // settled first, as a send settles it, rather than refusing every
+            // mode change until something else opens the conversation. A
+            // pending mode change still refuses this one until an opening
+            // or a send has settled it.
             service.recover_model_change(&id, &caller).await?;
             service.refuse_pending_model_change(&id, &caller).await?;
             if service.inner.metadata.pending_mode_change(&id).await?.is_some() {

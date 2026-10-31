@@ -77,6 +77,10 @@ export const KNOBS = {
     default: 2,
     what: "other clients following every conversation's events, view and list, stopping and following again as they go",
   },
+  closes: {
+    default: 1,
+    what: "conversations whose agent closes its own thread (close_thread) while the window shows it, parked once the turn ends, then talked to again",
+  },
   parks: {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
@@ -250,6 +254,7 @@ export function plan(knobs) {
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  add(knobs.closes, () => ({ kind: "close" }))
   add(knobs.renames, () => ({ kind: "rename" }))
   add(knobs.handoffs, () => ({ kind: "handoff" }))
   add(knobs.deletes, () => ({ kind: "delete" }))

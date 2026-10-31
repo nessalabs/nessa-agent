@@ -4231,6 +4231,14 @@ async fn workspace_connection_deadline_matches_the_published_client_budget() {
 /// is gone; the next lease connects again.
 #[tokio::test]
 async fn a_workspace_connection_is_let_go_only_while_nothing_uses_it() {
+    // As a VM's runtime does, the connection's owner ends its stream when
+    // it is dropped, so a closed link sees its end.
+    struct Cut(Arc<Connector>);
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.cut();
+        }
+    }
     struct Through(Arc<Connector>);
     impl super::connector::WorkspaceConnector for Through {
         fn connect(
@@ -4241,8 +4249,11 @@ async fn a_workspace_connection_is_let_go_only_while_nothing_uses_it() {
             Result<LeaseConnection, LeaseRefusal>,
         > {
             Box::pin(async move {
-                LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
-                    .map_err(|_| LeaseRefusal::EnvironmentUnreachable)
+                let mut connection =
+                    LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
+                        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+                connection.keep = Box::new((connection.keep, Cut(self.0.clone())));
+                Ok(connection)
             })
         }
     }

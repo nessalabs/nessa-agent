@@ -66,6 +66,10 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
+ *   close       another conversation's agent closes its own thread
+ *               (close_thread) while the window shows it; once the turn ends
+ *               its agent is parked though followed (its lease ends `idle`),
+ *               and the next message sent there starts it again
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
@@ -4236,6 +4240,88 @@ const steps = {
       failures.push(`the next message left the lease ${after?.lease?.state ?? "missing"}`)
     else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
       failures.push("the next message ran on the parked agent's lease, not a new one")
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async close(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " close")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // The window shows it, so it is followed: an agent that closed its own
+    // thread is parked anyway, unlike one that is only idle.
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    const closing = prompt(run, STRESS.close, step)
+    const seen = await send(
+      run,
+      conversationId,
+      closing,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const { view: closed } = await settled(
+      run,
+      conversationId,
+      seen,
+      closing,
+      "completed",
+      failures,
+    )
+    if (!closed) return
+    await expectShown(run.page, SAYS.closed, failures)
+    // The parking sweep looks at least every 15 s.
+    const parked = await waitFor(async () => {
+      const lease = (await followedOnce(run, conversationId)).lease
+      return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
+    }, 45_000)
+    if (!parked) {
+      const lease = (await followedOnce(run, conversationId)).lease
+      failures.push(
+        `the closed thread's agent was not parked: its lease is ${lease?.state ?? "missing"}${
+          lease?.cause ? ` (${lease.cause})` : ""
+        }`,
+      )
+      return
+    }
+    const next = prompt(run, STRESS.reply, step, " after close_thread")
+    const after = await send(
+      run,
+      conversationId,
+      next,
+      failures,
+      new Set(closed.messages.map((each) => each.executionId)),
+    )
+    const { view: reopened } = await settled(
+      run,
+      conversationId,
+      after,
+      next,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.echo}${next}`, failures)
+    if (reopened?.lease?.state !== "live")
+      failures.push(
+        `the message after close_thread left the lease ${reopened?.lease?.state ?? "missing"}`,
+      )
+    else if (!(reopened.lease.revision > (closed.lease?.revision ?? 0)))
+      failures.push("the message after close_thread ran on the closed agent's lease")
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
