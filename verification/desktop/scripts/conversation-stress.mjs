@@ -3384,20 +3384,31 @@ const steps = {
         await cloud.waitFor({ timeout: 5_000 })
         // It says where Boat stands, and offers the one thing to do about it:
         // unlock while the vault is locked, else a live token field.
-        const word = await waitFor(async () => {
-          const text = await cloud.locator("[data-devices-cloud-state]").innerText()
-          return /^(Connected|Not connected|Locked|Unavailable)\b/.test(text.trim())
-            ? text.trim().split(" ·")[0]
-            : null
+        const settled = await waitFor(async () => {
+          const word = await cloud
+            .locator("[data-devices-cloud-state]")
+            .getAttribute("data-devices-cloud-state")
+          if (word === "Unavailable") return word
+          if (word === "Locked")
+            return (await cloud
+              .locator('[data-boat-action="unlock"]')
+              .isEnabled({ timeout: 500 })
+              .catch(() => false))
+              ? word
+              : null
+          if (word === "Connected" || word === "Not connected")
+            return (await cloud
+              .locator('input[type="password"]')
+              .isEnabled({ timeout: 500 })
+              .catch(() => false))
+              ? word
+              : null
+          return null
         }, 10_000)
-        if (!word) failures.push("Boat's page never said where Boat stands")
-        else if (word === "Locked") {
-          if (!(await cloud.locator('[data-boat-action="unlock"]').isEnabled()))
-            failures.push("Boat is locked and its page offers no Unlock")
-        } else if (word !== "Unavailable") {
-          if (!(await cloud.locator('input[type="password"]').isEnabled()))
-            failures.push(`Boat reads ${word} and its token field is not live`)
-        }
+        if (!settled)
+          failures.push(
+            `Boat's page reads ${await cloud.locator("[data-devices-cloud-state]").innerText()} without its action`,
+          )
         await photograph("cloud")
         await cloud.locator('[data-devices-action="back"]').click()
         // Add device offers each kind; a computer gets a code and the two commands that use it.

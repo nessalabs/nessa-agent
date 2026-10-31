@@ -534,6 +534,12 @@ function CloudPage({
   // answer there reads Boat's status here again.
   const connection = useBoatConnection(onChanged, cloud)
   const state = connection.status?.state
+  const word =
+    state !== undefined
+      ? cloudWord(state)
+      : connection.unread
+        ? cloudWord(null)
+        : "Reading…"
   return (
     <div className="devices-page" data-devices-page="cloud">
       <BackButton onBack={onBack} />
@@ -545,13 +551,12 @@ function CloudPage({
         />
         <div className="devices-heading">
           <h1>Boat</h1>
-          <p className="devices-status devices-detail-status" data-devices-cloud-state>
+          <p
+            className="devices-status devices-detail-status"
+            data-devices-cloud-state={word}
+          >
             <Dot status={state === "connected" ? "ready" : "offline"} />
-            {state !== undefined
-              ? cloudWord(state)
-              : connection.unread
-                ? cloudWord(null)
-                : "Reading…"}
+            {word}
             <span className="devices-muted">{" · "}Cloud VMs</span>
           </p>
         </div>
