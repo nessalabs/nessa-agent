@@ -716,11 +716,13 @@
     pc = new RTCPeerConnection();
     audio = new Audio(); audio.autoplay = true;
     pc.ontrack = function (event) { audio.srcObject = event.streams[0]; voiceLevel = analyser(event.streams[0]); };
+    // The mode chosen on an earlier call holds: push to talk sends nothing until Space.
+    mic.getTracks()[0].enabled = alwaysOn;
     pc.addTrack(mic.getTracks()[0], mic);
     dc = pc.createDataChannel("oai-events");
     dc.onopen = function () {
       send({ type: "session.update", session: { type: "realtime", tools: toolSpecs, tool_choice: "auto",
-        audio: { input: { turn_detection: { type: "semantic_vad", interrupt_response: true },
+        audio: { input: { turn_detection: alwaysOn ? { type: "semantic_vad", interrupt_response: true } : null,
           transcription: { model: "gpt-4o-mini-transcribe" } } } } });
       phase = "listening"; setState(idleText());
       $("start").hidden = true; $("end").hidden = false; $("captionsButton").hidden = false; $("mode").hidden = false;
@@ -755,7 +757,8 @@
       case "response.function_call_arguments.done": {
         var args = {}; try { args = JSON.parse(e.arguments || "{}"); } catch (_) {}
         var output;
-        try { output = await stageTools[e.name](args); } catch (error) { output = { error: String(error && error.message) }; }
+        if (!Object.hasOwn(stageTools, e.name)) output = { error: "Unknown tool: " + String(e.name) };
+        else try { output = await stageTools[e.name](args); } catch (error) { output = { error: String(error && error.message) }; }
         send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: e.call_id, output: JSON.stringify(output || {}) } });
         // A tool can finish after its response is done; either way the model is asked to go on.
         respond(); break;
