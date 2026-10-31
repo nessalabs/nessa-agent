@@ -2061,16 +2061,16 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                     cause: cause.as_str().into(),
                 }
             }
-            RecoveryEvent::StopObserved {
+            RecoveryEvent::StopAnswered {
                 thread,
                 vm,
                 cause,
                 failure,
-            } => EnvironmentEvent::WorkspaceStopObserved {
+            } => EnvironmentEvent::WorkspaceStopAnswered {
                 thread: thread.clone(),
                 vm: vm.clone(),
                 cause: cause.as_str().into(),
-                stopped: failure.is_none(),
+                accepted: failure.is_none(),
                 failure: failure.map(str::to_owned),
             },
         };

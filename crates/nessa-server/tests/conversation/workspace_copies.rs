@@ -171,14 +171,10 @@ async fn a_vm_that_could_not_be_asked_has_nothing_installed_on_a_guess() {
     let vm = Vm::with_image(None);
     let installer = installer();
     let copy = served_copy(&installer, &Audit::default(), &conversation(), &vm, true).await;
-    // Served what is installed there, else its image's copy.
-    assert_eq!(
-        copy,
-        Ok(ServedCopy::Installed(
-            installer.serve_command().await.unwrap()
-        ))
-    );
-    assert!(vm.commands.lock().unwrap().is_empty());
+    // No copy of this build there: its image's serves, chosen before it
+    // starts, and the next opening asks again.
+    assert_eq!(copy, Ok(ServedCopy::Image));
+    assert_eq!(vm.uploads(), 0);
 }
 
 #[tokio::test]
@@ -221,9 +217,14 @@ async fn an_install_outlasts_the_opening_that_gave_up_on_it_and_is_never_sent_tw
 }
 
 #[tokio::test]
-async fn an_account_of_a_held_lease_never_installs() {
+async fn an_account_of_a_held_lease_never_installs_and_is_served_the_copy_there() {
     let vm = Vm::with_image(Some(""));
     let installer = installer();
+    let copy = served_copy(&installer, &Audit::default(), &conversation(), &vm, false).await;
+    assert_eq!(copy, Ok(ServedCopy::Image));
+    assert_eq!(vm.uploads(), 0);
+    // With this build installed there, that copy serves it.
+    vm.installed.store(true, Ordering::SeqCst);
     let copy = served_copy(&installer, &Audit::default(), &conversation(), &vm, false).await;
     assert_eq!(
         copy,
@@ -231,7 +232,7 @@ async fn an_account_of_a_held_lease_never_installs() {
             installer.serve_command().await.unwrap()
         ))
     );
-    assert!(vm.commands.lock().unwrap().is_empty());
+    assert_eq!(vm.uploads(), 0);
 }
 
 #[tokio::test]

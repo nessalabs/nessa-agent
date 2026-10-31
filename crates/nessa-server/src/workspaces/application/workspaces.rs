@@ -33,7 +33,7 @@ pub(crate) enum ServedCopy {
     /// The one its image was made with.
     Image,
     /// One installed since, started by this command
-    /// (`env_serve::install::serve_command`); with none there, the image's.
+    /// (`env_serve::install::serve_command`).
     Installed(String),
 }
 #[async_trait]
@@ -142,9 +142,10 @@ pub(crate) enum RecoveryEvent {
         vm: String,
         cause: RestCause,
     },
-    /// What Boat answered that stop: a `failure` (its kind) means the VM
-    /// may still run, until the next rest or its own time limit.
-    StopObserved {
+    /// What Boat answered that stop: accepted, the VM archives after it
+    /// (`connect` waits that out); a `failure` (its kind) means it may
+    /// still run, until the next rest or its own time limit.
+    StopAnswered {
         thread: String,
         vm: String,
         cause: RestCause,
@@ -172,7 +173,8 @@ impl RestCause {
     }
 }
 
-/// What [`Workspaces::rest`] did: whether it stopped the VM, and whether a
+/// What [`Workspaces::rest`] did: whether Boat accepted a stop of the VM
+/// (it archives after), and whether a
 /// record of that stop could not be kept. A failed record never holds the
 /// stop back, and the stop's own answer never hides a failed record.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,7 +250,7 @@ impl Workspaces {
     /// Ordered with opening under the thread's lock, so an open that comes
     /// meanwhile either finds the VM stopped, and resumes it, or holds it in
     /// use and keeps it running. Each stop asked of Boat is recorded, with
-    /// `cause`, before and after.
+    /// `cause`, before it is asked and once it answered.
     pub(crate) async fn rest(&self, thread: ConversationId, cause: RestCause) -> Rested {
         let this = self.clone();
         // Like an opening, a stop once asked is carried through by its own
@@ -291,7 +293,7 @@ impl Workspaces {
             .await
             .unwrap_or(Err(Failure::Provider));
         let observed_failed = self
-            .record_recovery(&RecoveryEvent::StopObserved {
+            .record_recovery(&RecoveryEvent::StopAnswered {
                 thread: id,
                 vm,
                 cause,

@@ -298,11 +298,12 @@ A VM made from an earlier image keeps its files and is not replaced. Each
 opening first asks the image's own `nessa env protocol`. When that is not this
 build's, the gateway installs this build in the VM over the VM's own SSH
 connection, exactly as it installs on an SSH host (`HostInstaller`, kept under
-`~/.nessa/env/<digest>`, records naming the VM `boat-<thread>`). The serve
-command then runs the installed copy, and the image's own when none is there.
-A VM that could not be asked gets nothing installed on a guess: it is served
-what is there, and the next opening asks again. An account of a lease already
-held never installs. A development build pins no release for Linux, so from a
+`~/.nessa/env/<digest>`, records naming the VM `boat-<thread>`), and serves
+that copy. Which copy serves is chosen before either starts, so when it ends
+the connection ends with it. A VM that could not be asked gets nothing
+installed on a guess: it is served this build's copy if one is there, else its
+image's, and the next opening asks again. An account of a lease already held
+never installs: it is served the copy that is there. A development build pins no release for Linux, so from a
 Mac it cannot install and the opening is refused
 `environment_platform_unsupported`.
 
@@ -318,16 +319,23 @@ sequenceDiagram
     G->>V: sh -c '/opt/nessa/bin/nessa env protocol'
     alt this build's protocol
         G->>V: serve the image's copy
-    else could not be asked
-        G->>V: serve the installed copy, else the image's
-    else another, or none
+    else another, none, or could not be asked
         G->>V: probe ~/.nessa/env/<digests>
-        opt absent
+        alt present
+            G->>V: serve the installed copy
+        else absent, and the image said another protocol
             G->>V: upload this build (or its pinned Linux release), on its own task
+            G->>V: serve the installed copy
+        else absent otherwise
+            G->>V: serve the image's copy
         end
-        G->>V: serve the installed copy, else the image's
     end
 ```
 
 Relayed MCP servers still start the image's own `nessa mcp-relay`, and the
 managed shell is the image's `nessa-mcp`; neither speaks the lease protocol.
+
+Each stop of a VM is recorded before Boat is asked (`workspace_stop_requested`)
+and once it answers (`workspace_stop_answered`, `accepted` or the failure's
+kind). Accepted means Boat took the stop: the VM archives after it, which an
+opening waits out.

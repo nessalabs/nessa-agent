@@ -373,6 +373,19 @@ impl HostInstaller {
             .await
     }
 
+    /// Whether a copy of this build is installed on `host`, asked by
+    /// `shell` without installing one; `None` when the host did not say.
+    pub(crate) async fn installed_on(
+        &self,
+        shell: &dyn RemoteShell,
+        host: &SshDestination,
+    ) -> Option<bool> {
+        match self.probe(shell, host).await? {
+            Probe::Present => Some(true),
+            Probe::Absent(_) => Some(false),
+        }
+    }
+
     /// [`Self::ensure`], with each command run by `shell` instead of the
     /// shell this installer was made with: a cloud workspace's VM is
     /// reached through its own connection, and `host` only names it in the

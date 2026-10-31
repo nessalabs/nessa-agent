@@ -49,13 +49,14 @@ pub(crate) enum EnvironmentEvent {
         vm: String,
         cause: String,
     },
-    /// What the provider answered that stop; a `failure` (its kind) means
-    /// the VM may still run.
-    WorkspaceStopObserved {
+    /// What the provider answered that stop. Accepted, the VM archives
+    /// after it: this does not say it has finished. A `failure` (its kind)
+    /// means it may still run.
+    WorkspaceStopAnswered {
         thread: String,
         vm: String,
         cause: String,
-        stopped: bool,
+        accepted: bool,
         failure: Option<String>,
     },
     /// A host answered with this lease protocol's hello.

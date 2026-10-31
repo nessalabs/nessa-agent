@@ -155,7 +155,7 @@ impl RecoveryAudit for Audit {
                 &self.fail_receipt
             }
             RecoveryEvent::RollbackObserved { .. } => &self.fail_cleanup,
-            RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopObserved { .. } => {
+            RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopAnswered { .. } => {
                 &self.fail_stop
             }
         };
@@ -508,7 +508,7 @@ async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_reco
                 cause: RestCause::Closed,
             }),
             RecoveryStep::Stop(vm.clone()),
-            RecoveryStep::Audit(RecoveryEvent::StopObserved {
+            RecoveryStep::Audit(RecoveryEvent::StopAnswered {
                 thread: thread.clone(),
                 vm: vm.clone(),
                 cause: RestCause::Closed,
@@ -525,7 +525,7 @@ async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_reco
             .filter(|event| {
                 matches!(
                     event,
-                    RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopObserved { .. }
+                    RecoveryEvent::StopRequested { .. } | RecoveryEvent::StopAnswered { .. }
                 )
             })
             .cloned()
@@ -539,7 +539,7 @@ async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_reco
                 vm: vm.clone(),
                 cause: RestCause::Closed,
             },
-            RecoveryEvent::StopObserved {
+            RecoveryEvent::StopAnswered {
                 thread: thread.clone(),
                 vm: vm.clone(),
                 cause: RestCause::Closed,
@@ -561,7 +561,7 @@ async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_reco
     assert!(!rested.audit_failed);
     assert_eq!(
         stops(&audit).last(),
-        Some(&RecoveryEvent::StopObserved {
+        Some(&RecoveryEvent::StopAnswered {
             thread,
             vm,
             cause: RestCause::Idle,

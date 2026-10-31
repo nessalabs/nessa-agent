@@ -99,13 +99,14 @@ impl VmCopies {
         pending.await
     }
 }
-/// The copy of `nessa` in `conversation`'s VM that speaks this build's
-/// lease protocol: the image's own when it does, else this build, installed
-/// in the VM now by `installer` unless it is there already. A VM made from
-/// an image an earlier build pinned keeps its files and gets this build
-/// beside them. An account of a lease already held (`install` false) never
-/// installs: it is served whichever copy is there. The installed copy, when
-/// there is one, comes first ([`ServedCopy::Installed`]).
+/// The copy of `nessa` in `conversation`'s VM that serves its leases,
+/// chosen before either starts: the image's own when it speaks this build's
+/// lease protocol; else this build, where it is installed in the VM, or is
+/// installed now by `installer`. A VM made from an image an earlier build
+/// pinned keeps its files and gets this build beside them. An account of a
+/// lease already held (`install` false) never installs, and nothing is
+/// installed on a guess: a VM that could not be asked, with no copy found,
+/// is served its image's.
 async fn served_copy(
     installer: &HostInstaller,
     audit: &dyn EnvironmentAudit,
@@ -117,16 +118,17 @@ async fn served_copy(
     if image.as_deref() == Some(LEASE_PROTOCOL) {
         return Ok(ServedCopy::Image);
     }
-    // A VM that could not be asked is served what is installed there, else
-    // its image's copy, as it would have been: nothing is installed on a
-    // guess.
-    if install && image.is_some() {
-        // The VM is named by its thread in the install's records, and the
-        // thread stands for the lease: they join the thread's lease records.
-        let host = SshDestination::new(format!("boat-{conversation}"))
-            .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+    // The VM is named by its thread in the install's records, and the
+    // thread stands for the lease: they join the thread's lease records.
+    let host = SshDestination::new(format!("boat-{conversation}"))
+        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+    let shell = VmShell(runtime);
+    if installer.installed_on(&shell, &host).await != Some(true) {
+        if !(install && image.is_some()) {
+            return Ok(ServedCopy::Image);
+        }
         installer
-            .ensure_on(&VmShell(runtime), &host, &conversation.to_string(), audit)
+            .ensure_on(&shell, &host, &conversation.to_string(), audit)
             .await?;
     }
     Ok(ServedCopy::Installed(installer.serve_command().await?))

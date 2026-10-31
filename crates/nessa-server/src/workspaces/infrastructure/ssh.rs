@@ -51,13 +51,11 @@ const VM_SERVE_ENVIRONMENT: &str =
 
 impl SshAccess {
     pub(super) fn serve(self: &Arc<Self>, copy: &ServedCopy) -> io::Result<WorkspaceStream> {
-        let image = format!("{VM_SERVE_ENVIRONMENT} {VM_NESSA} env serve");
-        // An installed copy found execs; with none, the image's serves.
+        // One copy, chosen before it starts: when it ends, the connection
+        // does.
         let program = match copy {
-            ServedCopy::Image => image,
-            ServedCopy::Installed(command) => {
-                posix(&format!("{VM_SERVE_ENVIRONMENT} {command}; exec {image}"))
-            }
+            ServedCopy::Image => format!("{VM_SERVE_ENVIRONMENT} {VM_NESSA} env serve"),
+            ServedCopy::Installed(command) => format!("{VM_SERVE_ENVIRONMENT} {command}"),
         };
         let mut command = ssh(&self.directory, self.endpoint);
         command
