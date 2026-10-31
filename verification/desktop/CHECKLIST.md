@@ -1212,10 +1212,10 @@ publish, and refuses nothing the gateway would judge.
   `mcp-servers-gateway.mjs --only empty,add,inspect,toggle,rename,relaunch,conflict,remove`
   (needs the gateway built and an agent's harness installed).
 - [ ] **Focus follows what opens and closes** — Add and Edit put it on the
-  form's first field; Remove on the confirm's Cancel, which its sentence
-  describes; Show Tools inside its dialog; Cancel, Escape, Save and Done
-  put it back on the row's ⋯, or on Add (a save's once the list after it is
-  read; a row renamed or removed, on Add). Escape closes the form and the confirm,
+  form's first field; Remove and Show Tools inside their dialog; Cancel,
+  Escape, Save and Done put it back on the row's ⋯ (a rename's, on the row
+  under its new name, once the list after it is read), or on Add when the
+  row is gone. Escape closes the form and the confirm,
   and never Settings. _Check:_ `mcp-servers-gateway.mjs --only focus`
   (`document.activeElement` after each); unit tests `integrations-tab.test.tsx`
   (`focus`).

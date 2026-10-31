@@ -18,6 +18,8 @@ import {
   launchChanged,
   namesKept,
   valuesNeeded,
+  valuesWaiting,
+  commandLine,
   initialMcpServersState,
   mcpServersReducer,
   sentences,
@@ -1705,6 +1707,32 @@ describe("a variable's value (S1–S8)", () => {
     state = run(state, { type: "changeVariable", key, patch: { value: "y" } })
     expect(valuesNeeded(state.form!, editedServer(state))).toBe(false)
     expect(saved(state)).toEqual([{ name: "TOKEN", value: "y" }])
+  })
+
+  it('S2 and S7: why Save waits is one answer: an emptied value alone is "cleared", any other change "again"', () => {
+    let state = edit()
+    const key = keyOf(state, "TOKEN")
+    expect(valuesWaiting(state.form!, editedServer(state))).toBeNull()
+    state = run(
+      state,
+      { type: "changeVariable", key, patch: { value: "x" } },
+      { type: "changeVariable", key, patch: { value: "" } },
+    )
+    expect(valuesWaiting(state.form!, editedServer(state))).toBe("cleared")
+    state = run(state, { type: "change", patch: { command: "/usr/bin/other" } })
+    // Nothing else stored is left unentered, so the emptied one is still the reason.
+    expect(valuesWaiting(state.form!, editedServer(state))).toBe("cleared")
+    state = run(state, { type: "changeVariable", key, patch: { value: "y" } })
+    expect(valuesWaiting(state.form!, editedServer(state))).toBeNull()
+  })
+
+  it("a command line names each part as one: empty, spaced and quoted parts quoted", () => {
+    expect(commandLine("/usr/bin/node", ["server.mjs"], true)).toBe("node server.mjs")
+    expect(commandLine("/usr/bin/node", ["server.mjs"])).toBe("/usr/bin/node server.mjs")
+    expect(commandLine("/opt/My Tools/run server", ["x"], true)).toBe('"run server" x')
+    expect(commandLine("cmd", ["a b"])).toBe('cmd "a b"')
+    expect(commandLine("cmd", ["a", "b"])).toBe("cmd a b")
+    expect(commandLine("cmd", ["", 'say "hi"'])).toBe('cmd "" "say \\"hi\\""')
   })
 
   it("S8: a stored variable removed elsewhere goes if not edited, stays as new if edited", () => {

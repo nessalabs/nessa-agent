@@ -1322,9 +1322,10 @@ const checks = {
       saveEnabled: true,
       keep: false,
     })
+    // Nothing else changed: what holds Save is the emptied value, said so.
     expectShown("the added one removed, the value emptied", seen.keepRemovedEdited, {
       placeholder: names.mcp.storedValueCleared,
-      note: names.mcp.valuesAgain,
+      note: `${names.mcp.storedValueCleared}.`,
       saveEnabled: false,
       keep: true,
     })

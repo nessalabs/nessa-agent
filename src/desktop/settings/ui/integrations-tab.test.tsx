@@ -669,6 +669,10 @@ describe("Integrations", () => {
       expect(button("Keep stored value", variable())).toBeDefined()
       await type(field(), "")
       expect(field()?.placeholder).toBe("Enter a value, or keep the stored one")
+      // Said as what holds Save, not as a changed launch: nothing else changed.
+      expect(document.querySelector("[data-mcp-values-needed]")?.textContent).toBe(
+        "Enter a value, or keep the stored one.",
+      )
       expect(button("Save")?.disabled).toBe(true)
       await click(button("Keep stored value", variable()))
       expect(field()).toBeNull()
@@ -886,8 +890,9 @@ describe("Integrations", () => {
       expect(button("Keep stored value", variable("A"))).toBeUndefined()
       await type(value("A"), "")
       await click(form().querySelector('[aria-label="Remove C"]') ?? undefined)
-      // A is still edited (empty): B waits, Keep comes back for A.
-      expect(note()).toBe(again)
+      // A is still edited (empty), and nothing else changed: what holds Save
+      // is A's empty value, said so, and Keep comes back for A.
+      expect(note()).toBe("Enter a value, or keep the stored one.")
       expect(button("Keep stored value", variable("A"))).toBeDefined()
       await click(button("Keep stored value", variable("A")))
       expect(note()).toBe("")

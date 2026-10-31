@@ -894,19 +894,53 @@ export function launchChanged(
 }
 
 /**
- * Whether a stored variable still waits for its value, the launch having
- * changed (U33, V2–V5): one not entered again. An empty value is not one
- * entered: a field touched and left empty would otherwise save the variable
- * blank, where the person meant to keep it (S7).
+ * Why Save waits on stored values, or `null` when it does not: the one
+ * answer both the hold and what is said about it read.
+ *
+ * - `"again"`: the launch changed for a reason other than an emptied stored
+ *   value (names, or another stored value replaced), so every stored value
+ *   not entered again is asked for (U33, V2–V5).
+ * - `"cleared"`: the only change is a stored value replaced and left empty.
+ *   An empty value is not one entered: saved, it would blank the variable
+ *   where the person meant to keep it (S7). Typing one, or Keep, ends it.
  */
+export function valuesWaiting(
+  form: ServerForm,
+  listed: ListedServer | undefined,
+): "again" | "cleared" | null {
+  if (!launchChanged(form, listed) || listed === undefined) return null
+  const emptied = (row: VariableRow) => row.stored && row.edited && row.value === ""
+  const otherChange =
+    !namesKept(form, listed) ||
+    form.env.some((row) => row.stored && row.edited && row.value !== "")
+  if (otherChange && form.env.some((row) => row.stored && !row.edited)) return "again"
+  return form.env.some(emptied) ? "cleared" : null
+}
+
+/** Whether a stored variable still waits for its value ([`valuesWaiting`]). */
 export function valuesNeeded(
   form: ServerForm,
   listed: ListedServer | undefined,
 ): boolean {
-  return (
-    launchChanged(form, listed) &&
-    form.env.some((row) => row.stored && (!row.edited || row.value === ""))
-  )
+  return valuesWaiting(form, listed) !== null
+}
+
+/**
+ * A stdio server's command as one line: the program (by its name alone when
+ * `short`) and every argument whole. An empty argument, or one with a space
+ * or quote in it, is quoted, the program too, so each part reads as one.
+ */
+export function commandLine(
+  command: string,
+  args: readonly string[],
+  short = false,
+): string {
+  const shown = (part: string) =>
+    part === "" || /[\s"]/.test(part) ? JSON.stringify(part) : part
+  const program = short
+    ? (command.split(/[\\/]/).filter(Boolean).pop() ?? command)
+    : command
+  return [program, ...args].map(shown).join(" ")
 }
 
 /**

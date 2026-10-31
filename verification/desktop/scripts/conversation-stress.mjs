@@ -2358,6 +2358,9 @@ const steps = {
         .catch(() => false)
       if (!shown) {
         failures.push(`${name} was saved but no row came back for it`)
+        // Left as the next step expects: no dialog, no Settings.
+        if (await form.isVisible().catch(() => false)) await page.keyboard.press("Escape")
+        await closeSettings(page).catch(() => {})
         return
       }
       // A closed row: its name, one short line, a switch and its ⋯ menu.

@@ -31,11 +31,10 @@ fn open_config(path: Option<&Path>, host: &dyn Host) -> Result<(), String> {
         path.ok_or_else(|| "The gateway's data folder isn't known to this app.".to_string())?;
     // Not followed through a link: the gateway refuses a config.json that is
     // not a regular file, and a link could point the opener anywhere.
-    let regular = std::fs::symlink_metadata(path)
-        .map(|meta| meta.file_type().is_file())
-        .unwrap_or(false);
-    if !regular {
-        return Err("The gateway hasn't written its configuration file yet.".into());
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => return Err("config.json isn't a regular file, so it wasn't opened.".into()),
+        Err(_) => return Err("The gateway hasn't written its configuration file yet.".into()),
     }
     host.open_file(path)
 }

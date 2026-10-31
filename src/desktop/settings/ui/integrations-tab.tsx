@@ -19,6 +19,7 @@ import {
   canInspect,
   canRemoveByName,
   canWrite,
+  commandLine,
   editedServer,
   endsWithLineBreak,
   authorizationLabel,
@@ -30,7 +31,7 @@ import {
   lineBreaks,
   linesOf,
   namesKept,
-  valuesNeeded,
+  valuesWaiting,
   initialMcpServersState,
   mcpServersReducer,
   sentences,
@@ -782,7 +783,7 @@ function SharedGroup({
         {group.rows.map(({ id, server }) => (
           <li key={id} data-mcp-shared-row>
             <code className="settings-server-command">
-              {[server.command, ...server.args].join(" ")}
+              {commandLine(server.command, server.args)}
             </code>
             <small>
               {[
@@ -958,7 +959,7 @@ function FormDialog({
     form.problem?.field === field ? problems[field] : undefined
   const listed = editedServer(state)
   const relaunched = launchChanged(form, listed)
-  const waiting = valuesNeeded(form, listed)
+  const waiting = valuesWaiting(form, listed)
   const keepable = namesKept(form, listed)
   const adding = form.editing === undefined
   return (
@@ -1167,7 +1168,10 @@ function FormDialog({
                       relaunched={relaunched}
                       keepable={keepable}
                       describedBy={
-                        [described("env"), row.stored && waiting ? ids.values : undefined]
+                        [
+                          described("env"),
+                          row.stored && waiting !== null ? ids.values : undefined,
+                        ]
                           .filter(Boolean)
                           .join(" ") || undefined
                       }
@@ -1206,7 +1210,11 @@ function FormDialog({
               aria-live="polite"
               data-mcp-values-needed
             >
-              {waiting ? sentences.valuesAgain : null}
+              {waiting === "again"
+                ? sentences.valuesAgain
+                : waiting === "cleared"
+                  ? `${sentences.storedValueCleared}.`
+                  : null}
             </p>
             <FieldProblem form={form} field="env" id={problems.env} />
           </section>
@@ -1234,14 +1242,9 @@ function CommandRow({
   const [failed, setFailed] = useState<string | null>(null)
   // The program by its name, its arguments as they are: a shortened
   // argument (a package, a URL, a flag's path) would misstate what runs.
-  const program = form.command.split(/[\\/]/).filter(Boolean).pop() ?? form.command
-  // An empty argument, or one with a space or quote in it, is quoted, so each
-  // still reads as one.
-  const shown = (part: string) =>
-    part === "" || /[\s"]/.test(part) ? JSON.stringify(part) : part
-  const args = form.args.map((row) => shown(row.value))
-  const full = [shown(form.command), ...args].join(" ")
-  const command = [program, ...args].join(" ")
+  const args = form.args.map((row) => row.value)
+  const full = commandLine(form.command, args)
+  const command = commandLine(form.command, args, true)
   return (
     <SettingsRow
       label="Command"
