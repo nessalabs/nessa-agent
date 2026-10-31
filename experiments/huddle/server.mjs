@@ -10,7 +10,9 @@
  * No dependencies. The real Huddle server lives in its own repo and reaches
  * the gateway as a client; this one only reads files under HUDDLE_ROOT.
  */
-import { readFileSync, readdirSync, statSync, realpathSync } from "node:fs"
+import { appendFileSync, readFileSync, readdirSync, renameSync, rmSync, statSync, realpathSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { tmpdir } from "node:os"
 import { createInterface } from "node:readline"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -34,6 +36,9 @@ const INSTRUCTIONS = [
   "Before you talk about a file, show it. While you explain a part, draw on it: highlight the lines, circle a block, underline a phrase's line.",
   "Use list_files to find files when you do not know a path. Paths are relative to the project root.",
   "If the person interrupts you, stop and listen.",
+  "For anything past what is on the stage (reading more code, searching, running or changing things), hand it to Claude with ask_agent:",
+  "say in a sentence that you asked, then keep the conversation going. The person approves the request in the chat first.",
+  "When a report from Claude arrives, tell the person what it found in a sentence or two. Never go silent while you wait.",
 ].join(" ")
 
 const object = (properties, required = []) => ({
@@ -142,6 +147,45 @@ function listFiles({ dir = "." }) {
   return { ...text(entries.join("\n")), structuredContent: { entries } }
 }
 
+// Reports from the agent a Huddle handed a task to, held until the app collects them.
+// A file, not memory: the agent's copy of this server and the app's are separate
+// processes, started by different hosts with the same environment.
+const INBOX = join(tmpdir(), `huddle-inbox-${createHash("sha256").update(ROOT).digest("hex").slice(0, 16)}.jsonl`)
+const MAX_REPORTS = 20
+
+function report({ summary, agents }) {
+  if (typeof summary !== "string" || !summary.trim()) return failed("Give a summary.")
+  const started = (Array.isArray(agents) ? agents : [])
+    .filter((agent) => agent && typeof agent.title === "string" && typeof agent.sessionId === "string" && agent.sessionId)
+    .slice(0, 8)
+    .map((agent) => ({ title: agent.title.slice(0, 120), sessionId: agent.sessionId.slice(0, 200) }))
+  appendFileSync(INBOX, JSON.stringify({ summary: summary.trim().slice(0, 2000), agents: started, at: Date.now() }) + "\n", { mode: 0o600 })
+  return text("Reported to the Huddle.")
+}
+
+function collect() {
+  // Taken by renaming, so a report appended meanwhile lands in a new file.
+  const taken = `${INBOX}.${process.pid}.${Date.now()}`
+  try {
+    renameSync(INBOX, taken)
+  } catch {
+    return { ...text("0 report(s)."), structuredContent: { reports: [] } }
+  }
+  const reports = readFileSync(taken, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)]
+      } catch {
+        return []
+      }
+    })
+    .slice(-MAX_REPORTS)
+  rmSync(taken, { force: true })
+  return { ...text(`${reports.length} report(s).`), structuredContent: { reports } }
+}
+
 const TOOLS = {
   huddle_open: {
     description:
@@ -174,6 +218,29 @@ const TOOLS = {
     annotations: { readOnlyHint: true },
     _meta: { ui: { visibility: ["app"] } },
     call: readFile,
+  },
+  huddle_report: {
+    description:
+      "Report back to the open Huddle after finishing a task it handed you: a 1-3 sentence summary, and the title and session id of any agent threads you started.",
+    inputSchema: object(
+      {
+        summary: { type: "string" },
+        agents: {
+          type: "array",
+          items: object({ title: { type: "string" }, sessionId: { type: "string" } }, ["title", "sessionId"]),
+        },
+      },
+      ["summary"],
+    ),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    call: report,
+  },
+  huddle_inbox: {
+    description: "Collect and clear the reports agents sent this Huddle. For the Huddle app only.",
+    inputSchema: object({}),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    _meta: { ui: { visibility: ["app"] } },
+    call: collect,
   },
   huddle_list_files: {
     description: "List files under a folder of the project, two levels deep. For the Huddle app only.",
