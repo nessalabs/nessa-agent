@@ -18,9 +18,9 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *   reviews     one turn asks `--reviews` reviews in a row, each a card
  *   large       one review larger than the old 16 KB display limit
  *   stop        Send turns into Stop while the turn runs; Stop cancels it.
- *               While it runs, the chat's channel in the sidebar breathes its
- *               # and draws no spinner at its end, and its settings show
- *               only under the pointer; stopped, the # is still again
+ *               While it runs, the chat's channel in the sidebar shows a
+ *               spinner at its end, which its settings replace only under
+ *               the pointer; stopped, the spinner is gone
  *   fail        the turn fails; the next message is sent in the same conversation
  *   usageLimit  the turn ends in a usage limit; the card shows, the project
  *               preference is turned on and back off, and the turn is not resumed
@@ -695,68 +695,67 @@ async function channelShowsList(page, failures) {
 const MAIN_CHANNEL = "Conversations"
 
 /**
- * A channel in the sidebar shows that something runs in it by its own glyph:
- * the # breathes (an animation plays on it) and nothing spins at the row's
- * end, and its name says "Running" to a reader. Its settings stay hidden
- * until the row is pointed at. Without a running turn the # is still.
+ * A channel in the sidebar shows that something runs in it with a spinner at
+ * its row's end, and its name says "Running" to a reader. Its settings stay
+ * hidden until the row is pointed at, and then take the spinner's place.
+ * Without a running turn no spinner is drawn.
  */
-async function channelBreathes(page, name, running, failures) {
+async function channelRunning(page, name, running, failures) {
   const row = page
     .locator(`${css.sidebar} ${css.kitRowFrame}`)
     .filter({ has: page.getByText(name, { exact: true }) })
-    .filter({ has: page.locator(":is(.workspace-row-icon, .workspace-disclosure)") })
+    .filter({ has: page.locator(".workspace-row-icon") })
     .first()
   const read = () =>
     row.evaluate((frame) => {
-      // The row's own glyph, running or not: a still # has no animation playing.
-      const holder = frame.querySelector(".workspace-row-icon, .workspace-disclosure")
-      const icon = holder?.matches("[data-running]") ? holder : null
-      const glyph = holder?.matches(".workspace-disclosure")
-        ? holder.querySelector("svg")
-        : holder
-      const settings = frame.querySelector("[data-channel-settings-open]")
-      let shown = settings ? 1 : 0
-      for (let at = settings; at; at = at.parentElement)
-        shown *= Number(getComputedStyle(at).opacity)
+      // How much of an element shows: its opacity times every ancestor's.
+      const shown = (element) => {
+        if (!element) return null
+        let opacity = 1
+        for (let at = element; at; at = at.parentElement)
+          opacity *= Number(getComputedStyle(at).opacity)
+        return opacity
+      }
       return {
-        marked: Boolean(icon),
-        breathes: Boolean(
-          glyph?.getAnimations().some((each) => each.playState === "running"),
-        ),
-        spinner: Boolean(frame.querySelector('.workspace-status[data-status="running"]')),
+        spinner: shown(frame.querySelector('.workspace-status[data-status="running"]')),
+        settings: shown(frame.querySelector("[data-channel-settings-open]")),
         said: (
-          frame
-            .querySelector('[data-size], [data-row="channel"]')
-            ?.getAttribute("aria-label") ?? ""
+          frame.querySelector("[data-size]")?.getAttribute("aria-label") ?? ""
         ).includes("Running"),
-        settings: settings ? shown : null,
       }
     })
   if (!(await row.count())) {
     failures.push(`no channel ${name} in the sidebar`)
     return
   }
-  const wanted = (now) => now.marked === running && now.breathes === running
+  // Away from the window's left edge, where the pointer would peek the sidebar out.
+  await page.mouse.move(600, 400)
+  const wanted = (now) => (now.spinner !== null) === running && now.said === running
   let now = await read()
   await waitFor(async () => wanted((now = await read())), 10_000)
   if (!wanted(now))
     failures.push(
-      `channel ${name} ${running ? "does not breathe while" : "still breathes after"} a turn runs: ${JSON.stringify(now)}`,
+      `channel ${name} ${running ? "shows no spinner while" : "still shows a spinner after"} a turn runs: ${JSON.stringify(now)}`,
     )
-  if (now.spinner) failures.push(`channel ${name} draws a spinner at its end`)
-  if (running && !now.said) failures.push(`channel ${name} does not say it is running`)
-  if (now.settings === null) return
-  // Away from the window's left edge, where the pointer would peek the sidebar out.
-  await page.mouse.move(600, 400)
+  if (now.settings === null) {
+    failures.push(`channel ${name} has no settings`)
+    return
+  }
   await sleep(250)
-  const atRest = (await read()).settings
-  if (atRest !== 0)
-    failures.push(`channel ${name} shows its settings at rest (${atRest})`)
+  const atRest = await read()
+  if (atRest.settings !== 0)
+    failures.push(`channel ${name} shows its settings at rest (${atRest.settings})`)
+  if (running && atRest.spinner !== null && atRest.spinner !== 1)
+    failures.push(`channel ${name}'s spinner shows at ${atRest.spinner} at rest`)
   await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
   await sleep(300)
-  const pointed = (await read()).settings
-  if (pointed !== 1)
-    failures.push(`channel ${name} pointed at shows its settings at ${pointed}`)
+  const pointed = await read()
+  if (pointed.settings !== 1)
+    failures.push(`channel ${name} pointed at shows its settings at ${pointed.settings}`)
+  if (running && pointed.spinner > 0)
+    failures.push(
+      `channel ${name} pointed at still shows its spinner (${pointed.spinner})`,
+    )
   await page.mouse.move(600, 400)
 }
 
@@ -2250,13 +2249,13 @@ const steps = {
       failures.push("Send did not turn into Stop while the turn ran")
       return
     }
-    await channelBreathes(run.page, MAIN_CHANNEL, true, failures)
+    await channelRunning(run.page, MAIN_CHANNEL, true, failures)
     await dock(run.page)
       .getByRole(...composerControls.stop)
       .click({ timeout: 10_000 })
     await settled(run, run.main.id, seen, text, "cancelled", failures)
     if (!(await sendShown(run.page))) failures.push("Stop did not turn back into Send")
-    await channelBreathes(run.page, MAIN_CHANNEL, false, failures)
+    await channelRunning(run.page, MAIN_CHANNEL, false, failures)
   },
 
   async fail(run, step, failures) {

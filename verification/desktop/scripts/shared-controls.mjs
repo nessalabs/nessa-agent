@@ -149,31 +149,6 @@ function rowsOnPage(sel) {
   })
 }
 
-/**
- * The sidebar's running channels: each breathes its # (an animation playing on
- * its icon), draws no spinner at its end, and says "Running" in its name.
- * In the page.
- */
-function runningChannels(sel) {
-  return [
-    ...document.querySelectorAll(
-      `${sel.sidebar} :is(.workspace-row-icon, .workspace-disclosure)[data-running]`,
-    ),
-  ].map((icon) => {
-    const frame = icon.closest(sel.kitRowFrame)
-    const row = frame.querySelector(sel.kitRow)
-    const glyph = icon.matches(".workspace-disclosure") ? icon.querySelector("svg") : icon
-    return {
-      label: row.textContent.trim().slice(0, 40),
-      breathes: glyph
-        .getAnimations()
-        .some((animation) => animation.playState === "running"),
-      spinner: Boolean(frame.querySelector('.workspace-status[data-status="running"]')),
-      said: (row.getAttribute("aria-label") ?? "").includes("Running"),
-    }
-  })
-}
-
 /** Rows that are neither of the two components, and current or unread rows off the scale. */
 function rowFailures(rows, scale, where) {
   const failures = []
@@ -659,27 +634,21 @@ const checks = {
     failures.push(...rowFailures(onLoad, scale, "on load"))
     // The sample's unread session shows in the session list and in the tree.
     if (!onLoad.some((row) => row.unread)) failures.push("no unread row on load to weigh")
-    // A count beside a kit row, said once (the sample has one).
-    if (!onLoad.some((row) => row.besides === "count"))
-      failures.push("no kit row with a count beside it on load")
-    // A running channel breathes its own icon and draws no spinner at its end.
-    const running = await page.evaluate(runningChannels, css)
-    measured.running = running
-    if (running.length === 0) failures.push("no running channel on load")
-    for (const row of running)
-      if (!row.breathes || row.spinner || !row.said)
-        failures.push(`running channel "${row.label}": ${JSON.stringify(row)}`)
-    // Pointed at, a count at a row's end leaves the row its fill.
-    for (const kind of ["count"]) {
+    // A count and a glyph beside a kit row, each said once (the sample has both).
+    for (const kind of ["count", "glyph"])
+      if (!onLoad.some((row) => row.besides === kind))
+        failures.push(`no kit row with a ${kind} beside it on load`)
+    // Pointed at, a count or a running glyph at a row's end leaves the row its fill.
+    for (const kind of ["count", "glyph"]) {
       const beside = page
         .locator(
-          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${css.countBadge}`,
+          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${kind === "count" ? css.countBadge : ".workspace-status"}`,
         )
         .first()
       if (!(await beside.count())) {
         // The tree lays its folded summary in the kit's own badge slot, with no `data-trailing`.
         measured.hover[`kit row under its ${kind}`] = "none on this layout"
-        if (kind === "count")
+        if (kind === "count" || layout === "columns")
           failures.push(`no kit row with a ${kind} at its end to point at`)
         continue
       }
@@ -696,7 +665,14 @@ const checks = {
         failures.push(
           `a kit row pointed at by its ${kind} is ${fill}, not ${scale.hover}`,
         )
-      if (layout === "columns") {
+      // Under the pointer a row's actions take the count's or glyph's cell, so
+      // a click there is theirs: only a row without actions passes it through.
+      const withActions = await beside.evaluate(
+        (element, sel) =>
+          element.closest(sel.kitRowFrame).querySelector("[data-row-actions]") !== null,
+        css,
+      )
+      if (layout === "columns" && !withActions) {
         const through = await beside.evaluate((element, sel) => {
           const frame = element.closest(sel.kitRowFrame)
           const control = frame.querySelector(sel.kitRow)
@@ -712,7 +688,8 @@ const checks = {
       await page.mouse.move(1, 1)
     }
     if (layout === "columns") {
-      // A channel's settings show only under the pointer (or keyboard focus).
+      // A channel's settings show only under the pointer (or keyboard focus),
+      // in the place of its count or running glyph.
       const settings = page.locator(`${css.sidebar} ${css.channelSettingsOpen}`)
       const shown = () =>
         settings.evaluateAll((buttons) =>

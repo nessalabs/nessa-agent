@@ -36,7 +36,7 @@ import { tooltip } from "../../../ui/tooltip"
  * newest session (⌘ beside); its glyph turns into a disclosure under the
  * pointer, which shows the few sessions that matter — the newest, any on
  * screen, any waiting — with "Show all" for the rest. Folded, it still says
- * whether something waits; its glyph breathes while something runs.
+ * whether something waits or runs.
  */
 export const ChannelBranch = memo(function ChannelBranch({
   channelId,
@@ -59,16 +59,11 @@ export const ChannelBranch = memo(function ChannelBranch({
   )
   if (!channel) return null
   const label = `New session in #${channel.name}`
-  // Folded, what waits is a lit point the kit lays beside the control; what
-  // runs, folded or not, is the channel's glyph breathing. The row's name
-  // says both.
-  const waits = !expanded && activity.waiting > 0
-  const summary = [
-    waits ? statusLabels["needs-you"] : null,
-    activity.running ? statusLabels.running : null,
-  ]
-    .filter(Boolean)
-    .join(" ")
+  // Folded, what waits or runs is said with the row's name: the kit lays it beside the control.
+  const summary =
+    !expanded && (activity.waiting > 0 || activity.running)
+      ? statusLabels[activity.waiting > 0 ? "needs-you" : "running"]
+      : null
   return (
     <SidebarMenuItem
       size="xs"
@@ -92,7 +87,6 @@ export const ChannelBranch = memo(function ChannelBranch({
       icon={
         <span
           className="workspace-disclosure"
-          data-running={activity.running || undefined}
           onClick={(event) => {
             event.stopPropagation()
             dispatch(toggleChannel({ channelId: channel.id }))
@@ -102,9 +96,16 @@ export const ChannelBranch = memo(function ChannelBranch({
           <DesktopIcon name="chevronRight" />
         </span>
       }
-      // Folded, it still says whether something waits, in the slot its + takes
-      // under the pointer.
-      badge={waits ? <StatusGlyph status="needs-you" decorative /> : undefined}
+      // Folded, it still says whether something waits or runs, in the slot
+      // its + takes under the pointer.
+      badge={
+        summary ? (
+          <StatusGlyph
+            status={activity.waiting > 0 ? "needs-you" : "running"}
+            decorative
+          />
+        ) : undefined
+      }
       trailing={
         <>
           <ChannelSettingsButton channelId={channel.id} name={channel.name} />
