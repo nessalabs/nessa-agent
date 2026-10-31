@@ -3383,6 +3383,21 @@ const steps = {
           ))
         )
           failures.push("the Devices view drew no hub card")
+        // Its cards run under the bottom-left corner, so it draws no "nessa Studio".
+        if ((await page.locator(".side-rail-studio").count()) !== 0)
+          failures.push(`the Devices view still draws "nessa Studio" in its corner`)
+        // Its titlebar's free room moves the window, as over a chat.
+        const drags = await page.evaluate(() => {
+          const space = document.querySelector(".workspace-titlebar-space")
+          if (!space) return false
+          const box = space.getBoundingClientRect()
+          const hit = document.elementFromPoint(
+            box.left + box.width / 2,
+            box.top + box.height / 2,
+          )
+          return hit?.closest("[data-tauri-drag-region]") !== null && hit !== null
+        })
+        if (!drags) failures.push("the Devices titlebar does not move the window")
         for (const stat of ["CPU", "Memory", "Disk"])
           if (
             (await page

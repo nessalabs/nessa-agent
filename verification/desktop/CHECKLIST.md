@@ -387,6 +387,11 @@ Experimental turns it on; the rail stands beside the workspace in
   chat controls all the way to the top edge. One top sidebar toggle folds and
   reopens the rail in Notes, Calendar, Browser and Files.
   _Check:_ `columns.mjs --only rail-view-inert`.
+- [ ] **Devices keeps its corner and titlebar for the window**: no "nessa
+  Studio" in the bottom-left corner (its cards run under it), and a press in
+  the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
+  moves the window and a double-click zooms it, as over a chat. _Check:_
+  `conversation-stress` step `devices` (Chromium and WebKit, `local-auth.yml`).
 - [ ] **An item's view opens empty, and a slow load shows only text**: no
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
