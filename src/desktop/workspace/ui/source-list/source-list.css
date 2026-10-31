@@ -264,6 +264,16 @@
   );
 }
 
+/* A coarse pointer has nothing to reveal on: the kit lays both side by side. */
+@media not ((hover: hover) and (pointer: fine)) {
+  .workspace-sidebar
+    :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-row-actions] {
+    padding-right: calc(
+      16px + var(--workspace-row-decoration-width, 0px) + var(--desktop-control-size)
+    );
+  }
+}
+
 .workspace-row-icon {
   display: inline-flex;
   width: 16px;

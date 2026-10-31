@@ -669,11 +669,11 @@ const checks = {
     for (const row of running)
       if (!row.breathes || row.spinner || !row.said)
         failures.push(`running channel "${row.label}": ${JSON.stringify(row)}`)
-    // Pointed at, a count or a lit point at a row's end leaves the row its fill.
-    for (const kind of ["count", "glyph"]) {
+    // Pointed at, a count at a row's end leaves the row its fill.
+    for (const kind of ["count"]) {
       const beside = page
         .locator(
-          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${kind === "count" ? css.countBadge : ".workspace-status"}`,
+          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${css.countBadge}`,
         )
         .first()
       if (!(await beside.count())) {

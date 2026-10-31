@@ -708,12 +708,12 @@ async function channelBreathes(page, name, running, failures) {
     .first()
   const read = () =>
     row.evaluate((frame) => {
-      const icon = frame.querySelector(
-        ":is(.workspace-row-icon, .workspace-disclosure)[data-running]",
-      )
-      const glyph = icon?.matches(".workspace-disclosure")
-        ? icon.querySelector("svg")
-        : icon
+      // The row's own glyph, running or not: a still # has no animation playing.
+      const holder = frame.querySelector(".workspace-row-icon, .workspace-disclosure")
+      const icon = holder?.matches("[data-running]") ? holder : null
+      const glyph = holder?.matches(".workspace-disclosure")
+        ? holder.querySelector("svg")
+        : holder
       const settings = frame.querySelector("[data-channel-settings-open]")
       let shown = settings ? 1 : 0
       for (let at = settings; at; at = at.parentElement)
