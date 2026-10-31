@@ -3,7 +3,7 @@ id: local-vault
 title: Local vault
 kind: statechart
 status: implemented
-sourceRevision: "59ed940ca1623b4f16f1874c5859608d6b6534f5"
+sourceRevision: "5f45a5e66d10046fd15eae95f6ebc8f4fd87dd56"
 summary: A passphrase unlocks encrypted local credentials for one native app session.
 parent: gateway
 sources:
@@ -61,7 +61,10 @@ and its rollback journal using a separate random key held in that vault. The
 passphrase and derived key are not stored beside the encrypted files. A copied
 vault can still be attacked offline; a long, unique passphrase matters. Nessa
 cannot recover a forgotten passphrase. A separate Settings action changes a known
-passphrase after unlock and leaves the vault locked afterward. Lost replies are
+passphrase after unlock and leaves the vault locked afterward.
+Intent audit delivery releases the state mutex before change admission. An
+explicit owner lock can therefore fence a blocked intent; admission rechecks the
+live owner and captured generation before taking the key. Lost replies are
 not retried automatically; the app explains how to try the new phrase, then the
 old phrase, without claiming the replacement was cancelled. The change and
 recovery dialog owns foreground prompting until the person closes it or explicitly
