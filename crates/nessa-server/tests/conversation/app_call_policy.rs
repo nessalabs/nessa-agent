@@ -149,3 +149,49 @@ fn a_policy_that_errors_makes_the_app_decision_unavailable_and_refused() {
         Err(AppRefusal::ToolNotForApp)
     );
 }
+
+fn message<'a>(
+    server: &'a str,
+    approval_mode: &'a str,
+    trusted_app: bool,
+) -> UnreviewedMessage<'a> {
+    UnreviewedMessage {
+        server,
+        approval_mode,
+        trusted_app,
+    }
+}
+
+#[test]
+fn app_message_full_access_a_message_goes_unasked_with_full_access() {
+    assert_eq!(
+        evaluator()
+            .message_unreviewed("huddle", message("huddle", "full", false))
+            .unwrap(),
+        allowed(&["app.message_full_access"])
+    );
+    for mode in ["ask", "auto"] {
+        assert_eq!(
+            evaluator()
+                .message_unreviewed("huddle", message("huddle", mode, false))
+                .unwrap(),
+            refused(&[])
+        );
+    }
+}
+
+#[test]
+fn app_message_trusted_app_a_message_goes_unasked_for_an_always_allowed_app() {
+    assert_eq!(
+        evaluator()
+            .message_unreviewed("huddle", message("huddle", "ask", true))
+            .unwrap(),
+        allowed(&["app.message_trusted_app"])
+    );
+    // Never for another server's app, whatever was chosen.
+    assert!(!crate::conversation::application::message_skips_review(
+        &evaluator(),
+        "charts",
+        message("huddle", "full", true)
+    ));
+}

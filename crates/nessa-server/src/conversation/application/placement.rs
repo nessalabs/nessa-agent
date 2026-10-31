@@ -537,7 +537,7 @@ impl Environments {
         let mut requested = requested;
         if let Some(name) = requested {
             let pool = name == POOL;
-            let known = name == BOAT && self.workspaces.is_some()
+            let known = name == BOAT && self.boat_connected().await
                 || name == POOL && self.bindings.is_some() && self.pool_serves()
                 || match PeerEnvironment::parse(name) {
                     Ok(peer) => self
@@ -563,6 +563,17 @@ impl Environments {
             Some(placements) => Ok(placements.place(conversation, requested).await?),
             None if requested.is_none() => Ok(()),
             None => Err(ConversationError::EnvironmentNotConfigured),
+        }
+    }
+
+    /// Whether a cloud workspace can be had now: this gateway builds them
+    /// and a Boat account is connected. Asked before placing on [`BOAT`]
+    /// and before each lease there, so a chat whose account is not
+    /// connected is refused as not configured, not as an unreachable host.
+    async fn boat_connected(&self) -> bool {
+        match &self.workspaces {
+            Some(workspaces) => workspaces.available().await,
+            None => false,
         }
     }
 
@@ -671,7 +682,11 @@ impl Environments {
         conversation: &ConversationId,
         avoid: &[PeerEnvironment],
     ) -> Result<LeasePlace, ConversationError> {
-        if self.placement(conversation).await?.as_deref() != Some(POOL) {
+        let placed = self.placement(conversation).await?;
+        if placed.as_deref() == Some(BOAT) && !self.boat_connected().await {
+            return Err(ConversationError::EnvironmentNotConfigured);
+        }
+        if placed.as_deref() != Some(POOL) {
             return Ok(LeasePlace {
                 environment: self.of(conversation).await?,
                 context: None,

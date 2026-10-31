@@ -48,6 +48,7 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
+            DurableTrustedApps,
         },
     },
 };
@@ -869,6 +870,7 @@ async fn conversations(
 pub(super) fn mcp_app_ports(
     mcp: &mut super::mcp_servers::McpComposition,
     audit: Arc<dyn McpAppAudit>,
+    trusted: Arc<dyn crate::conversation::application::TrustedApps>,
 ) -> McpAppPorts {
     let dropped = mcp.start_recorders(audit.clone());
     McpAppPorts {
@@ -879,6 +881,7 @@ pub(super) fn mcp_app_ports(
         tickets: mcp.resource_tickets.clone(),
         dropped,
         policy: mcp.app_policy.clone(),
+        trusted,
     }
 }
 
@@ -1564,7 +1567,11 @@ async fn conversations(
                 },
                 workspace,
                 tool_uis,
-                mcp_app_ports(mcp, mcp_app_audit.clone()),
+                mcp_app_ports(
+                    mcp,
+                    mcp_app_audit.clone(),
+                    Arc::new(DurableTrustedApps::new(root.clone())),
+                ),
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
         }

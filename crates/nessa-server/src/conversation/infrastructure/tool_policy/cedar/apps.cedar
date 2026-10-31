@@ -41,3 +41,23 @@ forbid (
   resource is Nessa::McpTool
 )
 when { resource.server != principal.server };
+
+// An app's message goes as the person's turn without asking them when the
+// conversation runs with full access: its agent already acts without asking.
+// `context.approvalMode` is the conversation's mode: `ask`, `auto` or `full`.
+@id("app.message_full_access")
+permit (
+  principal is Nessa::App,
+  action == Nessa::Action::"app.sendUnreviewed",
+  resource is Nessa::McpServer
+)
+when { resource == principal.server && context.approvalMode == "full" };
+
+// Or when the person chose "Always allow this app" for the app's server.
+@id("app.message_trusted_app")
+permit (
+  principal is Nessa::App,
+  action == Nessa::Action::"app.sendUnreviewed",
+  resource is Nessa::McpServer
+)
+when { resource == principal.server && context.trustedApp };
