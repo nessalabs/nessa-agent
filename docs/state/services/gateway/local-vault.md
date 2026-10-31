@@ -3,11 +3,12 @@ id: local-vault
 title: Local vault
 kind: statechart
 status: implemented
-sourceRevision: "87979c62ab6323ef32a1de6bc2cb9bd64e6056f0"
+sourceRevision: "59ed940ca1623b4f16f1874c5859608d6b6534f5"
 summary: A passphrase unlocks encrypted local credentials for one native app session.
 parent: gateway
 sources:
   - crates/nessa-vault/src/application/vault.rs
+  - crates/nessa-client-core/src/local_product.rs
   - crates/nessa-vault/src/domain/passphrase.rs
   - crates/nessa-server/src/core/process_memory.rs
   - crates/nessa-vault/tests/passphrase_change.rs

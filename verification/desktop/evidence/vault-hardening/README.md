@@ -119,3 +119,22 @@ and native-vault source hashes remain unchanged; those Linux and harness results
 carry across this frontend/native-composition integration. Current frontend,
 browser and CI outcomes remain recorded on the linked draft PR, with their exact
 head and scope. The state page checkpoint identifies this reviewed integration.
+
+### CI compatibility qualification
+
+Reviewed source checkpoint `59ed940ca1623b4f16f1874c5859608d6b6534f5` also includes the canonical SDK field
+description and preserved ordinary-command correlation behavior at the existing
+valid-notice limit. Strict frame validation and passphrase-change uncertainty /
+connection retirement remain unchanged. Canonical CLI peer fixtures now include
+their required event metadata; their adversarial cases and counts are preserved.
+The direct new regression fails before the correlation fix and passes afterward.
+Repeated client-core tests pass 489 plus 6 doctests; corrected real CLI tests pass
+2/2; grouped CI-package Clippy passes. Independent review reports no findings.
+
+The full local frontend attempt reached 5,571 passing tests and two private-file
+fixture refusals. This sandbox reports the filesystem root owner as UID 65534;
+the unchanged private-file acquisition policy accepts only root/current-user
+ancestors. The same two positive fixtures fail on unmodified main. Those checks
+were not relaxed. File-watcher fixtures separately require native `/tmp` here;
+their existing 30-second checks pass 2/2 there. Local stage results and the final
+canonical hosted frontend verdict are distinguished on the PR.
