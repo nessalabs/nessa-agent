@@ -14,7 +14,10 @@ use workspace_sdk::{
 };
 
 /// How long an opening waits for a VM that is stopping to have stopped.
-const STOP_WAIT: Duration = Duration::from_secs(90);
+/// With the 90 s wait for it to be ready after its resume, the opening stays
+/// within the workspace connect budget (`agent-startup-budgets.json`,
+/// 120 s); a stop slower than this fails the opening as unreachable.
+const STOP_WAIT: Duration = Duration::from_secs(25);
 
 pub(crate) struct BoatProvider {
     pub(crate) http: reqwest::Client,

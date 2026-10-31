@@ -127,13 +127,13 @@ impl ConversationService {
                 Idle::Never => {}
                 Idle::After(limit) => {
                     if slot.untouched_for(now) >= limit {
-                        due.push((id, slot, limit));
+                        due.push((id, slot));
                     }
                 }
             }
         }
         stream::iter(due)
-            .map(|(id, slot, limit)| async move { self.park(&id, slot, limit).await })
+            .map(|(id, slot)| async move { self.park(&id, slot, park_after).await })
             .buffer_unordered(PARKS_AT_ONCE)
             .filter(|parked| std::future::ready(*parked))
             .count()
@@ -198,9 +198,14 @@ impl ConversationService {
     }
 
     /// Park `slot` if, under the conversation's submission lock, it is still
-    /// the live owner, untouched for `park_after` and parkable. Returns
-    /// whether it was parked.
-    async fn park(&self, id: &ConversationId, slot: Arc<Slot>, park_after: Duration) -> bool {
+    /// the live owner and untouched for its limit under `park_after`, asked
+    /// again. Returns whether it was parked.
+    async fn park(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        park_after: Option<Duration>,
+    ) -> bool {
         // Retirement waits for this to finish, or this does not start.
         let Ok(_admission) = self.admit().await else {
             return false;
@@ -230,23 +235,25 @@ impl ConversationService {
             return false;
         };
         let now = self.inner.clock.unix_milliseconds();
-        let parkable = match when {
-            // The same limit again: its placement never changes, but whether
-            // it is watched, busy or running something may have.
-            ParkWhen::IdleFor(limit) => {
-                slot.untouched_for(now) >= limit
-                    && matches!(
-                        self.idle_limit(id, &slot, &live, Some(limit)).await,
-                        Idle::After(again) if slot.untouched_for(now) >= again
-                    )
+        // Its limit is asked again, not carried from the sweep: whether it
+        // is watched, busy, running something or closing may have changed
+        // (a message clears a close), and with it the limit.
+        let idle_for = match when {
+            ParkWhen::IdleFor(park_after) => {
+                match self.idle_limit(id, &slot, &live, park_after).await {
+                    Idle::After(limit) if slot.untouched_for(now) >= limit => Some(limit),
+                    _ => return false,
+                }
             }
             ParkWhen::UnusedSince(touched) => {
-                slot.touched.load(Ordering::SeqCst) <= touched && self.parkable(id, &live).await
+                if !(slot.touched.load(Ordering::SeqCst) <= touched
+                    && self.parkable(id, &live).await)
+                {
+                    return false;
+                }
+                None
             }
         };
-        if !parkable {
-            return false;
-        }
         // A delete lets go of the lock once its tombstone is written, and
         // stops the agent itself: its lease ends as the delete's, not idle.
         match load_conversation(self.inner.metadata.as_ref(), id).await {
@@ -259,11 +266,11 @@ impl ConversationService {
         else {
             return false;
         };
-        match when {
-            ParkWhen::IdleFor(park_after) => {
-                tracing::info!(conversation_id = %id, idle_seconds = park_after.as_secs(), "parking an idle agent")
+        match idle_for {
+            Some(limit) => {
+                tracing::info!(conversation_id = %id, idle_seconds = limit.as_secs(), "parking an idle agent")
             }
-            ParkWhen::UnusedSince(_) => {
+            None => {
                 tracing::info!(conversation_id = %id, "parking an idle agent to make room")
             }
         }
@@ -301,8 +308,9 @@ enum Idle {
 /// How long a conversation must have gone unused for [`ConversationService::park_held`]
 /// to park it.
 pub(super) enum ParkWhen {
-    /// Untouched this long: the idle sweep.
-    IdleFor(Duration),
+    /// Untouched for its limit under the sweep's `park_after`
+    /// ([`ConversationService::idle_limit`]): the idle sweep.
+    IdleFor(Option<Duration>),
     /// Untouched since it was picked, at this touch: past the bound on live
     /// agents, the one used longest ago, however recently
     /// ([`ConversationService::make_room`]). A read or message that lands

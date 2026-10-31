@@ -683,6 +683,32 @@ async fn a_message_after_close_thread_keeps_the_thread_open() {
     fixture.service.shutdown().await.unwrap();
 }
 
+/// A message that clears a close after the sweep picked the thread, but
+/// before it took the lock, keeps it: its limit is asked again under the
+/// lock, and with no idle limit configured nothing else parks it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_close_cleared_before_the_park_takes_the_lock_keeps_the_thread() {
+    let fixture = Fixture::new(None).await;
+    fixture.service.close_after_turn(&fixture.id).await.unwrap();
+    let slot = fixture.slot().await.unwrap();
+    // What a message does on its way in.
+    slot.closing.store(false, Ordering::SeqCst);
+    let submissions = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    assert!(
+        !fixture
+            .service
+            .park_held(
+                &fixture.id,
+                slot,
+                super::ParkWhen::IdleFor(None),
+                submissions
+            )
+            .await
+    );
+    assert!(fixture.slot().await.is_some());
+    fixture.service.shutdown().await.unwrap();
+}
+
 /// `close_thread` is refused, not answered as closing, for a thread that is
 /// not open or whose agent could never be parked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
