@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: Settings reads stored MCP servers, submits revision-bound changes and rereads uncertain outcomes; inspection has its own request owner.
 parent: desktop-workspace
-sourceRevision: "aea04b729148734756fe2539f262c9613d8c55bb"
+sourceRevision: "7bdefd7a9a3ba2b3d18d3ac914a491952e4ee317"
 sources:
   - src/desktop/settings/model/mcp-servers.ts
   - src/desktop/settings/model/mcp-servers.test.ts
@@ -13,6 +13,7 @@ sources:
   - src/desktop/settings/adapters/mcp-servers-gateway.test.ts
   - src/desktop/settings/ui/integrations-tab.tsx
   - src/desktop/settings/ui/integrations-tab.test.tsx
+  - src-tauri/src/gateway_config.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
