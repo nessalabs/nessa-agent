@@ -209,6 +209,12 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               card shows its input. While the run is still at work it
  *               alone says so: its line reads "Working", open or folded, the
  *               call at work is named once, and no live row repeats it
+ *   transcriptView  Compact is chosen from the pane's "…" menu, then the
+ *               trace turn is sent: while it works the transcript draws no
+ *               run, only one live row that reads "Working" and names no
+ *               call; once it ends, the reply shows and no run does, while
+ *               the gateway still keeps every call. Compact outlasts a
+ *               reload; Detailed, chosen again, draws the folded run
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -1045,6 +1051,48 @@ async function traceWhileLive(run, failures) {
   )
   if (!folded) failures.push("the live run, folded, does not read Working on its own")
   else if (run.evidence) await liveShot(run, transcript, "live-folded")
+}
+
+/**
+ * Chooses `label` ("Detailed" or "Compact") under Transcript in the main
+ * conversation's pane menu, and waits for its transcript to say it is drawn
+ * that way.
+ */
+async function chooseTranscriptView(run, label, failures) {
+  const pane = run.page
+    .locator(css.pane)
+    .filter({ has: run.page.locator(css.conversationDock) })
+  await pane.locator(css.paneActions).click({ timeout: 10_000 })
+  const item = run.page.getByRole("menuitemradio", { name: label, exact: true })
+  await item.waitFor({ timeout: 10_000 })
+  if (run.evidence)
+    await run.page
+      .locator(css.menu)
+      .screenshot({
+        path: join(
+          run.evidence,
+          `transcript-${run.engine ?? "window"}-menu-${label}.png`,
+        ),
+        timeout: 4_000,
+      })
+      .catch((error) =>
+        log(`transcript menu screenshot: ${error.message.split("\n")[0]}`),
+      )
+  await item.click({ timeout: 10_000 })
+  const view = label.toLowerCase()
+  const shown = await waitFor(
+    async () =>
+      (await pane
+        .locator(".workspace-transcript")
+        .getAttribute("data-transcript-view", { timeout: 1_000 })
+        .catch(() => null)) === view,
+    5_000,
+  )
+  if (!shown) failures.push(`choosing ${label} did not draw the transcript ${view}`)
+  // The menu blinks its choice and fades after the view has changed; a click
+  // on the trigger before it has gone closes the next menu as it opens.
+  await run.page.locator(css.menu).waitFor({ state: "detached", timeout: 5_000 })
+  return pane
 }
 
 /**
@@ -4881,6 +4929,111 @@ const steps = {
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
+  async transcriptView(run, step, failures) {
+    const pane = await chooseTranscriptView(run, "Compact", failures)
+    if (failures.length) return
+    const transcript = pane.locator(".workspace-transcript")
+    const text = prompt(run, STRESS.trace, step, " compact")
+    const seen = await send(run, run.main.id, text, failures)
+    // While the calls run, the compact transcript draws no run and one live
+    // row, which says only that the agent is working: no call is named.
+    const live = await waitFor(
+      () =>
+        transcript.evaluate(
+          (element, tools) => {
+            const rows = [...element.querySelectorAll(".workspace-live")]
+            if (rows.length !== 1) return null
+            const said = rows[0].textContent ?? ""
+            return {
+              said,
+              runs: element.querySelectorAll('[data-slot="tool-trace"]').length,
+              named: tools.filter((tool) => said.includes(tool)),
+            }
+          },
+          TRACE_CALLS.flatMap((call) => [call.tool, call.title ?? call.tool]),
+        ),
+      15_000,
+    )
+    if (!live) failures.push("the compact transcript drew no live row while the turn ran")
+    else {
+      if (!live.said.includes("Working"))
+        failures.push(`the compact live row reads ${JSON.stringify(live.said)}`)
+      if (live.named.length)
+        failures.push(`the compact live row names ${JSON.stringify(live.named)}`)
+      if (live.runs !== 0)
+        failures.push(`the compact transcript drew ${live.runs} tool runs while working`)
+      if (run.evidence) await liveShot(run, transcript, "compact-live")
+    }
+    const { view, turn } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    if (!turn) return
+    // Compact only draws less: the gateway keeps every call.
+    const kept = view.tools.filter((tool) => tool.executionId === turn.executionId)
+    if (kept.length !== TRACE_CALLS.length)
+      failures.push(
+        `the compact turn kept ${kept.length} calls, not ${TRACE_CALLS.length}`,
+      )
+    const message = transcript
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.trace}${text}` })
+    const replied = await waitFor(
+      async () =>
+        (await message.count()) === 1 &&
+        (await transcript.locator(".workspace-live").count()) === 0,
+      15_000,
+    )
+    if (!replied) failures.push("the compact transcript does not show the reply alone")
+    const runs = await transcript.locator('[data-slot="tool-trace"]').count()
+    if (runs !== 0) failures.push(`the compact transcript draws ${runs} tool runs`)
+    if (run.evidence)
+      await transcript.screenshot({
+        path: join(run.evidence, `transcript-${run.engine ?? "window"}-compact.png`),
+      })
+    if (failures.length) return
+    // The choice is remembered: a reload draws the transcript compact again.
+    await run.page.reload()
+    await run.page
+      .locator(selectorFor.sessionListRowFor(run.main.id))
+      .waitFor({ timeout: 30_000 })
+    await unlockRequestedVault(run.client, run.page)
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const reloaded = run.page
+      .locator(css.pane)
+      .filter({ has: run.page.locator(css.conversationDock) })
+      .locator(".workspace-transcript")
+    const remembered = await waitFor(
+      async () =>
+        (await reloaded
+          .getAttribute("data-transcript-view", { timeout: 1_000 })
+          .catch(() => null)) === "compact",
+      15_000,
+    )
+    if (!remembered) failures.push("after a reload the transcript is not compact")
+    // Detailed again draws the same turn's run, folded.
+    await chooseTranscriptView(run, "Detailed", failures)
+    const line = reloaded
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.trace}${text}` })
+      .locator('[data-slot="tool-trace-line"]')
+    const folded = await waitFor(
+      async () =>
+        (await line.count()) === 1 &&
+        ((await line.textContent()) ?? "").includes(`Ran ${TRACE_CALLS.length} tools`),
+      15_000,
+    )
+    if (!folded) failures.push("Detailed, chosen again, does not draw the turn's run")
+    else if (run.evidence)
+      await reloaded.screenshot({
+        path: join(run.evidence, `transcript-${run.engine ?? "window"}-detailed.png`),
+      })
   },
 
   async trace(run, step, failures) {

@@ -103,6 +103,8 @@ const desktopRoles = [
   "evenOut",
   "picture",
   "nightScene",
+  "transcriptDetailed",
+  "transcriptCompact",
   "position",
   "rename",
   "pin",
