@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 105,
+          "maxItems": 106,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -8430,6 +8430,23 @@
       },
       "required": ["state"]
     },
+    "VaultPassphraseChangeState": {
+      "description": "A confirmed passphrase change seals the vault; explicitly unlock again with the new phrase.",
+      "type": "string",
+      "enum": ["locked"]
+    },
+    "VaultPassphraseChangeStatus": {
+      "description": "Confirmed passphrase replacement. Its complete success payload is locked; this does not confirm audit-failed or unknown publication outcomes.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/VaultPassphraseChangeState",
+          "description": "The vault is sealed after a confirmed passphrase change; explicitly unlock with the new phrase before protected use."
+        }
+      },
+      "required": ["state"]
+    },
     "VaultPassphraseParams": {
       "description": "Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed.",
       "type": "object",
@@ -8446,6 +8463,7 @@
       "type": "string",
       "enum": [
         "vault_unavailable",
+        "vault_forbidden",
         "vault_locked",
         "vault_passphrase_policy",
         "vault_wrong_passphrase",
@@ -8456,7 +8474,12 @@
         "vault_already_configured",
         "vault_capacity",
         "vault_audit_unavailable",
-        "vault_migration_unavailable"
+        "vault_migration_unavailable",
+        "vault_change_unchanged",
+        "vault_change_unchanged_audit_unavailable",
+        "vault_change_not_confirmed",
+        "vault_change_not_confirmed_audit_unavailable",
+        "vault_changed_audit_unavailable"
       ],
       "description": "Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault."
     },

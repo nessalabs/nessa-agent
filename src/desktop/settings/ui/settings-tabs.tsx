@@ -1,4 +1,5 @@
 import { BoatRow } from "./boat-row"
+import { VaultPassphraseControl } from "../../../vault"
 import { useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
@@ -488,6 +489,9 @@ function AccountsTab() {
     <Group>
       <GithubRow />
       <BoatRow />
+      <Row id="vault-passphrase">
+        <VaultPassphraseControl />
+      </Row>
     </Group>
   )
 }

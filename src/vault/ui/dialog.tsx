@@ -4,25 +4,8 @@ import { Button } from "@nessa-ui/react/button"
 import { Input } from "@nessa-ui/react/input"
 import contract from "../../../protocol/defaults/vault-contract.json"
 import type { VaultDialog as View } from "../application/controller"
-import type { VaultFailure } from "../application/ports"
+import { vaultFailureCopy as copy } from "./failure-copy"
 import "./vault.css"
-const copy: Record<VaultFailure, string> = {
-  vault_unavailable: "Secure storage is unavailable. Try again.",
-  vault_locked: "Your vault is locked.",
-  vault_passphrase_policy: `Use at least ${contract.minimumCharacters} characters, including a non-space character.`,
-  vault_wrong_passphrase:
-    "That passphrase didn't unlock the vault. Check it and try again.",
-  vault_busy: "Secure storage is busy. Try again shortly.",
-  vault_cooldown: `Too many attempts. Wait ${contract.cooldownSeconds} seconds, then try again.`,
-  vault_session_closed: "The app connection ended. Try again.",
-  vault_session_owned:
-    "Another app session has the vault unlocked. Close it and try again.",
-  vault_already_configured: "A vault already exists. Unlock it to continue.",
-  vault_capacity: "Secure storage is full.",
-  vault_audit_unavailable: "Nessa couldn't record the change. Try again.",
-  vault_migration_unavailable:
-    "Nessa couldn't import existing protected data. Unlock the old OS credential store once, then try again. Your existing data is preserved.",
-}
 /** Presentation owns only transient input; submitting or dismissing clears it. */
 export function VaultDialog({
   view,
@@ -43,6 +26,7 @@ export function VaultDialog({
   const [mismatch, setMismatch] = useState(false)
   const id = useId()
   const setup = view.kind === "setup"
+  const minimum = setup ? contract.minimumSetupCharacters : contract.minimumCharacters
   const ready = view.kind === "setup" || view.kind === "unlock"
   const busy = ready && view.busy
   const title = setup ? "Create your Nessa vault" : "Unlock Nessa"
@@ -118,7 +102,7 @@ export function VaultDialog({
             ) : null}
             <p id={`${id}-hint`} className="vault-hint">
               {setup
-                ? `Use ${contract.minimumCharacters}+ characters or a few words.`
+                ? `Use ${contract.minimumSetupCharacters}+ characters. Choose unique words; avoid common passwords and repeated text.`
                 : "Unlock once until Nessa quits."}
             </p>
             {mismatch ? <p role="alert">The passphrases don't match.</p> : null}
@@ -141,7 +125,7 @@ export function VaultDialog({
                 type="submit"
                 disabled={
                   busy ||
-                  Array.from(passphrase).length < contract.minimumCharacters ||
+                  Array.from(passphrase).length < minimum ||
                   new TextEncoder().encode(passphrase).length >
                     contract.maximumPassphraseBytes
                 }

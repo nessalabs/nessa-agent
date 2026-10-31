@@ -2494,3 +2494,14 @@ vault dialog blocking the main conversation click.
   continuation reaches the conversation and no synthetic user bubble appears.
 - Check the running and completed row in Chromium and WebKit. Ordinary foreground
   tools still settle when their calling turn ends. No separate task list is added.
+
+
+### Vault passphrase hardening
+
+- New setup refuses short/common/repeated input while an existing twelve-character
+  vault remains unlockable; the vault script drives the real native pipe.
+- Passphrase change seals, rejects the old phrase, accepts the new phrase and
+  retains explicit recovery guidance after a lost response without replay.
+- The conversation stress `passphrases` step changes through Settings, verifies
+  Locked, explicitly unlocks, restores its disposable phrase and sends a reply.
+  Run default1 and raised3. `vault.mjs`, `conversation-stress.mjs` own these checks.

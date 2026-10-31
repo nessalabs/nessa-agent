@@ -202,6 +202,7 @@ jobs:
               'crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs',
               'crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs',
               'crates/nessa-protocol/src/product_contract/generated.rs',
+              'src-tauri/src/vault/application/contract.rs',
           ]:
               destination = root / name
               destination.parent.mkdir(parents=True, exist_ok=True)
