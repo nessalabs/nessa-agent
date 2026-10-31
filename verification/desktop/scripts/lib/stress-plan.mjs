@@ -125,6 +125,10 @@ export const KNOBS = {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway, with a code opened by Pair a device while it is on",
   },
+  mcpServers: {
+    default: 1,
+    what: "MCP servers added, edited (the stored variable kept when Replace is left empty) and removed from Settings, each followed by a message",
+  },
   pastes: {
     default: 1,
     what: "images pasted into the composer as a screenshot is, shown as tiles, sent with the message and handed to the agent",
@@ -261,6 +265,7 @@ export function plan(knobs) {
   add(knobs.streams, () => ({ kind: "stream" }))
   add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
+  add(knobs.mcpServers, () => ({ kind: "mcp" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.notices, () => ({ kind: "notice" }))

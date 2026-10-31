@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Settings › Connections › Integrations over a real gateway (#391): the
+ * Settings › Connections › MCP servers over a real gateway (#391): the
  * gateway's stored MCP servers, managed from the desktop window of a browser
  * preview (`desktop.html?gateway`), every write going through a real gateway
  * to its `config.json`.
@@ -14,8 +14,9 @@
  * In each engine it signs a page in with the gateway's owner token and walks
  * the tab: add the test MCP server (`scripts/mcp-test-server/server.mjs`,
  * slow to start, so an inspection is seen running) with one variable,
- * inspect it, follow focus through each part that opens and closes, turn it
- * off, rename it, give it another command (every value entered again),
+ * inspect it, follow focus through each dialog that opens and closes, turn it
+ * off, rename it, add a variable beside the stored one (every value entered
+ * again),
  * measure it narrow, meet a conflict a Node client makes
  * first, remove it, see a failed list's notice go once a reconnect lists;
  * meet a list too large to show, and a save refused for size; meet two
@@ -114,7 +115,7 @@ const BIG_ADDED = "big-extra"
 const meta = {
   name: "mcp-servers-gateway",
   summary:
-    "Settings › Integrations over a real gateway: add, inspect, focus, toggle, rename, relaunch, conflict, remove, reconnect, a list too large to show, a save refused for size, two servers under one name, non-admin, and an app drawn from a server added there",
+    "Settings › MCP servers over a real gateway: add, inspect, focus, toggle, rename, relaunch, conflict, remove, reconnect, a list too large to show, a save refused for size, two servers under one name, non-admin, and an app drawn from a server added there",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" }, agent: { type: "string", default: "claude" } },
   help: `
@@ -131,41 +132,45 @@ Options:
 Steps, per engine, in order on one page (--only <names> to pick):
   empty      no server stored: "No servers yet", Add offered
   add        ${SERVER} added with one variable, slow to start (${START_DELAY_MS} ms): one
-             row, its switch on, "1 variable", the variable's value nowhere
-             in the page
-  inspect    seen running, Inspect and Close resting while it runs; then
-             show_chart has a UI badge, ${DESTRUCTIVE} is destructive, the
-             answer is complete
-  focus      document.activeElement after each part opens and closes: Add and
-             Edit on the form's first field, Remove on the confirm's Cancel
-             (described by its sentence), Inspect on the panel's heading;
-             Cancel, Escape, Save and Close back on the row's button or Add
-  toggle     the switch turns it off: one save, the switch resting in flight,
-             and off as the new list says
-  rename     renamed to ${RENAMED}: one row, its variable kept
+             row, its switch on, "Local · 1 variable", the variable's value
+             nowhere in the page
+  inspect    Show Tools from the row's ⋯ menu, seen running, Done resting and
+             no corner close while it runs; then show_chart has a UI badge,
+             ${DESTRUCTIVE} is destructive, the answer is complete
+  focus      document.activeElement after each dialog opens and closes: Add and
+             Edit on the form's first field, Remove and Show Tools inside
+             their dialog; Cancel, Escape, Save and Done back on the row's ⋯
+             or Add
+  toggle     the switch turns it off: one save, the switch and the row's ⋯
+             resting in flight, and off as the new list says
+  rename     renamed to ${RENAMED}: one row, its variable kept, at rest as
+             "Stored" in the form
   relaunch   the gateway refuses another command with a value kept
              (environment_value_missing, from a Node client); in the window,
-             another command asks for the value again, says why, and holds
-             Save until it is typed; saved, the row shows the new command and
-             still one variable, the value nowhere in the page
-  secret     the value is a password field: typed, it is in neither the
-             page nor (Chromium) the engine's accessibility tree; a paste
-             with line breaks is held, never drawn, in neither, said as
-             "Pasted value: N lines, ends with a line break", trimmed only
-             when asked, and stored as pasted; then the stored value cleared
-             (edited to empty: said, and stored empty), and a value typed
+             the command is named and not a field, and a variable added asks
+             for the stored value again, says why, and holds Save until it is
+             typed; saved, "Local · 2 variables"; the added one removed asks
+             again and, typed, is saved back to one
+  secret     the value rests as "Stored" until Replace, which focuses a
+             password field: typed, it is in neither the page nor (Chromium)
+             the engine's accessibility tree; a paste with line breaks is
+             held, never drawn, in neither, said as "Pasted value: N lines,
+             ends with a line break", trimmed only when asked, and stored as
+             pasted; then a value typed and erased is no value (Save waits,
+             S7) and Keep stored value saves it unchanged; a value typed
              again (S1–S6); last, a variable added beside the kept value: the
              gateway refuses a kept value then (a Node client), and the
              window asks for it again, offers no keeping, and keeps it once
              the variable is removed (V3, V7, V9)
-  narrow     with the row, the form and the inspection open, at 800 and 390px:
-             nothing outside its card, no sideways scroll, the fold held, the
+  narrow     the list, then the edit form and the finished inspection's
+             dialogs, at 800 and 390px: nothing outside its card or the
+             window, no sideways scroll, nothing clipped, the fold held, the
              row's actions under its text under a 420px page
   conflict   a Node client turns it back on first; the window's save is
              refused, says so, reloads, keeps what was typed, and refills
              the switch it left untouched from the reload
-  remove     asked first while an inspection runs, then removed: the row
-             gone, "No servers yet", the inspection saying the server is gone
+  remove     asked first in its dialog, then removed: one remove and one
+             list, the row gone, "No servers yet", focus on Add
   too-large  config.json hand-edited to ${BIG_SERVERS} servers with long arguments,
              under its 64 KiB, whose list will not fit one frame (a Node
              client's list refused mcp_servers_config_too_large): the panel
@@ -183,8 +188,8 @@ Steps, per engine, in order on one page (--only <names> to pick):
   duplicate-names
              config.json edited to store three servers under one name: one
              group, "3 servers share this name", its rows read-only with no
-             Edit, Inspect or switch, one action "Remove the first server
-             named …"; asked, it says so, Cancel puts focus back on it;
+             switch, one ⋯ menu action "Remove the first server named …";
+             asked in a dialog, it says so, Cancel puts focus back on the ⋯;
              confirmed twice: one remove and one list each, the gateway
              removing the first stored each time, focus on the group while
              it lasts, then on the row left, which is editable (G3–G6); then
@@ -438,6 +443,38 @@ const stored = (page) => page.locator(css.mcpStoredRow)
 const row = (page, name) => page.locator(selectorFor.mcpRowNamed(name))
 const button = (scope, name) => scope.getByRole("button", { name, exact: true })
 const form = (page) => page.locator(css.mcpForm)
+/** A row's ⋯ button, by the row's name. */
+const more = (page, name) => button(page, names.mcp.more(name))
+/** Chooses `item` from the ⋯ menu of the row (or group) named `name`. */
+async function choose(page, name, item) {
+  // A menu just chosen from fades out for 230 ms: a click on ⋯ meanwhile
+  // lands on the closing menu's trigger, which does not open it again.
+  await gone(page.locator(`${css.mcpMenu}[data-state="closed"]`), 2000)
+  await more(page, name).click()
+  await page
+    .locator(selectorFor.mcpMenuOf(name))
+    .getByRole("menuitem", { name: item, exact: true })
+    .click()
+}
+/** Whether `item` in `name`'s ⋯ menu can be chosen; the menu is closed again. */
+async function offered(page, name, item) {
+  if (await more(page, name).isDisabled()) return false
+  await more(page, name).click()
+  const found = page
+    .locator(selectorFor.mcpMenuOf(name))
+    .getByRole("menuitem", { name: item, exact: true })
+  const enabled =
+    (await found.count()) === 1 && (await found.getAttribute("data-disabled")) === null
+  await page.keyboard.press("Escape")
+  await gone(page.locator(selectorFor.mcpMenuOf(name)), 2000)
+  return enabled
+}
+/** A row's one line under its name: "Local · 1 variable", a host, a state. */
+const rowLine = (page, name) =>
+  row(page, name).locator('[data-slot="settings-row-detail"]').textContent()
+/** Opens a stored value's field in the edit form: its Replace. */
+const replaceValue = (scope, name) =>
+  scope.getByRole("button", { name: names.mcp.replaceValue(name), exact: true }).click()
 
 /** Types `value` as a new argument, after those the form holds. */
 async function addArgument(scope, value) {
@@ -495,9 +532,15 @@ const focused = (page) =>
           ? `${active.getAttribute("data-mcp-action")}`
           : active === firstField
             ? "first-field"
-            : active.matches(sel.inspectionHeading)
-              ? "inspection-heading"
-              : `${active.tagName.toLowerCase()} ${active.textContent?.trim().slice(0, 40) ?? ""}`,
+            : `${active.tagName.toLowerCase()} ${active.textContent?.trim().slice(0, 40) ?? ""}`,
+        // The dialog focus is in, if any: form | confirm | inspection.
+        dialog: active.closest(sel.form)
+          ? "form"
+          : active.closest(sel.confirm)
+            ? "confirm"
+            : active.closest(sel.inspection)
+              ? "inspection"
+              : null,
         row: active.closest(sel.row)?.getAttribute("data-mcp-server") ?? null,
         // The group of a name stored more than once.
         group: active.closest(sel.group)?.getAttribute("data-mcp-group") ?? null,
@@ -509,7 +552,8 @@ const focused = (page) =>
     },
     {
       form: css.mcpForm,
-      inspectionHeading: css.mcpInspectionHeading,
+      confirm: css.mcpConfirm,
+      inspection: css.mcpInspection,
       row: css.mcpRow,
       group: css.mcpAnyGroup,
     },
@@ -626,7 +670,7 @@ const checks = {
     }
     if (seen.stored !== 0) failures.push(`${seen.stored} stored rows, expected none`)
     if (!seen.empty) failures.push(`no "${names.mcp.empty}"`)
-    if (!seen.addEnabled) failures.push("Add server… is disabled")
+    if (!seen.addEnabled) failures.push(`${names.mcp.add} is disabled`)
     return { seen, failures }
   },
 
@@ -644,7 +688,7 @@ const checks = {
       formClosed: closed,
       rows: await stored(page).count(),
       switch: shown ? await switchOf(page, SERVER) : null,
-      variables: shown ? await row(page, SERVER).locator("small").textContent() : null,
+      variables: shown ? await rowLine(page, SERVER) : null,
       requests: context.opened.sent.slice(before),
       secretInPage: await pageHolds(page, context.secret),
     }
@@ -652,7 +696,8 @@ const checks = {
     if (seen.rows !== 1) failures.push(`${seen.rows} stored rows, expected 1`)
     if (seen.switch?.checked !== "true")
       failures.push(`the switch is ${JSON.stringify(seen.switch)}, not on`)
-    if (seen.variables !== "1 variable") failures.push(`the row says "${seen.variables}"`)
+    if (seen.variables !== "Local · 1 variable")
+      failures.push(`the row says "${seen.variables}"`)
     if (seen.secretInPage)
       failures.push("the variable's value is in the page after the save")
     if (
@@ -668,7 +713,7 @@ const checks = {
   inspect: async (page) => {
     const failures = []
     const at = Date.now()
-    await button(row(page, SERVER), names.mcp.inspect).click()
+    await choose(page, SERVER, names.mcp.inspect)
     // The server holds its start for START_DELAY_MS: the panel is running
     // well inside that, and what rests while it runs is read then.
     const running = await visible(
@@ -677,7 +722,11 @@ const checks = {
     )
     const whileRunning = running
       ? {
-          inspectRests: await button(row(page, SERVER), names.mcp.inspect).isDisabled(),
+          // The dialog's corner close is not drawn while it runs.
+          cornerClose: await page
+            .locator(css.mcpInspection)
+            .getByRole("button", { name: "Close", exact: true })
+            .count(),
           closeRests: await button(
             page.locator(css.mcpInspection),
             names.mcp.close,
@@ -713,8 +762,9 @@ const checks = {
     else if (!whileRunning.stillRunning)
       failures.push(`the inspection finished before it was read (${whileRunning.ms} ms)`)
     else {
-      if (!whileRunning.inspectRests) failures.push("Inspect is enabled while running")
-      if (!whileRunning.closeRests) failures.push("Close is enabled while running")
+      if (whileRunning.cornerClose !== 0)
+        failures.push("the inspection's corner close is drawn while running")
+      if (!whileRunning.closeRests) failures.push("Done is enabled while running")
     }
     if (!done) failures.push(`the inspection is ${seen.phase}, not done within 45 s`)
     if (seen.ms < START_DELAY_MS)
@@ -733,24 +783,28 @@ const checks = {
     const failures = []
     const trail = []
     const group = page.locator(css.mcpGroup)
-    const serverRow = row(page, SERVER)
-    /** Where focus is after `what`, held to `on` (and its row, when given). */
-    const expect = async (what, on, inRow = null) => {
+    /**
+     * Where focus is after `what`, held to `on` (and its row, when given),
+     * or — for a dialog just opened — to somewhere inside `dialog`.
+     */
+    const expect = async (what, on, inRow = null, dialog = null) => {
+      const held = (now) =>
+        dialog ? now.dialog === dialog : now.on === on && now.row === inRow
       const at = await waitFor(async () => {
         const now = await focused(page)
-        return now.on === on && now.row === inRow ? now : null
+        return held(now) ? now : null
       }, 5000)
       const now = at ?? (await focused(page))
       trail.push({ after: what, ...now })
       if (!at)
         failures.push(
-          `after ${what}, focus is on ${now.on}${now.row ? ` in ${now.row}` : ""}, not ${on}${inRow ? ` in ${inRow}` : ""}`,
+          `after ${what}, focus is on ${now.on}${now.row ? ` in ${now.row}` : ""}${now.dialog ? ` in the ${now.dialog}` : ""}, not ${dialog ? `in the ${dialog}` : `${on}${inRow ? ` in ${inRow}` : ""}`}`,
         )
       return now
     }
     await button(group, names.mcp.add).click()
     await expect("Add", "first-field")
-    // A part Escape leaves open holds the rest of the walk: closed by its
+    // A dialog Escape leaves open holds the rest of the walk: closed by its
     // Cancel, and the step ends there.
     await page.keyboard.press("Escape")
     if (!(await gone(form(page), 2000))) {
@@ -759,37 +813,39 @@ const checks = {
       return { seen: { trail }, failures }
     }
     await expect("Escape in the add form", "add")
-    await button(serverRow, names.mcp.edit).click()
+    await choose(page, SERVER, names.mcp.edit)
     await expect("Edit", "first-field")
     await button(form(page), names.mcp.cancel).click()
-    await expect("Cancel in the form", "edit", SERVER)
-    await button(serverRow, names.mcp.remove).click()
-    const asked = await expect("Remove", "cancel", SERVER)
-    if (asked.describedBy !== names.mcp.removeAsk(SERVER))
-      failures.push(`the confirm's Cancel is described by "${asked.describedBy}"`)
+    await expect("Cancel in the form", "more", SERVER)
+    await choose(page, SERVER, names.mcp.remove)
+    await expect("Remove", null, null, "confirm")
+    const confirm = page.locator(css.mcpConfirm)
+    const asked = await confirm.textContent()
+    if (!asked?.includes(names.mcp.removeAsk(SERVER).replace(/^.*\? /, "")))
+      failures.push(`the confirm says "${asked}"`)
     await page.keyboard.press("Escape")
-    if (!(await gone(serverRow.locator(css.mcpConfirm), 2000))) {
+    if (!(await gone(confirm, 2000))) {
       failures.push("Escape did not close the confirm")
-      await serverRow.locator(selectorFor.mcpAction("cancel")).click()
+      await confirm.locator(selectorFor.mcpAction("cancel")).click()
       return { seen: { trail }, failures }
     }
-    await expect("Escape in the confirm", "remove", SERVER)
-    await button(serverRow, names.mcp.remove).click()
-    await expect("Remove again", "cancel", SERVER)
-    await serverRow.locator(selectorFor.mcpAction("cancel")).click()
-    await expect("Cancel in the confirm", "remove", SERVER)
-    await button(serverRow, names.mcp.inspect).click()
-    await expect("Inspect", "inspection-heading")
+    await expect("Escape in the confirm", "more", SERVER)
+    await choose(page, SERVER, names.mcp.remove)
+    await expect("Remove again", null, null, "confirm")
+    await confirm.locator(selectorFor.mcpAction("cancel")).click()
+    await expect("Cancel in the confirm", "more", SERVER)
+    await choose(page, SERVER, names.mcp.inspect)
+    await expect("Show Tools", null, null, "inspection")
     if (!(await visible(page.locator(selectorFor.mcpInspectionIn("done")), 45_000)))
       failures.push("the inspection did not finish")
     await button(page.locator(css.mcpInspection), names.mcp.close).click()
-    await expect("Close", "inspect", SERVER)
-    // A save goes back to the row's Edit once the list after it is read.
-    await button(serverRow, names.mcp.edit).click()
+    await expect("Done", "more", SERVER)
+    // A save goes back to the row's ⋯ once the list after it is read.
+    await choose(page, SERVER, names.mcp.edit)
     await expect("Edit again", "first-field")
     await button(form(page), names.mcp.save).click()
     if (!(await gone(form(page)))) failures.push("the form did not close on its save")
-    await expect("Save", "edit", SERVER)
+    await expect("Save", "more", SERVER)
     await settled(page)
     return { seen: { trail }, failures }
   },
@@ -799,10 +855,10 @@ const checks = {
     const before = context.opened.sent.length
     const toggle = row(page, SERVER).locator(css.mcpSwitch)
     // Whether the switch rested at any moment while its save was in flight,
-    // and Inspect with it (U21: every control, while one request runs).
+    // and the row's ⋯ with it (U21: every control, while one request runs).
     const found = await toggle.evaluate(
       (element, sel) => {
-        const inspect = element.closest(sel.row)?.querySelector(sel.inspect)
+        const inspect = element.closest(sel.row)?.querySelector(sel.more)
         if (!inspect) return false
         window.__mcpSwitchRested = false
         window.__mcpInspectRested = false
@@ -813,11 +869,11 @@ const checks = {
         }).observe(element, { attributes: true })
         return true
       },
-      { row: css.mcpRow, inspect: selectorFor.mcpAction("inspect") },
+      { row: css.mcpRow, more: selectorFor.mcpAction("more") },
     )
     if (!found)
       throw new CannotRun(
-        `no Inspect in ${SERVER}'s row (${css.mcpRow} ${selectorFor.mcpAction("inspect")}); update lib/selectors.mjs if it moved`,
+        `no ⋯ in ${SERVER}'s row (${css.mcpRow} ${selectorFor.mcpAction("more")}); update lib/selectors.mjs if it moved`,
       )
     await toggle.click()
     const off = await waitFor(
@@ -835,7 +891,7 @@ const checks = {
     if (!seen.restedInFlight)
       failures.push("the switch did not rest while its save was in flight")
     else if (!seen.inspectRestedInFlight)
-      failures.push("Inspect did not rest while the switch's save was in flight")
+      failures.push("the row's ⋯ did not rest while the switch's save was in flight")
     if (
       JSON.stringify(seen.requests) !==
       JSON.stringify(["mcpServers.save", "mcpServers.list"])
@@ -848,9 +904,12 @@ const checks = {
 
   rename: async (page, stack, context) => {
     const failures = []
-    await button(row(page, SERVER), names.mcp.edit).click()
+    await choose(page, SERVER, names.mcp.edit)
     const edit = form(page)
-    const placeholder = await edit.locator(css.mcpSecret).getAttribute("placeholder")
+    // A stored value rests as "Stored", with no field to touch in passing.
+    const placeholder = (await edit.locator(css.mcpSecret).count())
+      ? "a field"
+      : await edit.locator(css.mcpSecretStored).locator("span").first().textContent()
     await edit.getByLabel(names.mcp.name, { exact: true }).fill(RENAMED)
     await button(edit, names.mcp.save).click()
     const closed = await gone(edit)
@@ -861,15 +920,16 @@ const checks = {
       rows: await stored(page).evaluateAll((rows) =>
         rows.map((each) => each.getAttribute("data-mcp-server")),
       ),
-      variables: shown ? await row(page, RENAMED).locator("small").textContent() : null,
+      variables: shown ? await rowLine(page, RENAMED) : null,
       secretInPage: await pageHolds(page, context.secret),
     }
     if (placeholder !== names.mcp.storedValue)
-      failures.push(`the stored value's placeholder is "${placeholder}"`)
+      failures.push(`the stored value shows as "${placeholder}", not at rest`)
     if (!closed) failures.push("the form is still open after the save")
     if (JSON.stringify(seen.rows) !== JSON.stringify([RENAMED]))
       failures.push(`rows ${JSON.stringify(seen.rows)}, expected [${RENAMED}]`)
-    if (seen.variables !== "1 variable") failures.push(`the row says "${seen.variables}"`)
+    if (seen.variables !== "Local · 1 variable")
+      failures.push(`the row says "${seen.variables}"`)
     if (seen.secretInPage) failures.push("the variable's value is in the page")
     return { seen, failures }
   },
@@ -896,18 +956,29 @@ const checks = {
         () => null,
         (error) => error.refusal ?? { code: String(error) },
       )
-    // In the window: the value asked for again, and Save held until typed.
-    await button(row(page, RENAMED), names.mcp.edit).click()
-    const edit = form(page)
-    const secret = edit.locator(css.mcpSecret)
+    // In the window the command is named, not edited: it is changed in
+    // config.json. A variable added beside the stored one is another launch
+    // too: the value asked for again, and Save held until typed.
+    const EXTRA = "MCP_TEST_EXTRA"
+    await choose(page, RENAMED, names.mcp.edit)
+    let edit = form(page)
+    const command = {
+      field: await edit.locator(selectorFor.mcpField("command")).count(),
+      named: await edit.locator(css.mcpCommand).textContent(),
+    }
+    const kept = edit.locator(selectorFor.mcpVariableNamed(VARIABLE))
+    const secret = kept.locator(css.mcpSecret)
     const note = edit.locator(css.mcpValuesNeeded)
     const save = button(edit, names.mcp.save)
     const before = {
-      placeholder: await secret.getAttribute("placeholder"),
+      atRest: await kept.locator(css.mcpSecretStored).count(),
       note: await note.textContent(),
       saveEnabled: await save.isEnabled(),
     }
-    await edit.locator(selectorFor.mcpField("command")).fill(stack.relaunch)
+    await button(edit, names.mcp.addVariable).click()
+    const added = edit.locator(css.mcpVariableAdded).last()
+    await added.getByLabel(names.mcp.variableName, { exact: true }).fill(EXTRA)
+    await added.locator(css.mcpSecret).fill("extra")
     const changed = {
       placeholder: await secret.getAttribute("placeholder"),
       note: await note.textContent(),
@@ -915,23 +986,45 @@ const checks = {
     }
     await secret.fill(context.secret)
     const typed = { note: await note.textContent(), saveEnabled: await save.isEnabled() }
-    const sentFrom = context.opened.sent.length
+    let sentFrom = context.opened.sent.length
     await save.click()
     const closed = await gone(edit)
     await settled(page)
-    const after = await stack.client.mcpServers.list()
-    const now = after.servers.find((each) => each.name === RENAMED)
+    const withExtra = (await stack.client.mcpServers.list()).servers.find(
+      (each) => each.name === RENAMED,
+    )
     const seen = {
       refused,
+      command,
       before,
       changed,
       typed,
-      command: await row(page, RENAMED).locator("code").textContent(),
-      variables: await row(page, RENAMED).locator("small").textContent(),
-      listed: now && { command: now.command, envNames: now.envNames },
+      variables: await rowLine(page, RENAMED),
+      listed: withExtra && { command: withExtra.command, envNames: withExtra.envNames },
       requests: context.opened.sent.slice(sentFrom),
       secretInPage: await pageHolds(page, context.secret),
     }
+    // Removed again: the stored one asked for once more, and saved.
+    await choose(page, RENAMED, names.mcp.edit)
+    edit = form(page)
+    await edit.getByRole("button", { name: `Remove ${EXTRA}`, exact: true }).click()
+    seen.removedAsks = await edit
+      .locator(selectorFor.mcpVariableNamed(VARIABLE))
+      .locator(css.mcpSecret)
+      .getAttribute("placeholder")
+    await edit
+      .locator(selectorFor.mcpVariableNamed(VARIABLE))
+      .locator(css.mcpSecret)
+      .fill(context.secret)
+    sentFrom = context.opened.sent.length
+    await button(edit, names.mcp.save).click()
+    seen.removedClosed = await gone(edit)
+    await settled(page)
+    seen.removedRequests = context.opened.sent.slice(sentFrom)
+    seen.after = (await stack.client.mcpServers.list()).servers.find(
+      (each) => each.name === RENAMED,
+    )?.envNames
+    seen.storedAfter = storedValue(stack.config, RENAMED, VARIABLE) === context.secret
     if (
       refused?.code !== "mcp_servers_invalid" ||
       refused.details?.problem !== "environment_value_missing"
@@ -939,36 +1032,43 @@ const checks = {
       failures.push(
         `the gateway answered a kept value under another command with ${JSON.stringify(refused)}`,
       )
-    if (
-      before.placeholder !== names.mcp.storedValue ||
-      before.note !== "" ||
-      !before.saveEnabled
-    )
+    if (command.field !== 0) failures.push("the edit form offers the command as a field")
+    const short = (part) => part.split("/").pop()
+    if (command.named !== [process.execPath, ...server.args].map(short).join(" "))
+      failures.push(`the edit form names the command "${command.named}"`)
+    if (before.atRest !== 1 || before.note !== "" || !before.saveEnabled)
       failures.push(`before the change: ${JSON.stringify(before)}`)
     if (
       changed.placeholder !== names.mcp.storedValueAgain ||
       changed.note !== names.mcp.valuesAgain ||
       changed.saveEnabled
     )
-      failures.push(`with another command: ${JSON.stringify(changed)}`)
+      failures.push(`with a variable added: ${JSON.stringify(changed)}`)
     if (typed.note !== "" || !typed.saveEnabled)
       failures.push(`with the value typed again: ${JSON.stringify(typed)}`)
     if (!closed) failures.push("the form is still open after the save")
-    if (!seen.command?.startsWith(stack.relaunch))
-      failures.push(`the row shows "${seen.command}", not the new command`)
-    if (seen.variables !== "1 variable") failures.push(`the row says "${seen.variables}"`)
+    if (seen.variables !== "Local · 2 variables")
+      failures.push(`the row says "${seen.variables}"`)
     if (
-      JSON.stringify(seen.listed) !==
-      JSON.stringify({ command: stack.relaunch, envNames: [VARIABLE] })
+      JSON.stringify(seen.listed?.envNames?.toSorted()) !==
+      JSON.stringify([EXTRA, VARIABLE])
     )
       failures.push(`the gateway lists ${JSON.stringify(seen.listed)}`)
-    if (
-      JSON.stringify(seen.requests) !==
-      JSON.stringify(["mcpServers.save", "mcpServers.list"])
-    )
-      failures.push(
-        `requests ${JSON.stringify(seen.requests)}, expected one save then one list`,
+    for (const [what, requests] of [
+      ["add", seen.requests],
+      ["remove", seen.removedRequests],
+    ])
+      if (
+        JSON.stringify(requests) !==
+        JSON.stringify(["mcpServers.save", "mcpServers.list"])
       )
+        failures.push(`the ${what}'s requests are ${JSON.stringify(requests)}`)
+    if (seen.removedAsks !== names.mcp.storedValueAgain)
+      failures.push(`with ${EXTRA} removed, the stored value shows "${seen.removedAsks}"`)
+    if (!seen.removedClosed) failures.push("the form is open after the removal's save")
+    if (JSON.stringify(seen.after) !== JSON.stringify([VARIABLE]))
+      failures.push(`after the removal the gateway lists ${JSON.stringify(seen.after)}`)
+    if (!seen.storedAfter) failures.push("the value typed again is not the one stored")
     if (seen.secretInPage) failures.push("the variable's value is in the page")
     return { seen, failures }
   },
@@ -977,7 +1077,7 @@ const checks = {
     const failures = []
     const seen = {}
     const variableOf = (scope) => scope.locator(selectorFor.mcpVariableNamed(VARIABLE))
-    await button(row(page, RENAMED), names.mcp.edit).click()
+    await choose(page, RENAMED, names.mcp.edit)
     let edit = form(page)
     await need(
       page,
@@ -985,7 +1085,10 @@ const checks = {
       `${VARIABLE}'s row`,
     )
     let variable = variableOf(edit)
+    seen.atRest = await variable.locator(css.mcpSecretStored).count()
+    await replaceValue(variable, VARIABLE)
     const field = variable.locator(css.mcpSecret)
+    seen.onReplace = await focused(page)
     seen.field = await field.evaluate((element) => ({
       tag: element.tagName,
       type: element.getAttribute("type"),
@@ -1038,28 +1141,35 @@ const checks = {
           : "other"
     seen.pemInPage = await pageHolds(page, marker)
 
-    // The stored value cleared: edited to empty, said, and stored empty (S2).
-    await button(row(page, RENAMED), names.mcp.edit).click()
+    // Emptied, a value is not one entered (S2, S7): said, Save waits, and
+    // Keep stored value saves with the stored value untouched.
+    const pemStored = storedValue(stack.config, RENAMED, VARIABLE)
+    await choose(page, RENAMED, names.mcp.edit)
     edit = form(page)
     variable = variableOf(edit)
+    await replaceValue(variable, VARIABLE)
     const again = variable.locator(css.mcpSecret)
     await again.fill("x")
     await again.fill("")
     seen.cleared = {
       placeholder: await again.getAttribute("placeholder"),
       keep: await button(variable, names.mcp.keepStored).isVisible(),
+      saveEnabled: await button(edit, names.mcp.save).isEnabled(),
     }
+    await button(variable, names.mcp.keepStored).click()
+    seen.keptAtRest = await variable.locator(css.mcpSecretStored).count()
     sentFrom = context.opened.sent.length
     await button(edit, names.mcp.save).click()
     seen.clearSaved = await gone(edit)
     await settled(page)
     seen.clearRequests = context.opened.sent.slice(sentFrom)
-    seen.storedCleared = storedValue(stack.config, RENAMED, VARIABLE)
-    seen.variables = await row(page, RENAMED).locator("small").textContent()
+    seen.storedKept = storedValue(stack.config, RENAMED, VARIABLE) === pemStored
+    seen.variables = await rowLine(page, RENAMED)
 
     // Typed again, so the steps after start from a value set.
-    await button(row(page, RENAMED), names.mcp.edit).click()
+    await choose(page, RENAMED, names.mcp.edit)
     edit = form(page)
+    await replaceValue(variableOf(edit), VARIABLE)
     await variableOf(edit).locator(css.mcpSecret).fill(context.secret)
     await button(edit, names.mcp.save).click()
     seen.restored = await gone(edit)
@@ -1089,14 +1199,18 @@ const checks = {
         () => null,
         (error) => error.refusal ?? { code: String(error) },
       )
-    await button(row(page, RENAMED), names.mcp.edit).click()
+    await choose(page, RENAMED, names.mcp.edit)
     edit = form(page)
     variable = variableOf(edit)
     const kept = variable.locator(css.mcpSecret)
     const note = edit.locator(css.mcpValuesNeeded)
     const save = button(edit, names.mcp.save)
     const shown = async () => ({
-      placeholder: await kept.getAttribute("placeholder"),
+      placeholder: (await kept.count())
+        ? await kept.getAttribute("placeholder")
+        : (await variable.locator(css.mcpSecretStored).count())
+          ? "at rest"
+          : null,
       note: await note.textContent(),
       saveEnabled: await save.isEnabled(),
       keep: await button(variable, names.mcp.keepStored).isVisible(),
@@ -1112,7 +1226,7 @@ const checks = {
     // Typed while a variable is added: keeping is not offered (V9).
     seen.keepTyped = await shown()
     await kept.fill("")
-    await added.getByRole("button", { name: "Remove MCP_TEST_ADDED" }).click()
+    await edit.getByRole("button", { name: "Remove MCP_TEST_ADDED", exact: true }).click()
     seen.keepRemovedEdited = await shown()
     await button(variable, names.mcp.keepStored).click()
     seen.keepBack = await shown()
@@ -1124,6 +1238,9 @@ const checks = {
     seen.keepStoredValue = storedValue(stack.config, RENAMED, VARIABLE) === context.secret
     seen.keepSecretInPage = await pageHolds(page, context.secret)
 
+    if (seen.atRest !== 1) failures.push("the stored value is not at rest before Replace")
+    if (seen.onReplace.on !== "input " || seen.onReplace.dialog !== "form")
+      failures.push(`after Replace, focus is on ${JSON.stringify(seen.onReplace)}`)
     if (seen.field.tag !== "INPUT" || seen.field.type !== "password")
       failures.push(`the value field is ${JSON.stringify(seen.field)}`)
     // Playwright's ARIA snapshot reads any input's DOM value, a password
@@ -1150,15 +1267,22 @@ const checks = {
     if (seen.storedPem !== "as pasted, trimmed")
       failures.push(`config.json stores the pasted value ${seen.storedPem}`)
     if (seen.pemInPage) failures.push("the pasted value is in the page after the save")
-    if (seen.cleared.placeholder !== names.mcp.storedValueCleared || !seen.cleared.keep)
+    if (
+      seen.cleared.placeholder !== names.mcp.storedValueCleared ||
+      !seen.cleared.keep ||
+      seen.cleared.saveEnabled
+    )
       failures.push(`emptied, the field shows ${JSON.stringify(seen.cleared)}`)
-    if (!seen.clearSaved) failures.push("the form is open after the clearing save")
-    if (seen.storedCleared !== "")
-      failures.push(`cleared, config.json stores ${JSON.stringify(seen.storedCleared)}`)
-    if (seen.variables !== "1 variable") failures.push(`the row says "${seen.variables}"`)
+    if (seen.keptAtRest !== 1)
+      failures.push("Keep stored value did not put it back at rest")
+    if (!seen.clearSaved) failures.push("the form is open after the kept save")
+    if (!seen.storedKept)
+      failures.push("an emptied then kept value changed in config.json")
+    if (seen.variables !== "Local · 1 variable")
+      failures.push(`the row says "${seen.variables}"`)
     for (const [what, requests] of [
       ["paste", seen.pasteRequests],
-      ["clear", seen.clearRequests],
+      ["kept", seen.clearRequests],
     ])
       if (
         JSON.stringify(requests) !==
@@ -1179,7 +1303,7 @@ const checks = {
         failures.push(`${what}: ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`)
     }
     const keptShown = {
-      placeholder: names.mcp.storedValue,
+      placeholder: "at rest",
       note: "",
       saveEnabled: true,
       keep: false,
@@ -1200,8 +1324,8 @@ const checks = {
     })
     expectShown("the added one removed, the value emptied", seen.keepRemovedEdited, {
       placeholder: names.mcp.storedValueCleared,
-      note: "",
-      saveEnabled: true,
+      note: names.mcp.valuesAgain,
+      saveEnabled: false,
       keep: true,
     })
     expectShown("kept again", seen.keepBack, keptShown)
@@ -1217,23 +1341,57 @@ const checks = {
   },
 
   narrow: async (page) => {
-    // The row, the form and the finished inspection all open, then measured.
-    await button(row(page, RENAMED), names.mcp.inspect).click()
-    if (!(await visible(page.locator(selectorFor.mcpInspectionIn("done")), 45_000)))
-      return {
-        failures: [
-          `the inspection is ${await page.locator(css.mcpInspection).getAttribute("data-mcp-inspection")}, not done within 45 s: nothing measured`,
-        ],
-      }
-    await button(row(page, RENAMED), names.mcp.edit).click()
-    await need(page, css.mcpForm, "the edit form")
+    // The list measured as the tab draws it, then each dialog on its own:
+    // inside the viewport, nothing in it scrolling sideways or cut off.
     const { seen, failures } = await integrationsFit(page, [800, 390])
+    const dialogs = []
+    const fits = async (what, locator) => {
+      for (const width of [800, 390]) {
+        await page.setViewportSize({ width, height: 800 })
+        await settled(page)
+        const measured = await locator.evaluate((dialog) => {
+          const box = dialog.getBoundingClientRect()
+          const clipped = [...dialog.querySelectorAll("*")]
+            .filter((each) => each.scrollWidth > each.clientWidth + 1)
+            .filter(
+              (each) =>
+                each.tagName === "INPUT" ||
+                each.tagName === "TEXTAREA" ||
+                getComputedStyle(each).overflowX !== "visible",
+            )
+            .map(
+              (each) =>
+                `${each.tagName.toLowerCase()}.${String(each.className).split(" ")[0]}`,
+            )
+          return {
+            left: Math.round(box.left),
+            right: Math.round(box.right),
+            viewport: innerWidth,
+            clipped,
+          }
+        })
+        dialogs.push({ what, width, ...measured })
+        if (measured.left < 0 || measured.right > measured.viewport)
+          failures.push(`${width}px: the ${what} reaches outside the window`)
+        if (measured.clipped.length > 0)
+          failures.push(`${width}px: the ${what} clips ${measured.clipped.join(", ")}`)
+      }
+    }
+    await choose(page, RENAMED, names.mcp.edit)
+    await need(page, css.mcpForm, "the edit form")
+    await fits("edit form", form(page))
+    await button(form(page), names.mcp.cancel).click()
+    await gone(form(page))
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await choose(page, RENAMED, names.mcp.inspect)
+    if (!(await visible(page.locator(selectorFor.mcpInspectionIn("done")), 45_000)))
+      failures.push("the inspection did not finish within 45 s: measured running")
+    await fits("inspection", page.locator(css.mcpInspection))
     await page.setViewportSize({ width: 1440, height: 900 })
     await settled(page)
-    await button(form(page), names.mcp.cancel).click()
     await button(page.locator(css.mcpInspection), names.mcp.close).click()
     await gone(page.locator(css.mcpInspection))
-    return { seen: { widths: seen }, failures }
+    return { seen: { widths: seen, dialogs }, failures }
   },
 
   conflict: async (page, stack, context) => {
@@ -1254,16 +1412,22 @@ const checks = {
       },
     })
     const before = context.opened.sent.length
-    await button(row(page, RENAMED), names.mcp.edit).click()
+    await choose(page, RENAMED, names.mcp.edit)
     const edit = form(page)
     const formSwitch = () =>
       edit
         .locator(css.mcpSwitch)
         .evaluate((element) => element.getAttribute("aria-checked"))
     const switchBefore = await formSwitch()
-    // Another argument is another launch: the value is typed again (U33).
-    await addArgument(edit, "--typed")
-    await edit.locator(css.mcpSecret).fill(context.secret)
+    // Another variable is another launch: the value is typed again (U33).
+    await button(edit, names.mcp.addVariable).click()
+    const added = edit.locator(css.mcpVariableAdded).last()
+    await added.getByLabel(names.mcp.variableName, { exact: true }).fill("MCP_TEST_TYPED")
+    await added.locator(css.mcpSecret).fill("typed")
+    await edit
+      .locator(selectorFor.mcpVariableNamed(VARIABLE))
+      .locator(css.mcpSecret)
+      .fill(context.secret)
     await button(edit, names.mcp.save).click()
     const said = await waitFor(
       async () => (await page.locator(css.mcpNotice).allTextContents()).join(" "),
@@ -1273,7 +1437,10 @@ const checks = {
     const seen = {
       notice: said,
       formOpen: (await form(page).count()) === 1,
-      kept: await argumentsOf(edit).catch(() => null),
+      kept: await edit
+        .locator(css.mcpVariable)
+        .evaluateAll((rows) => rows.map((each) => each.getAttribute("data-mcp-variable")))
+        .catch(() => null),
       formSwitch: { before: switchBefore, after: await formSwitch().catch(() => null) },
       switch: await switchOf(page, RENAMED),
       requests: context.opened.sent.slice(before),
@@ -1281,8 +1448,8 @@ const checks = {
     if (!seen.notice.includes(names.mcp.conflict))
       failures.push(`the window says "${seen.notice}", not the conflict`)
     if (!seen.formOpen) failures.push("the form closed on the conflict")
-    if (JSON.stringify(seen.kept) !== JSON.stringify([...server.args, "--typed"]))
-      failures.push(`the arguments are ${JSON.stringify(seen.kept)}, not as typed`)
+    if (JSON.stringify(seen.kept) !== JSON.stringify([VARIABLE, "MCP_TEST_TYPED"]))
+      failures.push(`the variables are ${JSON.stringify(seen.kept)}, not as typed`)
     // Untouched in the form, the switch follows the other writer (U42).
     if (seen.formSwitch.before !== "false" || seen.formSwitch.after !== "true")
       failures.push(
@@ -1306,53 +1473,36 @@ const checks = {
 
   remove: async (page, stack, context) => {
     const failures = []
-    // Inspected first, and removed while the inspection still runs (the
-    // server is slow to start): the panel then says the server is gone.
-    await button(row(page, RENAMED), names.mcp.inspect).click()
-    const inspecting = await visible(
-      page.locator(selectorFor.mcpInspectionIn("running")),
-      1000,
-    )
     const before = context.opened.sent.length
-    await button(row(page, RENAMED), names.mcp.remove).click()
-    const asked = await row(page, RENAMED).locator(css.mcpConfirm).textContent()
+    await choose(page, RENAMED, names.mcp.remove)
+    const confirm = page.locator(css.mcpConfirm)
+    const asked = await confirm.textContent()
     const sentOnAsk = context.opened.sent.length - before
-    await row(page, RENAMED).locator(selectorFor.mcpAction("confirm")).click()
+    await confirm.locator(selectorFor.mcpAction("confirm")).click()
+    const closed = await gone(confirm)
     const removed = await gone(row(page, RENAMED))
     const empty = await visible(page.locator(css.mcpEmpty))
-    const stillRunning =
-      (await page.locator(selectorFor.mcpInspectionIn("running")).count()) === 1
-    const failed = await visible(
-      page.locator(selectorFor.mcpInspectionIn("failed")),
-      45_000,
-    )
+    await settled(page)
     const seen = {
-      inspecting,
-      stillRunningAfterRemoval: stillRunning,
       asked,
       sentOnAsk,
+      closed,
       removed,
       empty,
-      inspection: failed
-        ? await need(page, css.mcpInspectionStatus, "the inspection's status").then(() =>
-            page.locator(css.mcpInspectionStatus).textContent(),
-          )
-        : await page.locator(css.mcpInspection).getAttribute("data-mcp-inspection"),
+      focus: await focused(page),
       requests: context.opened.sent.slice(before),
     }
-    if (!inspecting) failures.push("the inspection was not seen running")
-    if (!stillRunning)
-      failures.push("the inspection finished before the removal's list: nothing raced")
-    if (seen.inspection !== names.mcp.gone(RENAMED))
-      failures.push(`the inspection of the removed server says "${seen.inspection}"`)
-    await button(page.locator(css.mcpInspection), names.mcp.close).click()
-    if (!(await gone(page.locator(css.mcpInspection))))
-      failures.push("the inspection did not close")
-    if (asked !== names.mcp.removeAsk(RENAMED)) failures.push(`it asked "${asked}"`)
+    // The dialog says the name and what happens to conversations.
+    const [title, rest] = names.mcp.removeAsk(RENAMED).split("? ")
+    // The dialog's text: its title, its sentence, then its buttons.
+    if (!asked?.startsWith(`${title}?${rest}`)) failures.push(`it asked "${asked}"`)
     if (sentOnAsk !== 0)
       failures.push(`${sentOnAsk} requests sent before the removal was confirmed`)
+    if (!closed) failures.push("the remove dialog is still open")
     if (!removed) failures.push("the row is still there")
     if (!empty) failures.push(`no "${names.mcp.empty}" after the removal`)
+    if (seen.focus.on !== "add")
+      failures.push(`focus is on ${JSON.stringify(seen.focus)}, not Add`)
     if (
       JSON.stringify(seen.requests) !==
       JSON.stringify(["mcpServers.remove", "mcpServers.list"])
@@ -1438,7 +1588,9 @@ const checks = {
     }
     await settled(page)
     const field = tooLarge.locator(selectorFor.mcpAction("removeByName"))
-    seen.sentence = await tooLarge.locator("p").first().textContent()
+    seen.sentence = await tooLarge
+      .locator('[data-slot="settings-row-label"]')
+      .textContent()
     seen.fieldDescribedBy = await field.evaluate(
       (element) =>
         document.getElementById(element.getAttribute("aria-describedby"))?.textContent ??
@@ -1446,7 +1598,7 @@ const checks = {
     )
     seen.rows = await page.locator(css.mcpRow).count()
     seen.add = await page.locator(selectorFor.mcpAction("add")).count()
-    seen.removeBeforeName = await button(tooLarge, names.mcp.remove).isEnabled()
+    seen.removeBeforeName = await button(tooLarge, names.mcp.confirmRemove).isEnabled()
     if (seen.sentence !== names.mcp.listTooLarge)
       failures.push(`the panel says "${seen.sentence}"`)
     if (seen.fieldDescribedBy !== names.mcp.listTooLarge)
@@ -1457,7 +1609,7 @@ const checks = {
     // Removed by name, asked first: nothing sent until confirmed.
     await field.fill(BIG_REMOVED)
     const before = context.opened.sent.length
-    await button(tooLarge, names.mcp.remove).click()
+    await button(tooLarge, names.mcp.confirmRemove).click()
     seen.asked = await tooLarge.locator(css.mcpConfirm).textContent()
     seen.sentOnAsk = context.opened.sent.length - before
     await tooLarge.locator(selectorFor.mcpAction("confirm")).click()
@@ -1592,7 +1744,8 @@ const checks = {
         return { seen, failures }
       }
       await settled(page)
-      const action = button(group, names.mcp.removeFirst(DUPLICATE))
+      const removeFirst = `${names.mcp.removeFirst(DUPLICATE)}…`
+      const confirm = page.locator(css.mcpConfirm)
       // G3: one read-only group, its count said, one action.
       seen.group = {
         rowsNamed: await page.locator(selectorFor.mcpRowNamed(DUPLICATE)).count(),
@@ -1602,7 +1755,7 @@ const checks = {
           .evaluateAll((rows) => rows.map((each) => each.textContent)),
         buttons: await group.locator("button").count(),
         switches: await group.locator(css.mcpSwitch).count(),
-        actionEnabled: await action.isEnabled(),
+        actionEnabled: await offered(page, DUPLICATE, removeFirst),
       }
       if (seen.group.rowsNamed !== 0)
         failures.push(`${seen.group.rowsNamed} editable rows named ${DUPLICATE}`)
@@ -1621,25 +1774,34 @@ const checks = {
       if (!seen.group.actionEnabled) failures.push("the group's action is disabled")
       // G5: asked, it says exactly what goes; Cancel puts focus back.
       const before = context.opened.sent.length
-      await action.click()
-      seen.asked = await group.locator(css.mcpConfirm).textContent()
+      await choose(page, DUPLICATE, removeFirst)
+      seen.asked = await confirm.textContent()
       seen.onAsk = await focused(page)
-      await button(group, names.mcp.cancel).click()
-      seen.onCancel = await focused(page)
+      await button(confirm, names.mcp.cancel).click()
+      await gone(confirm)
+      seen.onCancel =
+        (await waitFor(async () => {
+          const on = await focused(page)
+          return on.on === "more" ? on : null
+        }, 5000)) ?? (await focused(page))
       seen.sentOnAsk = context.opened.sent.length - before
-      if (seen.asked !== names.mcp.removeFirstAsk(DUPLICATE, process.execPath))
+      if (
+        !seen.asked?.startsWith(
+          `${names.mcp.removeFirst(DUPLICATE)}?${names.mcp.removeFirstAsk(DUPLICATE, process.execPath)}`,
+        )
+      )
         failures.push(`the group asked "${seen.asked}"`)
-      if (seen.onAsk.on !== "cancel" || seen.onAsk.group !== DUPLICATE)
+      if (seen.onAsk.dialog !== "confirm")
         failures.push(`asked, focus is on ${JSON.stringify(seen.onAsk)}`)
-      if (seen.onCancel.on !== "removeFirst" || seen.onCancel.group !== DUPLICATE)
+      if (seen.onCancel.on !== "more" || seen.onCancel.group !== DUPLICATE)
         failures.push(`cancelled, focus is on ${JSON.stringify(seen.onCancel)}`)
       if (seen.sentOnAsk !== 0) failures.push(`${seen.sentOnAsk} requests sent on asking`)
       // G6: confirmed twice; the gateway removes the first stored each time.
       seen.removals = []
       for (const left of [2, 1]) {
         const from = context.opened.sent.length
-        await action.click()
-        await group.locator(selectorFor.mcpAction("confirm")).click()
+        await choose(page, DUPLICATE, removeFirst)
+        await confirm.locator(selectorFor.mcpAction("confirm")).click()
         const landed = await waitFor(async () => {
           const on = await focused(page)
           return left > 1
@@ -1647,9 +1809,9 @@ const checks = {
                 .locator(css.mcpShared)
                 .textContent()
                 .catch(() => null)) === names.mcp.nameShared(left) &&
-                on.on === "removeFirst" &&
+                on.on === "more" &&
                 on.group === DUPLICATE
-            : (await group.count()) === 0 && on.on === "remove" && on.row === DUPLICATE
+            : (await group.count()) === 0 && on.on === "more" && on.row === DUPLICATE
         }, 20_000)
         await settled(page)
         const listed = await stack.client.mcpServers.list()
@@ -1679,8 +1841,8 @@ const checks = {
       if (JSON.stringify(one.kept) !== JSON.stringify(["third"]))
         failures.push(`after two the gateway keeps ${JSON.stringify(one.kept)}`)
       const only = row(page, DUPLICATE)
-      seen.editAfter = await button(only, names.mcp.edit).isEnabled()
-      seen.inspectAfter = await button(only, names.mcp.inspect).isEnabled()
+      seen.editAfter = await offered(page, DUPLICATE, names.mcp.edit)
+      seen.inspectAfter = await offered(page, DUPLICATE, names.mcp.inspect)
       seen.toggleAfter = await only.locator(css.mcpSwitch).isEnabled()
       if (!seen.editAfter || !seen.inspectAfter || !seen.toggleAfter)
         failures.push(

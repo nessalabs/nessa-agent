@@ -5,11 +5,15 @@ import {
   useId,
   useReducer,
   useRef,
+  useState,
   type KeyboardEvent,
   type DragEvent,
   type ClipboardEvent,
   type ReactNode,
 } from "react"
+import { Button } from "@nessa-ui/react/button"
+import { Dialog } from "@nessa-ui/react/dialog"
+import { SettingsGroup, SettingsRow } from "@nessa-ui/react/settings-group"
 import type { McpServersGateway } from "../adapters/mcp-servers-gateway"
 import {
   canInspect,
@@ -20,6 +24,7 @@ import {
   authorizationLabel,
   formReady,
   groupsOf,
+  sharesName,
   hasLineBreak,
   launchChanged,
   lineBreaks,
@@ -38,53 +43,89 @@ import {
   type ServerGroup,
   type VariableRow,
 } from "../model/mcp-servers"
+import { IconButton } from "../../ui/icon-button"
 import { DesktopIcon } from "../../ui/icons"
-import { ItemRow, PendingAction, SettingGroup, Toggle } from "./settings-controls"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  MenuItem,
+  MenuSeparator,
+} from "../../ui/menu"
+import {
+  ItemRow,
+  PendingAction,
+  Segmented,
+  SettingGroup,
+  Toggle,
+} from "./settings-controls"
 
 /**
- * Settings › Connections › Integrations: the gateway's stored MCP servers
+ * Settings › Connections › MCP servers: the gateway's stored MCP servers
  * (#391). The rules are the reducer's (`model/mcp-servers.ts`); this draws
  * its state and sends the one request it names. With no gateway — the
  * sample preview, whose workspace is the in-memory one — the page keeps its
  * pending row.
  *
- * Focus follows what opens and closes (CHECKLIST › Integrations): Add or
- * Edit puts it on the form's first field, Remove on the confirm's Cancel,
- * Inspect on the panel's heading; closing any of them puts it back on the
- * row's or group's button that opened it, or on Add (`focusAfter`). Escape
- * closes the form and the confirm.
+ * ```text
+ *   card ── one row per server: tile, name, one short line, switch, ⋯ menu
+ *            └─ menu: Edit…  Authorize / Revoke (remote)  Show Tools…  Remove…
+ *   Edit… / Add Server…  ── a dialog: name, variables, offered; a stored
+ *                           server's command is edited in config.json
+ *   Show Tools…          ── a dialog: what the server offers
+ *   Remove…              ── a dialog: the confirm
+ * ```
+ *
+ * Focus follows what opens and closes (CHECKLIST › Integrations): each
+ * dialog takes focus as it opens; closing one puts it back on the ⋯ button
+ * of the row or group it was opened from, or on Add (`focusAfter`). Escape
+ * closes a dialog, and never Settings behind it.
  *
  * A name stored more than once is one group, read-only, whose one action
  * removes the first stored under it: the gateway finds a server by name, so
  * no other could be targeted (G3).
  */
 
-/** The stored servers of the window's gateway, given by composition (`main.tsx`); none without one. */
-const McpServersContext = createContext<McpServersGateway | undefined>(undefined)
+/**
+ * What composition (`main.tsx`) gives the tab: the window's gateway's stored
+ * servers, none without one; and a way to open that gateway's `config.json`,
+ * only where it is on this computer (the app's own).
+ */
+interface McpServersWiring {
+  readonly gateway: McpServersGateway | undefined
+  readonly openConfig: (() => Promise<void>) | undefined
+}
+
+const McpServersContext = createContext<McpServersWiring>({
+  gateway: undefined,
+  openConfig: undefined,
+})
 
 export function McpServersProvider({
   gateway,
+  openConfig,
   children,
 }: {
   gateway: McpServersGateway | undefined
+  openConfig?: () => Promise<void>
   children: ReactNode
 }) {
   return (
-    <McpServersContext.Provider value={gateway}>{children}</McpServersContext.Provider>
+    <McpServersContext.Provider value={{ gateway, openConfig }}>
+      {children}
+    </McpServersContext.Provider>
   )
 }
 
-const footnote = "Servers added here are offered to every agent that supports MCP."
-
 export function IntegrationsTab() {
-  const gateway = useContext(McpServersContext)
+  const { gateway } = useContext(McpServersContext)
   if (!gateway)
     return (
-      <SettingGroup id="mcp-servers" note={footnote} pending>
+      <SettingGroup id="mcp-servers" pending>
         <div className="settings-empty">
           <DesktopIcon name="connections" />
           <p>{sentences.empty}</p>
-          <PendingAction>Add server…</PendingAction>
+          <PendingAction>Add Server…</PendingAction>
         </div>
       </SettingGroup>
     )
@@ -135,17 +176,18 @@ function useRequests(
  * or one of the tab's own.
  */
 export interface FocusTarget {
-  readonly action: "edit" | "inspect" | "remove" | "removeFirst" | "add" | "removeByName"
+  readonly action: "more" | "add" | "removeByName"
   readonly server?: string
 }
 
 /**
  * Where focus goes back to when the form, the confirm or the inspection
  * closes between `previous` and `next`: the first of these drawn, once it is
- * enabled. `null` when nothing closed. A saved form goes back to the row
- * under the name saved, a cancelled one to the row it edited. A confirm goes
- * back to the group it was asked from while the name is still shared, else
- * to the one row left under it, else to Add (G6).
+ * enabled. `null` when nothing closed. Each goes back to a row's or group's
+ * ⋯ button, which every one of them was opened from. A saved form goes back
+ * to the row under the name saved, a cancelled one to the row it edited. A
+ * confirm goes back to the group it was asked from while the name is still
+ * shared, else to the one row left under it, else to Add (G6).
  */
 export function focusAfter(
   previous: McpServersState,
@@ -156,20 +198,19 @@ export function focusAfter(
     return previous.form.editing === undefined
       ? [add]
       : [
-          { action: "edit", server: previous.form.name },
-          { action: "edit", server: previous.form.editing },
+          { action: "more", server: previous.form.name },
+          { action: "more", server: previous.form.editing },
           add,
         ]
   if (previous.confirming !== null && next.confirming === null)
     return [
-      { action: "removeFirst", server: previous.confirming.name },
-      { action: "remove", server: previous.confirming.name },
+      { action: "more", server: previous.confirming.name },
       // A list too large to show has no rows: back to the name field (U44).
       { action: "removeByName" },
       add,
     ]
   if (previous.inspection && !next.inspection)
-    return [{ action: "inspect", server: previous.inspection.name }, add]
+    return [{ action: "more", server: previous.inspection.name }, add]
   return null
 }
 
@@ -192,36 +233,45 @@ function buttonFor(container: HTMLElement, target: FocusTarget) {
  * enabled — a save's is only after the list it reads. Only focus that was
  * lost (on the body, or a surface around the tab) or is still in the tab is
  * moved: focus taken elsewhere meanwhile stays there.
+ *
+ * `fallback` is the dialogs' `onReturnFocus`: a dialog puts focus back on
+ * the ⋯ it was opened from a moment after it goes, and calls this instead
+ * when that button went with it — a row removed or renamed, a group left.
  */
 function useFocusReturn(state: McpServersState) {
   const container = useRef<HTMLDivElement>(null)
   const previous = useRef(state)
   const returning = useRef<readonly FocusTarget[] | null>(null)
-  useEffect(() => {
-    const after = focusAfter(previous.current, state)
-    previous.current = state
-    if (after) returning.current = after
-    const targets = returning.current
+  const last = useRef<readonly FocusTarget[] | null>(null)
+  const place = useRef((targets: readonly FocusTarget[]): "placed" | "waiting" => {
     const tab = container.current
-    if (!targets || !tab) return
+    if (!tab) return "placed"
     // Lost focus is on the body, or — where a click does not focus a button,
     // as in WebKit — on the nearest focusable thing around the tab.
     const active = document.activeElement
-    if (active && !tab.contains(active) && !active.contains(tab)) {
-      returning.current = null
-      return
-    }
+    if (active && !tab.contains(active) && !active.contains(tab)) return "placed"
     for (const target of targets) {
       const button = buttonFor(tab, target)
       if (!button) continue
       // Drawn but resting while a request runs: wait for it.
-      if (button.disabled) return
+      if (button.disabled) return "waiting"
       button.focus()
       break
     }
-    returning.current = null
+    return "placed"
+  }).current
+  useEffect(() => {
+    const after = focusAfter(previous.current, state)
+    previous.current = state
+    if (after) returning.current = last.current = after
+    const targets = returning.current
+    if (targets && place(targets) === "placed") returning.current = null
   })
-  return container
+  const fallback = useRef(() => {
+    const targets = returning.current ?? last.current
+    if (targets && place(targets) === "placed") returning.current = null
+  }).current
+  return { container, fallback }
 }
 
 function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
@@ -232,7 +282,7 @@ function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
   )
   useEffect(() => gateway.follow(dispatch), [gateway])
   useRequests(gateway, state, dispatch)
-  const container = useFocusReturn(state)
+  const { container, fallback } = useFocusReturn(state)
   const phase =
     state.access === "notAdmin"
       ? "not-admin"
@@ -253,14 +303,28 @@ function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
       data-connection={state.connection}
       aria-busy={state.pending !== null || undefined}
     >
-      <SettingGroup id="mcp-servers" note={footnote}>
+      <SettingGroup id="mcp-servers">
         <ServersCard state={state} dispatch={dispatch} />
       </SettingGroup>
       {state.form && state.access === "admin" ? (
-        <FormGroup state={state} form={state.form} dispatch={dispatch} />
+        <FormDialog
+          state={state}
+          form={state.form}
+          dispatch={dispatch}
+          onReturnFocus={fallback}
+        />
+      ) : null}
+      {/* A list too large to show asks in its own row: it has no row to ask from. */}
+      {state.confirming && state.access === "admin" && state.list.phase === "listed" ? (
+        <RemoveDialog
+          state={state}
+          name={state.confirming.name}
+          dispatch={dispatch}
+          onReturnFocus={fallback}
+        />
       ) : null}
       {state.inspection && state.access === "admin" ? (
-        <InspectionGroup state={state} dispatch={dispatch} />
+        <InspectionDialog state={state} dispatch={dispatch} onReturnFocus={fallback} />
       ) : null}
     </div>
   )
@@ -347,12 +411,15 @@ function ServersBody({
   const add = (
     <button
       type="button"
-      className="settings-button"
+      className="settings-server-add-button"
       data-mcp-action="add"
       disabled={!writable}
       onClick={() => dispatch({ type: "add" })}
     >
-      Add server…
+      <span className="settings-tile" aria-hidden="true">
+        <DesktopIcon name="add" />
+      </span>
+      Add Server…
     </button>
   )
   if (list.phase === "loading")
@@ -396,12 +463,12 @@ function ServersBody({
               />
             ),
           )}
-          <div className="settings-servers-add">{add}</div>
         </>
       )}
       {managed.map((row) => (
         <ServerRow key={row.id} server={row.server} state={state} dispatch={dispatch} />
       ))}
+      {groups.length === 0 ? null : <div className="settings-servers-add">{add}</div>}
     </>
   )
 }
@@ -509,57 +576,108 @@ function TooLargeBody({
   )
 }
 
-/** The confirm's two buttons, keyed: they are not the row's, reused by place. */
-function ConfirmButtons({
-  askId,
-  state,
-  dispatch,
-}: {
-  askId: string
-  state: McpServersState
-  dispatch: Dispatch
-}) {
-  const cancel = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    cancel.current?.focus()
-  }, [])
+/** What a row's tile shows: whose server it is, and where it runs. */
+function ServerTile({ server }: { server: ListedServer }) {
   return (
-    <>
-      <button
-        key="cancel"
-        ref={cancel}
-        type="button"
-        className="settings-button"
-        data-mcp-action="cancel"
-        aria-describedby={askId}
-        disabled={state.pending !== null}
-        onClick={() => dispatch({ type: "cancelRemove" })}
-      >
-        Cancel
-      </button>
-      <button
-        key="confirm"
-        type="button"
-        className="settings-button settings-button-danger"
-        data-mcp-action="confirm"
-        aria-describedby={askId}
-        disabled={!canWrite(state)}
-        onClick={() => dispatch({ type: "confirmRemove" })}
-      >
-        Remove
-      </button>
-    </>
+    <span className="settings-tile" aria-hidden="true">
+      <DesktopIcon
+        name={server.managed ? "connections" : server.url ? "site" : "terminal"}
+      />
+    </span>
   )
 }
 
-/** The confirm's Escape: Settings' own never closes it. */
-function confirmEscape(confirming: boolean, state: McpServersState, dispatch: Dispatch) {
-  return (event: KeyboardEvent) => {
-    if (!confirming || event.key !== "Escape" || state.pending !== null) return
-    event.preventDefault()
-    event.stopPropagation()
-    dispatch({ type: "cancelRemove" })
+/** A remote server's host, for its row; the address as given when it has none. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url
+  } catch {
+    return url
   }
+}
+
+/** A row's one short line: where it runs, and what it holds or how it stands. */
+function rowDetail(server: ListedServer): string {
+  if (server.managed) return sentences.managed
+  if (server.url) return authorizationLabel(server) ?? hostOf(server.url)
+  return server.envNames.length === 0
+    ? sentences.local
+    : `${sentences.local} · ${sentences.variables(server.envNames.length)}`
+}
+
+/** A row's ⋯ menu: every action on the server, each opening its own dialog. */
+function ServerMenu({
+  server,
+  state,
+  dispatch,
+}: {
+  server: ListedServer
+  state: McpServersState
+  dispatch: Dispatch
+}) {
+  const writable = canWrite(state) && state.form === null
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        {/* Resting while nothing in it can be done, as a row's buttons would. */}
+        <IconButton
+          icon="moreHorizontal"
+          label={`More for ${server.name}`}
+          size="sm"
+          disabled={!writable && !canInspect(state)}
+          data-mcp-action="more"
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-mcp-menu={server.name}>
+        <MenuItem
+          data-mcp-action="edit"
+          disabled={!writable}
+          onSelect={() => dispatch({ type: "edit", name: server.name })}
+        >
+          <DesktopIcon name="edit" />
+          Edit…
+        </MenuItem>
+        {server.remoteId ? (
+          <>
+            <MenuItem
+              data-mcp-action="authorize"
+              disabled={!writable}
+              onSelect={() => dispatch({ type: "authorize", name: server.name })}
+            >
+              <DesktopIcon name="access" />
+              Authorize
+            </MenuItem>
+            <MenuItem
+              data-mcp-action="revoke"
+              disabled={!writable}
+              onSelect={() => dispatch({ type: "revoke", name: server.name })}
+            >
+              <DesktopIcon name="disconnect" />
+              Revoke
+            </MenuItem>
+          </>
+        ) : null}
+        <MenuItem
+          data-mcp-action="inspect"
+          disabled={!canInspect(state)}
+          onSelect={() => dispatch({ type: "inspect", name: server.name })}
+        >
+          <DesktopIcon name="search" />
+          Show Tools…
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem
+          variant="destructive"
+          data-mcp-action="remove"
+          disabled={!writable}
+          onSelect={() => dispatch({ type: "askRemove", name: server.name })}
+        >
+          <DesktopIcon name="delete" />
+          Remove…
+        </MenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 }
 
 /** A server stored once under its name, or the managed one (G2). */
@@ -572,112 +690,33 @@ function ServerRow({
   state: McpServersState
   dispatch: Dispatch
 }) {
-  const nameId = useId()
-  const askId = useId()
   const writable = canWrite(state) && state.form === null
-  const confirming = !server.managed && state.confirming?.name === server.name
-  const command = server.url ?? [server.command, ...server.args].join(" ")
-  const authorization = authorizationLabel(server)
   const consent = state.consent?.name === server.name ? state.consent : null
   return (
     <ItemRow
       className="settings-server"
       data-mcp-server={server.name}
       data-managed={server.managed || undefined}
-      onKeyDown={confirmEscape(confirming, state, dispatch)}
-      label={<span id={nameId}>{server.managed ? "Nessa" : server.name}</span>}
-      detail={
-        <>
-          {server.managed ? null : (
-            <code className="settings-server-command">{command}</code>
-          )}
-          <small>
-            {server.managed
-              ? sentences.managed
-              : server.url
-                ? (authorization ?? server.url)
-                : sentences.variables(server.envNames.length)}
-          </small>
-        </>
-      }
+      leading={<ServerTile server={server} />}
+      label={server.managed ? "Nessa" : server.name}
+      detail={rowDetail(server)}
       control={
         <span className="settings-server-actions">
-          {server.managed ? null : confirming ? (
-            <ConfirmButtons
-              key="confirm"
-              askId={askId}
-              state={state}
-              dispatch={dispatch}
-            />
-          ) : (
-            [
-              <button
-                key="edit"
-                type="button"
-                className="settings-button"
-                data-mcp-action="edit"
-                aria-describedby={nameId}
-                disabled={!writable}
-                onClick={() => dispatch({ type: "edit", name: server.name })}
-              >
-                Edit
-              </button>,
-              ...(server.remoteId
-                ? [
-                    <button
-                      key="authorize"
-                      type="button"
-                      className="settings-button"
-                      data-mcp-action="authorize"
-                      aria-describedby={nameId}
-                      disabled={!writable}
-                      onClick={() => dispatch({ type: "authorize", name: server.name })}
-                    >
-                      Authorize
-                    </button>,
-                    <button
-                      key="revoke"
-                      type="button"
-                      className="settings-button"
-                      data-mcp-action="revoke"
-                      aria-describedby={nameId}
-                      disabled={!writable}
-                      onClick={() => dispatch({ type: "revoke", name: server.name })}
-                    >
-                      Revoke
-                    </button>,
-                  ]
-                : []),
-              <button
-                key="inspect"
-                type="button"
-                className="settings-button"
-                data-mcp-action="inspect"
-                aria-describedby={nameId}
-                disabled={!canInspect(state)}
-                onClick={() => dispatch({ type: "inspect", name: server.name })}
-              >
-                Inspect
-              </button>,
-              <button
-                key="remove"
-                type="button"
-                className="settings-button"
-                data-mcp-action="remove"
-                aria-describedby={nameId}
-                disabled={!writable}
-                onClick={() => dispatch({ type: "askRemove", name: server.name })}
-              >
-                Remove
-              </button>,
-            ]
-          )}
-          <Toggle
-            checked={server.enabled}
-            label={server.name}
-            disabled={server.managed || !writable || confirming}
-            onChange={() => dispatch({ type: "toggle", name: server.name })}
-          />
+          {/* Keyed: the kit's row walks the control's children as a list. */}
+          {[
+            <Toggle
+              key="switch"
+              checked={server.enabled}
+              label={server.managed ? "Nessa" : server.name}
+              disabled={server.managed || !writable}
+              onChange={() => dispatch({ type: "toggle", name: server.name })}
+            />,
+            server.managed ? (
+              <span key="more" className="settings-server-actions-space" />
+            ) : (
+              <ServerMenu key="more" server={server} state={state} dispatch={dispatch} />
+            ),
+          ]}
         </span>
       }
     >
@@ -685,11 +724,6 @@ function ServerRow({
         <a href={consent.url} data-mcp-consent>
           {sentences.pendingConsent}
         </a>
-      ) : null}
-      {confirming ? (
-        <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-          {sentences.removeAsk(server.name)}
-        </p>
       ) : null}
     </ItemRow>
   )
@@ -709,43 +743,38 @@ function SharedGroup({
   state: McpServersState
   dispatch: Dispatch
 }) {
-  const sharedId = useId()
-  const askId = useId()
   const writable = canWrite(state) && state.form === null
-  const confirming = state.confirming?.name === group.name
   return (
     <ItemRow
       className="settings-server settings-server-group"
       data-mcp-group={group.name}
-      onKeyDown={confirmEscape(confirming, state, dispatch)}
+      leading={<ServerTile server={group.rows[0].server} />}
       label={group.name}
-      detail={
-        <small id={sharedId} data-mcp-shared>
-          {sentences.nameShared(group.rows.length)}
-        </small>
-      }
+      detail={<span data-mcp-shared>{sentences.nameShared(group.rows.length)}</span>}
       control={
         <span className="settings-server-actions">
-          {confirming ? (
-            <ConfirmButtons
-              key="confirm"
-              askId={askId}
-              state={state}
-              dispatch={dispatch}
-            />
-          ) : (
-            <button
-              key="removeFirst"
-              type="button"
-              className="settings-button settings-button-wrapped"
-              data-mcp-action="removeFirst"
-              aria-describedby={sharedId}
-              disabled={!writable}
-              onClick={() => dispatch({ type: "askRemove", name: group.name })}
-            >
-              {sentences.removeFirst(group.name)}
-            </button>
-          )}
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <IconButton
+                icon="moreHorizontal"
+                label={`More for ${group.name}`}
+                size="sm"
+                disabled={!writable}
+                data-mcp-action="more"
+              />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" data-mcp-menu={group.name}>
+              <MenuItem
+                variant="destructive"
+                data-mcp-action="removeFirst"
+                disabled={!writable}
+                onSelect={() => dispatch({ type: "askRemove", name: group.name })}
+              >
+                <DesktopIcon name="delete" />
+                {sentences.removeFirst(group.name)}…
+              </MenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </span>
       }
     >
@@ -764,12 +793,74 @@ function SharedGroup({
           </li>
         ))}
       </ul>
-      {confirming ? (
-        <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-          {sentences.removeFirstAsk(group.name, group.rows[0].server.command)}
-        </p>
-      ) : null}
     </ItemRow>
+  )
+}
+
+/**
+ * Escape closes the dialog it is pressed in, and stops there: Settings,
+ * which the dialog is drawn inside, would otherwise close as well.
+ */
+function keepEscape(event: KeyboardEvent) {
+  if (event.key === "Escape") event.stopPropagation()
+}
+
+/**
+ * The confirm, for a row's Remove or a group's (G5): a group's names the
+ * command of the first stored under it, the one the gateway removes (M5).
+ */
+function RemoveDialog({
+  state,
+  name,
+  dispatch,
+  onReturnFocus,
+}: {
+  state: McpServersState
+  name: string
+  dispatch: Dispatch
+  onReturnFocus: () => void
+}) {
+  const busy = state.pending !== null
+  const first =
+    state.list.phase === "listed" && sharesName(state, name)
+      ? groupsOf(state.list).groups.find((group) => group.name === name)?.rows[0]
+      : undefined
+  return (
+    <Dialog
+      open
+      size="sm"
+      title={first ? `${sentences.removeFirst(name)}?` : sentences.removeTitle(name)}
+      description={
+        first ? sentences.removeFirstAsk(name, first.server.command) : sentences.removeAsk
+      }
+      showCloseButton={false}
+      onReturnFocus={onReturnFocus}
+      onOpenChange={(open) => {
+        if (!open && !busy) dispatch({ type: "cancelRemove" })
+      }}
+      onKeyDown={keepEscape}
+      data-mcp-confirm={name}
+      footer={
+        <>
+          <Button
+            variant="outline"
+            data-mcp-action="cancel"
+            disabled={busy}
+            onClick={() => dispatch({ type: "cancelRemove" })}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            data-mcp-action="confirm"
+            disabled={!canWrite(state)}
+            onClick={() => dispatch({ type: "confirmRemove" })}
+          >
+            Remove
+          </Button>
+        </>
+      }
+    />
   )
 }
 
@@ -793,14 +884,16 @@ function FieldProblem({
   )
 }
 
-function FormGroup({
+function FormDialog({
   state,
   form,
   dispatch,
+  onReturnFocus,
 }: {
   state: McpServersState
   form: ServerForm
   dispatch: Dispatch
+  onReturnFocus: () => void
 }) {
   const ids = {
     name: useId(),
@@ -818,13 +911,10 @@ function FormGroup({
     url: useId(),
   } satisfies Record<FormField, string>
   const first = useRef<HTMLInputElement>(null)
-  const section = useRef<HTMLElement>(null)
+  const section = useRef<HTMLFieldSetElement>(null)
   // Where focus goes once the rows an action changed are drawn (F11, F12).
   const focusNext = useRef<string | null>(null)
   const busy = state.pending !== null
-  useEffect(() => {
-    first.current?.focus()
-  }, [])
   useEffect(() => {
     const selector = focusNext.current
     if (selector === null) return
@@ -864,95 +954,130 @@ function FormGroup({
   }
   const change = (patch: Extract<McpServersEvent, { type: "change" }>["patch"]) =>
     dispatch({ type: "change", patch })
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || busy) return
-    // The form's Escape: Settings' own never closes it.
-    event.preventDefault()
-    event.stopPropagation()
-    dispatch({ type: "cancelForm" })
-  }
   const described = (field: FormField) =>
     form.problem?.field === field ? problems[field] : undefined
   const listed = editedServer(state)
   const relaunched = launchChanged(form, listed)
   const waiting = valuesNeeded(form, listed)
   const keepable = namesKept(form, listed)
+  const adding = form.editing === undefined
   return (
-    <section
-      ref={section}
-      className="settings-group"
+    <Dialog
+      open
+      size="md"
+      title={adding ? "Add Server" : form.editing}
+      description={
+        adding ? undefined : form.kind === "remote" ? "Remote server" : "Local server"
+      }
+      initialFocus={first}
+      onReturnFocus={onReturnFocus}
+      onOpenChange={(open) => {
+        if (!open && !busy) dispatch({ type: "cancelForm" })
+      }}
+      onKeyDown={keepEscape}
+      className="settings-mcp-dialog"
       data-mcp-form={form.editing ?? ""}
-      onKeyDown={onKeyDown}
+      footer={
+        <>
+          <Button
+            variant="outline"
+            data-mcp-action="cancel"
+            onClick={() => dispatch({ type: "cancelForm" })}
+          >
+            Cancel
+          </Button>
+          <Button
+            data-mcp-action="save"
+            disabled={!formReady(form, listed) || !canWrite(state)}
+            onClick={() => dispatch({ type: "save" })}
+          >
+            Save
+          </Button>
+        </>
+      }
     >
-      <h2>{form.editing === undefined ? "Add server" : `Edit “${form.editing}”`}</h2>
       <fieldset
-        className="settings-card settings-form"
+        ref={section}
+        className="settings-form"
         disabled={busy}
         aria-describedby={described("form")}
       >
         <FieldProblem form={form} field="form" id={problems.form} />
-        <div className="settings-field">
-          <label htmlFor={ids.name}>Name</label>
-          <input
-            ref={first}
-            id={ids.name}
-            className="settings-input"
-            value={form.name}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={form.problem?.field === "name" || undefined}
-            aria-describedby={described("name")}
-            onChange={(event) => change({ name: event.target.value })}
+        <SettingsGroup>
+          <SettingsRow
+            label={<label htmlFor={ids.name}>Name</label>}
+            control={
+              <input
+                ref={first}
+                id={ids.name}
+                className="settings-input settings-form-short"
+                value={form.name}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={form.problem?.field === "name" || undefined}
+                aria-describedby={described("name")}
+                onChange={(event) => change({ name: event.target.value })}
+              />
+            }
+          >
+            <FieldProblem form={form} field="name" id={problems.name} />
+          </SettingsRow>
+          {adding ? (
+            <SettingsRow
+              label="Runs"
+              control={
+                <Segmented
+                  label="Server kind"
+                  value={form.kind}
+                  onChange={(kind) => change({ kind })}
+                  options={[
+                    { id: "stdio", label: "As a command" },
+                    { id: "remote", label: "At a URL" },
+                  ]}
+                />
+              }
+            />
+          ) : null}
+          {form.kind === "remote" ? (
+            <SettingsRow
+              label={<label htmlFor={ids.url}>URL</label>}
+              control={
+                <input
+                  id={ids.url}
+                  className="settings-input settings-form-short"
+                  data-mcp-field="url"
+                  value={form.url}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={form.problem?.field === "url" || undefined}
+                  aria-describedby={described("url")}
+                  onChange={(event) => change({ url: event.target.value })}
+                />
+              }
+            >
+              <FieldProblem form={form} field="url" id={problems.url} />
+            </SettingsRow>
+          ) : null}
+          {form.kind === "stdio" && !adding ? (
+            <CommandRow form={form} problemId={problems.command} />
+          ) : null}
+          <SettingsRow
+            label="Use in new conversations"
+            control={
+              <Toggle
+                checked={form.enabled}
+                label="Use in new conversations"
+                disabled={busy}
+                onChange={(enabled) => change({ enabled })}
+              />
+            }
           />
-          <FieldProblem form={form} field="name" id={problems.name} />
-        </div>
-        <div className="settings-field" role="group" aria-label="Server kind">
-          <label>
-            <input
-              type="radio"
-              name={`${ids.name}-kind`}
-              data-mcp-field="kind"
-              value="stdio"
-              checked={form.kind === "stdio"}
-              onChange={() => change({ kind: "stdio" })}
-            />
-            Local command
-          </label>
-          <label>
-            <input
-              type="radio"
-              name={`${ids.name}-kind`}
-              data-mcp-field="kind"
-              value="remote"
-              checked={form.kind === "remote"}
-              onChange={() => change({ kind: "remote" })}
-            />
-            Remote URL
-          </label>
-        </div>
-        {form.kind === "remote" ? (
-          <div className="settings-field">
-            <label htmlFor={ids.url}>URL</label>
-            <input
-              id={ids.url}
-              className="settings-input"
-              data-mcp-field="url"
-              value={form.url}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={form.problem?.field === "url" || undefined}
-              aria-describedby={described("url")}
-              onChange={(event) => change({ url: event.target.value })}
-            />
-            <FieldProblem form={form} field="url" id={problems.url} />
-          </div>
-        ) : null}
-        {form.kind === "stdio" ? (
-          <>
+        </SettingsGroup>
+        {form.kind === "stdio" && adding ? (
+          <section className="settings-form-section">
             <div className="settings-field">
               <label htmlFor={ids.command}>Command</label>
-              {/* A path is often wider than a narrow page: wrapped where it
-              is read, as the row's command is, rather than cut off. */}
+              {/* A path is often wider than the dialog: wrapped, not cut off. */}
               <textarea
                 id={ids.command}
                 className="settings-input settings-input-mono settings-input-wrapped"
@@ -989,120 +1114,153 @@ function FormGroup({
                 />
               ))}
               <div>
-                <button
-                  type="button"
-                  className="settings-button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   data-mcp-action="add-argument"
                   onClick={() => addArgument()}
                 >
-                  Add argument
-                </button>
+                  <DesktopIcon name="add" />
+                  Add Argument
+                </Button>
               </div>
               <FieldProblem form={form} field="args" id={problems.args} />
             </div>
-            <div className="settings-field">
-              <span className="settings-field-label">Variables</span>
-              {form.env.map((row, at) => (
-                <div
-                  className="settings-variable"
-                  key={row.key}
-                  data-mcp-variable={row.name}
-                  data-mcp-variable-key={row.key}
-                >
-                  <input
-                    className="settings-input settings-input-mono"
-                    aria-label="Variable name"
-                    value={row.name}
-                    readOnly={row.stored}
-                    aria-describedby={described("env")}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(event) =>
-                      dispatch({
-                        type: "changeVariable",
-                        key: row.key,
-                        patch: { name: event.target.value },
-                      })
-                    }
-                  />
-                  <SecretField
-                    secret={secretOf(row)}
-                    relaunched={relaunched}
-                    keepable={keepable}
-                    describedBy={
-                      [described("env"), row.stored && waiting ? ids.values : undefined]
-                        .filter(Boolean)
-                        .join(" ") || undefined
-                    }
-                    dispatch={dispatch}
-                    focusAfter={(selector) => {
-                      focusNext.current = `[data-mcp-variable-key="${row.key}"] ${selector}`
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="settings-button"
-                    aria-label={`Remove ${row.name || "this variable"}`}
-                    onClick={() => removeVariable(at)}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-              <div>
-                <button
-                  type="button"
-                  className="settings-button"
-                  data-mcp-action="add-variable"
-                  onClick={() => {
-                    focusNext.current = variableField(nextKey)
-                    dispatch({ type: "addVariable" })
-                  }}
-                >
-                  Add variable
-                </button>
-              </div>
-              <p
-                id={ids.values}
-                className="settings-field-note"
-                aria-live="polite"
-                data-mcp-values-needed
-              >
-                {waiting ? sentences.valuesAgain : null}
-              </p>
-              <FieldProblem form={form} field="env" id={problems.env} />
-            </div>
-          </>
+          </section>
         ) : null}
-        <div className="settings-field settings-field-inline">
-          <span className="settings-field-label">Offered to new conversations</span>
-          <Toggle
-            checked={form.enabled}
-            label="Offered to new conversations"
-            disabled={busy}
-            onChange={(enabled) => change({ enabled })}
-          />
-        </div>
-        <div className="settings-form-actions">
-          <button
-            type="button"
-            className="settings-button"
-            data-mcp-action="cancel"
-            onClick={() => dispatch({ type: "cancelForm" })}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="settings-button settings-button-primary"
-            disabled={!formReady(form, listed) || !canWrite(state)}
-            onClick={() => dispatch({ type: "save" })}
-          >
-            Save
-          </button>
-        </div>
+        {form.kind === "stdio" ? (
+          <section className="settings-form-section">
+            <h3 className="settings-field-label">Variables</h3>
+            {form.env.length === 0 ? null : (
+              <div className="settings-variables">
+                {form.env.map((row, at) => (
+                  <div
+                    className="settings-variable"
+                    key={row.key}
+                    data-mcp-variable={row.name}
+                    data-mcp-variable-key={row.key}
+                  >
+                    <input
+                      className="settings-input settings-input-mono"
+                      aria-label="Variable name"
+                      placeholder="NAME"
+                      value={row.name}
+                      readOnly={row.stored}
+                      aria-describedby={described("env")}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) =>
+                        dispatch({
+                          type: "changeVariable",
+                          key: row.key,
+                          patch: { name: event.target.value },
+                        })
+                      }
+                    />
+                    <SecretField
+                      secret={secretOf(row)}
+                      relaunched={relaunched}
+                      keepable={keepable}
+                      describedBy={
+                        [described("env"), row.stored && waiting ? ids.values : undefined]
+                          .filter(Boolean)
+                          .join(" ") || undefined
+                      }
+                      dispatch={dispatch}
+                      focusAfter={(selector) => {
+                        focusNext.current = `[data-mcp-variable-key="${row.key}"] ${selector}`
+                      }}
+                    />
+                    <IconButton
+                      icon="close"
+                      size="sm"
+                      label={`Remove ${row.name || "this variable"}`}
+                      onClick={() => removeVariable(at)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div>
+              <Button
+                variant="ghost"
+                size="sm"
+                data-mcp-action="add-variable"
+                onClick={() => {
+                  focusNext.current = variableField(nextKey)
+                  dispatch({ type: "addVariable" })
+                }}
+              >
+                <DesktopIcon name="add" />
+                Add Variable
+              </Button>
+            </div>
+            <p
+              id={ids.values}
+              className="settings-field-note"
+              aria-live="polite"
+              data-mcp-values-needed
+            >
+              {waiting ? sentences.valuesAgain : null}
+            </p>
+            <FieldProblem form={form} field="env" id={problems.env} />
+          </section>
+        ) : null}
       </fieldset>
-    </section>
+    </Dialog>
+  )
+}
+
+/**
+ * A stored server's command, which the dialog does not edit: the program and
+ * its arguments by their last names, and — where the gateway is this
+ * computer's — a button that opens its `config.json`, where it is changed.
+ */
+function CommandRow({ form, problemId }: { form: ServerForm; problemId: string }) {
+  const { openConfig } = useContext(McpServersContext)
+  const [failed, setFailed] = useState<string | null>(null)
+  const shortName = (part: string) => part.split(/[\\/]/).filter(Boolean).pop() ?? part
+  const command = [form.command, ...form.args.map((row) => row.value)]
+    .map(shortName)
+    .join(" ")
+  return (
+    <SettingsRow
+      label="Command"
+      detail={
+        <>
+          <code className="settings-server-command" data-mcp-command>
+            {command}
+          </code>
+          {sentences.commandInConfig}
+        </>
+      }
+      control={
+        openConfig ? (
+          <Button
+            variant="outline"
+            size="sm"
+            data-mcp-action="open-config"
+            onClick={() => {
+              setFailed(null)
+              openConfig().catch((error: unknown) =>
+                setFailed(error instanceof Error ? error.message : String(error)),
+              )
+            }}
+          >
+            {sentences.openConfig}
+          </Button>
+        ) : undefined
+      }
+    >
+      <p
+        id={problemId}
+        className="settings-field-problem"
+        role="alert"
+        data-mcp-problem="command"
+      >
+        {form.problem?.field === "command" ? form.problem.text : failed}
+      </p>
+    </SettingsRow>
   )
 }
 
@@ -1225,6 +1383,19 @@ function SecretField({
   focusAfter: (selector: string) => void
 }) {
   const field = useRef<HTMLInputElement>(null)
+  const replaceButton = useRef<HTMLButtonElement>(null)
+  // A stored value rests as "Stored" until Replace is chosen, so a field
+  // touched in passing never asks for, or empties, a value nobody meant to
+  // change. Once the launch changed, every stored one is asked for (U33).
+  const [replacing, setReplacing] = useState(false)
+  // Replace and Keep swap this field's own controls, which the form may not
+  // draw again: focus follows here, onto what took the pressed one's place.
+  const swapped = useRef(false)
+  useEffect(() => {
+    if (!swapped.current) return
+    swapped.current = false
+    ;(replaceButton.current ?? field.current)?.focus()
+  })
   const label = `Value of ${row.name || "the variable"}`
   /** Text with a line break, pasted or dropped, which a password field would drop: held (S4, M3). */
   const hold = (event: ClipboardEvent | DragEvent, text: string) => {
@@ -1234,20 +1405,40 @@ function SecretField({
     dispatch({ type: "pasteVariable", key: row.key, value: text })
   }
   const keep =
-    row.stored && row.edited && keepable ? (
+    row.stored && (row.edited || replacing) && keepable ? (
       <button
         type="button"
         className="settings-button"
         data-mcp-action="keep-value"
         onClick={() => {
           if (field.current) field.current.value = ""
-          focusAfter("[data-mcp-secret]")
+          setReplacing(false)
+          swapped.current = true
           dispatch({ type: "keepVariable", key: row.key })
         }}
       >
         {sentences.keepStored}
       </button>
     ) : null
+  if (row.stored && !row.edited && !row.held && !relaunched && !replacing)
+    return (
+      <span className="settings-secret-stored" data-mcp-secret-stored>
+        <span>{sentences.storedValue}</span>
+        <Button
+          ref={replaceButton}
+          variant="ghost"
+          size="sm"
+          data-mcp-action="replace-value"
+          aria-label={`Replace the value of ${row.name}`}
+          onClick={() => {
+            swapped.current = true
+            setReplacing(true)
+          }}
+        >
+          Replace
+        </Button>
+      </span>
+    )
   if (row.held)
     return (
       <div
@@ -1340,21 +1531,19 @@ function hints(tool: InspectedTool): string[] {
   ]
 }
 
-function InspectionGroup({
+function InspectionDialog({
   state,
   dispatch,
+  onReturnFocus,
 }: {
   state: McpServersState
   dispatch: Dispatch
+  onReturnFocus: () => void
 }) {
   const inspection = state.inspection
-  const heading = useRef<HTMLHeadingElement>(null)
-  const started = inspection?.phase === "running" ? inspection.seq : undefined
-  useEffect(() => {
-    if (started !== undefined) heading.current?.focus()
-  }, [started])
   if (!inspection) return null
-  // How it stands, in one live region drawn with the panel: what it starts,
+  const running = inspection.phase === "running"
+  // How it stands, in one live region drawn with the dialog: what it starts,
   // then what it found or why it failed, read out as it arrives.
   const status =
     inspection.phase === "running"
@@ -1370,86 +1559,100 @@ function InspectionGroup({
       ? inspection.result.cut
       : undefined
   return (
-    <section className="settings-group" data-mcp-inspection={inspection.phase}>
-      <h2 ref={heading} tabIndex={-1}>
-        Inspect “{inspection.name}”
-      </h2>
-      <div className="settings-card settings-inspection">
-        <p
-          className="settings-inspection-note"
+    <Dialog
+      open
+      size="md"
+      title={inspection.name}
+      description={
+        <span
           role="status"
           data-mcp-inspection-status
           data-mcp-inspection-failure={inspection.phase === "failed" || undefined}
         >
           {status}
-        </p>
-        {inspection.phase === "done" ? (
-          <>
-            {inspection.result.tools.length === 0 ? null : (
-              <ul className="settings-tools">
-                {/* By place too: a server may list one name twice. */}
-                {inspection.result.tools.map((tool, at) => (
-                  <li key={`${at}:${tool.name}`} data-mcp-tool={tool.name}>
-                    <div className="settings-tool-head">
-                      <code>{tool.name}</code>
-                      {hints(tool).map((hint) => (
+        </span>
+      }
+      showCloseButton={!running}
+      onReturnFocus={onReturnFocus}
+      onOpenChange={(open) => {
+        if (!open && !running) dispatch({ type: "closeInspection" })
+      }}
+      onKeyDown={keepEscape}
+      className="settings-mcp-dialog"
+      data-mcp-inspection={inspection.phase}
+      footer={
+        <Button
+          data-mcp-action="close"
+          disabled={running}
+          onClick={() => dispatch({ type: "closeInspection" })}
+        >
+          Done
+        </Button>
+      }
+    >
+      {inspection.phase === "done" && inspection.result.tools.length > 0 ? (
+        <SettingsGroup className="settings-tools">
+          {/* By place too: a server may list one name twice. */}
+          {inspection.result.tools.map((tool, at) => (
+            <SettingsRow
+              key={`${at}:${tool.name}`}
+              data-mcp-tool={tool.name}
+              label={<code>{tool.name}</code>}
+              control={
+                hints(tool).length > 0 || tool.ui ? (
+                  <span className="settings-tool-badges">
+                    {/* One keyed list: the kit's row walks the control's children. */}
+                    {[
+                      ...hints(tool).map((hint) => (
                         <span key={hint} className="settings-badge" data-badge={hint}>
                           {hint}
                         </span>
-                      ))}
-                      {tool.ui ? (
-                        <span className="settings-badge" data-badge="ui">
-                          UI
-                        </span>
-                      ) : null}
+                      )),
+                      ...(tool.ui
+                        ? [
+                            <span key="ui" className="settings-badge" data-badge="ui">
+                              App
+                            </span>,
+                          ]
+                        : []),
+                    ]}
+                  </span>
+                ) : undefined
+              }
+            >
+              {tool.ui ? (
+                <dl className="settings-tool-ui">
+                  <div>
+                    <dt>App</dt>
+                    <dd>
+                      <code>{tool.ui.uri}</code>
+                    </dd>
+                  </div>
+                  {tool.ui.csp.map((list) => (
+                    <div key={list.name}>
+                      <dt>{list.name}</dt>
+                      <dd>{list.origins.join(", ")}</dd>
                     </div>
-                    {tool.ui ? (
-                      <dl className="settings-tool-ui">
-                        <div>
-                          <dt>App</dt>
-                          <dd>
-                            <code>{tool.ui.uri}</code>
-                          </dd>
-                        </div>
-                        {tool.ui.csp.map((list) => (
-                          <div key={list.name}>
-                            <dt>{list.name}</dt>
-                            <dd>{list.origins.join(", ")}</dd>
-                          </div>
-                        ))}
-                        <div>
-                          <dt>Permissions</dt>
-                          <dd>
-                            {tool.ui.permissions.length === 0
-                              ? "None"
-                              : tool.ui.permissions.join(", ")}
-                          </dd>
-                        </div>
-                      </dl>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {cutNote ? (
-              <p className="settings-inspection-note" data-mcp-cut={cutNote}>
-                {sentences.cut[cutNote]}
-              </p>
-            ) : null}
-          </>
-        ) : null}
-        <div className="settings-form-actions">
-          <button
-            type="button"
-            className="settings-button"
-            data-mcp-action="close"
-            disabled={inspection.phase === "running"}
-            onClick={() => dispatch({ type: "closeInspection" })}
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </section>
+                  ))}
+                  <div>
+                    <dt>Permissions</dt>
+                    <dd>
+                      {tool.ui.permissions.length === 0
+                        ? "None"
+                        : tool.ui.permissions.join(", ")}
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
+            </SettingsRow>
+          ))}
+        </SettingsGroup>
+      ) : null}
+      {cutNote ? (
+        <p className="settings-inspection-note" data-mcp-cut={cutNote}>
+          {sentences.cut[cutNote]}
+        </p>
+      ) : null}
+    </Dialog>
   )
 }

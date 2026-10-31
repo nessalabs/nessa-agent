@@ -116,6 +116,12 @@ impl ServiceNamespace {
     pub(crate) fn log_directory(&self) -> PathBuf {
         self.root.join(self.logs_relative())
     }
+
+    /// The gateway's `config.json`, at the top of this namespace: where its
+    /// stored MCP servers are (the gateway's `runtime_config::config_path`).
+    pub(crate) fn config_file(&self) -> PathBuf {
+        self.root.join(&self.relative).join("config.json")
+    }
 }
 
 /// Whether a name may be one path segment of a namespace.

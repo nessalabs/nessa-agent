@@ -1,5 +1,5 @@
 /**
- * Settings › Integrations' reducer, one row of the design's state table
+ * Settings › MCP servers' reducer, one row of the design's state table
  * (#391 PR 3, U1–U31, U32–U43 from its review, and U44–U49 for a list too
  * large to show) at least one test, each
  * named for its row. Rows the
@@ -826,8 +826,9 @@ describe("removing", () => {
     )
     expect(state.confirming).toBeNull()
     expect(state.pending).toBeNull()
-    expect(sentences.removeAsk("charts")).toBe(
-      "Remove “charts”? New conversations stop getting it. Open ones keep it until they close.",
+    expect(sentences.removeTitle("charts")).toBe("Remove “charts”?")
+    expect(sentences.removeAsk).toBe(
+      "New conversations stop getting it. Open ones keep it until they close.",
     )
   })
 })
@@ -1600,7 +1601,7 @@ describe("a variable's value (S1–S8)", () => {
     expect(saved(edit())).toEqual([{ name: "TOKEN", value: null }])
   })
 
-  it("S2 (Codex P1): edited and emptied, it saves the empty value; kept again, null", () => {
+  it("S2 (Codex P1): edited and emptied, it neither keeps nor blanks it but waits; kept again, null", () => {
     let state = edit()
     const key = keyOf(state, "TOKEN")
     state = run(
@@ -1608,7 +1609,7 @@ describe("a variable's value (S1–S8)", () => {
       { type: "changeVariable", key, patch: { value: "x" } },
       { type: "changeVariable", key, patch: { value: "" } },
     )
-    expect(saved(state)).toEqual([{ name: "TOKEN", value: "" }])
+    expect(run(state, { type: "save" }).pending).toBeNull()
     state = run(state, { type: "keepVariable", key })
     expect(state.form?.env[0]).toMatchObject({ value: "", edited: false, held: false })
     expect(saved(state)).toEqual([{ name: "TOKEN", value: null }])
@@ -1684,22 +1685,26 @@ describe("a variable's value (S1–S8)", () => {
       { type: "clearVariable", key },
     )
     expect(state.form?.env[0]).toMatchObject({ value: "", edited: true, held: false })
-    expect(saved(state)).toEqual([{ name: "TOKEN", value: "" }])
+    expect(run(state, { type: "save" }).pending).toBeNull()
   })
 
-  it("S7: with the launch changed, a stored variable waits until edited, empty counts", () => {
+  it("S7: with the launch changed, a stored variable waits until given a value, empty does not count", () => {
     let state = edit()
     const key = keyOf(state, "TOKEN")
     state = run(state, { type: "change", patch: { command: "/usr/bin/other" } })
     expect(valuesNeeded(state.form!, editedServer(state))).toBe(true)
     expect(run(state, { type: "save" }).pending).toBeNull()
+    // Typed and erased: still waiting, so a save can't store it blank.
     state = run(
       state,
       { type: "changeVariable", key, patch: { value: "x" } },
       { type: "changeVariable", key, patch: { value: "" } },
     )
+    expect(valuesNeeded(state.form!, editedServer(state))).toBe(true)
+    expect(run(state, { type: "save" }).pending).toBeNull()
+    state = run(state, { type: "changeVariable", key, patch: { value: "y" } })
     expect(valuesNeeded(state.form!, editedServer(state))).toBe(false)
-    expect(saved(state)).toEqual([{ name: "TOKEN", value: "" }])
+    expect(saved(state)).toEqual([{ name: "TOKEN", value: "y" }])
   })
 
   it("S8: a stored variable removed elsewhere goes if not edited, stays as new if edited", () => {
