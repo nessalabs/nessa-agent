@@ -438,15 +438,16 @@ impl ConversationService {
         answer.map_err(ConversationError::McpApp)
     }
 
-    /// Ask the person, and wait for their answer: `Ok` once they allowed it,
-    /// `Ok(true)` when they allowed every later message of the app too.
+    /// Ask the person, and wait for their answer: `Ok` once they allowed it.
+    /// "Always allow this app" keeps the app's server trusted first, and
+    /// that choice and whether it was kept are on record (`AppTrusted`).
     async fn approved(
         &self,
         opening: &Opening,
         step: &Step,
         asked: Asked<'_>,
         gone: &mut oneshot::Receiver<()>,
-    ) -> Result<bool, ConversationError> {
+    ) -> Result<(), ConversationError> {
         let permission_id = new_review_id();
         if !super::super::app_reviews::fits(
             &permission_id,
@@ -513,7 +514,10 @@ impl ConversationService {
                 ended.await
             }
         };
-        let for_app = matches!(end, ReviewEnd::AllowedForApp(_));
+        let trusted = match &end {
+            ReviewEnd::AllowedForApp(by) => Some((person(by), permission_id.clone())),
+            _ => None,
+        };
         let (phase, initiator, error) = match end {
             ReviewEnd::Allowed(by) | ReviewEnd::AllowedForApp(by) => (
                 McpAppAuditPhase::Approved { permission_id },
@@ -540,7 +544,24 @@ impl ConversationService {
             ),
         };
         step.record(phase, Some(initiator)).await?;
-        error.map_or(Ok(for_app), |error| Err(ConversationError::McpApp(error)))
+        if let Some((by, permission_id)) = trusted {
+            let kept = step.ports.trusted.trust(asked.server).is_ok();
+            if !kept {
+                tracing::error!(
+                    server = asked.server,
+                    "always allowing an app was not kept; its next message asks"
+                );
+            }
+            step.record(
+                McpAppAuditPhase::AppTrusted {
+                    permission_id,
+                    kept,
+                },
+                Some(by),
+            )
+            .await?;
+        }
+        error.map_or(Ok(()), |error| Err(ConversationError::McpApp(error)))
     }
 
     async fn app_message(
@@ -634,16 +655,9 @@ impl ConversationService {
                 tool: sender.tool().tool(),
                 shown: &shown,
             };
-            // "Always allow this app": kept before this message goes, and a
-            // choice that could not be kept still sends the one allowed.
-            if self.approved(&opening, &step, asked, &mut gone).await?
-                && ports.trusted.trust(&message.server).is_err()
-            {
-                tracing::error!(
-                    server = message.server,
-                    "always allowing an app was not kept; its next message asks"
-                );
-            }
+            // A choice to always allow the app that could not be kept still
+            // sends the one message allowed.
+            self.approved(&opening, &step, asked, &mut gone).await?;
         }
         // Checked once more under the conversation's submission lock, just
         // before it is enqueued (`submit_as`): a close or a delete that took

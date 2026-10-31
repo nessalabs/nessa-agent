@@ -753,6 +753,17 @@ async fn m7_always_allowing_an_app_sends_its_later_messages_unasked() {
     fixture.answer(&review, ALLOW_APP).await;
     task.await.unwrap().unwrap();
     assert!(fixture.trusted.trusts(SERVER));
+    // The choice is on record apart from the one message's approval.
+    let phases = fixture.audit.phases();
+    let approved = phases
+        .iter()
+        .position(|phase| matches!(phase, McpAppAuditPhase::Approved { .. }))
+        .unwrap();
+    assert!(matches!(
+        &phases[approved + 1],
+        McpAppAuditPhase::AppTrusted { permission_id, kept: true }
+            if *permission_id == review.permission_id
+    ));
     fixture.idle().await;
     // Every later message of the app goes without a review, from any mount.
     fixture

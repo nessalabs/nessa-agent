@@ -10,7 +10,7 @@
  * No dependencies. The real Huddle server lives in its own repo and reaches
  * the gateway as a client; this one only reads files under HUDDLE_ROOT.
  */
-import { appendFileSync, readFileSync, readdirSync, renameSync, rmSync, statSync, realpathSync } from "node:fs"
+import { appendFileSync, lstatSync, readFileSync, readdirSync, renameSync, rmSync, statSync, realpathSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { createInterface } from "node:readline"
@@ -138,7 +138,10 @@ function listFiles({ dir = "." }) {
     for (const name of readdirSync(at).sort()) {
       if (entries.length >= MAX_ENTRIES || SKIP.has(name) || name.startsWith(".")) continue
       const full = join(at, name)
-      const isDir = statSync(full).isDirectory()
+      // A link is never followed: it could lead outside the root, or nowhere.
+      const stat = lstatSync(full)
+      if (stat.isSymbolicLink()) continue
+      const isDir = stat.isDirectory()
       entries.push(relative(ROOT, full) + (isDir ? "/" : ""))
       if (isDir && depth < 2) walk(full, depth + 1)
     }
@@ -287,7 +290,7 @@ async function answer(message) {
     case "tools/list":
       return ok({ tools: Object.entries(TOOLS).map(([name, { call, ...declared }]) => ({ name, ...declared })) })
     case "tools/call": {
-      const tool = TOOLS[params?.name]
+      const tool = Object.hasOwn(TOOLS, params?.name ?? "") ? TOOLS[params.name] : undefined
       if (!tool) return failure(id, -32602, `Unknown tool: ${String(params?.name)}`)
       try {
         return ok(await tool.call(params.arguments ?? {}))
@@ -298,7 +301,7 @@ async function answer(message) {
     case "resources/list":
       return ok({ resources: Object.entries(RESOURCES).map(([uri, { name, mimeType }]) => ({ uri, name, mimeType })) })
     case "resources/read": {
-      const resource = RESOURCES[params?.uri]
+      const resource = Object.hasOwn(RESOURCES, params?.uri ?? "") ? RESOURCES[params.uri] : undefined
       if (!resource) return failure(id, -32002, `Resource not found: ${String(params?.uri)}`)
       const { mimeType, text: body, _meta } = resource
       return ok({ contents: [{ uri: params.uri, mimeType, text: body, _meta }] })

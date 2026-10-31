@@ -179,6 +179,10 @@ pub enum McpAppAuditPhase {
     ApprovalRequested { permission_id: String },
     /// The person allowed it; sent next.
     Approved { permission_id: String },
+    /// With that answer the person chose to always allow the app's
+    /// messages; `kept` is whether that choice was saved. Unsaved, the next
+    /// message asks again.
+    AppTrusted { permission_id: String, kept: bool },
     /// The person denied it.
     Denied { permission_id: String },
     /// Nobody answered within the review's deadline.
