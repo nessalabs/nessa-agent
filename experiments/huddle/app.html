@@ -68,6 +68,18 @@
   .md th { color: var(--quiet); font-weight: 600; }
   .md code { font: 0.88em ui-monospace, "SF Mono", Menlo, monospace; background: #1c1c1f; padding: 1px 5px; border-radius: 4px; }
   .md.pre code { background: none; padding: 0; font: inherit; }
+  .md.pre { border-radius: 6px; }
+  .md.pre .line.md.cl { font: inherit; white-space: pre; padding: 0 6px; margin: 0 -6px; border-radius: 4px; overflow-wrap: normal; }
+  .line.md.diagram { display: flex; justify-content: center; padding: 12px 0; margin: 10px 0; }
+  .line.md.diagram svg { max-width: 100%; height: auto; }
+  .diagram [data-line] { cursor: pointer; }
+  .diagram .mmd-mark, .diagram .mmd-mark rect, .diagram .mmd-mark polygon, .diagram .mmd-mark circle,
+  .diagram .mmd-mark path, .diagram .mmd-mark line, .diagram .mmd-mark ellipse {
+    stroke: var(--mark) !important; stroke-width: 2.5px !important; transition: stroke 200ms ease-out, fill 200ms ease-out; }
+  .diagram rect.mmd-mark, .diagram .mmd-mark rect, .diagram .mmd-mark polygon, .diagram .mmd-mark circle { fill: rgba(229,130,91,0.18) !important; }
+  .diagram text.mmd-mark, .diagram .mmd-mark text, .diagram .mmd-mark tspan { fill: var(--mark) !important; stroke: none !important; }
+  .diagram .mmd-mark span, .diagram .mmd-mark p, .diagram .mmd-mark div { color: var(--mark) !important; }
+  .diagram .mmd-pointed, .diagram .mmd-pointed rect, .diagram .mmd-pointed path, .diagram .mmd-pointed line { stroke: rgba(255,255,255,0.7) !important; }
   .md .link { color: #9ec1ff; }
   .md strong { color: var(--ink); font-weight: 620; }
   .md.underline { text-decoration: underline; text-decoration-color: var(--mark); text-decoration-thickness: 2px; text-underline-offset: 4px; }
@@ -159,17 +171,20 @@
     return out;
   }
   function isMarkdown(path) { return /\.(md|markdown|mdx)$/i.test(path); }
+  function isMermaid(path) { return /\.(mmd|mermaid)$/i.test(path); }
   async function show(args) {
     var file = await callTool("huddle_read_file", { path: args.path });
     current = file.path;
     $("file").textContent = file.path;
     Object.keys(marks).forEach(function (id) { removeMark(id); });
-    paper.querySelectorAll(".line, #empty").forEach(function (el) { el.remove(); });
+    Array.prototype.slice.call(paper.children).forEach(function (el) { if (el !== ink) el.remove(); });
     var lines = file.content.split("\n");
-    var markdown = isMarkdown(file.path);
-    paper.classList.toggle("doc", markdown);
-    var frag = markdown ? renderMarkdown(lines) : document.createDocumentFragment();
-    if (!markdown) lines.forEach(function (text, i) {
+    var markdown = isMarkdown(file.path), diagram = isMermaid(file.path);
+    paper.classList.toggle("doc", markdown || diagram);
+    var frag = document.createDocumentFragment();
+    if (markdown) frag = renderMarkdown(lines);
+    if (diagram) frag.appendChild(mermaidSlot(lines, 0, 0, lines.length - 1));
+    if (!markdown && !diagram) lines.forEach(function (text, i) {
       var row = document.createElement("div");
       row.className = "line"; row.dataset.n = String(i + 1);
       var no = document.createElement("span"); no.className = "no"; no.textContent = String(i + 1);
@@ -178,6 +193,7 @@
     });
     paper.insertBefore(frag, ink);
     if (args.line) view({ line: args.line }); else stage.scrollTop = 0;
+    upgradeDiagrams();
     return { shown: file.path, lines: lines.length };
   }
   // ---- Markdown, drawn without a library (the app's CSP loads no scripts) ----
@@ -209,10 +225,11 @@
       var line = lines[i], m;
       if (!line.trim()) { i++; continue; }
       if ((m = line.match(/^\s*(```|~~~)/))) {
-        var fence = m[1], start = i, body = [];
+        var fence = m[1], start = i, body = [], lang = line.trim().slice(fence.length).trim().toLowerCase();
         i++;
         while (i < lines.length && lines[i].trim().indexOf(fence) !== 0) body.push(lines[i++]);
-        block("pre", start, Math.min(i, lines.length - 1), "<code>" + escapeHtml(body.join("\n")) + "</code>");
+        var last = Math.min(i, lines.length - 1);
+        frag.appendChild(lang === "mermaid" ? mermaidSlot(body, start + 1, start, last) : codeBlock(body, start + 1));
         i++; continue;
       }
       if ((m = line.match(/^\s*(#{1,6})\s+(.*?)\s*#*\s*$/))) { block("h" + m[1].length, i, i, inline(m[2])); i++; continue; }
@@ -246,19 +263,291 @@
     }
     return frag;
   }
+  // A code block keeps one row per source line, so a mark lands on that line.
+  function codeBlock(body, first) {
+    var box = document.createElement("div");
+    box.className = "md pre";
+    body.forEach(function (text, j) {
+      var row = document.createElement("div");
+      row.className = "line md cl"; row.dataset.n = String(first + j + 1);
+      row.textContent = text || " "; box.appendChild(row);
+    });
+    return box;
+  }
+
+  // ---- Mermaid: drawn by mermaid itself, then each piece tied to its source line ----
+  // A slot shows the code rows until the diagram is drawn, and keeps them if it cannot be.
+  var MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  var mermaidLoad = null, diagramCount = 0;
+  function mermaidSlot(body, first, from, to) {
+    var slot = codeBlock(body, first);
+    slot.classList.add("mmd-slot");
+    slot.mermaid = { body: body, first: first, from: from, to: to };
+    return slot;
+  }
+  function loadMermaid() {
+    if (!mermaidLoad) mermaidLoad = import(MERMAID).then(function (module) {
+      var m = module.default;
+      m.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict",
+        themeVariables: { background: "transparent", fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif' } });
+      return m;
+    });
+    return mermaidLoad;
+  }
+  async function upgradeDiagrams() {
+    var slots = Array.prototype.slice.call(paper.querySelectorAll(".mmd-slot"));
+    if (!slots.length) return;
+    var m;
+    try { m = await loadMermaid(); } catch (error) { mermaidLoad = null; debug("mermaid did not load: " + (error && error.message)); return; }
+    for (var k = 0; k < slots.length; k++) {
+      var slot = slots[k], src = slot.mermaid;
+      if (!slot.isConnected) continue;
+      var renderId = "huddle-diagram-" + (++diagramCount);
+      try {
+        var drawn = await m.render(renderId, src.body.join("\n"));
+        if (!slot.isConnected) continue;
+        var row = document.createElement("div");
+        row.className = "line md diagram"; row.dataset.n = String(src.from + 1);
+        if (src.to > src.from) row.dataset.to = String(src.to + 1);
+        row.innerHTML = drawn.svg;
+        row.diagram = indexDiagram(row.querySelector("svg"), src.body, src.first);
+        slot.replaceWith(row);
+      } catch (error) {
+        // A failed render leaves mermaid's own error drawing in the body; the code rows stay instead.
+        ["d" + renderId, renderId].forEach(function (id) { var left = document.getElementById(id); if (left) left.remove(); });
+        debug("diagram kept as code: " + String(error && error.message).split("\n")[0].slice(0, 80));
+      }
+    }
+  }
+  // The pieces a diagram's source names, each with its 1-based line and its SVG elements.
+  function indexDiagram(svg, body, first) {
+    var kind = (body.find(function (l) { return l.trim() && !/^\s*%%/.test(l); }) || "").trim().split(/\s+/)[0];
+    var items = /^sequenceDiagram/i.test(kind) ? sequenceItems(svg, body, first)
+      : /^(flowchart|graph)$/i.test(kind) ? flowItems(svg, body, first) : [];
+    items.forEach(function (item) {
+      item.els.forEach(function (el) { el.setAttribute("data-line", String(item.line)); });
+    });
+    return { items: items.filter(function (item) { return item.els.length; }) };
+  }
+  function byClass(svg, selector) { return Array.prototype.slice.call(svg.querySelectorAll(selector)); }
+  function sequenceItems(svg, body, first) {
+    var items = [], declared = {}, seen = {}, stack = [], blocks = [], messages = 0, notes = 0;
+    var texts = byClass(svg, ".messageText"), arrows = byClass(svg, '[class^="messageLine"]');
+    var noteBoxes = byClass(svg, "rect.note"), noteTexts = byClass(svg, ".noteText");
+    // A participant is drawn twice, at the top and the bottom; a circle takes the top one only.
+    function actorEls(name, topOnly) {
+      var out = [];
+      byClass(svg, topOnly ? ".actor-top" : ".actor-top, .actor-bottom").forEach(function (el) {
+        if (el.getAttribute("name") !== name) return;
+        out.push(el);
+        var label = el.nextElementSibling;
+        if (label && label.tagName.toLowerCase() === "text") out.push(label);
+      });
+      return out;
+    }
+    body.forEach(function (raw, j) {
+      var line = raw.trim(), n = first + j + 1, m;
+      if (!line || /^%%/.test(line)) return;
+      if ((m = line.match(/^(?:create\s+)?(participant|actor)\s+(.+?)(?:\s+as\s+(.+))?$/i))) {
+        declared[m[2]] = true; seen[m[2]] = true;
+        items.push({ type: "participant", line: n, names: [m[2], m[3] || m[2]], els: actorEls(m[2]), ring: actorEls(m[2], true) });
+      } else if ((m = line.match(/^(loop|alt|opt|par|critical|break|rect|box)\b\s*(.*)$/i))) {
+        stack.push({ kind: m[1].toLowerCase(), label: m[2], line: n, branches: [] });
+      } else if ((m = line.match(/^(else|and|option)\b\s*(.*)$/i)) && stack.length) {
+        stack[stack.length - 1].branches.push({ label: m[2], line: n });
+      } else if (/^end$/i.test(line) && stack.length) {
+        var done = stack.pop(); done.end = n; blocks.push(done);
+      } else if ((m = line.match(/^note\s+(?:over|left of|right of)\s+([^:]+):\s*(.*)$/i))) {
+        items.push({ type: "note", line: n, names: [m[2]], els: [noteBoxes[notes], noteTexts[notes]].filter(Boolean) });
+        notes++;
+      } else if ((m = line.match(/^([^:]+?)\s*(<<-{1,2}>>|-{1,2}>>|-{1,2}>|-{1,2}x|-{1,2}\))\s*[+-]?\s*([^:]+?)\s*:\s*(.*)$/))) {
+        [m[1], m[3]].forEach(function (name) {
+          if (!seen[name]) { seen[name] = true; items.push({ type: "participant", line: n, byLine: false, names: [name], els: actorEls(name), ring: actorEls(name, true) }); }
+        });
+        items.push({ type: "message", line: n, names: [m[4]], els: [texts[messages], arrows[messages]].filter(Boolean) });
+        messages++;
+      }
+    });
+    // Mermaid draws each loop, alt, opt... as a group holding its label box. Match by kind and label.
+    var groups = byClass(svg, ".labelBox").map(function (box) { return box.parentNode; }), used = [];
+    blocks.sort(function (a, b) { return a.line - b.line; }).forEach(function (block) {
+      if (block.kind === "rect" || block.kind === "box") return;
+      var group = groups.find(function (g) {
+        if (used.indexOf(g) >= 0) return false;
+        var kind = g.querySelector(".labelText"), label = g.querySelector(".loopText");
+        return kind && kind.textContent.trim().toLowerCase() === block.kind && (!block.label || !label || label.textContent.indexOf(block.label) >= 0);
+      }) || groups.find(function (g) { return used.indexOf(g) < 0; });
+      if (!group) return;
+      used.push(group);
+      items.push({ type: "block", line: block.line, names: [block.label], els: [group] });
+      var labels = byClass(group, ".loopText");
+      block.branches.forEach(function (branch) {
+        var label = labels.find(function (t) { return branch.label && t.textContent.indexOf(branch.label) >= 0; });
+        if (label) items.push({ type: "block", line: branch.line, names: [branch.label], els: [label] });
+      });
+    });
+    return items;
+  }
+  // One flowchart statement: groups of node ids (A & B) joined by links, and each node's label.
+  function flowStatement(text) {
+    var groups = [[]], labels = {}, shaped = {}, i = 0;
+    var close = { "[": "]", "(": ")", "{": "}", ">": "]" };
+    while (i < text.length) {
+      var rest = text.slice(i), m;
+      if ((m = rest.match(/^\s+/))) { i += m[0].length; continue; }
+      if ((m = rest.match(/^&/))) { i++; continue; }
+      if ((m = rest.match(/^(<)?(?:(--|==)\s+[^-=>]+?\s+)?(-{2,}|={2,}|-\.+-|~{3})(>|o|x)?/)) && m[0].length > 1) {
+        i += m[0].length;
+        var label = text.slice(i).match(/^\s*\|[^|]*\|/);
+        if (label) i += label[0].length;
+        groups.push([]); continue;
+      }
+      if ((m = rest.match(/^[A-Za-z0-9_][\w.]*/))) {
+        var id = m[0]; i += id.length;
+        groups[groups.length - 1].push(id);
+        var open = text[i];
+        if (close[open] && !(open === ">" && /^>\s*$/.test(text.slice(i)))) {
+          var depth = 0, j = i, quote = false;
+          for (; j < text.length; j++) {
+            var c = text[j];
+            if (c === '"') quote = !quote;
+            if (quote) continue;
+            if (c === open && open !== ">") depth++;
+            else if (c === close[open]) { depth--; if (depth <= 0 || open === ">") break; }
+          }
+          labels[id] = text.slice(i + 1, j).replace(/^[\[\(\{\/\\>"]+|[\]\)\}\/\\"]+$/g, "").trim();
+          shaped[id] = true;
+          i = j + 1;
+        }
+        var cls = text.slice(i).match(/^:::\w+/);
+        if (cls) i += cls[0].length;
+        continue;
+      }
+      i++;
+    }
+    return { groups: groups.filter(function (g) { return g.length; }), labels: labels, shaped: shaped };
+  }
+  function flowItems(svg, body, first) {
+    var items = [], nodes = {}, edgeIndex = 0;
+    var nodeEls = {};
+    byClass(svg, "g.node").forEach(function (g) {
+      var m = (g.id || "").match(/flowchart-(.+)-\d+$/);
+      if (m) nodeEls[m[1]] = g;
+    });
+    var paths = byClass(svg, "path.flowchart-link"), edgeLabels = byClass(svg, "g.edgeLabel");
+    function edgePath(k) { return paths.find(function (p) { return new RegExp("_" + k + "$").test(p.id); }) || paths[k]; }
+    body.forEach(function (raw, j) {
+      var n = first + j + 1;
+      raw.split(";").forEach(function (part) {
+        var line = part.trim();
+        if (!line || /^(%%|flowchart\b|graph\b|subgraph\b|end$|classDef\b|class\b|style\b|linkStyle\b|click\b|direction\b)/i.test(line)) return;
+        var stmt = flowStatement(line);
+        stmt.groups.forEach(function (group) {
+          group.forEach(function (id) {
+            if (!nodes[id] || (stmt.shaped[id] && !nodes[id].shaped)) {
+              if (nodes[id]) items.splice(items.indexOf(nodes[id]), 1);
+              nodes[id] = { type: "node", line: n, shaped: !!stmt.shaped[id], names: [id, stmt.labels[id] || id], els: nodeEls[id] ? [nodeEls[id]] : [] };
+              items.push(nodes[id]);
+            }
+          });
+        });
+        for (var g = 0; g + 1 < stmt.groups.length; g++) {
+          stmt.groups[g].forEach(function (from) {
+            stmt.groups[g + 1].forEach(function (to) {
+              var k = edgeIndex++, label = edgeLabels[k];
+              items.push({ type: "edge", line: n, names: [from + "->" + to],
+                els: [edgePath(k), label && label.textContent.trim() ? label : null].filter(Boolean) });
+            });
+          });
+        }
+      });
+    });
+    return items;
+  }
+  // The diagram pieces a mark names: by an element's name, or by the lines it covers.
+  function diagramTargets(row, spec) {
+    var items = row.diagram ? row.diagram.items : [];
+    if (spec.element) {
+      var want = String(spec.element).trim().toLowerCase();
+      var exact = items.filter(function (item) { return item.names.some(function (name) { return String(name).trim().toLowerCase() === want; }); });
+      return exact.length ? exact : items.filter(function (item) {
+        return item.names.some(function (name) { return String(name).toLowerCase().indexOf(want) >= 0; });
+      });
+    }
+    var from = spec.from_line, to = spec.to_line || spec.from_line;
+    return items.filter(function (item) { return item.byLine !== false && item.line >= from && item.line <= to; });
+  }
+  function boxOf(els) {
+    var base = paper.getBoundingClientRect(), box = null;
+    els.forEach(function (el) {
+      var r = el.getBoundingClientRect();
+      if (!r.width && !r.height) return;
+      box = box ? { left: Math.min(box.left, r.left), top: Math.min(box.top, r.top), right: Math.max(box.right, r.right), bottom: Math.max(box.bottom, r.bottom) }
+        : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    });
+    if (!box) return null;
+    return { left: (box.left - base.left) / zoom, top: (box.top - base.top) / zoom,
+      width: (box.right - box.left) / zoom, height: (box.bottom - box.top) / zoom };
+  }
+  function ellipse(box, padX, padY) {
+    var e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+    e.setAttribute("cx", String(box.left + box.width / 2)); e.setAttribute("cy", String(box.top + box.height / 2));
+    e.setAttribute("rx", String(box.width / 2 + padX)); e.setAttribute("ry", String(box.height / 2 + padY));
+    e.setAttribute("fill", "none"); e.setAttribute("stroke", "#E5825B"); e.setAttribute("stroke-width", "2.5");
+    e.setAttribute("stroke-dasharray", "2000"); e.setAttribute("stroke-dashoffset", "2000");
+    e.style.transition = "stroke-dashoffset 600ms ease-out";
+    ink.appendChild(e); requestAnimationFrame(function () { e.setAttribute("stroke-dashoffset", "0"); });
+    return e;
+  }
 
   function removeMark(id) {
     var mark = marks[id]; if (!mark) return;
     mark.rows.forEach(function (row) { row.classList.remove(mark.kind); });
+    (mark.parts || []).forEach(function (el) { el.classList.remove("mmd-mark"); });
     if (mark.shape) mark.shape.remove();
     delete marks[id];
   }
+  // A mark on a drawn diagram lands on the pieces its lines (or element) name.
+  function drawOnDiagram(spec, row) {
+    var targets = diagramTargets(row, spec);
+    if (!targets.length) return null;
+    var parts = [], ring = [];
+    targets.forEach(function (item) {
+      item.els.forEach(function (el) { if (parts.indexOf(el) < 0) parts.push(el); });
+      (item.ring || item.els).forEach(function (el) { if (ring.indexOf(el) < 0) ring.push(el); });
+    });
+    var mark = { kind: spec.kind, rows: [], parts: [], line: targets[0].line };
+    if (spec.kind === "circle") {
+      var box = boxOf(ring);
+      if (box) mark.shape = ellipse(box, 14, 10);
+    } else {
+      parts.forEach(function (el) { el.classList.add("mmd-mark"); });
+      mark.parts = parts;
+    }
+    return mark;
+  }
   function draw(args) {
     if (!current) return { error: "Nothing is on the stage. Call show first." };
-    var ids = [];
+    var ids = [], missed = [], firstLine = null;
     (args.marks || []).forEach(function (spec) {
+      var diagrams = Array.prototype.slice.call(paper.querySelectorAll(".line.diagram"));
+      var onDiagram = spec.element
+        ? diagrams.find(function (d) { return diagramTargets(d, spec).length; })
+        : (spec.from_line && diagrams.find(function (d) {
+            var from = Number(d.dataset.n), to = Number(d.dataset.to || from);
+            return spec.from_line >= from && spec.from_line <= to && diagramTargets(d, spec).length;
+          }));
+      if (onDiagram) {
+        var dm = drawOnDiagram(spec, onDiagram);
+        var did = "m" + (++markId);
+        marks[did] = dm; ids.push(did);
+        if (firstLine === null) firstLine = dm.line;
+        return;
+      }
+      if (!spec.from_line) { missed.push(spec.element || "?"); return; }
       var rows = range(spec.from_line, spec.to_line);
       if (!rows.length) return;
+      if (firstLine === null) firstLine = spec.from_line;
       var id = "m" + (++markId), mark = { kind: spec.kind, rows: rows };
       if (spec.kind === "circle") {
         var top = rows[0].offsetTop, bottom = rows[rows.length - 1].offsetTop + rows[rows.length - 1].offsetHeight;
@@ -278,8 +567,8 @@
       }
       marks[id] = mark; ids.push(id);
     });
-    if (ids.length) view({ line: args.marks[0].from_line });
-    return { ids: ids };
+    if (firstLine !== null) view({ line: firstLine });
+    return missed.length ? { ids: ids, not_found: missed } : { ids: ids };
   }
   function view(args) {
     if (args.zoom) { zoom = Math.max(0.5, Math.min(3, args.zoom)); paper.style.transform = "scale(" + zoom + ")"; }
@@ -296,13 +585,16 @@
   // The person points back: a click on a line is sent with their next words.
   var pointed = null;
   paper.addEventListener("click", function (event) {
-    var row = event.target.closest && event.target.closest(".line");
+    if (!event.target.closest) return;
+    var piece = event.target.closest("[data-line]");
+    var row = piece || event.target.closest(".line");
     if (!row) return;
-    if (pointed) pointed.classList.remove("pointed");
-    pointed = row; row.classList.add("pointed");
+    if (pointed) pointed.classList.remove(pointed.classList.contains("line") ? "pointed" : "mmd-pointed");
+    pointed = row; row.classList.add(piece ? "mmd-pointed" : "pointed");
+    var where = piece ? piece.getAttribute("data-line") : row.dataset.n + (row.dataset.to ? "–" + row.dataset.to : "");
     send({ type: "conversation.item.create", item: { type: "message", role: "user",
-      content: [{ type: "input_text", text: "(The person is pointing at " + current + " line " + row.dataset.n +
-        (row.dataset.to ? "–" + row.dataset.to : "") + ".)" }] } });
+      content: [{ type: "input_text", text: "(The person is pointing at " + current + " line " + where +
+        (piece ? ", a piece of the diagram" : "") + ".)" }] } });
   });
 
   var stageTools = {
@@ -312,10 +604,14 @@
   var toolSpecs = [
     { type: "function", name: "show", description: "Put a file on the stage, optionally scrolled to a line.",
       parameters: { type: "object", properties: { path: { type: "string" }, line: { type: "integer" } }, required: ["path"] } },
-    { type: "function", name: "draw", description: "Draw marks over the file on the stage. Each mark covers a line range.",
+    { type: "function", name: "draw", description: "Draw marks over the file on the stage. A mark covers a source line range " +
+        "(from_line, to_line). On a Mermaid diagram (sequence or flowchart) a mark lands on the exact piece those lines define: " +
+        "a participant, a message arrow, a note, a loop/alt box, a node or an edge. When you know a piece's name but not its line, " +
+        "give element instead: a participant name, a node id or label, or a message's text.",
       parameters: { type: "object", properties: { marks: { type: "array", items: { type: "object",
-        properties: { kind: { type: "string", enum: ["highlight", "underline", "circle"] }, from_line: { type: "integer" }, to_line: { type: "integer" } },
-        required: ["kind", "from_line"] } } }, required: ["marks"] } },
+        properties: { kind: { type: "string", enum: ["highlight", "underline", "circle"] }, from_line: { type: "integer" }, to_line: { type: "integer" },
+          element: { type: "string", description: "A diagram piece by name, instead of from_line." } },
+        required: ["kind"] } } }, required: ["marks"] } },
     { type: "function", name: "view", description: "Scroll to a line, zoom (0.5 to 3), or fit.",
       parameters: { type: "object", properties: { line: { type: "integer" }, zoom: { type: "number" }, fit: { type: "boolean" } } } },
     { type: "function", name: "clear", description: "Remove marks by id, or all marks.",

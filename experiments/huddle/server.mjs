@@ -191,7 +191,7 @@ const RESOURCES = {
     text: APP_HTML,
     _meta: {
       ui: {
-        csp: { connectDomains: [OPENAI], resourceDomains: [] },
+        csp: { connectDomains: [OPENAI], resourceDomains: ["https://cdn.jsdelivr.net"] },
         permissions: { microphone: {} },
         prefersBorder: false,
       },
