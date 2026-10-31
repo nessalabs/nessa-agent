@@ -341,3 +341,13 @@
   animation: none !important;
   transition-duration: 0s !important;
 }
+
+/*
+ * Over the panes the titlebar's free room lets clicks through to the pane
+ * headers under it, which move the window. An item's view has no header
+ * there, so the room takes the press itself: a drag moves the window and a
+ * double-click zooms it, as over a chat.
+ */
+.workspace-window[data-rail-view] .workspace-titlebar-space {
+  pointer-events: auto;
+}
