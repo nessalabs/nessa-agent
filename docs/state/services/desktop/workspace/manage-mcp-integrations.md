@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: Settings reads stored MCP servers, submits revision-bound changes and rereads uncertain outcomes; inspection has its own request owner.
 parent: desktop-workspace
-sourceRevision: "b02bd7656b8fb17ad9f79e077fd7a9ead6c88eb0"
+sourceRevision: "54eada082563badb344bf0fb23c85c318f024b2a"
 sources:
   - src/desktop/settings/model/mcp-servers.ts
   - src/desktop/settings/model/mcp-servers.test.ts
