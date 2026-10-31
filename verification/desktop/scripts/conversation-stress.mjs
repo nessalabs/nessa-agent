@@ -3276,6 +3276,9 @@ const steps = {
           ))
         )
           failures.push("the Devices view drew no hub card")
+        // Its cards run under the bottom-left corner, so it draws no "nessa Studio".
+        if ((await page.locator(".side-rail-studio").count()) !== 0)
+          failures.push(`the Devices view still draws "nessa Studio" in its corner`)
         for (const stat of ["CPU", "Memory", "Disk"])
           if (
             (await page
