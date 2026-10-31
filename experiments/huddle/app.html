@@ -226,7 +226,20 @@
     paper.insertBefore(frag, ink);
     if (args.line) view({ line: args.line }); else stage.scrollTop = 0;
     upgradeDiagrams();
-    return { shown: file.path, lines: lines.length };
+    shownText = numbered(lines);
+    return { shown: file.path, lines: lines.length, content: shownText.text, cut: shownText.cut };
+  }
+  // The voice model hears, it does not see: what is on the stage reaches it as
+  // numbered text, so it can explain the file and point at the right lines.
+  var MAX_SHOWN_CHARS = 24000, shownText = null;
+  function numbered(lines) {
+    var text = "", cut = false;
+    for (var i = 0; i < lines.length; i++) {
+      var row = (i + 1) + "| " + lines[i] + "\n";
+      if (text.length + row.length > MAX_SHOWN_CHARS) { cut = true; break; }
+      text += row;
+    }
+    return { text: text, cut: cut };
   }
   // ---- Markdown, drawn without a library (the app's CSP loads no scripts) ----
   function escapeHtml(text) {
@@ -724,6 +737,10 @@
       send({ type: "session.update", session: { type: "realtime", tools: toolSpecs, tool_choice: "auto",
         audio: { input: { turn_detection: alwaysOn ? { type: "semantic_vad", interrupt_response: true } : null,
           transcription: { model: "gpt-4o-mini-transcribe" } } } } });
+      // A file shown before the call started is on the stage: give the model its text.
+      if (current && shownText)
+        send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text",
+          text: "(On the stage now: " + current + (shownText.cut ? ", first part only" : "") + ")\n" + shownText.text }] } });
       phase = "listening"; setState(idleText());
       $("start").hidden = true; $("end").hidden = false; $("captionsButton").hidden = false; $("mode").hidden = false;
     };
