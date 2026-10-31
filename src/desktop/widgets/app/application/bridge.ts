@@ -92,8 +92,15 @@ export interface BridgeOptions {
   readonly ports: McpAppPorts
   /** Sends a message to the frame; called only while the frame is on the page. */
   readonly post: (message: Outgoing) => void
-  /** The host's callbacks for the view's place. */
-  readonly host: { open(place: OpenPlace): void; close(): void }
+  /**
+   * The host's callbacks for the view's place; `openSession` brings one of the
+   * person's conversations to the front, for a `nessa:session/<id>` link.
+   */
+  readonly host: {
+    open(place: OpenPlace): void
+    close(): void
+    openSession?(sessionId: string): void
+  }
   /** Told what the view shows when the bridge is made, and of each change. */
   readonly onView: (view: AppViewState) => void
 }
@@ -455,6 +462,15 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         )
       }
       case "ui/open-link": {
+        // A link to one of the person's conversations opens it in the window,
+        // never a browser: the app names it, the host shows it.
+        const session = sessionLink(message.url)
+        if (session !== undefined) {
+          const openSession = options.host.openSession
+          if (!openSession) return unsupported(id)
+          openSession(session)
+          return ok(id)
+        }
         const links = ports.links
         if (!links) return unsupported(id)
         const url = webUrl(message.url)
@@ -607,6 +623,15 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     },
     view: () => view,
   }
+}
+
+/**
+ * The conversation id in a `nessa:session/<id>` link, or `undefined` for any
+ * other URL. An id is the gateway's: letters, digits, `-` and `_`.
+ */
+export function sessionLink(url: string): string | undefined {
+  const match = /^nessa:(?:\/\/)?session\/([A-Za-z0-9_-]{1,128})$/.exec(url)
+  return match?.[1]
 }
 
 /** `url` when it is an absolute `http` or `https` URL, as the URL parser spells it. */

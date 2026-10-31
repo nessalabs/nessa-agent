@@ -80,6 +80,8 @@ interface Harness {
   readonly posted: { message: Outgoing; origin: string }[]
   readonly views: AppViewState[]
   readonly opened: OpenPlace[]
+  /** The conversations a `nessa:session/<id>` link brought to the front. */
+  readonly sessions: string[]
   readonly closed: { count: number }
   readonly timers: { ms: number; run: () => void; cancelled: boolean }[]
   /** The app (or anything else on the page) says something. */
@@ -110,6 +112,7 @@ function harness(
   const timers: Harness["timers"] = []
   const views: AppViewState[] = []
   const opened: OpenPlace[] = []
+  const sessions: string[] = []
   const closed = { count: 0 }
   const call: AppCall = {
     ...fixtureCall("session-a"),
@@ -150,6 +153,7 @@ function harness(
     host: {
       open: (place) => void opened.push(place),
       close: () => void closed.count++,
+      openSession: (sessionId) => void sessions.push(sessionId),
     },
     onView: (view) => void views.push(view),
   })
@@ -161,6 +165,7 @@ function harness(
     posted,
     views,
     opened,
+    sessions,
     closed,
     timers,
     transport,
@@ -1702,6 +1707,32 @@ describe("a live app's other requests", () => {
       })),
       { jsonrpc: "2.0", id: 1, result: {} },
       { jsonrpc: "2.0", id: 5, result: { isError: true } },
+    ])
+  })
+
+  it("a nessa:session link opens that conversation in the window, never a browser", async () => {
+    const opened: string[] = []
+    const app = harness({
+      ports: { links: { open: async (url) => (opened.push(url), "done") } },
+    })
+    await live(app)
+    for (const [id, url] of [
+      [1, "nessa:session/conv_42"],
+      [2, "nessa://session/b-7"],
+      [3, "nessa:session/../etc"],
+    ] as const)
+      app.say({ jsonrpc: "2.0", id, method: "ui/open-link", params: { url } })
+    await flush()
+    expect(app.sessions).toEqual(["conv_42", "b-7"])
+    expect(opened).toEqual([])
+    expect(app.take()).toEqual([
+      { jsonrpc: "2.0", id: 1, result: {} },
+      { jsonrpc: "2.0", id: 2, result: {} },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: { code: errorCodes.invalidParams, message: "Invalid URL" },
+      },
     ])
   })
 

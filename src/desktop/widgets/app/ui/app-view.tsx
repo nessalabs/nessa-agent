@@ -92,6 +92,7 @@ function AppFrame({
       host: {
         open: (to) => latest.current.host.open(to),
         close: () => latest.current.host.close(),
+        openSession: (sessionId) => latest.current.host.openSession?.(sessionId),
       },
       onView: setView,
     })
