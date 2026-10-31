@@ -230,6 +230,34 @@ async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can()
     ));
 }
 
+/// Boat asked for by name with no Boat account connected is refused as not
+/// configured, at placement and, for a chat placed there before the account
+/// went away, at its next lease: never as a host that cannot be reached.
+#[cfg(unix)]
+#[tokio::test]
+async fn boat_without_a_connected_account_is_not_configured() {
+    use crate::conversation::application::placement::BOAT;
+    let root = tempfile::tempdir().unwrap();
+    let with = |connected| {
+        Environments::new(
+            in_process_environment(),
+            BTreeMap::new(),
+            Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+        )
+        .with_workspaces(Arc::new(Cloud(connected)))
+    };
+    assert!(matches!(
+        with(false).place(&conversation(), Some(BOAT)).await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+    with(true).place(&conversation(), Some(BOAT)).await.unwrap();
+    assert!(with(true).for_lease(&conversation(), &[]).await.is_ok());
+    assert!(matches!(
+        with(false).for_lease(&conversation(), &[]).await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+}
+
 #[tokio::test]
 async fn a_gateway_that_pairs_no_environments_places_nothing_on_the_pool() {
     let root = tempfile::tempdir().unwrap();

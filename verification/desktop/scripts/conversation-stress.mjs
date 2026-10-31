@@ -1510,14 +1510,38 @@ async function makeChannel(
   // Both choices must remain independent, and Local must not allocate a VM.
   const coordinatorLocation = flow.getByLabel("Main agent location")
   const workerLocation = flow.getByLabel("New threads location")
-  await coordinatorLocation.selectOption("boat")
-  if ((await workerLocation.inputValue()) !== "local")
-    failures.push("changing coordinator placement also changed worker placement")
-  await coordinatorLocation.selectOption("local")
-  await workerLocation.selectOption("boat")
-  if ((await coordinatorLocation.inputValue()) !== "local")
-    failures.push("changing worker placement also changed coordinator placement")
-  await workerLocation.selectOption("local")
+  // Boat is offered only while it is connected; otherwise connecting it is
+  // offered right here, and a channel can never be made on a Boat that would
+  // refuse every message.
+  const boatOffered = await waitFor(async () => {
+    const disabled = await coordinatorLocation
+      .locator('option[value="boat"]')
+      .evaluate((option) => option.disabled)
+    if (!disabled) return "offered"
+    return (await flow
+      .locator(
+        '[data-boat-connect] input[type="password"], [data-boat-connect] [data-boat-action="unlock"]',
+      )
+      .first()
+      .isVisible()
+      .catch(() => false))
+      ? "connect"
+      : null
+  }, 5_000)
+  if (!boatOffered)
+    failures.push(
+      "Boat is not connected, yet the placement step offers no way to connect it",
+    )
+  if (boatOffered === "offered") {
+    await coordinatorLocation.selectOption("boat")
+    if ((await workerLocation.inputValue()) !== "local")
+      failures.push("changing coordinator placement also changed worker placement")
+    await coordinatorLocation.selectOption("local")
+    await workerLocation.selectOption("boat")
+    if ((await coordinatorLocation.inputValue()) !== "local")
+      failures.push("changing worker placement also changed coordinator placement")
+    await workerLocation.selectOption("local")
+  }
   await photograph(`${name}-3-placement`)
   await flow.locator(".new-channel-placement").focus()
   await page.keyboard.press(keys.enter)
