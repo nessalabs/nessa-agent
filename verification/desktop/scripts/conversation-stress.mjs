@@ -3475,6 +3475,12 @@ const steps = {
           (await list.locator("[data-devices-cloud]").count()) !== 1
         )
           failures.push("the worker and the cloud are not in one list")
+        if (
+          (await list
+            .locator("[data-devices-cloud] [data-slot=device-figure]")
+            .getAttribute("data-kind")) !== "boat"
+        )
+          failures.push("Boat's tile is not drawn as a boat")
         const headings = await page
           .locator('[data-devices-page="list"] h2:not(#devices-hub-name)')
           .allInnerTexts()
@@ -3516,6 +3522,16 @@ const steps = {
           failures.push(
             `Boat's page reads ${await cloud.locator("[data-devices-cloud-state]").innerText()} without its action`,
           )
+        // Boat is drawn as a boat, on its tile and its page, and floats only
+        // while connected.
+        const boat = await cloud
+          .locator("[data-slot=device-figure]")
+          .evaluate((figure) => ({
+            kind: figure.getAttribute("data-kind"),
+            afloat: figure.hasAttribute("data-afloat"),
+          }))
+        if (boat.kind !== "boat" || boat.afloat !== (settled === "Connected"))
+          failures.push(`Boat's page draws ${JSON.stringify(boat)} while ${settled}`)
         await photograph("cloud")
         await cloud.locator('[data-devices-action="back"]').click()
         // Add device offers each kind; a computer gets a code and the two commands that use it.

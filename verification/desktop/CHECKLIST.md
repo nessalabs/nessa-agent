@@ -396,7 +396,8 @@ Experimental turns it on; the rail stands beside the workspace in
   device; Add device offers computer, phone and cloud; Add a phone draws
   Settings' pairing rows as cards and its code modal on top, giving focus
   back on Escape; Boat's page says Connected, Not connected, Locked or
-  Unavailable with its one action (Unlock or a live token field); the reach
+  Unavailable with its one action (Unlock or a live token field); Boat is
+  drawn as a boat on its tile and page, floating only while connected; the reach
   button sits in the code's card. _Check:_ `conversation-stress` step
   `devices` (Chromium and WebKit, `local-auth.yml`).
 - [ ] **An item's view opens empty, and a slow load shows only text**: no
@@ -2456,14 +2457,15 @@ vault dialog blocking the main conversation click.
 
 - [ ] The global default saves from Settings → Connections → Accounts without a
   Boat token. A saved channel's gear opens its settings in both layouts. A new
-  channel inherits the global lifetime; an explicit No automatic stop overrides
+  channel inherits the global lifetime; picking a choice saves it at once (no
+  Save button); an explicit Never overrides
   it, and Use Nessa default removes only that override. Invalid, null-scope and
   contradictory commands leave the default unchanged. _Check:_
   `boat-runtime-settings.mjs` in Chromium/WebKit, columns/sidebar, against a real
   gateway; the same shared check runs in the conversation stress `channel` step.
-- [ ] The dialog's controls remain usable by keyboard, Escape closes it, and
-  the text explains that finite durations include active work and changes apply
-  at create/resume rather than changing an active deadline. _Check:_ manual
+- [ ] The dialog's controls remain usable by keyboard and Escape closes it.
+  It says nothing beyond "Auto-stop VMs" and the choice, except under Never,
+  which adds that VMs keep billing until stopped in Boat. _Check:_ manual
   screenshot/focus review and the settings control's rendered tests.
 
 

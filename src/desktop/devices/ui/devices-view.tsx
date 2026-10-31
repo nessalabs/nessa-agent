@@ -9,7 +9,7 @@
  * `pollMs` while the page is open; nothing is kept once it closes.
  */
 import { Button } from "@nessa-ui/react/button"
-import { DeviceFigure } from "@nessa-ui/react/device-figure"
+import { DeviceFigure, type DeviceFigureKind } from "@nessa-ui/react/device-figure"
 import { LoadingText } from "@nessa-ui/react/loading-text"
 import { Meter } from "@nessa-ui/react/meter"
 import {
@@ -358,6 +358,7 @@ function Stat({ label, usage }: { label: string; usage: Usage }) {
 
 function Tile({
   art,
+  afloat,
   name,
   kind,
   status,
@@ -365,7 +366,9 @@ function Tile({
   onClick,
   ...data
 }: {
-  art: WorkerCard["art"]
+  art: DeviceFigureKind
+  /** A boat bobs on its water while it is not dimmed. */
+  afloat?: boolean
   name: string
   kind: string
   status: DeviceStatus
@@ -378,6 +381,7 @@ function Tile({
       <div className="devices-stage">
         <DeviceFigure
           kind={art}
+          afloat={afloat}
           dimmed={status === "offline"}
           className="devices-tile-figure"
         />
@@ -433,7 +437,8 @@ function CloudTile({
   if (cloud === undefined) return null
   return (
     <Tile
-      art="cloud"
+      art="boat"
+      afloat
       name="Boat"
       kind="Cloud VMs"
       status={cloud === "connected" ? "ready" : "offline"}
@@ -463,7 +468,7 @@ type AddKind = "computer" | "phone" | "cloud"
 
 const addKinds: readonly {
   kind: AddKind
-  art: WorkerCard["art"]
+  art: DeviceFigureKind
   name: string
   detail: string
 }[] = [
@@ -476,7 +481,7 @@ const addKinds: readonly {
   { kind: "phone", art: "phone", name: "Phone", detail: "Talk to the hub from anywhere" },
   {
     kind: "cloud",
-    art: "cloud",
+    art: "boat",
     name: "Cloud",
     detail: "Boat VMs for channels to run in",
   },
@@ -545,7 +550,8 @@ function CloudPage({
       <BackButton onBack={onBack} />
       <header className="devices-detail-head">
         <DeviceFigure
-          kind="cloud"
+          kind="boat"
+          afloat
           dimmed={state !== "connected"}
           className="devices-detail-figure"
         />

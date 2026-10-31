@@ -225,6 +225,10 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
   const { host, root } = await mount(gateway, false, boat)
   expect(text(host, "[data-devices-cloud] .devices-tile-foot")).toBe("Not connected")
   expect(host.textContent).not.toContain("Settings ›")
+  // Boat is drawn as a boat; one not connected sits still.
+  const tileBoat = host.querySelector("[data-devices-cloud] [data-slot=device-figure]")
+  expect(tileBoat?.getAttribute("data-kind")).toBe("boat")
+  expect(tileBoat?.hasAttribute("data-afloat")).toBe(false)
   await act(async () =>
     (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
   )
@@ -232,6 +236,9 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
   expect(host.querySelector('[data-devices-page="cloud"] h1')?.textContent).toBe("Boat")
   expect(text(host, "[data-devices-cloud-state]")).toContain("Connected")
   expect(host.querySelector('input[type="password"]')).not.toBeNull()
+  const pageBoat = () =>
+    host.querySelector('[data-devices-page="cloud"] [data-slot=device-figure]')
+  expect(pageBoat()?.getAttribute("data-afloat")).toBe("true")
   const before = reads.filter((call) => call === "list").length
   await act(async () =>
     (host.querySelector('[data-devices-action="disconnect"]') as HTMLElement).click(),
@@ -239,6 +246,7 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
   await act(async () => {})
   expect(calls).toEqual(["disconnect"])
   expect(text(host, "[data-devices-cloud-state]")).toContain("Not connected")
+  expect(pageBoat()?.hasAttribute("data-afloat")).toBe(false)
   // The list reads again, so going back shows the new state.
   expect(reads.filter((call) => call === "list").length).toBeGreaterThan(before)
   await act(async () => root.unmount())
