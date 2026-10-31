@@ -578,7 +578,12 @@ async fn a_followed_conversation_is_not_parked() {
 #[cfg(unix)]
 #[derive(Default)]
 struct RestedWorkspaces {
-    rested: StdMutex<Vec<(ConversationId, LeaseEndCause)>>,
+    rested: StdMutex<
+        Vec<(
+            ConversationId,
+            crate::conversation::application::WorkspaceRest,
+        )>,
+    >,
 }
 #[cfg(unix)]
 impl crate::conversation::application::ThreadEnvironments for RestedWorkspaces {
@@ -594,7 +599,7 @@ impl crate::conversation::application::ThreadEnvironments for RestedWorkspaces {
     fn rest<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        cause: LeaseEndCause,
+        cause: crate::conversation::application::WorkspaceRest,
     ) -> crate::conversation::application::EnvironmentFuture<'a, bool> {
         self.rested
             .lock()
@@ -629,7 +634,10 @@ async fn a_workspace_conversation_rests_its_vm_once_idle_even_when_followed() {
     assert!(rested_once.is_ok(), "its VM was let rest");
     assert_eq!(
         *rested.rested.lock().unwrap(),
-        [(fixture.id.clone(), LeaseEndCause::Idle)]
+        [(
+            fixture.id.clone(),
+            crate::conversation::application::WorkspaceRest::Idle
+        )]
     );
     // The next message opens it again.
     fixture.turn("second").await;

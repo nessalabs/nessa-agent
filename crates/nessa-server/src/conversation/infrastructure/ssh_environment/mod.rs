@@ -32,7 +32,7 @@ pub(crate) use environment::{SshEnvironment, SshTimings};
 #[cfg(test)]
 pub(crate) use install::{Build, BuildSource, InstallTimings};
 pub(crate) use install::{HostInstaller, RemoteShell, ShellFuture};
-pub(crate) use open_ssh::OpenSshConnector;
+pub(crate) use open_ssh::{log_stderr, read_tail, OpenSshConnector};
 pub(crate) use peer::{PeerEnvironments, ServingCredentials, Sightings};
 
 #[cfg(test)]

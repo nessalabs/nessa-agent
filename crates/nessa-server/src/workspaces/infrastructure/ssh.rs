@@ -1,7 +1,10 @@
 //! Connection-scoped SSH access. Boat authorizes an ephemeral public key and
 //! supplies the host identity; no user's SSH configuration or agent is consulted.
 use crate::{
-    conversation::application::{ArtifactChannel, ArtifactChannels},
+    conversation::{
+        application::{ArtifactChannel, ArtifactChannels},
+        infrastructure::ssh_environment::{log_stderr, read_tail},
+    },
     mcp_servers::domain::{relay_arguments, MANAGED_SERVER_NAME, RELAY_SUBCOMMAND},
     workspaces::{
         application::{ServedCopy, WorkspaceStream},
@@ -43,20 +46,22 @@ const VM_NESSA: &str = "/opt/nessa/bin/nessa";
 /// The environment `env serve` runs with in the VM, whichever copy it is.
 const VM_SERVE_ENVIRONMENT: &str =
     "env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa";
-/// The most of what a command run in the VM printed that is kept: its end.
-const MAX_RUN_OUTPUT: usize = 64 * 1024;
 
 impl SshAccess {
     pub(super) fn serve(self: &Arc<Self>, copy: &ServedCopy) -> io::Result<WorkspaceStream> {
+        let image = format!("{VM_SERVE_ENVIRONMENT} {VM_NESSA} env serve");
+        // An installed copy found execs; with none, the image's serves.
         let program = match copy {
-            ServedCopy::Image => format!("{VM_NESSA} env serve"),
-            ServedCopy::Installed(command) => command.clone(),
+            ServedCopy::Image => image,
+            ServedCopy::Installed(command) => {
+                format!("{VM_SERVE_ENVIRONMENT} {command}; exec {image}")
+            }
         };
         let mut command = ssh(&self.directory, self.endpoint);
         command
             .args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
             .arg(format!("user@{}", self.endpoint.ip()))
-            .arg(format!("{VM_SERVE_ENVIRONMENT} {program}"))
+            .arg(program)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
         let mut child = command.spawn()?;
@@ -80,26 +85,29 @@ impl SshAccess {
             mcp_relay: Some(self.clone()),
         })
     }
-    /// The lease protocol the image's own `nessa` says it speaks.
+    /// The lease protocol the image's own `nessa` says it speaks, empty
+    /// when it says none; `None` when the VM did not answer.
     pub(super) async fn image_protocol(&self) -> Option<String> {
         let said = tokio::time::timeout(
             Duration::from_secs(30),
-            self.run(format!("{VM_NESSA} env protocol 2>/dev/null"), None),
+            self.run(
+                format!("p=$({VM_NESSA} env protocol 2>/dev/null); echo \"protocol $p\""),
+                None,
+            ),
         )
         .await
         .ok()?
         .ok()?;
-        let protocol = said.lines().last()?.trim();
-        (!protocol.is_empty()).then(|| protocol.to_owned())
+        let protocol = said.lines().last()?.strip_prefix("protocol")?;
+        Some(protocol.trim().to_owned())
     }
     /// Run `command` in the VM, `input` on its standard input, answering
-    /// the last [`MAX_RUN_OUTPUT`] bytes it printed.
+    /// the end of what it printed, as on an SSH host.
     pub(super) async fn run(
         &self,
         command: String,
         input: Option<std::fs::File>,
     ) -> io::Result<String> {
-        use tokio::io::AsyncReadExt;
         let mut ssh = ssh(&self.directory, self.endpoint);
         // A build sent is compressed on the way.
         if input.is_some() {
@@ -109,26 +117,19 @@ impl SshAccess {
             .arg(format!("user@{}", self.endpoint.ip()))
             .arg(command)
             .stdin(input.map_or_else(Stdio::null, Stdio::from))
-            .stdout(Stdio::piped());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = ssh.spawn()?;
-        let mut stdout = child
+        if let Some(stderr) = child.stderr.take() {
+            log_stderr("boat", stderr);
+        }
+        let stdout = child
             .stdout
             .take()
             .ok_or_else(|| io::Error::other("missing command stdout"))?;
-        let mut tail = Vec::new();
-        let mut chunk = [0; 4096];
-        loop {
-            let read = stdout.read(&mut chunk).await?;
-            if read == 0 {
-                break;
-            }
-            tail.extend_from_slice(&chunk[..read]);
-            if tail.len() > MAX_RUN_OUTPUT {
-                tail.drain(..tail.len() - MAX_RUN_OUTPUT);
-            }
-        }
+        let output = read_tail(stdout).await?;
         child.wait().await?;
-        Ok(String::from_utf8_lossy(&tail).into_owned())
+        Ok(String::from_utf8_lossy(&output).into_owned())
     }
     pub(super) async fn connect(
         api: &Api,

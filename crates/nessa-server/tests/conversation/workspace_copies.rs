@@ -71,12 +71,14 @@ impl EnvironmentAudit for Audit {
     }
 }
 
-/// A VM whose image's copy says `image`, answering the installer's probe
-/// and upload as a Linux VM does.
+/// A VM whose image's copy says `image` (`None`: the VM did not answer),
+/// answering the installer's probe and upload as a Linux VM does. Each
+/// upload waits for a permit of `uploads` once it has one to wait for.
 struct Vm {
     image: Option<String>,
     installed: AtomicBool,
     commands: Mutex<Vec<String>>,
+    uploads: Option<tokio::sync::Semaphore>,
 }
 impl Vm {
     fn with_image(image: Option<&str>) -> Self {
@@ -84,7 +86,16 @@ impl Vm {
             image: image.map(str::to_owned),
             installed: AtomicBool::new(false),
             commands: Mutex::default(),
+            uploads: None,
         }
+    }
+    fn uploads(&self) -> usize {
+        self.commands
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|command| command.contains("umask 077"))
+            .count()
     }
 }
 #[async_trait::async_trait]
@@ -99,6 +110,9 @@ impl WorkspaceRuntime for Vm {
         self.commands.lock().unwrap().push(command.clone());
         if command.contains("umask 077") {
             assert!(input.is_some(), "an upload sends the build");
+            if let Some(uploads) = &self.uploads {
+                uploads.acquire().await.unwrap().forget();
+            }
             self.installed.store(true, Ordering::SeqCst);
             return Ok("installed".into());
         }
@@ -142,20 +156,66 @@ async fn a_vm_from_an_older_image_gets_this_build_installed_and_served() {
     // Opened again, the copy is there: nothing is sent twice.
     let again = served_copy(&installer, &audit, &conversation(), &vm, true).await;
     assert_eq!(again, Ok(ServedCopy::Installed(served)));
+    assert_eq!(vm.uploads(), 1);
+}
+
+#[tokio::test]
+async fn a_vm_that_could_not_be_asked_has_nothing_installed_on_a_guess() {
+    let vm = Vm::with_image(None);
+    let installer = installer();
+    let copy = served_copy(&installer, &Audit::default(), &conversation(), &vm, true).await;
+    // Served what is installed there, else its image's copy.
     assert_eq!(
-        vm.commands
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|command| command.contains("umask 077"))
-            .count(),
-        1
+        copy,
+        Ok(ServedCopy::Installed(
+            installer.serve_command().await.unwrap()
+        ))
     );
+    assert!(vm.commands.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_install_outlasts_the_opening_that_gave_up_on_it_and_is_never_sent_twice() {
+    let vm = Arc::new(Vm {
+        uploads: Some(tokio::sync::Semaphore::new(0)),
+        ..Vm::with_image(Some(""))
+    });
+    let copies = VmCopies {
+        audit: Arc::new(Audit::default()),
+        installer: Arc::new(installer()),
+        conversation: conversation(),
+        choosing: Arc::default(),
+    };
+    // The opening's own wait runs out while the build is being sent.
+    let gave_up = tokio::time::timeout(Duration::from_millis(50), copies.copy(vm.clone(), true));
+    assert!(gave_up.await.is_err());
+    // Left to itself, the install reaches its upload, and waits there.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while vm.uploads() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The next opening waits on the same install, which goes on.
+    let next = copies.copy(vm.clone(), true);
+    vm.uploads.as_ref().unwrap().add_permits(1);
+    let served = copies.installer.serve_command().await.unwrap();
+    assert_eq!(next.await, Ok(ServedCopy::Installed(served.clone())));
+    assert_eq!(vm.uploads(), 1);
+    // Done, it is let go: an opening after asks the VM again, and finds
+    // the copy there.
+    assert!(copies.choosing.lock().unwrap().is_none());
+    assert_eq!(
+        copies.copy(vm.clone(), true).await,
+        Ok(ServedCopy::Installed(served))
+    );
+    assert_eq!(vm.uploads(), 1);
 }
 
 #[tokio::test]
 async fn an_account_of_a_held_lease_never_installs() {
-    let vm = Vm::with_image(None);
+    let vm = Vm::with_image(Some(""));
     let installer = installer();
     let copy = served_copy(&installer, &Audit::default(), &conversation(), &vm, false).await;
     assert_eq!(

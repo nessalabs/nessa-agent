@@ -6924,8 +6924,8 @@ impl ConversationService {
                             if on_confirm == ConfirmedClose::ReleaseSlot {
                                 self.release_slot(id, &slot).await;
                             }
-                            if rests_workspace(cause) {
-                                self.rest_workspace(id, cause);
+                            if let Some(rest) = super::WorkspaceRest::of(cause) {
+                                self.rest_workspace(id, rest);
                             }
                         }
                         closed
@@ -6943,7 +6943,7 @@ impl ConversationService {
     /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
     /// agent has stopped: nothing for a conversation that has none, nor
     /// while anything still uses it. The next message resumes it.
-    fn rest_workspace(&self, id: &ConversationId, cause: LeaseEndCause) {
+    fn rest_workspace(&self, id: &ConversationId, cause: super::WorkspaceRest) {
         let service = self.clone();
         let id = id.clone();
         tokio::spawn(async move { service.inner.environment.rest(&id, cause).await });
@@ -7028,10 +7028,6 @@ impl ConversationService {
 /// conversation. Not a suspend that opens it again at once (a handoff, an
 /// agent reopened for a message), nor a lost connection or the gateway's
 /// own stop, which the next opening picks up as it was.
-fn rests_workspace(cause: LeaseEndCause) -> bool {
-    matches!(cause, LeaseEndCause::Idle | LeaseEndCause::Closed)
-}
-
 /// What a pending-mode close did with the agent and its uploads.
 enum PendingClose {
     /// The close confirmed within the budget. `uploads` is this caller's

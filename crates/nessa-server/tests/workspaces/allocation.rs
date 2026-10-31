@@ -128,6 +128,7 @@ impl WorkspaceRuntime for Runtime {
 enum RecoveryStep {
     Audit(RecoveryEvent),
     Remove(String),
+    Stop(String),
 }
 #[derive(Default)]
 struct Audit {
@@ -267,6 +268,10 @@ impl Provider for FakeProvider {
         Ok(Arc::new(Runtime))
     }
     async fn stop(&self, _: &BoatConnection, vm: &str) -> Result<(), Failure> {
+        self.recovery_steps
+            .lock()
+            .unwrap()
+            .push(RecoveryStep::Stop(vm.into()));
         if self.refuse_stop.load(Ordering::SeqCst) {
             return Err(Failure::Provider);
         }
@@ -479,6 +484,38 @@ async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_reco
     let rested = service.rest(id(1), RestCause::Closed).await;
     assert_eq!(rested.stopped, Ok(true));
     assert!(!rested.audit_failed);
+    // Recorded before Boat is asked, and after it answered.
+    assert_eq!(
+        audit
+            .steps
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|step| !matches!(
+                step,
+                RecoveryStep::Audit(
+                    RecoveryEvent::ReceiptSaveFailed { .. }
+                        | RecoveryEvent::AdmissionRefused { .. }
+                        | RecoveryEvent::RollbackObserved { .. }
+                )
+            ))
+            .cloned()
+            .collect::<Vec<_>>(),
+        [
+            RecoveryStep::Audit(RecoveryEvent::StopRequested {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Closed,
+            }),
+            RecoveryStep::Stop(vm.clone()),
+            RecoveryStep::Audit(RecoveryEvent::StopObserved {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: RestCause::Closed,
+                failure: None,
+            }),
+        ]
+    );
     let stops = |audit: &Audit| -> Vec<RecoveryEvent> {
         audit
             .events
@@ -506,7 +543,7 @@ async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_reco
                 thread: thread.clone(),
                 vm: vm.clone(),
                 cause: RestCause::Closed,
-                stopped: true,
+                failure: None,
             },
         ]
     );
@@ -528,7 +565,7 @@ async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_reco
             thread,
             vm,
             cause: RestCause::Idle,
-            stopped: false,
+            failure: Some("provider"),
         })
     );
 }

@@ -101,6 +101,29 @@ pub(crate) enum Assignment {
         environment: String,
     },
 }
+impl Failure {
+    /// Its kind in a record: never what it carries.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::Locked => "locked",
+            Self::NotConfigured => "not_configured",
+            Self::InvalidInput => "invalid_input",
+            Self::Storage => "storage",
+            Self::Provider => "provider",
+            Self::EnvironmentUnavailable => "environment_unavailable",
+            Self::AdmissionRejected(_) => "admission_rejected",
+            Self::RefusedWorkspace { .. } => "refused_workspace",
+            Self::UnverifiedWorkspace { .. } => "unverified_workspace",
+            Self::AdmissionRecovery { .. } => "admission_recovery",
+            Self::WorkerUnavailable => "worker_unavailable",
+            Self::ProvisioningUncertain => "provisioning_uncertain",
+            Self::Missing => "missing",
+            Self::CleanupUncertain => "cleanup_uncertain",
+            Self::ReceiptRecovery { .. } => "receipt_recovery",
+        }
+    }
+}
+
 impl Assignment {
     pub(crate) fn thread(&self) -> &str {
         match self {

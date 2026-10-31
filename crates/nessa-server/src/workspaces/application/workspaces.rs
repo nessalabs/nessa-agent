@@ -33,14 +33,14 @@ pub(crate) enum ServedCopy {
     /// The one its image was made with.
     Image,
     /// One installed since, started by this command
-    /// (`env_serve::install::serve_command`).
+    /// (`env_serve::install::serve_command`); with none there, the image's.
     Installed(String),
 }
 #[async_trait]
 pub(crate) trait WorkspaceRuntime: Send + Sync {
     async fn serve(&self, copy: ServedCopy) -> Result<WorkspaceStream, Failure>;
-    /// The lease protocol the image's own copy says it speaks; `None` when
-    /// it said nothing this reads.
+    /// The lease protocol the image's own copy says it speaks, empty when it
+    /// says none; `None` when the VM could not be asked.
     async fn image_protocol(&self) -> Option<String>;
     /// Run `command` in the VM with `input` as its standard input, and
     /// answer the end of what it printed.
@@ -142,13 +142,13 @@ pub(crate) enum RecoveryEvent {
         vm: String,
         cause: RestCause,
     },
-    /// What Boat answered that stop: `stopped` false means the VM may
-    /// still run, until the next rest or its own time limit.
+    /// What Boat answered that stop: a `failure` (its kind) means the VM
+    /// may still run, until the next rest or its own time limit.
     StopObserved {
         thread: String,
         vm: String,
         cause: RestCause,
-        stopped: bool,
+        failure: Option<&'static str>,
     },
 }
 pub(crate) trait RecoveryAudit: Send + Sync {
@@ -295,7 +295,7 @@ impl Workspaces {
                 thread: id,
                 vm,
                 cause,
-                stopped: stopped.is_ok(),
+                failure: stopped.as_ref().err().map(Failure::kind),
             })
             .is_err();
         Rested {

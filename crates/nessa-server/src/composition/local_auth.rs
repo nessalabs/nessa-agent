@@ -2065,12 +2065,13 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                 thread,
                 vm,
                 cause,
-                stopped,
+                failure,
             } => EnvironmentEvent::WorkspaceStopObserved {
                 thread: thread.clone(),
                 vm: vm.clone(),
                 cause: cause.as_str().into(),
-                stopped: *stopped,
+                stopped: failure.is_none(),
+                failure: failure.map(str::to_owned),
             },
         };
         self.0

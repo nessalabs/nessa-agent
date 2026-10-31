@@ -45,6 +45,28 @@
 use super::{CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, LeaseEndCause, PeerEnvironment};
+
+/// Why a conversation's cloud VM rests: its agent's lease ended in one of
+/// the two ways that leave nothing for the VM to do until the next message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkspaceRest {
+    /// The agent sat idle and was parked.
+    Idle,
+    /// The agent closed its thread.
+    Closed,
+}
+impl WorkspaceRest {
+    /// Whether a lease that ended for `cause` lets its VM rest, and why.
+    /// Any other end (a stop, a revocation, a lost connection) leaves the
+    /// VM to its own time limit.
+    pub(crate) fn of(cause: LeaseEndCause) -> Option<Self> {
+        match cause {
+            LeaseEndCause::Idle => Some(Self::Idle),
+            LeaseEndCause::Closed => Some(Self::Closed),
+            _ => None,
+        }
+    }
+}
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -319,7 +341,7 @@ pub(crate) trait ThreadEnvironments: Send + Sync {
     fn rest<'a>(
         &'a self,
         conversation: &'a ConversationId,
-        cause: LeaseEndCause,
+        cause: WorkspaceRest,
     ) -> EnvironmentFuture<'a, bool>;
     /// Whether a new conversation can get a workspace now: a cloud account
     /// is connected.
@@ -566,7 +588,7 @@ impl Environments {
     /// Stop `conversation`'s VM, keeping its disk, once its agent has
     /// stopped and nothing else uses the VM; the next message resumes it.
     /// Nothing for a conversation that runs anywhere else.
-    pub(crate) async fn rest(&self, conversation: &ConversationId, cause: LeaseEndCause) {
+    pub(crate) async fn rest(&self, conversation: &ConversationId, cause: WorkspaceRest) {
         if !self.in_workspace(conversation).await {
             return;
         }
