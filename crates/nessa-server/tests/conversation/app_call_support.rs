@@ -7,7 +7,7 @@ use crate::conversation::application::{
     McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppCall, McpAppContextUpdate,
     McpAppFailure, McpAppFuture, McpAppInitiator, McpAppMessage, McpAppPorts, McpAppRef, McpApps,
     ProviderSessionErasers, RequestedConversation, ResourceTickets, SubmissionMode,
-    SubmittedMessage, TicketEnd, TicketRefusal,
+    SubmittedMessage, TicketEnd, TicketRefusal, TrustNotKept, TrustedApps,
 };
 use crate::conversation::application::{
     ConversationAgent, ConversationAgents, ConversationDeletionBudgets,
@@ -402,6 +402,19 @@ impl ResourceTickets for Tickets {
     }
 }
 
+/// The apps the person always allows, in memory.
+#[derive(Default)]
+pub(crate) struct Trusted(Mutex<std::collections::BTreeSet<String>>);
+impl TrustedApps for Trusted {
+    fn trusts(&self, server: &str) -> bool {
+        self.0.lock().unwrap().contains(server)
+    }
+    fn trust(&self, server: &str) -> Result<(), TrustNotKept> {
+        self.0.lock().unwrap().insert(server.to_owned());
+        Ok(())
+    }
+}
+
 pub(crate) struct Fixture {
     /// Whose conversation it is: every call the fixture makes is theirs.
     pub(crate) owner: ConversationCaller,
@@ -410,6 +423,8 @@ pub(crate) struct Fixture {
     pub(crate) apps: Arc<Apps>,
     pub(crate) audit: Arc<Audit>,
     pub(crate) tickets: Arc<Tickets>,
+    /// The apps the person chose to always allow.
+    pub(crate) trusted: Arc<Trusted>,
     /// Where its apps report each context they drop, recorded into `audit`.
     pub(crate) drops: Arc<Drops>,
     /// The conversation's agent: what each turn it ran was given.
@@ -492,6 +507,7 @@ impl Fixture {
         let apps = Arc::new(Apps::default());
         let audit = Arc::new(Audit::default());
         let tickets = Arc::new(Tickets::default());
+        let trusted = Arc::new(Trusted::default());
         let drops = Drops::recording_into(audit.clone());
         let repository = Arc::new(MemoryRepository::default());
         let execution_audit = Arc::new(ExecutionRecords::default());
@@ -545,6 +561,7 @@ impl Fixture {
                 policy: Arc::new(
                     CedarAppCallPolicyEvaluator::new().expect("the checked-in bundle validates"),
                 ),
+                trusted: trusted.clone(),
             },
         )
         .unwrap();
@@ -605,6 +622,7 @@ impl Fixture {
             apps,
             audit,
             tickets,
+            trusted,
             drops,
             provider,
             repository,

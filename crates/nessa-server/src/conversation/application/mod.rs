@@ -268,12 +268,16 @@ pub use mcp_apps::{
     ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
     McpAppAuditRecord, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome,
     McpAppPorts, McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
-    MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
+    TrustNotKept, TrustedApps, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS,
+    RESOURCE_TICKET_LIFETIME_MS,
 };
 pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
 // Composed only by the Unix gateway (`composition/local_auth.rs`).
-pub use app_call_policy::{admit_app_question, AppCallPolicyEvaluator, AppQuestion};
+pub use app_call_policy::{
+    admit_app_question, message_skips_review, AppCallPolicyEvaluator, AppQuestion,
+    UnreviewedMessage,
+};
 pub use command_policy::{
     admit_command, CommandInitiator, CommandPolicyEvaluator, CommandQuestion,
 };

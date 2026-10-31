@@ -8,6 +8,8 @@ import {
   UnreadableOverflowLine,
   UnreadablePartLine,
 } from "../../../../conversation"
+import { useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectWidgetOpenElsewhere } from "../../adapters/store/selectors"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
 import { InlineWidget, type WidgetRef } from "../../../widgets"
 import { handoffLine } from "../../model/handoff"
@@ -275,7 +277,10 @@ function TurnTerminalMark({ terminal }: { terminal: TurnTerminal }) {
 /** A widget in a message: its card, whose pane opens beside this conversation. */
 function MessageWidget({ sessionId, widget }: { sessionId: string; widget: WidgetRef }) {
   const host = useInlineWidgetHost(widget, sessionId)
-  return <InlineWidget widget={widget} host={host} />
+  const openElsewhere = useWorkspaceSelector((state) =>
+    selectWidgetOpenElsewhere(state, widget),
+  )
+  return <InlineWidget widget={widget} host={host} openElsewhere={openElsewhere} />
 }
 
 /** Why a message did not reach the agent, and the two ways on: send it again, or let it go. */

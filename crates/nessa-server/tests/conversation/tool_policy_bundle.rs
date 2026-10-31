@@ -14,6 +14,8 @@ fn every_checked_in_policy_has_a_unique_id() {
     assert_eq!(
         ids,
         [
+            "app.message_full_access",
+            "app.message_trusted_app",
             "app.other_server",
             "app.other_server_tool",
             "app.own_server",
