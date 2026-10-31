@@ -3420,6 +3420,89 @@ const steps = {
           )
         if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
           failures.push(`Add device offers ${JSON.stringify(kinds)}`)
+        // A phone pairs right here: Settings' rows, drawn as cards on Devices,
+        // and the code's modal on top of the page, giving focus back on Escape.
+        await page.locator('[data-devices-add="phone"]').click()
+        const phone = page.locator('[data-devices-page="add-phone"]')
+        await phone.waitFor({ timeout: 5_000 })
+        const pair = phone.locator(selectorFor.linkedAction("pair"))
+        if (
+          !(await waitFor(
+            async () => (await pair.count()) === 1 && (await pair.isEnabled()),
+            10_000,
+          ))
+        )
+          failures.push("Add a phone offers no live Pair a device")
+        else {
+          const card = await phone
+            .locator('[data-slot="settings-group-card"]')
+            .first()
+            .evaluate((node) => {
+              const style = getComputedStyle(node)
+              return {
+                fill: style.backgroundColor,
+                radius: parseFloat(style.borderTopLeftRadius),
+              }
+            })
+            .catch(() => null)
+          if (!card || card.fill === "rgba(0, 0, 0, 0)" || !(card.radius > 0))
+            failures.push(
+              `Add a phone draws its rows without a card: ${JSON.stringify(card)}`,
+            )
+          await photograph("phone")
+          await pair.click()
+          const dialog = page.locator(css.pairingDialog)
+          const code = await waitFor(
+            async () => (await dialog.locator(css.pairingCode).count()) > 0,
+            10_000,
+          )
+          if (!code) failures.push("Add a phone's Pair a device opened no code")
+          else {
+            const onTop = await dialog.evaluate((node) => {
+              const box = node.getBoundingClientRect()
+              const hit = document.elementFromPoint(
+                box.left + box.width / 2,
+                box.top + box.height / 2,
+              )
+              return hit !== null && node.contains(hit)
+            })
+            if (!onTop) failures.push("the pairing modal is drawn under the Devices page")
+            await photograph("phone-code")
+            await page.keyboard.press("Escape")
+            await dialog
+              .waitFor({ state: "detached", timeout: 10_000 })
+              .catch(() =>
+                failures.push("Escape did not close the pairing modal on Devices"),
+              )
+            const focusedIn = () =>
+              page.evaluate(() => ({
+                page:
+                  document.activeElement
+                    ?.closest("[data-devices-page]")
+                    ?.getAttribute("data-devices-page") ?? null,
+                tag: document.activeElement?.tagName ?? null,
+                text: document.activeElement?.textContent?.slice(0, 40) ?? null,
+              }))
+            const back = await waitFor(
+              async () => ((await focusedIn()).page === "add-phone" ? true : null),
+              2_000,
+            )
+            const focused = back ? "add-phone" : JSON.stringify(await focusedIn())
+            if (focused !== "add-phone")
+              failures.push(
+                `closing the pairing modal left focus on ${focused ?? "the body"}`,
+              )
+            // Leave no code open: cancel it from its row.
+            await phone.locator(selectorFor.linkedAction("cancel")).click()
+            await pair
+              .waitFor({ timeout: 10_000 })
+              .catch(() =>
+                failures.push("Pair a device was not offered again after cancelling"),
+              )
+          }
+        }
+        await phone.locator('[data-devices-action="back"]').click()
+        await page.locator('[data-devices-action="add"]').click()
         await page.locator('[data-devices-add="computer"]').click()
         const add = page.locator('[data-devices-page="add"]')
         const shown = await waitFor(

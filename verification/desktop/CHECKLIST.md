@@ -392,6 +392,13 @@ Experimental turns it on; the rail stands beside the workspace in
   the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
   moves the window and a double-click zooms it, as over a chat. _Check:_
   `conversation-stress` step `devices` (Chromium and WebKit, `local-auth.yml`).
+- [ ] **Devices adds and manages each kind in place**: one grid of every
+  device; Add device offers computer, phone and cloud; Add a phone draws
+  Settings' pairing rows as cards and its code modal on top, giving focus
+  back on Escape; Boat's page says Connected, Not connected, Locked or
+  Unavailable with its one action (Unlock or a live token field); the reach
+  button sits in the code's card. _Check:_ `conversation-stress` step
+  `devices` (Chromium and WebKit, `local-auth.yml`).
 - [ ] **An item's view opens empty, and a slow load shows only text**: no
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
