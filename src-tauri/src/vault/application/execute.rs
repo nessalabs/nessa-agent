@@ -6,6 +6,7 @@ pub async fn execute(
     request: Command,
     deadline: Duration,
 ) -> Result<serde_json::Value, Failure> {
+    let unconfirmed = request.unconfirmed_failure();
     let request_id = vault.next_request();
     let pending = vault.clone();
     match tokio::time::timeout(
@@ -14,10 +15,10 @@ pub async fn execute(
     )
     .await
     {
-        Ok(done) => done.map_err(|_| Failure::VaultUnavailable)?,
-        Err(_) => {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) | Err(_) => {
             vault.interrupt(request_id);
-            Err(Failure::VaultUnavailable)
+            Err(unconfirmed)
         }
     }
 }

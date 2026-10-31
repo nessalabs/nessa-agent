@@ -3672,6 +3672,23 @@ impl VaultState {
 pub struct VaultStatus {
     pub state: VaultState,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VaultPassphraseChangeState {
+    #[serde(rename = "locked")]
+    Locked,
+}
+impl VaultPassphraseChangeState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Locked => "locked",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultPassphraseChangeStatus {
+    pub state: VaultPassphraseChangeState,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VaultPassphraseParams {
@@ -3681,6 +3698,8 @@ pub struct VaultPassphraseParams {
 pub enum VaultErrorCode {
     #[serde(rename = "vault_unavailable")]
     VaultUnavailable,
+    #[serde(rename = "vault_forbidden")]
+    VaultForbidden,
     #[serde(rename = "vault_locked")]
     VaultLocked,
     #[serde(rename = "vault_passphrase_policy")]
@@ -3703,11 +3722,22 @@ pub enum VaultErrorCode {
     VaultAuditUnavailable,
     #[serde(rename = "vault_migration_unavailable")]
     VaultMigrationUnavailable,
+    #[serde(rename = "vault_change_unchanged")]
+    VaultChangeUnchanged,
+    #[serde(rename = "vault_change_unchanged_audit_unavailable")]
+    VaultChangeUnchangedAuditUnavailable,
+    #[serde(rename = "vault_change_not_confirmed")]
+    VaultChangeNotConfirmed,
+    #[serde(rename = "vault_change_not_confirmed_audit_unavailable")]
+    VaultChangeNotConfirmedAuditUnavailable,
+    #[serde(rename = "vault_changed_audit_unavailable")]
+    VaultChangedAuditUnavailable,
 }
 impl VaultErrorCode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::VaultUnavailable => "vault_unavailable",
+            Self::VaultForbidden => "vault_forbidden",
             Self::VaultLocked => "vault_locked",
             Self::VaultPassphrasePolicy => "vault_passphrase_policy",
             Self::VaultWrongPassphrase => "vault_wrong_passphrase",
@@ -3719,6 +3749,15 @@ impl VaultErrorCode {
             Self::VaultCapacity => "vault_capacity",
             Self::VaultAuditUnavailable => "vault_audit_unavailable",
             Self::VaultMigrationUnavailable => "vault_migration_unavailable",
+            Self::VaultChangeUnchanged => "vault_change_unchanged",
+            Self::VaultChangeUnchangedAuditUnavailable => {
+                "vault_change_unchanged_audit_unavailable"
+            }
+            Self::VaultChangeNotConfirmed => "vault_change_not_confirmed",
+            Self::VaultChangeNotConfirmedAuditUnavailable => {
+                "vault_change_not_confirmed_audit_unavailable"
+            }
+            Self::VaultChangedAuditUnavailable => "vault_changed_audit_unavailable",
         }
     }
 }
@@ -4051,6 +4090,7 @@ pub mod product_method {
     pub const VAULT_STATUS: &str = "vault.status";
     pub const VAULT_SETUP: &str = "vault.setup";
     pub const VAULT_UNLOCK: &str = "vault.unlock";
+    pub const VAULT_CHANGE_PASSPHRASE: &str = "vault.changePassphrase";
     pub const VAULT_LOCK: &str = "vault.lock";
     pub const BOAT_STATUS: &str = "boat.status";
     pub const BOAT_SAVE: &str = "boat.save";
@@ -4249,7 +4289,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 105
+                items.len() <= 106
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4371,6 +4411,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "vault.status",
     "vault.setup",
     "vault.unlock",
+    "vault.changePassphrase",
     "vault.lock",
     "boat.status",
     "boat.save",
@@ -4436,6 +4477,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "vault.status"
         | "vault.setup"
         | "vault.unlock"
+        | "vault.changePassphrase"
         | "vault.lock"
         | "boat.status"
         | "boat.save"

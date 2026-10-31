@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import { channelRuntimeSettings, openAccounts } from "./lib/boat-runtime-settings.mjs"
-import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
+import {
+  changeVaultPassphrase,
+  unlockRequestedVault,
+  unlockVault,
+  VAULT_PASSPHRASE,
+} from "./lib/vault.mjs"
 /**
  * The conversation stress check: a person using one conversation for many
  * rounds through the real gateway and the desktop window, with the scripted
@@ -308,7 +313,7 @@ import {
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
-import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
+import { KNOBS, describe, knobsFrom, selectedPlan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
@@ -339,6 +344,7 @@ const meta = {
   options: {
     agent: { type: "string", default: "claude" },
     evidence: { type: "string" },
+    only: { type: "string" },
     ...Object.fromEntries(Object.keys(KNOBS).map((name) => [name, { type: "string" }])),
   },
   help: `
@@ -360,7 +366,9 @@ ${Object.entries(KNOBS)
 Options:
   --agent claude|codex  the harness profile the scripted agent speaks (default:
                         claude; Linux offers full access only on Claude's model)
-  --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/`,
+  --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/
+  --only <kinds>        explicit comma-separated selected-step qualification; keeps
+                        all knobs/deadlines and reports selected scope, not a full run`,
 }
 
 /**
@@ -2316,6 +2324,29 @@ const steps = {
       await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async passphrase(run, step, failures) {
+    await run.exclusive(async () => {
+      const needsUnlock = (await run.client.vault.status()).state === "locked"
+      await openAccounts(run.page)
+      if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+      await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
+      const locked = async () => (await run.client.vault.status()).state === "locked"
+      await changeVaultPassphrase(
+        run.page,
+        `disposable cobalt orchard vault stress passphrase ${step.index}`,
+        { locked },
+      )
+      // Keep the shared disposable fixture phrase for restart/other steps.
+      await changeVaultPassphrase(run.page, VAULT_PASSPHRASE, { locked })
+      if ((await run.client.vault.status()).state !== "unlocked")
+        failures.push(
+          "Explicit unlock after passphrase change was not reflected by gateway",
+        )
+      await closeSettings(run.page)
+    })
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
@@ -7120,8 +7151,10 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
-  if (knobs.inputFiles > 0) phoneFilesVerifier()
-  if (knobs.pairedCatalogues > 0) await preparePairedCatalogue()
+  const selected = selectedPlan(knobs, options.only)
+  if (selected.some((step) => step.kind === "inputFiles")) phoneFilesVerifier()
+  if (selected.some((step) => step.kind === "pairedCatalogue"))
+    await preparePairedCatalogue()
   // Linking listens on every interface, as Settings sets it up, so the
   // gateway announces itself; clients on this machine dial it on loopback.
   const nativePort = await freePort()
@@ -7144,7 +7177,7 @@ async function startStack(options) {
     mkdirSync(options.evidence, { recursive: true })
     writeFileSync(
       join(options.evidence, "plan.txt"),
-      `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
+      `${JSON.stringify(knobs)}\n${options.only ? `SELECTED SCOPE: ${options.only}\n` : "FULL PLAN\n"}${describe(selectedPlan(knobs, options.only))}\n`,
     )
   }
   // The `github` step's GitHub, on this machine, which the gateway reads its
@@ -7228,7 +7261,7 @@ await main(
   meta,
   async ({ options, rep, target: stack }) => {
     const knobs = stack.knobs
-    const planned = plan(knobs)
+    const planned = selectedPlan(knobs, options.only)
     log(`conversation-stress ${JSON.stringify(knobs)}\n${describe(planned)}`)
     const origin = new URL(stack.url).origin
     await withEngines(options, rep, async (engine, browser) => {
@@ -7257,7 +7290,11 @@ await main(
       const run = new Run(stack, opened, knobs, restartConsole)
       run.evidence = options.evidence
       run.engine = engine
-      const base = { engine, layout }
+      const base = {
+        engine,
+        layout,
+        scope: options.only ? `selected:${options.only}` : "full",
+      }
       let followers = []
       try {
         const id = randomUUID()

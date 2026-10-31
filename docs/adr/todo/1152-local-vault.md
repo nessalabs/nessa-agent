@@ -321,3 +321,140 @@ retains its named target without granting authority. Receipt/audit evidence
 carries that disposition. Raw personal-scope API metadata also confirmed that
 environment `access` is a ResourceAccess object and `effective` contains the four
 computed credential flags; the fixture pins both, separately from VM string access.
+
+
+## Pending-unlock ownership hardening
+
+An admitted derivation reserves its connection identity before audit or repository
+work. A lock from another connection is refused while that reservation exists;
+only the owner may fence its pending publication. The reservation is released on
+success, typed refusal, audit failure or unwind while the state mutex remains
+usable. A panic that poisons the state leaves the vault explicitly unavailable.
+The bounded derivation permit
+still prevents a second KDF from starting. This is connection-lifecycle validity,
+not a second authorization policy; Cedar still owns control admission.
+
+| Ordering | Required result and regression |
+| --- | --- |
+| Foreign lock while owner derives | SessionOwned, unchanged generation; owner's verified key can publish |
+| Owner lock while owner derives | Generation advances; pending publication returns Locked |
+| Owner connection closes while deriving | No publication; reservation releases when derivation settles |
+| Audit or repository rejects opening | Reservation releases; another live connection can attempt unlock |
+| Foreign lock after owner publishes | Existing SessionOwned refusal; retained key remains available |
+| Derivation scratch allocation drops | Owned Argon2 block allocation zeroizes; fixed KDF profile and existing ciphertext remain readable |
+
+The current encrypted format still decrypts its whole map; no format migration,
+new key hierarchy, recovery enrollment, audit freshness anchor or process
+isolation is introduced by these admission and allocation changes.
+
+
+## Compatible local security hardening
+
+The new setup/change rule is distinct from bounded legacy unlock parsing. It
+requires fifteen original trimmed Unicode characters, checks a licensed public
+common-password snapshot and periodic repeated text through borrowed comparisons,
+and keeps original input bytes for cryptography. It does not estimate guaranteed
+entropy or send input to a service. Existing twelve-character vaults remain usable.
+
+| Setup/unlock ordering | Required behavior |
+| --- | --- |
+| New setup/change is short, common or repeated | Typed policy refusal before KDF/file mutation |
+| Unicode case mapping would expand length | Count original characters; do not inflate strength |
+| Previously accepted weak vault unlock | Original input goes through existing KDF; new strength check is absent |
+| UI new setup vs existing unlock | Consume separate published floors; backend owns final strength decision |
+
+Failed attempts belong to the authenticated principal/credential tuple, not the
+connection lease. Keep one global KDF permit, 1,024 compact caller slots and at
+most 512 retained identity bytes per slot. Unknown callers at capacity receive
+Capacity; active penalties and verified-controller slots are not evicted. This
+protects known controllers but cannot promise unlimited new-identity admission.
+Restart clears budgets. Enough separately issued credentials can temporarily
+exclude an untracked controller, an explicit bounded-resource tradeoff.
+
+| Caller event/order | Required behavior |
+| --- | --- |
+| Caller A fails five times | A cools down; B's correct input remains eligible |
+| A reconnects under same authenticated tuple | Retain A's partial failures/cooldown |
+| Different credential under same principal | Independent device/controller budget |
+| A succeeds | Reset only A; preserve B's penalty |
+| Active KDF or caller table saturation | Busy or Capacity before further KDF; no penalty eviction |
+| Quiet unverified caller for full cooldown | Retire slot; retained successful-controller slot remains |
+| Wrong phrase followed by audit failure | Keep failure accounting; reconnect cannot shed it |
+| Monotonic clock saturates | Fail closed without overflow |
+
+Linux process-local protection is composed before dispatch, runtime or key
+loading for every nessa invocation, including the native passphrase bridge.
+Read/set/verify failures refuse dispatch. The gateway log is bounded before the
+refusal path, preserving startup-failure behavior. Native tests change only a
+disposable child's limits/dumpability and verify parent state stays unchanged.
+These controls do not establish filesystem isolation, locked memory, protection
+from root/already-attached tracing or confidentiality of arbitrary exec children.
+Other platforms retain their independent OS/signing safeguards.
+
+| Linux startup event | Required behavior |
+| --- | --- |
+| Core limit or dumpability cannot be read/set | Secret-free failure and no command dispatch |
+| Set reports success but effective state differs | Refuse; no fake protection receipt |
+| Both effective protections confirmed | Proceed to parse/runtime/storage |
+| Protection fails during supervisor restart loop | Bound gateway log before reporting failure |
+
+## Ordinary passphrase change (same format)
+
+An independently reviewed bounded design seals after change admission instead
+of publishing a replacement live key. The sole derivation permit spans terminal
+audit. Intent audit precedes admission; lease liveness and captured generation
+are rechecked afterward. Taking the old key out of shared state and advancing
+its generation is the admission/seal point. Consumer work cannot read through
+that retired generation. Only an already admitted operation keeps its old key
+until repository work settles.
+
+| Change ordering/outcome | Required behavior |
+| --- | --- |
+| Weak input, foreign lease, locked vault, occupied KDF | Refuse before sealing/file effects |
+| Intent audit blocks, then owner closes or locks | Recheck liveness/generation before admitting replacement |
+| Change admitted | Seal, advance generation, retire GitHub cache/code ownership |
+| Preparation/temp verification fails | Original file unchanged; remain sealed; report Unchanged |
+| Temp verifies all entries, replacement and durability confirm | Report Committed; remain sealed |
+| Replacement/receipt uncertain | Report Uncertain; preserve data; no automatic rollback/replay |
+| Terminal audit fails after confirmed commit | Keep Committed plus independent audit failure |
+| Caller disconnects after admission | Admitted blocking IO may finish; do not promise cancellation |
+| Repository/audit panics | Stay sealed; retain uncertainty or actual commitment; recovery can explicitly unlock |
+| Native/SDK timeout or reply is lost after dispatch | Change-not-confirmed, never generic success or automatic replay |
+| Valid unsolicited notices exhaust the existing response budget | Ordinary commands keep Correlation; passphrase change reports Change-not-confirmed and retires the connection |
+| UI gets successful Locked result | Separate change flow reports completion; protected-access ensure does not resolve |
+
+The adapter holds the existing shared file lock, reloads current entries, derives
+with a fresh salt and nonce, writes/syncs private temporary ciphertext, rereads and
+decrypts it, compares the complete entry map, then atomically replaces and checks
+the destination. Old and new allocations use erasing owners. A source copy held
+with its old passphrase remains decryptable; this is not external token rotation,
+recovery, MFA or rollback resistance.
+
+
+## Change-dialog foreground ownership
+
+The browser qualification found that background protected-use/focus work could
+open an ordinary unlock dialog over change recovery. The provider owns one
+foreground change-requester lease; while held, competing ensure requests resolve
+false without starting or queuing another dialog. Backend authorization is
+unchanged. The change control acquires only after an initial successful ensure,
+and captures immutable mounted lifetime/opening identities across that await.
+
+| UI ordering | Required behavior and evidence |
+| --- | --- |
+| Background ensure/focus during form/busy/finished change | Preserve foreground dialog; no queued prompt or mutation replay |
+| Acquisition races a nonbusy pending status read | Cancel that request; its late result cannot open a dialog |
+| Normal unlock submit is busy | Refuse foreground takeover |
+| Explicit Unlock | Release change ownership, then request normal unlock |
+| Close/unmount/source replacement | Release only owned lease; ignore late command/view completion |
+| Old ensure resolves across source replacement | Immutable lifetime/opening check refuses stale acquisition and cleanup |
+| StrictMode replay or stale owner release | Current owner remains correct; no invisible suppression |
+
+Mounted regressions and the real Chromium/WebKit lost-reply flow enforce these
+orderings. The source-replacement and protected-use races have deliberate failing
+revert probes. The conversation stress passphrases step drives Settings changes,
+observes Locked, explicitly unlocks, restores its disposable phrase and sends a
+conversation reply; counts default1 and raised3 retain normal background/follower
+load. Explicit selected runs retain all knobs/deadlines/step identities and label
+their scope. They do not qualify unselected steps or waive the full plan's Swift
+phone-verifier prerequisite.
