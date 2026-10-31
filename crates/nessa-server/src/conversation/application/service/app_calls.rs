@@ -31,7 +31,9 @@ use super::{
     blank_text, ConversationCaller, ConversationError, ConversationService, LiveConversation,
     Reach, SubmissionMode, SubmitFailure, Writer,
 };
-use crate::conversation::application::{admit_app_question, error_code, AppQuestion};
+use crate::conversation::application::{
+    admit_app_question, error_code, message_skips_review, AppQuestion, UnreviewedMessage,
+};
 use crate::mcp_servers::domain::{
     admit_listed_call, known_app, listed_tool, AppCallAdmission, AppFacts, AppRefusal,
     ResourceTicketDigest, MAX_APP_RESULT_BYTES,
@@ -436,14 +438,15 @@ impl ConversationService {
         answer.map_err(ConversationError::McpApp)
     }
 
-    /// Ask the person, and wait for their answer: `Ok` once they allowed it.
+    /// Ask the person, and wait for their answer: `Ok` once they allowed it,
+    /// `Ok(true)` when they allowed every later message of the app too.
     async fn approved(
         &self,
         opening: &Opening,
         step: &Step,
         asked: Asked<'_>,
         gone: &mut oneshot::Receiver<()>,
-    ) -> Result<(), ConversationError> {
+    ) -> Result<bool, ConversationError> {
         let permission_id = new_review_id();
         if !super::super::app_reviews::fits(
             &permission_id,
@@ -510,8 +513,9 @@ impl ConversationService {
                 ended.await
             }
         };
+        let for_app = matches!(end, ReviewEnd::AllowedForApp(_));
         let (phase, initiator, error) = match end {
-            ReviewEnd::Allowed(by) => (
+            ReviewEnd::Allowed(by) | ReviewEnd::AllowedForApp(by) => (
                 McpAppAuditPhase::Approved { permission_id },
                 person(&by),
                 None,
@@ -536,7 +540,7 @@ impl ConversationService {
             ),
         };
         step.record(phase, Some(initiator)).await?;
-        error.map_or(Ok(()), |error| Err(ConversationError::McpApp(error)))
+        error.map_or(Ok(for_app), |error| Err(ConversationError::McpApp(error)))
     }
 
     async fn app_message(
@@ -556,13 +560,14 @@ impl ConversationService {
                 server: message.server.clone(),
             },
         );
-        if let Err(refusal) = reached(
+        let app_server = match reached(
             &ports,
             seen.as_ref().map(|(facts, _)| facts),
             &message.server,
         ) {
-            return Err(step.refuse(refusal.into()).await);
-        }
+            Ok(facts) => facts.server.clone(),
+            Err(refusal) => return Err(step.refuse(refusal.into()).await),
+        };
         let Some((_, tool)) = seen else {
             return Err(step.refuse(McpAppError::AppUnknown).await);
         };
@@ -600,10 +605,24 @@ impl ConversationService {
                 )
                 .await);
         };
-        if self.holds_turn(&id, &execution_id).await {
+        // A message goes unasked when the policy says so: the conversation
+        // runs with full access, or the person always allows this app
+        // (`apps.cedar`, `app.sendUnreviewed`).
+        let unreviewed = opening.approval_mode.is_some_and(|approval_mode| {
+            message_skips_review(
+                ports.policy.as_ref(),
+                &app_server,
+                UnreviewedMessage {
+                    server: &message.server,
+                    approval_mode,
+                    trusted_app: ports.trusted.trusts(&message.server),
+                },
+            )
+        });
+        if unreviewed || self.holds_turn(&id, &execution_id).await {
             step.record(McpAppAuditPhase::Admitted, None).await?;
         } else {
-            // Every message asks
+            // Otherwise every message asks
             // (`m7_every_message_asks_and_allowing_one_allows_no_other`).
             // What the person is shown is what is sent
             // (`m7_m8_m12_a_message_asks_and_allowed_lands_as_the_persons_turn_written_by_the_app`).
@@ -615,7 +634,16 @@ impl ConversationService {
                 tool: sender.tool().tool(),
                 shown: &shown,
             };
-            self.approved(&opening, &step, asked, &mut gone).await?;
+            // "Always allow this app": kept before this message goes, and a
+            // choice that could not be kept still sends the one allowed.
+            if self.approved(&opening, &step, asked, &mut gone).await?
+                && ports.trusted.trust(&message.server).is_err()
+            {
+                tracing::error!(
+                    server = message.server,
+                    "always allowing an app was not kept; its next message asks"
+                );
+            }
         }
         // Checked once more under the conversation's submission lock, just
         // before it is enqueued (`submit_as`): a close or a delete that took
@@ -965,9 +993,18 @@ impl ConversationService {
             .clone()
             .ok_or(ConversationError::McpApp(McpAppError::AppUnknown))?;
         let facts = self.app_facts(&live, app, id).await;
+        let approval_mode = live
+            .projection
+            .lock()
+            .await
+            .view()
+            .selection
+            .as_ref()
+            .map(|selection| selection.approval_mode.as_str());
         let opening = Opening {
             apps: live.app_reviews.clone(),
             epoch: live.app_epoch,
+            approval_mode,
         };
         Ok((opening, facts, ports))
     }
@@ -1027,6 +1064,9 @@ impl DroppedContexts for NoAppsToDrop {
 struct Opening {
     apps: Arc<AppReviews>,
     epoch: u64,
+    /// The conversation's committed approval mode, as the wire names it;
+    /// `None` before one is committed.
+    approval_mode: Option<&'static str>,
 }
 impl Opening {
     /// Whether `app` may still be admitted, opened for or issued to in this

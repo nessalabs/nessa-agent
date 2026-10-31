@@ -50,6 +50,17 @@ pub enum AppQuestion<'a> {
     },
 }
 
+/// What decides whether an app's message may go without asking the person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnreviewedMessage<'a> {
+    /// The server the app names.
+    pub server: &'a str,
+    /// The conversation's approval mode, as the wire names it.
+    pub approval_mode: &'a str,
+    /// Whether the person chose to always allow this app's messages.
+    pub trusted_app: bool,
+}
+
 /// Answers whether an app may reach a server, or call a tool on it.
 pub trait AppCallPolicyEvaluator: Send + Sync {
     /// The decision for `question`, asked by the app drawn by a tool call to
@@ -60,6 +71,34 @@ pub trait AppCallPolicyEvaluator: Send + Sync {
         app_server: &str,
         question: AppQuestion<'_>,
     ) -> Result<ToolDecision, ToolPolicyUnavailable>;
+
+    /// Whether the app drawn by `app_server` may send `message` as the
+    /// person's turn without the person reviewing it first.
+    fn message_unreviewed(
+        &self,
+        app_server: &str,
+        message: UnreviewedMessage<'_>,
+    ) -> Result<ToolDecision, ToolPolicyUnavailable>;
+}
+
+/// Whether the app's message goes without a review. A policy that cannot be
+/// evaluated, or that allows nothing, asks the person.
+pub fn message_skips_review(
+    evaluator: &dyn AppCallPolicyEvaluator,
+    app_server: &str,
+    message: UnreviewedMessage<'_>,
+) -> bool {
+    match evaluator.message_unreviewed(app_server, message) {
+        Ok(ToolDecision::Allow { rules }) => {
+            tracing::info!(app_server, ?rules, "MCP App message sent without a review");
+            true
+        }
+        Ok(ToolDecision::Refuse { .. }) => false,
+        Err(ToolPolicyUnavailable) => {
+            tracing::error!(app_server, "MCP App message policy unavailable; asking");
+            false
+        }
+    }
 }
 
 /// Whether the app drawn by `app_server` may do what `question` asks, as
