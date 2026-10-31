@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 105,
+          "maxItems": 109,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -8726,6 +8726,113 @@
         }
       },
       "required": ["requestId", "receiptId", "scope", "position", "appliedAtMs"]
+    },
+    "VoiceStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of voice.status, voice.saveKey and voice.forgetKey: whether the gateway holds a realtime voice key. The key itself is never returned.",
+      "properties": {
+        "keySaved": {
+          "type": "boolean",
+          "description": "Whether a key is saved in the gateway's vault."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "The realtime model a call runs."
+        }
+      },
+      "required": ["keySaved", "model"]
+    },
+    "VoiceSaveKeyParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Save the realtime voice provider's API key in the gateway's vault, replacing any saved one (voice.saveKey).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[!-~]+$",
+          "description": "The key: printable ASCII with no spaces."
+        }
+      },
+      "required": ["key"]
+    },
+    "VoiceStartCallParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a voice call about one conversation (voice.startCall): the gateway mints a short-lived client secret with its saved key.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation the call talks to."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "VoiceTransport": {
+      "type": "string",
+      "enum": ["webrtc", "scripted"],
+      "description": "How the window connects a call. webrtc: OpenAI's realtime calls over WebRTC, with the microphone and spoken audio. scripted: a WebSocket carrying the same realtime events and no audio, served by a scripted provider the gateway was started with (the stress check's fake)."
+    },
+    "VoiceToolName": {
+      "type": "string",
+      "enum": ["send_to_agent", "stop_agent"],
+      "description": "The functions a voice call may call. send_to_agent: send what the person asked, in their own transcribed words, to the conversation as a message. stop_agent: stop the agent's running turn, as the Stop button does."
+    },
+    "VoiceCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of voice.startCall: how to connect one call. The secret is good for one connection before expiresAt; what the call is told and may call was fixed when it was minted.",
+      "properties": {
+        "transport": {
+          "$ref": "#/$defs/VoiceTransport",
+          "description": "How to connect."
+        },
+        "callUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Where to connect: the WebRTC offer's address, or the scripted provider's WebSocket."
+        },
+        "clientSecret": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "The short-lived secret the connection presents. Never the saved key."
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds after which the secret connects nothing."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "The realtime model the call runs."
+        }
+      },
+      "required": ["transport", "callUrl", "clientSecret", "expiresAt", "model"]
+    },
+    "VoiceErrorCode": {
+      "type": "string",
+      "enum": [
+        "voice_not_configured",
+        "voice_key_missing",
+        "voice_key_rejected",
+        "voice_unreachable",
+        "voice_storage_unavailable",
+        "voice_audit_unavailable",
+        "vault_locked"
+      ],
+      "description": "Why the gateway refused a voice method. voice_not_configured: this gateway has no voice provider. voice_key_missing: no key is saved. voice_key_rejected: the provider refused the saved key. voice_unreachable: the provider could not be reached or answered something unreadable. voice_storage_unavailable: the vault could not save or delete the key; what was saved still is. voice_audit_unavailable: the change could not be recorded, so nothing changed and no call started. vault_locked: unlock Nessa first."
     }
   }
 }

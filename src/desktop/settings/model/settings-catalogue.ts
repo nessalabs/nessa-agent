@@ -63,7 +63,11 @@ export const settingsCategories = [
     label: "Connections",
     tabs: [
       { id: "agents", label: "Agents", keywords: "claude code codex opencode installed" },
-      { id: "accounts", label: "Accounts", keywords: "sign in github login" },
+      {
+        id: "accounts",
+        label: "Accounts",
+        keywords: "sign in github login voice openai",
+      },
       {
         id: "integrations",
         label: "MCP servers",
@@ -350,6 +354,14 @@ export const settingsEntries = [
     label: "GitHub",
     detail: "Lets agents clone, push, and open pull requests as you.",
     keywords: "git repository sign in connect app",
+  },
+  {
+    id: "voice",
+    tab: "accounts",
+    label: "Voice",
+    detail:
+      "Talk to your agents from the composer. Uses your OpenAI key, kept in Nessa's vault.",
+    keywords: "voice talk speak microphone openai realtime key",
   },
   {
     id: "boat",

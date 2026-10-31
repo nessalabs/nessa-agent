@@ -170,6 +170,22 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               Disconnect. A source-authorized gateway tool reads a fixed
  *               repository with the connected token. The audit holds each
  *               sign-in step and no token
+ *   voice       an OpenAI key is saved in Settings › Connections › Accounts
+ *               against a fake realtime provider on this machine: the key
+ *               is never logged or audited, only the gateway asks the
+ *               provider for a call. Talk opens a call above the composer
+ *               (the orb, "Listening", and the speaker, microphone and End
+ *               call buttons); the chat so far is handed to the voice; the
+ *               person's spoken words, fillers and a repeated word dropped,
+ *               are sent as their message and answered, and the reply is
+ *               handed back to the voice to talk about; muting the
+ *               microphone clears what it half heard; a stop the person
+ *               talked over (its response cancelled) stops nothing; a
+ *               follow-up said while the agent works is sent queued, and
+ *               asked to, the voice stops the running turn; once the agent
+ *               stops work the voice is told what it said once and the
+ *               call listens again; End call
+ *               closes the call and Talk is back
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
@@ -301,6 +317,7 @@ import {
   startFakeGithub,
   disposableGithubEnvironment,
 } from "./lib/fake-github.mjs"
+import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
@@ -2708,6 +2725,194 @@ const steps = {
     } finally {
       await run.page.unroute(pictures, answer)
     }
+  },
+
+  async voice(run, step, failures) {
+    const realtime = run.stack.realtime
+    if (!realtime) {
+      failures.push("the stack was started without the fake realtime provider")
+      return
+    }
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `voice-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    const row = run.page.locator('[data-setting="voice"]')
+    await run.exclusive(async () => {
+      const needsUnlock = (await run.client.vault.status()).state === "locked"
+      await openAccounts(run.page)
+      if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+      await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
+      await row.locator('[data-voice-key="input"]').fill(realtime.key)
+      await row.locator('[data-voice-key="save"]').click()
+      await unlockVault(run.page)
+      const saved = await row
+        .locator('[data-voice-key="saved"]')
+        .waitFor({ timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false)
+      if (!saved) failures.push("the voice row does not say the key is saved")
+      else await shot("key-saved")
+      if ((await row.locator('[data-voice-key="input"]').inputValue()) !== "")
+        failures.push("the voice row kept the key in its field after saving")
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    if (!(await run.client.voice.status()).keySaved)
+      failures.push("the gateway does not report the voice key saved")
+    const pane = dock(run.page)
+    const talk = pane.getByRole("button", { name: "Talk", exact: true })
+    const end = pane.getByRole("button", { name: "End call", exact: true })
+    const orb = run.page.locator(".voice-dock .voice-orb")
+    const phase = () =>
+      run.page
+        .locator(".voice-dock")
+        .getAttribute("data-phase", { timeout: 1_000 })
+        .catch(() => null)
+    const before = realtime.calls()
+    await talk.click({ timeout: 10_000 })
+    if (
+      !(await waitFor(
+        async () => realtime.open() && (await phase()) === "listening",
+        15_000,
+      ))
+    ) {
+      failures.push(`Talk did not open a call (phase ${await phase()})`)
+      return
+    }
+    if (realtime.calls() !== before + 1)
+      failures.push(`Talk opened ${realtime.calls() - before} calls, not one`)
+    if (!(await orb.isVisible())) failures.push("the call shows no orb")
+    for (const name of ["Mute voice", "Mute microphone", "End call"])
+      if (!(await pane.getByRole("button", { name, exact: true }).isVisible()))
+        failures.push(`the composer shows no ${name} button during the call`)
+    if ((await talk.count()) > 0) failures.push("Talk is still offered during the call")
+    await expectShown(run.page, "Listening", failures)
+    await shot("listening")
+    // The gateway asked for the call as the coordinator, with both tools.
+    const session = realtime.minted.at(-1)?.session
+    const tools = (session?.tools ?? []).map((tool) => tool.name).sort()
+    if (JSON.stringify(tools) !== JSON.stringify(["send_to_agent", "stop_agent"]))
+      failures.push(`the call was minted with tools ${JSON.stringify(tools)}`)
+    if (!/never do the work/i.test(session?.instructions ?? ""))
+      failures.push("the call was not told it only coordinates")
+    if (
+      (run.sent.get(run.main.id) ?? 0) > 0 &&
+      !(await waitFor(
+        () => realtime.told().some((text) => text.startsWith("Chat so far:\n")),
+        5_000,
+      ))
+    )
+      failures.push("the voice was not handed the chat so far")
+
+    // Said with a filler and a word twice: sent as the person said it, tidied.
+    const text = prompt(run, `Please ${STRESS.reply}`, step, " voice")
+    const seen = await seenTurns(run, run.main.id)
+    realtime.say(
+      `Um, please ${STRESS.reply} reply r${step.index} voice s${run.knobs.seed}`,
+    )
+    run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(run.page, `${SAYS.echo}${text}`, failures)
+    const handed = await waitFor(
+      () => realtime.told().some((told) => told === `Agent reply:\n${SAYS.echo}${text}`),
+      15_000,
+    )
+    if (!handed) failures.push("the agent's reply was not handed to the voice")
+    if (!realtime.outputs().includes("sent"))
+      failures.push(`send_to_agent answered ${JSON.stringify(realtime.outputs())}`)
+    // The voice's spoken line is the bubble's while it speaks; then it listens.
+    if (!(await waitFor(async () => (await phase()) === "listening", 10_000)))
+      failures.push(
+        `the call is ${await phase()} after the voice answered, not listening`,
+      )
+    await shot("answered")
+
+    // Muting the microphone throws away what it half heard.
+    const clears = () =>
+      realtime.received.filter((event) => event.type === "input_audio_buffer.clear")
+        .length
+    const cleared = clears()
+    await pane.getByRole("button", { name: "Mute microphone", exact: true }).click()
+    if (!(await waitFor(() => clears() === cleared + 1, 5_000)))
+      failures.push("muting the microphone did not clear what it heard")
+    await expectShown(run.page, "Microphone off", failures)
+    await pane.getByRole("button", { name: "Unmute microphone", exact: true }).click()
+    await expectShown(run.page, "Listening", failures)
+
+    // Asked to stop, the voice stops the running turn and hears it stopped.
+    const wait = prompt(run, `Okay ${STRESS.wait}`, step, " voice")
+    const waiting = await seenTurns(run, run.main.id)
+    realtime.say(wait)
+    run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+    await expectShown(run.page, SAYS.waiting, failures)
+    if (!(await waitFor(async () => (await phase()) === "working", 10_000)))
+      failures.push(`the call is ${await phase()} while the agent works, not working`)
+    await shot("working")
+    // A stop the person talked over is cancelled with its response: the
+    // turn keeps working.
+    realtime.ask("stop_agent", "cancelled")
+    await sleep(1_000)
+    if ((await phase()) !== "working" || realtime.outputs().at(-1) === "stopped")
+      failures.push("a cancelled stop_agent stopped the turn")
+    // A follow-up said while the agent works goes as a second message,
+    // queued behind the running turn: the call works on until both end.
+    const follow = prompt(run, `Also ${STRESS.reply}`, step, " voice")
+    const told = realtime.told().length
+    realtime.say(follow)
+    run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+    if (!(await waitFor(() => realtime.outputs().at(-1) === "sent", 10_000)))
+      failures.push(`the follow-up answered ${JSON.stringify(realtime.outputs().at(-1))}`)
+    realtime.ask("stop_agent")
+    await settled(run, run.main.id, waiting, wait, "cancelled", failures)
+    if (!(await waitFor(() => realtime.outputs().at(-1) === "stopped", 10_000)))
+      failures.push(`stop_agent answered ${JSON.stringify(realtime.outputs().at(-1))}`)
+    // Once the agent stops work, what it said since the first message is
+    // handed over once, and the call listens again.
+    const handedOnce = await waitFor(
+      async () =>
+        realtime
+          .told()
+          .slice(told)
+          .filter((text) => text.startsWith("Agent reply:")).length === 1 &&
+        (await phase()) === "listening",
+      30_000,
+    )
+    if (!handedOnce)
+      failures.push(
+        `after the stop the call is ${await phase()} and was told ${JSON.stringify(realtime.told().slice(told))}`,
+      )
+
+    await end.click()
+    if (!(await waitFor(() => !realtime.open(), 10_000)))
+      failures.push("End call left the call open")
+    if (
+      !(await talk.isVisible().catch(() => false)) &&
+      !(await talk
+        .waitFor({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("Talk is not offered again after End call")
+    if ((await run.page.locator(".voice-dock").count()) > 0)
+      failures.push("the call's orb stays after End call")
+    if (!realtime.received.some((event) => event.type === "response.create"))
+      failures.push("the voice was never asked to speak")
+
+    // The key never left the gateway's vault: not in its log, nor its audit.
+    if (run.stack.gateway.log().includes(realtime.key))
+      failures.push("the gateway logged the voice key")
+    const audit = join(namespace, "conversations", "audit", "voice")
+    const records = existsSync(audit) ? readdirSync(audit) : []
+    const kinds = records.map((name) => readFileSync(join(audit, name), "utf8"))
+    for (const kind of ["voice_key_save", "voice_call"])
+      if (!kinds.some((record) => record.includes(`"${kind}"`)))
+        failures.push(`the voice audit has no ${kind} record`)
+    if (kinds.some((record) => record.includes(realtime.key)))
+      failures.push("a voice audit record holds the key")
   },
 
   async upgrade(run, step, failures) {
@@ -7516,7 +7721,14 @@ async function startStack(options) {
     throw error
   }
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
+  // The `voice` step's realtime provider, on this machine.
+  const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
   const environment = {
+    ...(realtime
+      ? {
+          NESSA_VOICE_REALTIME: realtime.provider(join(directory, "voice-realtime.json")),
+        }
+      : {}),
     ...(github
       ? {
           ...disposableGithubEnvironment(),
@@ -7558,6 +7770,7 @@ async function startStack(options) {
     })
   } catch (error) {
     await github?.close()
+    await realtime?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -7567,6 +7780,7 @@ async function startStack(options) {
       await close()
     } finally {
       await github?.close()
+      await realtime?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -7576,6 +7790,7 @@ async function startStack(options) {
     nativeAddress,
     nativeListen,
     github,
+    realtime,
     scenario,
     // Removed when the stack closes.
     scratch: directory,

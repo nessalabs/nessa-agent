@@ -425,6 +425,22 @@
     "conversation.webhook.reset": {
       "params": "ConversationWebhookResetParams",
       "grant": "credential.manage"
+    },
+    "voice.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "voice.saveKey": {
+      "params": "VoiceSaveKeyParams",
+      "grant": "credential.manage"
+    },
+    "voice.forgetKey": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "voice.startCall": {
+      "params": "VoiceStartCallParams",
+      "grant": "conversation.write"
     }
   },
   "events": {

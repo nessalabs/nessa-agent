@@ -3875,6 +3875,91 @@ pub struct ConversationWebhookResetResult {
     pub position: String,
     pub applied_at_ms: u64,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceStatus {
+    pub key_saved: bool,
+    pub model: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceSaveKeyParams {
+    pub key: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceStartCallParams {
+    pub conversation_id: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VoiceTransport {
+    #[serde(rename = "webrtc")]
+    Webrtc,
+    #[serde(rename = "scripted")]
+    Scripted,
+}
+impl VoiceTransport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Webrtc => "webrtc",
+            Self::Scripted => "scripted",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VoiceToolName {
+    #[serde(rename = "send_to_agent")]
+    SendToAgent,
+    #[serde(rename = "stop_agent")]
+    StopAgent,
+}
+impl VoiceToolName {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SendToAgent => "send_to_agent",
+            Self::StopAgent => "stop_agent",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoiceCall {
+    pub transport: VoiceTransport,
+    pub call_url: String,
+    pub client_secret: String,
+    pub expires_at: u64,
+    pub model: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum VoiceErrorCode {
+    #[serde(rename = "voice_not_configured")]
+    VoiceNotConfigured,
+    #[serde(rename = "voice_key_missing")]
+    VoiceKeyMissing,
+    #[serde(rename = "voice_key_rejected")]
+    VoiceKeyRejected,
+    #[serde(rename = "voice_unreachable")]
+    VoiceUnreachable,
+    #[serde(rename = "voice_storage_unavailable")]
+    VoiceStorageUnavailable,
+    #[serde(rename = "voice_audit_unavailable")]
+    VoiceAuditUnavailable,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+}
+impl VoiceErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VoiceNotConfigured => "voice_not_configured",
+            Self::VoiceKeyMissing => "voice_key_missing",
+            Self::VoiceKeyRejected => "voice_key_rejected",
+            Self::VoiceUnreachable => "voice_unreachable",
+            Self::VoiceStorageUnavailable => "voice_storage_unavailable",
+            Self::VoiceAuditUnavailable => "voice_audit_unavailable",
+            Self::VaultLocked => "vault_locked",
+        }
+    }
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -4059,6 +4144,10 @@ pub mod product_method {
     pub const BOAT_SET_RUNTIME_SETTINGS: &str = "boat.setRuntimeSettings";
     pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
     pub const CONVERSATION_WEBHOOK_RESET: &str = "conversation.webhook.reset";
+    pub const VOICE_STATUS: &str = "voice.status";
+    pub const VOICE_SAVE_KEY: &str = "voice.saveKey";
+    pub const VOICE_FORGET_KEY: &str = "voice.forgetKey";
+    pub const VOICE_START_CALL: &str = "voice.startCall";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -4249,7 +4338,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 105
+                items.len() <= 109
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4379,6 +4468,10 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "boat.setRuntimeSettings",
     "conversation.webhook.cursor",
     "conversation.webhook.reset",
+    "voice.status",
+    "voice.saveKey",
+    "voice.forgetKey",
+    "voice.startCall",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -4443,7 +4536,10 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "boat.runtimeSettings"
         | "boat.setRuntimeSettings"
         | "conversation.webhook.cursor"
-        | "conversation.webhook.reset" => Some("credential.manage"),
+        | "conversation.webhook.reset"
+        | "voice.status"
+        | "voice.saveKey"
+        | "voice.forgetKey" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"
@@ -4488,7 +4584,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.peek"
         | "conversation.setModel"
         | "conversation.switchAgent"
-        | "conversation.fork" => Some("conversation.write"),
+        | "conversation.fork"
+        | "voice.startCall" => Some("conversation.write"),
         "conversation.recordsHead"
         | "conversation.recordsPage"
         | "artifact.read"

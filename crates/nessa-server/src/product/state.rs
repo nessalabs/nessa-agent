@@ -193,6 +193,9 @@ pub struct ProductRouteState {
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// The voice key and calls (`voice.*`). `None` answers
+    /// `voice_not_configured`.
+    pub(crate) voice: Option<Arc<crate::voice::application::VoiceCalls>>,
     /// Shared vault; each socket attaches a distinct non-owning lease.
     pub(crate) vault: Option<Arc<super::VaultRoutes>>,
     #[cfg(unix)]
@@ -337,6 +340,7 @@ impl ProductRouteState {
             tunnel: None,
             devices: None,
             github: None,
+            voice: None,
             vault: None,
             vault_lease: None,
             #[cfg(unix)]
@@ -475,6 +479,12 @@ impl ProductRouteState {
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
         self.github = Some(github);
+        self
+    }
+
+    /// Register the voice key and calls the voice methods answer for.
+    pub fn with_voice(mut self, voice: Arc<crate::voice::application::VoiceCalls>) -> Self {
+        self.voice = Some(voice);
         self
     }
 

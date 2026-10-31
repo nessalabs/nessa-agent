@@ -13,6 +13,13 @@ import type { DesktopIconComponent, DesktopIconFamily } from "./icon-contract"
  * inheritance and redraw them in someone else's weight. Size and colour stay
  * the consumer's — width and height from `size` or CSS, paint in currentColor.
  */
+/** A microphone on its stand. */
+const microphone = (
+  <path d="M10 3.5a2.25 2.25 0 0 1 2.25 2.25v3.5a2.25 2.25 0 0 1-4.5 0v-3.5A2.25 2.25 0 0 1 10 3.5zM5.5 9.25a4.5 4.5 0 0 0 9 0M10 13.75v2.75" />
+)
+/** A speaker's cone. */
+const speaker = <path d="M3.75 8v4h2.75L10 15V5L6.5 8z" />
+
 function drawn(art: ReactNode, stroke = 1.4): DesktopIconComponent {
   return function NessaIcon({ size = 20, ...props }) {
     return (
@@ -190,6 +197,27 @@ export const nessaIcons: DesktopIconFamily = {
   ),
   fast: drawn(<path d="M11.25 3.5 5 11.25h4.75L8.75 16.5 15 8.75h-4.75z" />),
   access: drawn(shield),
+  // Five bars of a voice, the middle tallest.
+  voice: drawn(<path d="M4 8.5v3M7 6v8M10 3.75v12.5M13 6v8M16 8.5v3" />),
+  microphone: drawn(microphone),
+  microphoneOff: drawn(
+    <>
+      {microphone}
+      <path d="M4 4l12 12" />
+    </>,
+  ),
+  speaker: drawn(
+    <>
+      {speaker}
+      <path d="M13.25 7.5a3.5 3.5 0 0 1 0 5M15.25 5.5a6.4 6.4 0 0 1 0 9" />
+    </>,
+  ),
+  speakerOff: drawn(
+    <>
+      {speaker}
+      <path d="M13 8l4 4M17 8l-4 4" />
+    </>,
+  ),
   enter: drawn(
     <path d="M15.5 4.5v4.75a2.25 2.25 0 0 1-2.25 2.25H4.75M8 8.25 4.75 11.5 8 14.75" />,
   ),

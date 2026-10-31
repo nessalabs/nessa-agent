@@ -63,6 +63,7 @@ export { openSettings, SettingsHost, useSettingsOpening } from "./ui/settings-vi
 export { McpServersProvider } from "./ui/integrations-tab"
 export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
 export { GithubProvider } from "./ui/github-row"
+export { VoiceKeyProvider } from "./ui/voice-key-row"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
 export { PermissionRulesProvider } from "./ui/permission-rule-rows"
 export {
