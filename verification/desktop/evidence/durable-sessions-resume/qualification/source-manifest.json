@@ -1,0 +1,20 @@
+{
+  "sdkSource": "ae6e33529887746079702d4eca5f528ec42146bd",
+  "base": "56c3c475a47b87d1c9ec26ba648f59cdab47b47e",
+  "files": {
+    "docs/design/durable-sessions-resume.md": "793ddaa435a8389e3d6c19057050e786e3ef1885ef25f387828e28e01cb68940",
+    "docs/state/services/sdk/history.md": "b14a7db46b915175257023dbac4e2212cc8c24edfda960418fce74cd027f30d6",
+    "docs/state/services/sdk/runtime/restart-and-restore-committed-conversation-history.md": "d73e9fe8611582c12bd8dd67b63455f58d487e4a4d29ac097edd484dac069ab5",
+    "scripts/mcp-test-server/scripted-agent.mjs": "2c389da43e53dbbf66e0cb85a40d22c2b3b3d98006d621a7d920b34af7aa4a8c",
+    "scripts/mcp-test-server/scripted-agent.test.mjs": "147fa1e05a5474f5950ce95dcf0b4d2ba7e82ae69c02c1b615fc697d5d4200b5",
+    "verification/README.md": "71f4c8dd1d0ac42fff81bc0c34d3ada221578d1aa459c0911783ca2f1821333e",
+    "verification/desktop/CHECKLIST.md": "893e283e47f528fea863351feafefb6c6000fda61a52e0507a71e5d50a0a1241",
+    "verification/desktop/scripts/conversation-stress.mjs": "a677f7b6d6a94236be85b1b471a99a609ccca17b72bacfddc3a7e2e61d885d93",
+    "verification/desktop/scripts/lib/gateway-stack.mjs": "2107ac065272a92055b9117ce38a068992f466fb134a5506f34cf9f58db32978",
+    "verification/desktop/scripts/lib/gateway-stack.test.mjs": "1491e72ed0f713d36109b74b47d1aa5a53f4a241eeeba68e4184f30fd9b6fb14",
+    "verification/desktop/scripts/lib/stress-native-context.mjs": "7018a1077069a2a7cd2862c230addd44926074b151c4c3584dac52d46e379838",
+    "verification/desktop/scripts/lib/stress-native-context.test.mjs": "f006bbf0798e8c407a358bb6fda7e4ef4f21948553f090310ad98b7f5d7460fb",
+    "verification/desktop/scripts/lib/stress-plan.mjs": "d484dd84a6c88dcae7579f135508310cefedc8a16107c5b908f547c03033f480",
+    "verification/desktop/scripts/lib/stress-plan.test.mjs": "a436740ed10c93d6a648a375755342c53dfa917edcebd9c4ebeb75cbd2f5f78e"
+  }
+}

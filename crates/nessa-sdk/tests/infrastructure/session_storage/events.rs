@@ -51,7 +51,8 @@ async fn replay_preserves_transitions_inside_one_save_and_original_indices_on_re
     let session = SessionId::new("events").unwrap();
     let lease = storage.open(session.clone()).await.unwrap();
     let (opening, snapshot) = opened(&session);
-    let recorded = ProviderContext::Recorded(ExecutionSessionId::new("provider-session").unwrap());
+    let recorded =
+        ProviderContext::recorded_after(ExecutionSessionId::new("provider-session").unwrap(), 0);
     let changes = vec![
         opening,
         SessionChange::ProviderContext {

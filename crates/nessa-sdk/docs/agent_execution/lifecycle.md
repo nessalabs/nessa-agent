@@ -724,3 +724,33 @@ terminal attempt remain present in the omission. The original mixed baseline
 and the first fixed run's two stale storage assertions remain separate records.
 This evidence covers executable task completion, not audit delivery after
 runtime destruction.
+
+## Admission belongs to the native context
+
+A saved provider context retains its native ID and an `admitted_before` watermark.
+The watermark counts the terminal prefix of invocations that preceded a fresh
+context. Admission for this context is established by retained invocations beyond
+that prefix, including queued work accepted while provider opening is pending.
+Later settlement does not move the watermark. Reopening the same context keeps
+its original boundary.
+
+Claude persists a native session only after its first prompt. On cold reopening,
+a context with no admitted work can therefore be replaced while preserving the
+conversation's earlier history. A context with admitted work must resume its exact
+native ID; missing native history is a typed provider error. Provider error text
+and missing observations do not authorize reset, and reopening does not replay
+old prompts. The switch and fingerprint-change regressions in
+`tests/infrastructure/acp/contracts/current_context.rs` enforce these distinctions.
+
+SessionManager publishes the native ID and watermark together with a changed
+fingerprint or agent-switch handoff in one semantic save. A fresh context excludes
+only the terminal prefix, so already accepted pending work continues to count.
+Semantic publication and full custom-snapshot/checkpoint restoration validate the
+watermark before a provider opens. The current wire context is either `null` or
+`{"id":"native-id","admitted_before":N}`; the watermark is required. There is
+one current storage contract, with no legacy string-context reader or schema bump.
+
+A fresh open returning the same native ID in the same provider namespace retains
+prior admission evidence conservatively. A provider's reuse of an ID is not proof
+that earlier work may be discarded. The context record adds constant retained
+space; it does not create an independent attachment or cleanup owner.

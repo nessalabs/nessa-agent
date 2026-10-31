@@ -1,0 +1,10 @@
+warning: unused variable: `invocation_count`
+  --> /workspace/scratch/durable-qualification/domain-mutants-c11/attachment.rs:58:37
+   |
+58 |     pub fn has_admitted_work(&self, invocation_count: usize) -> bool {
+   |                                     ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_invocation_count`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: 1 warning emitted
+

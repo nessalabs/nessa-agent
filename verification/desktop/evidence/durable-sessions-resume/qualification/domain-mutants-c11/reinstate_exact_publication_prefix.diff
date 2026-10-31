@@ -1,0 +1,12 @@
+--- pristine/attachment.rs
++++ reinstate_exact_publication_prefix/attachment.rs
+@@ -115,6 +115,9 @@
+                 Ok(())
+             };
+         }
++        if self.admission_watermark().is_some_and(|watermark| watermark != 0 && watermark != terminal_prefix) {
++            return Err(ProviderContextAdmissionError::InvalidTransition);
++        }
+         if self.recorded() == previous.recorded()
+             && !namespace_changed
+             && self.admission_watermark() != previous.admission_watermark()

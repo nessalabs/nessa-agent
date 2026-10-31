@@ -304,8 +304,9 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         current_configuration: None,
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
-        provider_context: ProviderContext::Recorded(
+        provider_context: ProviderContext::recorded_after(
             ExecutionSessionId::new("provider-session").unwrap(),
+            0,
         ),
         queue_history: vec![],
         invocations: vec![InvocationRecord {

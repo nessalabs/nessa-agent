@@ -1544,7 +1544,7 @@ mod tests {
         let SessionChange::Opened { context, .. } = &mut open else {
             unreachable!()
         };
-        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        *context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
@@ -1722,7 +1722,7 @@ mod tests {
         let SessionChange::Opened { context, .. } = &mut open else {
             unreachable!()
         };
-        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        *context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
@@ -2042,7 +2042,7 @@ mod tests {
         let mut resumed = TranscriptFold::restore(scope.clone(), 2, &checkpoint).unwrap();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         let suffix = records(&scope, 3, &save_frames(context, 2, 1));
         full.apply(&suffix).unwrap();
@@ -2348,7 +2348,7 @@ mod tests {
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         let start = fold.downloaded() + 1;
         let later = save_frames_at(context, fold.applied(), 1, start);
@@ -2539,7 +2539,7 @@ mod tests {
         // The first turn draws the app; the second is the message.
         let mut person = snapshot::checkpoint::history_fixture(2);
         person.provider_context =
-            ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+            ProviderContext::recorded_after(ExecutionSessionId::new("provider").unwrap(), 0);
         let drawing = &mut person.invocations[0];
         drawing.events = [
             ExecutionUpdate::Tool(
@@ -2875,7 +2875,7 @@ mod tests {
         let SessionChange::Opened { context, .. } = &mut open else {
             unreachable!()
         };
-        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        *context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
@@ -2956,7 +2956,7 @@ mod tests {
         let SessionChange::Opened { context, .. } = &mut open else {
             unreachable!()
         };
-        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        *context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         fold.apply(&records(
@@ -3084,7 +3084,8 @@ mod tests {
                 let SessionChange::Opened { context, .. } = &mut open else {
                     unreachable!()
                 };
-                *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+                *context =
+                    ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
                 fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
                     .unwrap();
                 if existing {
@@ -3222,7 +3223,7 @@ mod tests {
         let SessionChange::Opened { context, .. } = &mut open else {
             unreachable!()
         };
-        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        *context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         let mut inputs = Vec::new();
@@ -3300,9 +3301,13 @@ mod tests {
                 local_outcome: None,
             },
             SessionChange::ProviderContext {
-                before: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-                after: ProviderContext::Recorded(
+                before: ProviderContext::recorded_after(
+                    ExecutionSessionId::new("remote").unwrap(),
+                    0,
+                ),
+                after: ProviderContext::recorded_after(
                     ExecutionSessionId::new("replacement-remote-context").unwrap(),
+                    0,
                 ),
             },
         ];
@@ -3349,7 +3354,7 @@ mod tests {
     fn recorded_context() -> SessionChange {
         SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         }
     }
 
@@ -3699,7 +3704,7 @@ mod tests {
         let SessionChange::Opened { context, .. } = &mut open else {
             unreachable!()
         };
-        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        *context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
             .unwrap();
         let torn = save_payload_frames(b"{", fold.applied(), 1);
@@ -4049,7 +4054,7 @@ mod tests {
         let SessionChange::Opened { context, .. } = &mut open else {
             unreachable!()
         };
-        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        *context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
         open
     }
 
@@ -4144,7 +4149,7 @@ mod tests {
     }
 
     #[test]
-    fn an_abandoned_cancellation_leaves_no_provider_evidence() {
+    fn an_abandoned_cancellation_retains_admission_without_provider_observations() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(open_recorded(), 0, 0)))
@@ -4169,16 +4174,20 @@ mod tests {
             ProviderContext::Recorded(_)
         ));
         let clear = SessionChange::ProviderContext {
-            before: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            before: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
             after: ProviderContext::Absent,
         };
+        let admitted = fold.snapshot().unwrap().clone();
         fold.apply(&one_unit(&fold, &[clear], 3)).unwrap();
+        // Abandoned observations do not erase the earlier accepted input.
+        // Its context cannot be cleared merely because no provider event remains.
         assert!(matches!(
             fold.snapshot().unwrap().provider_context,
-            ProviderContext::Absent
+            ProviderContext::Recorded(_)
         ));
         assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
-        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.unreadable().len(), 2);
+        assert_eq!(fold.snapshot(), Some(&admitted));
         fold.committed.assert_retained_accounting();
     }
 
@@ -4190,8 +4199,10 @@ mod tests {
     #[test]
     fn a_cancellation_under_an_earlier_context_survives_a_move_to_a_new_one() {
         let scope = scope();
-        let earlier = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
-        let later = ProviderContext::Recorded(ExecutionSessionId::new("elsewhere").unwrap());
+        let earlier =
+            ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
+        let later =
+            ProviderContext::recorded_after(ExecutionSessionId::new("elsewhere").unwrap(), 0);
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         let mut history = records(&scope, 1, &save_frames(opened(), 0, 0));
         fold.apply(&history).unwrap();

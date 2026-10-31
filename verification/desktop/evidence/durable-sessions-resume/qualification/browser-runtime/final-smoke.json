@@ -1,0 +1,19 @@
+{
+  "scope": "Local runtime DOM/click only; no product qualification",
+  "results": [
+    {
+      "engine": "chromium",
+      "status": "pass",
+      "actual": "clicked",
+      "pageErrors": 0,
+      "version": "153.0.8010.12"
+    },
+    {
+      "engine": "webkit",
+      "status": "pass",
+      "actual": "clicked",
+      "pageErrors": 0,
+      "version": "26.6"
+    }
+  ]
+}

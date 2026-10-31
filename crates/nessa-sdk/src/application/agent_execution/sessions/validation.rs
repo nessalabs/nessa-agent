@@ -31,6 +31,25 @@ std::thread_local! {
     pub(crate) static VALIDATION_CALLS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
+/// The retained terminal prefix a fresh context may exclude from its admission.
+/// A known result preceding its final scheduling write is still pending here.
+pub(crate) fn terminal_prefix(invocations: &[InvocationRecord]) -> usize {
+    invocations
+        .iter()
+        .take_while(|record| {
+            record.scheduling.last().map_or_else(
+                || record.result.is_some(),
+                |event| {
+                    matches!(
+                        event.stage,
+                        InvocationStage::Settled | InvocationStage::Cancelled
+                    )
+                },
+            )
+        })
+        .count()
+}
+
 fn corrupt(error: impl Display) -> StorageError {
     StorageError::Corrupt(error.to_string())
 }
@@ -204,6 +223,13 @@ pub(super) fn continuation(
     if snapshot.invocations.len() > SessionSnapshot::MAX_INVOCATIONS {
         return Err(corrupt("retained invocation history exceeds session limit"));
     }
+    snapshot
+        .provider_context
+        .validate_admission(
+            snapshot.invocations.len(),
+            terminal_prefix(&snapshot.invocations),
+        )
+        .map_err(corrupt)?;
     super::artifacts::validate_saved(snapshot)?;
     super::notes::validate_saved(snapshot)?;
     super::handoffs::validate_saved(snapshot)?;
@@ -538,3 +564,7 @@ pub(super) fn local_result_transition(
         .map_err(corrupt)?;
     Ok(history.local_outcome())
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/sessions/context_admission.rs"]
+mod context_admission_tests;

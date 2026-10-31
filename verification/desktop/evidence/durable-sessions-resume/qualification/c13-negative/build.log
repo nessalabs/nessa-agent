@@ -1,0 +1,29 @@
+    Blocking waiting for file lock on build directory
+   Compiling nessa-sdk v0.1.0 (/workspace/scratch/durable-probes/crates/nessa-sdk)
+   Compiling nessa-protocol v0.1.0 (/workspace/scratch/durable-probes/crates/nessa-protocol)
+   Compiling nessa-client-core v0.1.0 (/workspace/scratch/durable-probes/crates/nessa-client-core)
+   Compiling nessa-server v0.1.0 (/workspace/scratch/durable-probes/crates/nessa-server)
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1126:20
+     |
+1126 |         while at < source.len() {
+     |                    ^^^^^^^^^^^^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:51:9
+     |
+  51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  63 | / lease_protocol!(
+  64 | |     "../../../nessa-protocol/src/lease.rs",
+  65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  66 | |     "../env_serve/mod.rs",
+...    |
+ 108 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 109 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 44s

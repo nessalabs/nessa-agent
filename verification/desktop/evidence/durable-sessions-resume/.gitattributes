@@ -1,0 +1,4 @@
+# Captured test output and revert patches retain their original bytes.
+*.log -whitespace
+*.patch -whitespace
+*.diff -whitespace

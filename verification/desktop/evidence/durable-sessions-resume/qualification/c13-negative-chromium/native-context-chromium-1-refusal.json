@@ -1,0 +1,20 @@
+{
+  "conversationId": "c5c0d7bf-436c-5a82-9fe2-0e34da60a683",
+  "oldExecutionIds": ["a4bdf56c-e774-4e10-8979-674438847974"],
+  "firstUnusedNative": "083ee1b4-888c-4b3a-acd6-e4e22ab2e61b",
+  "firstPhase": [
+    {
+      "method": "session/new",
+      "sessionId": "083ee1b4-888c-4b3a-acd6-e4e22ab2e61b",
+      "outcome": "opened"
+    }
+  ],
+  "coldPhase": [
+    {
+      "method": "session/resume",
+      "sessionId": "083ee1b4-888c-4b3a-acd6-e4e22ab2e61b",
+      "outcome": "missing"
+    }
+  ],
+  "coldAdmissions": []
+}

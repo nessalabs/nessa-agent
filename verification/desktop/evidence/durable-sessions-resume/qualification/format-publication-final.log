@@ -1,0 +1,3 @@
+$ prettier --check src scripts packages verification eslint.config.js prettier.config.js
+Checking formatting...
+All matched files use Prettier code style!

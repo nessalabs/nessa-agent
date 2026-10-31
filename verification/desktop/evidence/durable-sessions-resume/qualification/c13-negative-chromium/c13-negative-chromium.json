@@ -1,0 +1,65 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-10-31T00:49:16.482Z",
+  "finished": "2026-10-31T00:50:08.440Z",
+  "target": {
+    "url": "http://127.0.0.1:34659/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 18202,
+      "seen": {
+        "index": 1,
+        "kind": "drift"
+      },
+      "failures": [
+        "native context: cold reopen tried to resume the missing unused native ID"
+      ],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: WebSocket connection to 'ws://127.0.0.1:38781/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:34659/assets/index-CcGhYiYR.js) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:38781/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:34659/assets/index-CcGhYiYR.js) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:38781/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:34659/assets/index-CcGhYiYR.js) [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:38781/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:34659/assets/index-CcGhYiYR.js) [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

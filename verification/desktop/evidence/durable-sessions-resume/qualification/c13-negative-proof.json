@@ -1,0 +1,31 @@
+{
+  "source": "ae6e33529887746079702d4eca5f528ec42146bd",
+  "mutation": "nine-linecredentialedClaude restoration delegation only",
+  "runs": [
+    {
+      "engine": "chromium",
+      "expected_exit": 1,
+      "unused_native_id": "083ee1b4-888c-4b3a-acd6-e4e22ab2e61b",
+      "old_execution_count": 1,
+      "first_phase_prompts": 0,
+      "cold_admissions": 0,
+      "missing_resume_count": 1,
+      "actual_wire_error": -32002
+    },
+    {
+      "engine": "webkit",
+      "expected_exit": 1,
+      "unused_native_id": "b500ed05-a48c-4b2d-b8c1-2e4049bcf464",
+      "old_execution_count": 1,
+      "first_phase_prompts": 0,
+      "cold_admissions": 0,
+      "missing_resume_count": 1,
+      "actual_wire_error": -32002
+    }
+  ],
+  "restoration": {
+    "probe": "clean source restoredfreshmtimeandrecompiled",
+    "both_browser_result": "9/9 held; exit0",
+    "binary_manifest": "c13-restored/binary-manifest.json"
+  }
+}

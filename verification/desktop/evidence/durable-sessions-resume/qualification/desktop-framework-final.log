@@ -1,0 +1,730 @@
+$ node --test verification/desktop/scripts/lib/*.test.mjs
+✔ builds an ASCII long message of the asked length (0.816149ms)
+✔ builds a session-row selector only from a conversation id (0.482235ms)
+✔ accepts a complete list whose long read is the seeded text (1.460087ms)
+✔ refuses an incomplete list before a page would be opened (0.275805ms)
+✔ refuses a list that dropped a seeded conversation (3.791896ms)
+✔ refuses a clipped or short long read (0.487364ms)
+✔ holds a filled cap whose extra split arrived and added nothing (0.22572ms)
+✔ requires every seeded conversation on the session list (0.225549ms)
+✔ requires the open session's seeded bubbles, on screen, and a scroll that moved (0.447053ms)
+✔ the stress scenario answers a later long prompt (0.414473ms)
+✔ run-all does not run alpha-perf (0.180461ms)
+✔ the actual deadline fixture publishes its armed wait and typed expired notice (7.627436ms)
+✔ the current client refuses the original fixture's untyped local notice (6.411318ms)
+▶ settleAppFrame
+  ✔ settles the discovered handles within the supplied bound (0.804741ms)
+  ✔ a caller rewriting the carrier does not replace the captured handles (0.186581ms)
+  ✔ a rewritten carrier cannot hide the captured app's retirement (0.750419ms)
+  ✔ refuses an unbounded wait before contacting the page (0.266521ms)
+  ✔ preserves a settlement timeout or page failure (0.374003ms)
+  ✔ refuses a departing proxy without selecting a replacement (0.181233ms)
+  ✔ refuses a departing app without selecting a replacement (0.929488ms)
+✔ settleAppFrame (4.759172ms)
+▶ oneMount
+  ✔ accepts exactly one inline frame (3.14946ms)
+  ✔ fails a call with no frame (0.224988ms)
+  ✔ fails a call drawn more than once, naming the count (0.13331ms)
+✔ oneMount (3.818676ms)
+▶ oneCard
+  ✔ accepts exactly one step (0.122624ms)
+  ✔ fails a call with no step (0.076565ms)
+  ✔ fails a call drawn as more than one step, naming the count (0.098148ms)
+✔ oneCard (0.403428ms)
+▶ exactly
+  ✔ W5: matches the text and nothing else, case and all (0.298228ms)
+  ✔ W5: takes the text's characters literally (0.197577ms)
+✔ exactly (0.586512ms)
+▶ approvalCardFor
+  ✔ W5: is the first shown card an app asked for whose head names the tool (0.721595ms)
+  ✔ W5: a part of a tool's name is not the tool (0.196416ms)
+✔ approvalCardFor (1.02998ms)
+▶ approvalShown
+  ✔ W5: waits for the card by the same locator (0.312661ms)
+✔ approvalShown (0.37916ms)
+▶ approvalGone
+  ✔ W1: a card already gone has gone (22.576436ms)
+  ✔ W2: a card still shown at the start is waited out, not sampled (23.788078ms)
+  ✔ W3: a card still shown at the bound has not gone (31.609889ms)
+  ✔ W4: an error other than the timeout is not the card's state (0.402536ms)
+  ✔ W5: waits on the same locator as approvalShown (1.774791ms)
+✔ approvalGone (80.713115ms)
+▶ recordFailedRequest
+  ✔ a 200 whose content-length was fully delivered is harmless only (#473) (1.597247ms)
+  ✔ a 200 is an error when the body is short, or the size was not reported (0.389412ms)
+  ✔ a later size report moves that same line to harmless, and a short body does not (0.217364ms)
+  ✔ a later size report does not excuse another origin or another error (0.185758ms)
+  ✔ only an unlabelled same-origin /mcp-resources abort is the mount-went-live case (0.475951ms)
+  ✔ #647: the live mount pattern is literal origin and exact endpoint (0.322211ms)
+  ✔ F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only (0.15406ms)
+  ✔ a 2xx other than a full 200 or an empty 204 is an error (0.474289ms)
+  ✔ F2: a response never received (aborted before headers) is an error only (1.674492ms)
+  ✔ F3: a response outside 2xx is an error only, at both bounds (0.322823ms)
+  ✔ F4: another origin is an error only (0.26133ms)
+  ✔ F4: any other error text is an error only (0.183975ms)
+  ✔ F4: a page with no origin (about:blank) leaves every failure an error (0.926334ms)
+  ✔ records nothing for the fresh browser's /favicon.ico, as before (0.180219ms)
+✔ recordFailedRequest (30.624451ms)
+▶ settleSizeReports
+  ✔ lets a full-body report leave errors before the caller reads them (4.013396ms)
+  ✔ leaves the line an error when the size report does not arrive (29.751848ms)
+  ✔ a late full body does not excuse a later identical line (31.871354ms)
+  ✔ leaves the line an error when the body is short (0.560598ms)
+✔ settleSizeReports (66.623623ms)
+▶ runAndClose
+  ✔ keeps the body's error when close also rejects (1.043028ms)
+  ✔ reports a browser close failure when the body succeeded (1.222917ms)
+✔ runAndClose (2.393596ms)
+▶ withCleanup
+  ✔ preserves Error, non-Error, and undefined rejections while logging close failure (4.737959ms)
+  ✔ reports close failure when a successful body returns undefined (0.212067ms)
+✔ withCleanup (5.086599ms)
+✔ the same numbers and seed give the same actions, and another seed others (11.153915ms)
+✔ every wave has its width, restarts are placed by their number, and every action names its place (4.287532ms)
+✔ a bad number is refused, from a flag or the environment (0.32578ms)
+✔ shrinking keeps the fewest actions that still fail, in their order (0.7643ms)
+✔ shrinking stops at its budget and keeps the input when no cut fails (0.595687ms)
+✔ the default seeded actions include same-provider model controls (2.42538ms)
+✔ a rename says what it types (1.373206ms)
+FAIL  drag-drop
+        - longest frame 66.69999999999982 ms > 50 ms (runs: 67)
+wrote /workspace/.setup/tmp/nessa-json-9EkFhN/perf-budget.json
+perf-budget: 0/1 held
+FAIL  drag-drop
+        - longest frame 66.69999999999982 ms > 50 ms (runs: 67)
+wrote /workspace/.setup/tmp/nessa-json-fT6fjn/perf-budget.json
+perf-budget: 0/1 held
+▶ parseOptions
+  ✔ takes the check's defaults, and lists split on commas (6.678501ms)
+  ✔ narrows to the first of each list with --quick, unless one was asked for by name (0.564269ms)
+  ✔ drops the -- that pnpm forwards (0.164077ms)
+  ✔ refuses what the check was not written for, as could-not-run (0.69101ms)
+  ✔ says when help was asked for (27.084259ms)
+✔ parseOptions (36.701231ms)
+▶ chosen
+  ✔ is every check without --only, and the named ones with it, in order (0.291088ms)
+  ✔ refuses a name it does not have rather than skipping it (0.21266ms)
+✔ chosen (0.70461ms)
+▶ statusOf
+  ✔ is 0 when everything held (0.433813ms)
+  ✔ is 1 when any contract broke — a failure, or an error that is not could-not-run (0.156365ms)
+  ✔ stays 1 when something else could not run: a product failure is never exit 2 (0.154733ms)
+  ✔ is 2 only when nothing broke and something could not run, or nothing ran (0.099159ms)
+  ✔ does not count a dev-server step a production run left out (0.142775ms)
+✔ statusOf (1.24256ms)
+▶ attempt
+  ✔ turns a timeout waiting on the product into a failure, not could-not-run (0.643999ms)
+  ✔ keeps could-not-run for what the step needs to begin (0.162865ms)
+  ✔ stops the check when recovery leaves its browser page unsafe to reuse (0.228354ms)
+  ✔ adds what the step returned (0.147763ms)
+  ✔ reads an error that is not an Error (0.101122ms)
+✔ attempt (1.442721ms)
+▶ resultOfThrown
+  ✔ writes a fault's stack to stderr, as the result keeps only its first line (0.196817ms)
+  ✔ includes the original operation error in fatal recovery diagnostics (0.29206ms)
+  ✔ retains a non-Error operation cause in the fatal result (0.184357ms)
+  ✔ writes nothing for could-not-run, which is not a fault (0.116656ms)
+  ✔ writes the message of a thrown object that has no stack (0.202004ms)
+✔ resultOfThrown (1.241969ms)
+▶ run-all's sum
+  ✔ routes production Settings to its fixture preview owner (4.656728ms)
+  ✔ keeps explicit Settings URLs externally owned and perf runs out of functional arguments (0.203447ms)
+  ✔ preserves the shared functional page mode and existing preview owners (0.134723ms)
+  ✔ recognizes the clock check by --only name and leaves it out of production previews (0.476266ms)
+  ✔ passes an explicit production URL to committed-transcript (0.113701ms)
+  ✔ reads each check's exit code (0.081573ms)
+  ✔ exits 1 when any check failed, whatever else could not run; 2 only when none failed (0.130967ms)
+  ✔ does not count a dev-server check a production run left out (0.146039ms)
+  ✔ records a dev-server step as left out only under prod (1.226305ms)
+✔ run-all's sum (17.879156ms)
+▶ report
+  ✔ writes --out JSON that prettier accepts (610.21589ms)
+✔ report (610.368549ms)
+▶ report
+  ✔ writes --out JSON that prettier accepts (602.608928ms)
+✔ report (602.77022ms)
+▶ optional scenario assertions
+  ✔ preserves the omitted verdict and original diagnostics (1.231941ms)
+  ✔ preserves the derived success verdict and original diagnostics (0.13393ms)
+  ✔ preserves the undefined verdict and original diagnostics (0.122633ms)
+  ✔ preserves the null verdict and original diagnostics (0.061372ms)
+  ✔ preserves the error verdict and original diagnostics (0.072759ms)
+  ✔ preserves the assertion verdict and original diagnostics (1.682113ms)
+  ✔ preserves the error and assertion verdict and original diagnostics (0.083504ms)
+  ✔ preserves the cannot run verdict and original diagnostics (0.12057ms)
+  ✔ preserves the cannot run without diagnostic verdict and original diagnostics (0.117475ms)
+  ✔ preserves the skipped verdict and original diagnostics (0.104997ms)
+  ✔ keeps the scenario error in JSON and stderr with a failing process status (159.018041ms)
+  ✔ reports a layout exclusion without claiming it requires a dev server (151.462823ms)
+✔ optional scenario assertions (314.645407ms)
+✔ draft close check makes room before splitting in columns (54.886813ms)
+✔ draft close check makes room before splitting in sidebar (7.867996ms)
+✔ draft close still rejects missing draft (11.800961ms)
+✔ draft close still rejects dropped text (7.825292ms)
+✔ draft close still rejects missing home (3.500549ms)
+✔ draft close still rejects changed label (4.580583ms)
+✔ draft close still rejects retained box (9.441226ms)
+✔ draft setup still refuses when even reclaimed sidebar room is insufficient (5.49542ms)
+✔ draft setup admits the exact readable-room boundary using sidebar spare (5.546546ms)
+✔ a drawn midpoint can retain Left in the unchanged fractional prior-side model (1.103749ms)
+✔ the owning compact check targets inside Swap when approaching at 0px/ms (8.628401ms)
+✔ the owning compact check targets inside Swap when approaching at 0.2385px/ms (7.909466ms)
+✔ the owning compact check targets inside Swap when approaching at 0.344px/ms (1.84122ms)
+✔ the owning compact check still rejects initial glass (1.160704ms)
+✔ the owning compact check still rejects a glass pulse (0.945573ms)
+✔ the owning compact check still rejects wrong committed order (4.834473ms)
+✔ the owning compact check still rejects an unsettled commit (1.379321ms)
+✔ the owning compact check still rejects a remaining copy (1.469165ms)
+✔ an absent offer still leaves the compact case uncredited (1.568543ms)
+✔ opposite prior-side ownership is not reclassified as Swap (6.727211ms)
+✔ a code is pending until approved, then gives its token once, and the token reads the account (119.05871ms)
+✔ flat surface accepts T-shaped gutter (10.237706ms)
+✔ flat surface accepts clear window ground gutter (3.657494ms)
+✔ flat surface accepts first-column T-shaped gutter (0.867345ms)
+✔ flat surface accepts staggered adjacent columns gutter (0.845213ms)
+✔ flat surface accepts first adjoining row gutter (2.89151ms)
+✔ flat surface accepts later adjoining row gutter (0.817191ms)
+✔ flat surface rejects shifted row (1.070149ms)
+✔ flat surface rejects gap from another column (1.098151ms)
+✔ flat surface rejects row over a nonadjacent gap (0.974245ms)
+✔ flat surface rejects row across another column (5.558555ms)
+✔ flat surface rejects first-column row across another column (0.600167ms)
+✔ flat surface rejects row stopping at the wrong side (0.523091ms)
+✔ flat surface rejects thick row (0.659916ms)
+✔ flat surface rejects card shadow (3.980918ms)
+✔ flat surface rejects surface card (0.902047ms)
+✔ flat surface rejects rounded surface (0.900836ms)
+✔ a tool launch is the recorded agent, and a scenario launch is not (6.235746ms)
+✔ focused native context arguments are canonical, stable and Claude only (0.943059ms)
+✔ evidence wraps the agent and the MCP server with the recorder (19.839111ms)
+✔ a missing panel credential closes the stack before it escapes (34.401228ms)
+✔ a panel credential is returned and the stack stays open (1.722804ms)
+✔ a throw while building the target closes the stack (41.265372ms)
+✔ native no-send proof requires queued zero-attempt rows in the fixed complete scope (1477.728383ms)
+original-start-failure
+
+✔ the stack preserves startup and retention causes instead of rewriting failed evidence (561.88112ms)
+▶ admitOnce
+  ✔ A1: allows the first call of the app tool, and names the call (10.097315ms)
+  ✔ A2: leaves a permission it already answered alone (0.92329ms)
+  ✔ A2b: allows another permission of the admitted call: it is the same one call (0.2341ms)
+  ✔ A3: a second call of the app tool, once one is admitted, is not allowed but reported (0.218376ms)
+  ✔ A4: another tool's permission, an app's review, or one with no allow option is left alone (0.22782ms)
+✔ admitOnce (13.038961ms)
+▶ callsOf
+  ✔ A5: counts distinct calls of the tool, however often the view lists each (0.263073ms)
+  ✔ keeps each call as the view first lists it (0.142233ms)
+✔ callsOf (0.601999ms)
+▶ setupOutcome
+  ✔ A5: more than one distinct call is repeated, whatever their state (0.383803ms)
+  ✔ A6: one completed call naming its resourceUri, in a completed turn, is ready (0.153709ms)
+  ✔ A6: anything less is unusable — no call, a failed call, no resourceUri, a failed turn (8.021465ms)
+✔ setupOutcome (8.828791ms)
+▶ newReview
+  ✔ R1–R3: picks the review not in the baseline taken before the action (0.326208ms)
+  ✔ R4: a stale review, pending before the action, is never picked (0.138517ms)
+  ✔ R5: no review at all is none (0.085838ms)
+  ✔ the review is gone when its own key is, whatever else is pending (0.159558ms)
+✔ newReview (0.906714ms)
+▶ the app review a step waits for (#474)
+  ✔ the bound is the client's call deadline (0.196594ms)
+  ✔ R6: a review listed while the call is still pending is the one to answer (0.13349ms)
+  ✔ R6: a review that arrives after 15s is taken when the deadline is the client's (1.160503ms)
+  ✔ R6: the same review at 16s is missed when the deadline is 15s (27.531614ms)
+  ✔ R7: the call leaving pending, with no new review, is answered (0.335091ms)
+  ✔ R7: a review in the same read as an output that left pending is still the review (0.105137ms)
+  ✔ R8: still pending at the deadline is absent, and the samples name the transcript (0.30145ms)
+  ✔ an output that stays empty stops at the unstarted bound, not the call deadline (0.747567ms)
+  ✔ empty, then pending, still waits out a review that arrives after 15s (3.628721ms)
+  ✔ needs a deadline (0.913024ms)
+✔ the app review a step waits for (#474) (35.592897ms)
+▶ lastTurn
+  ✔ reads the last turn's text-only reply, its text parts joined and folded (1.350408ms)
+  ✔ a reply with a tool or a local notice in it is not text-only: could not run (0.501028ms)
+  ✔ a thought part is left out, as the window does not draw it (0.180369ms)
+  ✔ text the window draws otherwise — code, strong, anything not plain — could not run (1.441754ms)
+  ✔ an empty reply, a turn not yet answered, or no turn: could not run (0.169934ms)
+✔ lastTurn (3.853858ms)
+▶ messagesArrived
+  ✔ a second engine's send is the executionId the first did not have (0.402842ms)
+  ✔ an earlier message with the same text is not this send (0.114481ms)
+  ✔ two new executionIds are both this send, so the caller cannot keep the first (0.12048ms)
+  ✔ a queue entry is this send, and the turn wins when both list its executionId (0.147841ms)
+  ✔ a new executionId saying something else is not this send (0.083445ms)
+✔ messagesArrived (1.036839ms)
+﹣ macOS Bonjour browse correlates a live registration's port and gateway, then observes withdrawal (0.677312ms) # SKIP
+✔ mode and observation metadata do not imply semantic output (4.052906ms)
+✔ every remaining field participates, including future published fields (9.380515ms)
+✔ content comparison preserves its input (0.926264ms)
+✔ pending HTTP and RPC remain distinct, redacted, and scoped to their socket (29.098985ms)
+✔ limits and unsupported frames mark an incomplete inventory without evicting it (0.264615ms)
+✔ malformed RPC identities cannot throw out of the passive diagnostic listener (0.329643ms)
+✔ URLs never retain arbitrary paths, userinfo, query, fragment or remote hostnames (0.203044ms)
+✔ animation snapshots cap structural entries and preserve Infinity without DOM text (7.278525ms)
+✔ failure capture precedes page disposal; failures in capture never replace readiness failure (44.86435ms)
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: page close failed
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: null
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: undefined
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: 
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: page close acknowledgement failed
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: page closed during disarm
+✔ acts on the observed partial prefix before a later render completes (4.146185ms)
+✔ reports a genuinely absent partial prefix without inventing measurements (1.986177ms)
+✔ reports a completed list when no row is focused (1.430407ms)
+✔ reports a completed list when focus is outside its column (2.640945ms)
+✔ preserves an opening-key failure (3.084368ms)
+✔ stops observing when an opening key is delivered but its RPC rejects (1.949453ms)
+✔ retires a live page when disarm fails after a delivered opening key (1.509415ms)
+✔ does not continue the driver when observer disarm and page retirement both fail (1.746189ms)
+✔ preserves fatal observer failure through context and browser cleanup into the result (2.22206ms)
+✔ treats nullish and empty page-close rejections as unsafe while the page is live (2.75107ms)
+✔ keeps fatal retirement diagnostics safe for errors with throwing coercion (3.423284ms)
+✔ preserves the opening error when retirement reports failure after closing the page (1.832347ms)
+secondary overview keyboard cleanup fault: could not dispose browser result
+secondary overview keyboard cleanup fault: could not dispose browser result
+✔ preserves an opening error when disarm fails and observes the later waiter error (15.320429ms)
+✔ preserves a JSON read error when disposing its handle also fails (2.223071ms)
+✔ reports a cleanup failure after successful browser verification (6.18463ms)
+✔ does not act before its own rows and focus are mounted (21.42181ms)
+✔ preserves a browser observation fault instead of reporting unavailable rendering (7.834786ms)
+FAIL  console [chromium]
+        - pageerror: while the acknowledged cutoff is pending
+✔ close drains ordinary lines after its evidence barrier and reports only once (10.941417ms)
+ok    console [chromium columns]
+✔ R1: independently delivered owned failure after cutoff ACK reaches the final synchronous drain (45.690078ms)
+FAIL  console [chromium columns]
+        - requestfailed: http://127.0.0.1:2345/mcp-resources net::ERR_ABORTED
+✔ R1: independently delivered unowned failure after cutoff ACK reaches the final synchronous drain (19.437661ms)
+ok    console [chromium columns]
+✔ R2: owned requestfailed in a later event-loop task is reported before retirement (3.112621ms)
+FAIL  console [chromium columns]
+        - requestfailed: http://127.0.0.1:2345/mcp-resources net::ERR_ABORTED
+✔ R2: unowned requestfailed in a later event-loop task is reported before retirement (5.40111ms)
+ok    apps
+FAIL  console [chromium columns]
+        - pageerror: late ordinary fault
+ok    apps
+FAIL  console [chromium columns]
+        - pageerror: late ordinary fault
+        - requestfailed: http://127.0.0.1:2345/mcp-resources net::ERR_ABORTED
+        - resource-read evidence: no complete verified live read at the acknowledged cutoff
+✔ observed endpoint Requests bypass step drains, patterns and size rules until final cutoff (4.207867ms)
+FAIL  console [chromium columns]
+        - pageerror: late ordinary fault
+        - requestfailed: http://127.0.0.1:2345/mcp-resources net::ERR_ABORTED
+        - resource-read evidence: no complete verified live read at the acknowledged cutoff
+✔ opening abandonment finalizes evidence before detached reporting and retirement (3.105525ms)
+✔ reporter-absent retirement still finalizes exactly once (5.508639ms)
+FAIL  console [chromium columns]
+        - pageerror: late ordinary fault
+        - requestfailed: http://127.0.0.1:2345/mcp-resources?unrelated=1 net::ERR_ABORTED
+        - resource-read evidence: no complete verified live read at the acknowledged cutoff
+ok    apps
+FAIL  console [chromium]
+        - requestfailed: http://127.0.0.1:1439/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/other/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_FAILED
+        - console.error: real
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  step
+        - an assertion
+        - console.error: during the step
+FAIL  next
+        - console.error: between steps
+FAIL  console [chromium columns]
+        - console.error: after the last step
+ERROR open
+        ! could not run
+ERROR later
+        ! not run: the page did not open
+FAIL  console [webkit]
+        - console.error: while opening
+FAIL  console [chromium]
+        - pageerror: boom
+FAIL  step
+        - console.error: real
+FAIL  release
+        - console.error: real
+FAIL  chromium
+        - console.error: chromium
+FAIL  webkit
+        - console.error: webkit
+FAIL  console [chromium columns 600]
+        - console.error: same fault
+        - console.error: same fault
+FAIL  console [webkit 360]
+        - pageerror: held before close
+✔ an unrelated query endpoint cannot borrow the old live pattern (3.579689ms)
+✔ #647: live mount proof classifies a late abort before close, keeping rejected neighbors (0.840456ms)
+✔ #647: an absent live mount proof leaves held and late aborts as failures (0.473798ms)
+✔ a page's lines are reported once, on the result that follows them (1.55324ms)
+✔ openPage publishes counts and classification actions without diagnostic queues (0.793345ms)
+✔ close reports held diagnostics even when context retirement fails (0.588249ms)
+✔ page consumers and wrappers do not access private queues through any handle name (6171.210595ms)
+FAIL  console [chromium columns]
+        - resource-read evidence: no complete verified live read at the acknowledged cutoff
+✔ missing actual Request completion fails within the unchanged settlement budget (2007.725293ms)
+✔ later-task terminal delivery precedes reporter-absent close (9.282604ms)
+✔ later-task terminal delivery precedes opening abandonment (16.01039ms)
+✔ new pane waits through mounted mark and late caret, retaining the old pane (179.10004ms)
+✔ split refuses old pane remains focused (50.397577ms)
+✔ split refuses old pane disappears (42.921317ms)
+✔ split refuses two panes are added (59.621277ms)
+✔ split refuses duplicate focus marks (50.021505ms)
+✔ split refuses no composer caret (25.305868ms)
+✔ focus waits while its composer is inert (22.137264ms)
+✔ focus waits while its composer is data-drag-reflow (42.52222ms)
+✔ focus waits while its composer is data-split-flying (25.337245ms)
+✔ focus waits while its composer is data-split-measuring (29.362028ms)
+✔ focus waits while its composer is data-message-arrival-waiting (50.258459ms)
+✔ finite movement must finish; infinite ambient animation does not block focus (11.427332ms)
+✔ pane navigation waits for the commanded destination (19.688666ms)
+✔ a button in the right pane does not stand in for its composer (27.405546ms)
+✔ close must remove exactly the formerly focused pane (48.710666ms)
+✔ destinations follow pane reading order and retain boundary navigation (3.404316ms)
+✔ retirement requires work but does not assume one frame owner (0.289172ms)
+✔ the bounded page wait accepts delayed convergence and releases both handles (31.557008ms)
+✔ deadline failure stays failed with missing convergence (24.643008ms)
+✔ deadline failure stays failed with late convergence (36.367285ms)
+✔ a lost page is an infrastructure failure, not a settlement timeout (24.345414ms)
+✔ samples callback execution rather than delayed nominal frame timestamps (5.016916ms)
+✔ retains a first frame whose execution clock starts at zero (0.914266ms)
+✔ keeps median precision and averages the middle pair of an even series (1.003079ms)
+▶ frame budget
+  ✔ fails a 50.1 ms frame whose presented maximum rounds to the budget (0.40829ms)
+  ✔ accepts an exact 50 ms frame (0.147971ms)
+  ✔ accepts a 49.6 ms frame that presentation rounds up to the budget (0.124016ms)
+  ✔ could not run when the sample recorded no frame (0.58234ms)
+  ✔ keeps a missing frame sample as a gap and rethrows anything else (0.225227ms)
+✔ frame budget (30.736206ms)
+▶ long animation frame clock
+  ✔ shifts style and layout with the frame, so the duration stays positive (0.40833ms)
+  ✔ reports no style and layout when the phase sentinel is zero (0.235382ms)
+  ✔ keeps a phase that begins at the sample origin as a real zero (0.162863ms)
+✔ long animation frame clock (0.995818ms)
+✔ attributes a sampled frame to work that began before the sample origin (0.186028ms)
+✔ retains attribution in the pre-origin part of the first sampled gap (0.158327ms)
+✔ retains input stamps and raw gaps without changing the measured frame window (0.958792ms)
+✔ records actual trusted input targets on the same execution clock (0.718443ms)
+✔ the owning check retains all six landing frames through the expected swap (13.818184ms)
+✔ the owning check rejects stalled original order (16.343038ms)
+✔ the owning check rejects missing pane (44.838561ms)
+✔ the owning check rejects wrong complete order (13.401964ms)
+✔ the owning check rejects an extra pane (15.930321ms)
+✔ the owning check rejects unfinished finite animation (5.270153ms)
+✔ the owning check rejects pending finite animation (43.598629ms)
+✔ the owning check rejects late live order after the deadline (16.843115ms)
+✔ infinite ambient animation does not prevent a completed reduced-motion drop (13.16532ms)
+✔ recorded reading order is columns then rows, independent of DOM order (4.588105ms)
+✔ no recorded landing frame is unfinished, rather than ready or an exception (0.714888ms)
+✔ a page failure propagates instead of being labelled settlement timeout (3.251378ms)
+✔ converged order still rejects no placeholder (18.038851ms)
+✔ converged order still rejects preview glide (3.189876ms)
+✔ converged order still rejects intermediate landing geometry (10.858413ms)
+✔ converged order still rejects a carried copy (27.80367ms)
+✔ converged order still rejects an inline transform (12.019047ms)
+✔ exact Request joins in either delivery order (true) (7.553194ms)
+✔ exact Request joins in either delivery order (false) (26.302988ms)
+✔ corrupt remains an error despite full same-origin sizes and a live pattern (0.770351ms)
+✔ truncated remains an error despite full same-origin sizes and a live pattern (0.325246ms)
+✔ overlong remains an error despite full same-origin sizes and a live pattern (0.390563ms)
+✔ missingEOF remains an error despite full same-origin sizes and a live pattern (12.559755ms)
+✔ missingTransport remains an error despite full same-origin sizes and a live pattern (0.358606ms)
+✔ missingAcceptance remains an error despite full same-origin sizes and a live pattern (0.322632ms)
+✔ missingLive remains an error despite full same-origin sizes and a live pattern (0.212608ms)
+✔ cancelAfterLive remains an error despite full same-origin sizes and a live pattern (0.463943ms)
+✔ cancelBeforeEOF remains an error despite full same-origin sizes and a live pattern (0.205027ms)
+✔ wrongRead remains an error despite full same-origin sizes and a live pattern (0.26107ms)
+✔ wrongOwner remains an error despite full same-origin sizes and a live pattern (0.20777ms)
+✔ wrongDigest remains an error despite full same-origin sizes and a live pattern (0.494699ms)
+✔ wrongSize remains an error despite full same-origin sizes and a live pattern (0.318095ms)
+✔ wrongGeneration remains an error despite full same-origin sizes and a live pattern (0.146749ms)
+✔ outOfOrder remains an error despite full same-origin sizes and a live pattern (9.361517ms)
+✔ overflow remains an error despite full same-origin sizes and a live pattern (0.23458ms)
+✔ inactive remains an error despite full same-origin sizes and a live pattern (0.223754ms)
+✔ noBarrier remains an error despite full same-origin sizes and a live pattern (0.209933ms)
+✔ forgedField remains an error despite full same-origin sizes and a live pattern (0.245857ms)
+✔ a duplicate Request poisons an otherwise complete read through cutoff (0.357564ms)
+✔ non-abort, wrong status and other endpoints never gain the exception (0.604553ms)
+✔ served export decoration fails closed on changed or duplicated contracts (9.503288ms)
+✔ producer observes constructor reads and live callbacks; delayed binding keeps browser causal order (2.880904ms)
+✔ producer refuses {"corrupt":true} (12.530451ms)
+✔ producer refuses {"canceled":true} (0.535129ms)
+✔ producer refuses {"cancelDigest":true} (0.342922ms)
+✔ producer refuses {"callbackThrows":true} (0.61584ms)
+✔ producer refuses {"size":1} (0.215011ms)
+✔ producer refuses {"chunk":"oversize"} (1.446641ms)
+✔ credential and body sentinels never enter the safe summary (8.85529ms)
+✔ forged read states and collector-shaped objects cannot mint classification (0.187741ms)
+✔ disposed observation rejects late delivery and new identities without retaining them (0.185847ms)
+✔ a tiny-chunk flood with stalled receipts fails bounded observation while the app continues (29.236732ms)
+✔ the retained Request budget fails explicitly instead of evicting duplicate evidence (6.486441ms)
+✔ an unowned transport read fails observation without changing its original Promise (0.336422ms)
+✔ foreign-frame bindings and a second main-frame navigation invalidate the generation (40.858886ms)
+✔ new endpoint admission after cutoff cannot borrow a completed live read (0.484444ms)
+✔ many small reads cannot exceed the retained read budget (4.559272ms)
+✔ mount overflow fails observation while still invoking every original factory (4.606523ms)
+✔ actual requestfinished in a later task completes the admitted Request barrier (3.096887ms)
+✔ actual requestfailed in a later task completes the admitted Request barrier (9.327465ms)
+✔ synchronous finish rejects pending proof and cleanup cannot repair it (1.00426ms)
+✔ a terminal verified read cannot conceal another pending unowned candidate (1.034777ms)
+✔ a terminal verified read cannot conceal another pending query candidate (30.529553ms)
+✔ a terminal verified read cannot conceal another pending method candidate (4.891818ms)
+✔ a terminal verified read cannot conceal another pending preflight candidate (17.958291ms)
+✔ a terminal verified read cannot conceal another pending subframe candidate (2.701486ms)
+✔ new candidates after the wait empties remain refused: terminal=false (5.051117ms)
+✔ new candidates after the wait empties remain refused: terminal=true (1.998637ms)
+✔ terminal tombstones make repeats idempotent and contradictions invalid: false (1.435425ms)
+✔ terminal tombstones make repeats idempotent and contradictions invalid: true (1.49286ms)
+✔ a terminal notification cannot invent admission by URL (4.024773ms)
+✔ the Request lifetime bound includes 512 completed identities (26.871798ms)
+✔ the Request lifetime bound includes 513 completed identities (6.543667ms)
+✔ original acceptance and live owner join in either order: accept-first (5.30791ms)
+✔ original acceptance and live owner join in either order: live-first (0.775318ms)
+✔ original acceptance and live owner join in either order: live-before-read (6.856915ms)
+✔ later successive reads need no view republish (1.062848ms)
+✔ later concurrent-forward reads need no view republish (1.217298ms)
+✔ later concurrent-reverse reads need no view republish (0.690492ms)
+✔ later read cannot survive abort before-acceptance or borrow replacement liveness (0.768388ms)
+✔ later read cannot survive abort after-acceptance or borrow replacement liveness (0.460368ms)
+✔ later read cannot survive ending before-acceptance or borrow replacement liveness (0.78299ms)
+✔ later read cannot survive ending after-acceptance or borrow replacement liveness (2.376731ms)
+✔ later read cannot survive gone before-acceptance or borrow replacement liveness (0.322031ms)
+✔ later read cannot survive gone after-acceptance or borrow replacement liveness (0.360408ms)
+✔ later read cannot survive failed before-acceptance or borrow replacement liveness (0.459006ms)
+✔ later read cannot survive failed after-acceptance or borrow replacement liveness (0.349933ms)
+✔ acceptance without an original live owner publishes no live evidence (0.303283ms)
+✔ live owner cannot lend acceptance to a later corrupt read (7.650826ms)
+✔ live owner cannot lend acceptance to a later truncated read (0.63554ms)
+✔ live owner cannot lend acceptance to a later rejected read (0.348902ms)
+✔ live owner cannot lend acceptance to a later unaccepted read (0.311916ms)
+▶ Settings notification permission evidence
+  ✔ accepts the default row and refuses contradictory button evidence (1.399862ms)
+  ✔ accepts the denied row and refuses contradictory button evidence (0.151046ms)
+  ✔ accepts the granted row and refuses contradictory button evidence (1.754982ms)
+  ✔ accepts the unsupported row and refuses contradictory button evidence (5.440749ms)
+  ✔ does not infer an Allow button from the denied state's explanatory copy (0.20098ms)
+  ✔ rejects an unknown permission without indexing an inherited property (0.170464ms)
+✔ Settings notification permission evidence (10.185718ms)
+✔ the verdict line is one JSON object naming the evidence and the summary (24.605391ms)
+✔ a failed check wins, and a skipped dev-only check is not could-not-run (0.243083ms)
+✔ engines and page lines come from the check's own results (0.550743ms)
+✔ the summary names the verdict, each engine, and the lines (0.305216ms)
+✔ writeView stores the view as JSON under the evidence directory (1.923454ms)
+✔ a bundled Chromium channel is forwarded on the child check's argv (0.176483ms)
+✔ a UI check's generated argv parses without gateway-only options (2.675667ms)
+✔ the scripted command accepts --channel bundled (322.476205ms)
+✔ an engine the document does not name is not the process status (4.802245ms)
+✔ the workspace-load query is the dry run (11.216128ms)
+✔ the page parser accepts that query (476.383716ms)
+✔ run-all does not run workspace-load (0.367329ms)
+✔ can pass the complete CSS selector table to a browser evaluation (9.000507ms)
+✔ reads the split-beside chord from the Playwright string (0.525826ms)
+starting a dev server of its own on port 45045…
+warmed 4 modules in 192 ms
+starting a dev server of its own on port 44487…
+warmed 4 modules in 95 ms
+starting a dev server of its own on port 35261…
+✔ shared production optimization overwrites the development JSX runtime (1912.104184ms)
+warmed 4 modules in 172 ms
+starting a dev server of its own on port 42191…
+warmed 4 modules in 111 ms
+starting a dev server of its own on port 44985…
+warmed 4 modules in 146 ms
+starting a dev server of its own on port 33423…
+✔ isolated optimizers preserve the concurrent canonical cache and runtime (2621.199659ms)
+warmed 4 modules in 101 ms
+starting a dev server of its own on port 40707…
+✔ isolated cache survives until the owned process exits, then close is repeatable (987.925852ms)
+✔ configuration failure stops its child and removes the private cache (319.880919ms)
+✔ stopping a preview waits for the process and removes its directory (296.806655ms)
+building production into /workspace/.setup/tmp/nessa-desktop-verify-kEwwoG…
+✔ stopping a signal-killed preview again does not wait (32.580287ms)
+✔ stopping a preview that never started still removes its directory (8.496344ms)
+✔ a failed production build removes its directory (658.260359ms)
+✔ the functional production preview inlines the ci stage on both halves (6.838452ms)
+✔ an explicit --url keeps a named dev or prod mode and otherwise stays given (0.215934ms)
+✔ setup waits for a late locked-vault prompt and confirms the actual unlock (4.543359ms)
+✔ already unlocked setup performs no passphrase or unlock action (0.317858ms)
+✔ unavailable status refuses setup readiness before any unlock (0.721326ms)
+✔ a missing prompt refuses inside the unchanged fifteen-second ceiling (0.243904ms)
+✔ a completed click without authoritative unlock is not successful readiness (0.335062ms)
+✔ records one frame per flush when a recorder is stopped and started again inside that frame (4.475463ms)
+▶ startup sample
+  ✔ subtracts the navigation start from the phase timestamps (2.028307ms)
+  ✔ treats a zero load-event timestamp as the event not having fired (0.197487ms)
+  ✔ returns null when the document has no navigation entry (0.118928ms)
+  ✔ keeps the two paint names and ignores the rest (0.754003ms)
+  ✔ keeps allowlisted CDP metrics and drops names it does not own (0.227441ms)
+  ✔ does not read a CDP name inherited from Object.prototype (0.910438ms)
+  ✔ keeps gauges and subtracts counters from the sample baseline (0.554393ms)
+  ✔ omits a counter that moved backwards (0.713372ms)
+  ✔ computes frames per second from the rAF gaps (3.031403ms)
+  ✔ summarizes long tasks by count and longest duration (2.09031ms)
+  ✔ times the first endpoint ask from the navigation start (2.304621ms)
+  ✔ prefers the CDP heap and falls back to performance.memory (0.282915ms)
+  ✔ rounds a series for the table and leaves an empty series blank (0.218839ms)
+✔ startup sample (20.454075ms)
+✔ duplicate titles open the intended conversation in either row order (4.703305ms)
+✔ the previous composer's presence cannot complete a delayed selection (6.479944ms)
+✔ selection cannot be remembered across a later composer appearing for main (22.905658ms)
+✔ ambiguous composers remain a failure, including hidden duplicates (1.659923ms)
+✔ an intended selection without a visible composer is not ready (21.488489ms)
+✔ an absent identity cannot open another conversation with the same title (0.964048ms)
+✔ Home's focused selected identity wins over another engine's same title (0.293761ms)
+✔ delayed Home publication cannot use the previously listed same-title row (0.135574ms)
+✔ missing, ambiguous or differently titled Home selection supplies no identity (0.241874ms)
+✔ a stable full connection proves its capacity (2.512504ms)
+✔ a stable connection accepting an extra view fails (0.647913ms)
+✔ an original event ending invalidates the probe (0.221523ms)
+✔ replacing an original event invalidates the probe (0.149845ms)
+✔ removing an original event invalidates the probe (1.088255ms)
+✔ the original main view ending invalidates the probe (0.230456ms)
+✔ an acquired view ending invalidates the probe (0.469064ms)
+✔ a closed change source is followed again (0.204216ms)
+✔ a frame that does not fit is still a failure and is not followed again (0.480221ms)
+✔ reference replay waits through quiet and every page until fresh-head convergence (3.826528ms)
+✔ an intermediate empty checkpoint resumes instead of claiming completion (0.728194ms)
+✔ head growth resumes after the applied candidate without duplicating late callbacks (0.863197ms)
+✔ a stalled prefix fails at the existing overall deadline (0.829155ms)
+✔ empty history still requires matching fresh-head authority (0.910277ms)
+✔ capture and growing-head resumes share the original deadline (0.468054ms)
+✔ a missing head capture fails rather than accepting an empty candidate (0.577197ms)
+✔ a late opening after deadline releases its source without starting a capture (0.233171ms)
+✔ a terminal replay refusal stays a failure (0.361322ms)
+✔ a terminal head capture refusal stays a failure (0.877568ms)
+✔ a stalled replay cleanup fails without misreporting convergence (0.660792ms)
+✔ a stalled head capture cleanup fails without misreporting convergence (0.208333ms)
+✔ a probe interrupted by agent retirement closes its views and the next probe still proves capacity (0.483907ms)
+✔ a probe still fails for permission_denied before its capacity boundary (0.28619ms)
+✔ a probe still fails for subscription_duplicate before its capacity boundary (0.108643ms)
+✔ a probe still fails for subscription_capacity before its capacity boundary (0.082153ms)
+✔ a probe still fails if a subscription past capacity is accepted (0.202323ms)
+✔ native trace keeps complete observations and markers name exact used IDs (7.772095ms)
+✔ audit publication identity remains fresh when restart generation repeats (6.928007ms)
+✔ native catalogue refuses a zero-match successful process (252.020702ms)
+✔ native catalogue refuses a failed process despite a passing-looking summary (215.472006ms)
+✔ the same numbers and seed give the same plan, and another seed another (6.59718ms)
+✔ every required step appears as often as its number says (0.982907ms)
+✔ a failure is always followed by a reply, and a switch never picks the mode in force (36.335041ms)
+✔ no long conversation is planned when its number is 0 (0.509656ms)
+✔ numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one throws (1.366262ms)
+✔ handoffs run last of all, after every upgrade, whatever the seed (13.850686ms)
+✔ positive model steps retain default and raised counts, run last but for handoffs, and enter Ask (13.130223ms)
+✔ the legacy seed preserves the existing non-model work's relative order (5.7315ms)
+✔ webhook capture/no-send runs once by default and three times at the raised count (0.611839ms)
+✔ native-context drift keeps its default and raised repetition counts (0.511959ms)
+✔ browser recovery requires its new conversation.subscribeList acknowledgement (15.082076ms)
+✔ browser recovery requires its new conversation.subscribe acknowledgement (0.449826ms)
+✔ challenge alone cannot establish usable browser recovery (3.064774ms)
+✔ authentication alone cannot establish usable browser recovery (3.093317ms)
+✔ failed read cannot establish usable browser recovery (0.317987ms)
+✔ unsolicited reply cannot establish usable browser recovery (0.369695ms)
+✔ another socket's reply cannot establish usable browser recovery (0.288493ms)
+✔ closed acknowledged socket cannot establish usable browser recovery (0.322434ms)
+✔ failed acknowledged socket cannot establish usable browser recovery (4.337125ms)
+✔ stalled recovery exhausts the existing Send budget rather than sending (0.756576ms)
+✔ 64 pending workspace reads allow readiness (0.613452ms)
+✔ 65 pending workspace reads refuse readiness (0.377317ms)
+✔ the pre-restart socket's read does not prove a replacement recovered (0.286781ms)
+✔ a socket closing before a recovered waiter resumes is refused (0.292068ms)
+✔ an error on an older socket preserves the live read (0.265499ms)
+✔ an error on another socket preserves the live read (0.148032ms)
+✔ late console text cannot revoke another socket's acknowledged read (0.283696ms)
+✔ more frames on the same socket cannot erase a later console failure (3.351945ms)
+✔ disposing or ending the observation releases a pending readiness waiter (1.898172ms)
+✔ exact owned Could not connect to 127.0.0.1: Connection refused is retained as harmless only after recovery (4.449874ms)
+✔ exact owned Error receiving data: Connection reset by peer is retained as harmless only after recovery (0.269355ms)
+✔ exact owned The network connection was lost. is retained as harmless only after recovery (0.247542ms)
+✔ exact owned Could not connect to the server. is retained as harmless only after recovery (0.197917ms)
+✔ exact owned Error in connection establishment: net::ERR_CONNECTION_REFUSED is retained as harmless only after recovery (0.168413ms)
+✔ older identical text keeps every occurrence failed (0.308503ms)
+✔ an identical error after verified recovery is still a failure (0.249375ms)
+✔ console without socket evidence (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.315954ms)
+✔ socket without a new receiving connection (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.1399ms)
+✔ failed recovery assertion (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.202555ms)
+✔ unknown socket cause (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.816677ms)
+✔ another gateway (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.297327ms)
+✔ another path (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.225158ms)
+✔ query suffix (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.390948ms)
+✔ evidence overflow (Could not connect to 127.0.0.1: Connection refused) leaves every console error failed (0.726942ms)
+✔ console without socket evidence (The network connection was lost.) leaves every console error failed (0.168463ms)
+✔ socket without a new receiving connection (The network connection was lost.) leaves every console error failed (0.120922ms)
+✔ failed recovery assertion (The network connection was lost.) leaves every console error failed (0.209845ms)
+✔ unknown socket cause (The network connection was lost.) leaves every console error failed (0.408223ms)
+✔ another gateway (The network connection was lost.) leaves every console error failed (0.1731ms)
+✔ another path (The network connection was lost.) leaves every console error failed (0.128433ms)
+✔ query suffix (The network connection was lost.) leaves every console error failed (0.343757ms)
+✔ evidence overflow (The network connection was lost.) leaves every console error failed (0.311758ms)
+✔ console without socket evidence (Could not connect to the server.) leaves every console error failed (0.123055ms)
+✔ socket without a new receiving connection (Could not connect to the server.) leaves every console error failed (0.18001ms)
+✔ failed recovery assertion (Could not connect to the server.) leaves every console error failed (2.982691ms)
+✔ unknown socket cause (Could not connect to the server.) leaves every console error failed (0.526301ms)
+✔ another gateway (Could not connect to the server.) leaves every console error failed (0.107381ms)
+✔ another path (Could not connect to the server.) leaves every console error failed (0.164988ms)
+✔ query suffix (Could not connect to the server.) leaves every console error failed (0.108803ms)
+✔ evidence overflow (Could not connect to the server.) leaves every console error failed (0.466711ms)
+✔ throw retains error evidence and retires the observation before another action (0.843167ms)
+✔ socket evidence is consumed once and cannot pay a second identical console error (0.220781ms)
+✔ an earlier connection receiving another frame is not a new connection (0.184547ms)
+✔ another page, nested action and disposed owner reject before running effects (0.307542ms)
+✔ owned console with foreign socket cannot create matching restart evidence (0.257147ms)
+✔ foreign console with owned socket cannot create matching restart evidence (0.122364ms)
+✔ owned URL with contradictory causes cannot create matching restart evidence (0.119319ms)
+✔ overflow of active owned sockets stays failed after they close (0.656326ms)
+✔ disposal during recovery cannot publish an exemption (0.25948ms)
+✔ more than64 earlier distinct lines conservatively forbid reclassification (0.310186ms)
+✔ receiving socket resets and closes needs a later live receiving connection (2.646085ms)
+✔ first recovery fails again needs a later live receiving connection (0.192989ms)
+✔ receiving socket closes without another error needs a later live receiving connection (0.15962ms)
+✔ failed socket emits a buffered receiving frame needs a later live receiving connection (0.138548ms)
+✔ console failure arrives after receiving proof needs a later live receiving connection (0.145308ms)
+✔ later unknown socket error invalidates earlier recovery needs a later live receiving connection (0.129405ms)
+✔ a later distinct live receiving socket recovers both outages (0.19961ms)
+✔ closing an older failed socket preserves the distinct live recovery (0.17305ms)
+✔ retired observation cannot exempt a retained socket after listener cleanup fails (0.431548ms)
+✔ a file with nothing in the newer tables goes back to version 6 (92.767786ms)
+✔ a marked turn keeps its table, at version 7 (136.844191ms)
+✔ a model request keeps every table, at version 7 (103.421494ms)
+✔ a file with an agent switch is left as the newest build's (63.713107ms)
+✔ cursor catch-up cannot renew the final webhook evidence deadline (11.586184ms)
+✔ accepts a moved pane after the carried copy is gone (1.471501ms)
+✔ rejects a no-op even when no carried copy remains (0.171217ms)
+✔ rejects a moved pane while its carried copy remains (0.138017ms)
+✔ focus and Down are ready on a mounted prefix while complete-list timing still fails (157.162337ms)
+✔ a complete list does not excuse lost focus (22.741841ms)
+✔ a row outside the overview column does not certify focus (67.808919ms)
+✔ Down waits for its mounted successor rather than accepting the last prefix row (34.876259ms)
+✔ a stalled empty prefix fails readiness (40.461835ms)
+✔ a timely horizontal announcement holds and a moving vertical announcement fails (0.729886ms)
+✔ absent announcements and announcements without a recorded move fail (4.913921ms)
+✔ late delivery is distinct from late observation and neither proves moving intent (0.225979ms)
+✔ the exact rest boundary and future event clocks cannot certify moving intent (0.153921ms)
+✔ a later legitimate rest announcement is retained without replacing moving evidence (0.180261ms)
+✔ the browser recorder captures delivery separately, ignores duplicate coordinates and releases resources (2.124842ms)
+ℹ tests 548
+ℹ suites 31
+ℹ pass 547
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 14303.687292

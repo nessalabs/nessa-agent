@@ -1,0 +1,15 @@
+diff --git a/crates/nessa-sdk/src/application/agent_execution/sessions/records.rs b/crates/nessa-sdk/src/application/agent_execution/sessions/records.rs
+index d287576d3..f6239ae4d 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/sessions/records.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/sessions/records.rs
+@@ -436,9 +436,7 @@ impl continuation::Continuation {
+                     .as_ref()
+                     .map(|snapshot| snapshot.provider.clone());
+             }
+-            let net_namespace_changed = namespace_changed
+-                && self.snapshot.as_ref().map(|snapshot| &snapshot.provider)
+-                    != context_provider.as_ref();
++            let net_namespace_changed = namespace_changed;
+             let result = self.stage_change(change, undo, net_namespace_changed);
+             if result.is_ok() {
+                 if changes_namespace {

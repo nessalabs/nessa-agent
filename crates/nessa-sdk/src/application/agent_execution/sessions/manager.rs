@@ -642,11 +642,9 @@ impl SessionManager {
         let compacted = saved;
         let identity = provider.identity();
         // A different provider name or model is refused before launch (S1,
-        // S2). A fingerprint change where the saved context is not restored
-        // here is saved now (S5): the next open still cannot resume it. A
-        // fingerprint change where it would be resumed is not saved yet (S6).
-        // attach opens a new native session and writes the new fingerprint
-        // with that session's id. docs/design/restoration-fingerprint.md.
+        // S2). Fingerprint changes (S5/S6) defer publication until attach opens
+        // a new native session. Its ID, admission watermark and fingerprint
+        // commit together. docs/design/restoration-fingerprint.md.
         self.open_fresh_context.store(false, Ordering::Relaxed);
         *self.switching.lock().expect("switch") = None;
         let intent = self.handoff.get_mut().expect("handoff intent").take();
@@ -680,18 +678,11 @@ impl SessionManager {
                     *self.switching.lock().expect("switch") = Some((actor.clone(), *at_ms));
                     None
                 } else {
-                    let restores = snapshot.provider_context.recorded().is_some_and(|saved| {
-                        provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
-                    });
-                    if restores {
-                        self.open_fresh_context.store(true, Ordering::Relaxed);
-                        None
-                    } else {
-                        Some(SessionChange::ProviderIdentityChanged {
-                            before: snapshot.provider.clone(),
-                            after: identity.clone(),
-                        })
-                    }
+                    // A different restoration fingerprint selects a fresh native
+                    // context. Publish both facts together only after open succeeds,
+                    // including when the previous context was never invoked.
+                    self.open_fresh_context.store(true, Ordering::Relaxed);
+                    None
                 }
             }
             _ => None,
@@ -809,18 +800,31 @@ impl SessionManager {
         // fingerprint still matches. A context-only mismatch (S6) and a
         // provider that starts elsewhere open new context, recorded below.
         let fresh = self.open_fresh_context.load(Ordering::Relaxed);
-        let restore = if fresh {
-            None
-        } else {
+        let (restore, admitted_before) = {
             let evidence = self.evidence.lock().await;
             let snapshot = evidence.observed().expect("prepared session evidence");
-            snapshot
-                .provider_context
-                .recorded()
-                .cloned()
-                .filter(|saved| {
-                    provider.restores_saved_context(saved, !snapshot.invocations.is_empty())
-                })
+            let restore = if fresh {
+                None
+            } else {
+                snapshot
+                    .provider_context
+                    .recorded()
+                    .cloned()
+                    .filter(|saved| {
+                        provider.restores_saved_context(
+                            saved,
+                            snapshot
+                                .provider_context
+                                .has_admitted_work(snapshot.invocations.len()),
+                        )
+                    })
+            };
+            // Admission while open waits belongs to this opening even if the
+            // input is withdrawn before native context publication (C11).
+            (
+                restore,
+                super::validation::terminal_prefix(&snapshot.invocations),
+            )
         };
         let opening = catch_unwind(AssertUnwindSafe(|| {
             provider.open(ProviderOpenRequest::new(
@@ -1003,7 +1007,18 @@ impl SessionManager {
                 .expect("prepared session evidence")
                 .provider_context
                 .clone();
-            let after = ProviderContext::Recorded(session.id().clone());
+            let snapshot = evidence.observed().expect("prepared session evidence");
+            // A resumed context keeps its original admission boundary. A fresh
+            // open returning the same native ID in the same provider namespace
+            // is also conservative: ID reuse cannot erase admitted work.
+            let after = if restore.is_some()
+                || (before.recorded() == Some(session.id())
+                    && snapshot.provider.name() == provider.identity().name())
+            {
+                before.clone()
+            } else {
+                ProviderContext::recorded_after(session.id().clone(), admitted_before)
+            };
             if before != after {
                 changes.push(SessionChange::ProviderContext { before, after });
             }

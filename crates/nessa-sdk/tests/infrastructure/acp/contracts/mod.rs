@@ -3,6 +3,8 @@
 //! ```text
 //! ACP tests -> shared fixture setup -> Python subprocess
 //!           -> sessions / executions / steering / permissions / audit / restoration
+//!           -> current_context: retained admission across switch/fingerprint
+//!              changes, fresh native processes and missing used history
 //!           -> codex and opencode: the other profiles, each against a handler
 //!              speaking its own shapes
 //!           -> hooks: Claude and OpenCode report unknown across open, prompt,
@@ -27,6 +29,7 @@
 mod audit;
 mod codex;
 mod configuration;
+mod current_context;
 mod deletion;
 mod effort;
 mod executions;

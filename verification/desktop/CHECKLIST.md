@@ -1639,6 +1639,18 @@ says why where the conversations would be.
   and preserve the30-second discovery deadline and three-client/24-create load.
   _Check:_ `lib/stress-conversation.test.mjs` and both-engine default and raised
   `conversation-stress.mjs` runs (#1026).
+- [ ] **An unused new Claude context survives a cold restart after old history.**
+  In a dedicated channel coordinator selected as Claude through the real UI,
+  retain a completed exchange, change its native fingerprint, then restart again
+  before any new input. Fresh outer audit identities and focused native request
+  traces prove publication and zero new admission; the missing unused ID is
+  replaced rather than resumed. The next UI Send completes exactly once while
+  that pane retains the old prompt/reply, with no prompt replay. The fixture
+  limits native-history checks to this canonical workspace. Restore the isolated
+  baseline configuration with an actual restart before later steps.
+  _Check:_ `conversation-stress.mjs`'s `drift` step (`drifts`, default and raised
+  count), Chromium and WebKit; `lib/stress-native-context.test.mjs` and the
+  scripted agent's focused native-history transport tests (#1164).
 - [ ] **Stress restart errors belong to the planned gateway outage.** Install
   socket observation before navigation. Only exact owned `/session` refusal/reset
   console occurrences during the action, corroborated by actual socket errors,

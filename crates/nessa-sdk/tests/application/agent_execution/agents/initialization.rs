@@ -817,7 +817,7 @@ async fn prepare_leaves_an_unfinished_save_it_did_not_plan_unresolved() {
     );
     let lease = storage.open(later.clone()).await.unwrap();
     let loaded = lease.load().await.unwrap();
-    let context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+    let context = ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0);
     refuse_record_appends_from(&root, record_rows(&root) + 1);
     assert!(matches!(
         lease

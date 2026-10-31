@@ -1,0 +1,10 @@
+{
+  "base": "56c3c475a47b87d1c9ec26ba648f59cdab47b47e",
+  "base_source_calculated_protocol": "a8e6fff6643172a9",
+  "head_compiled_protocol": "40ab4c5e00271b21",
+  "protocol_source_differences": [
+    "crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs"
+  ],
+  "config_source_equal": true,
+  "base_release_source": "//! Credential-free worker image, pinned to the lease protocol it serves.\n//! A source build with another protocol must publish its matching image before\n//! enabling token-only setup; it cannot silently clone an incompatible worker.\nconst PROTOCOL: &str = \"a8e6fff6643172a9\";\nconst IMAGE: &str = \"bsh_tu8vxzXBBQhMDD8tkFO1pUy9pY4lKRXxGrl1mp-PAu4\";\npub(crate) fn worker_image() -> Option<&'static str> {\n    (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)\n}\n"
+}

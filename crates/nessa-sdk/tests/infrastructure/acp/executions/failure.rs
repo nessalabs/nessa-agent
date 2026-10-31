@@ -319,8 +319,9 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
             queue_history: Vec::new(),
             id: session_id.clone(),
             provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-            provider_context: ProviderContext::Recorded(
+            provider_context: ProviderContext::recorded_after(
                 ExecutionSessionId::new("provider-context").unwrap(),
+                0,
             ),
             invocations: vec![InvocationRecord {
                 target_event_offset: None,

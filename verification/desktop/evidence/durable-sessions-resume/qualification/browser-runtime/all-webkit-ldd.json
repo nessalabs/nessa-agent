@@ -1,0 +1,77 @@
+[
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-wpe/bin/WPEGPUProcess",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-wpe/bin/MiniBrowser",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-wpe/bin/WPEWebProcess",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-wpe/bin/WPENetworkProcess",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-wpe/lib/libWPEWebKit-2.0.so.1.12.0",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-wpe/lib/libWPEInjectedBundle.so",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-wpe/sys/lib/libbacktrace.so.0.0.0",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/bin/WebKitGPUProcess",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/bin/WebKitWebProcess",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/bin/MiniBrowser",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/bin/WebKitNetworkProcess",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/lib/libwebkitgtk-6.0.so.4.20.0",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/lib/libjavascriptcoregtk-6.0.so.1.9.0",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/lib/libwebkitgtkinjectedbundle.so",
+    "missing": [],
+    "ldd_exit": 0
+  },
+  {
+    "path": "/workspace/scratch/durable-browser-runtime/browsers/webkit-2359/minibrowser-gtk/sys/lib/libbacktrace.so.0.0.0",
+    "missing": [],
+    "ldd_exit": 0
+  }
+]

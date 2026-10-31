@@ -620,9 +620,8 @@ impl SubscriptionFixture {
                     context: ProviderContext::Absent,
                 }
             } else {
-                let after = ProviderContext::Recorded(
-                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(),
-                );
+                let after = ProviderContext::recorded_after(
+                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(), 0);
                 let before = std::mem::replace(&mut context, after.clone());
                 SessionChange::ProviderContext { before, after }
             };
@@ -672,9 +671,8 @@ impl SubscriptionFixture {
             }],
             Some(snapshot) => vec![SessionChange::ProviderContext {
                 before: snapshot.provider_context.clone(),
-                after: ProviderContext::Recorded(
-                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(),
-                ),
+                after: ProviderContext::recorded_after(
+                    ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(), 0),
             }],
         };
         writer

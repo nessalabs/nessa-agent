@@ -1,0 +1,11 @@
+--- pristine/attachment.rs
++++ classify_admission/attachment.rs
+@@ -57,7 +57,7 @@
+     /// [`Self::validate_admission`] reports that contradiction separately.
+     pub fn has_admitted_work(&self, invocation_count: usize) -> bool {
+         self.admission_watermark()
+-            .is_some_and(|watermark| invocation_count != watermark)
++            .is_some_and(|_| false)
+     }
+ 
+     /// Validate the context boundary against retained invocation evidence.

@@ -1,0 +1,40 @@
+{
+  "head": "6d1b413b19d2af4355fdf331778fe98fa4a683a4",
+  "tree": "edb5e9a2fba369503238859b54924bb6cdfc0437",
+  "source_file": "crates/nessa-server/src/agents/infrastructure/credentialed_claude.rs",
+  "pristine_sha256": "e103dab8d89653f8b1b583b6b189f91889ba831fd2932a9dcbd6db23135fdfb8",
+  "mutated_sha256": "dfe77069258b65cc3b4ab57c1e3568cac33f9348ede14245bd909e63acc19c22",
+  "command": "/usr/local/bin/docker-init -s -- cargo test -p nessa-server --lib credentialed_claude::tests --offline -- --nocapture",
+  "setup": "source /workspace/.setup/activate.sh",
+  "environment": {
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "negative": {
+    "compiled": true,
+    "passed": 6,
+    "failed": 2,
+    "ignored": 0,
+    "failures": [
+      "context_restoration_delegates_without_reading_credentials: left true, right false",
+      "an_unused_credentialed_claude_context_reopens_without_native_history: Transport(provider stdout closed)"
+    ],
+    "exit_code": null,
+    "exit_code_note": "Process handle no longer available after compaction; terminal cargo test failure and complete result recorded in negative.log."
+  },
+  "positive": {
+    "status": "passed",
+    "compiled": true,
+    "passed": 8,
+    "failed": 0,
+    "ignored": 0,
+    "exit_code": 0
+  },
+  "scope_limit": "Actual CredentialedClaudeProvider + Agent + local ACP fixture + RecordStorage tested; private LeaseFence constructor not instantiated. Production composition and fence delegation inspected in source.",
+  "negative_log_sha256": "f7866e62ba97b1b5a0d7ccd5d965a2d11db7064618634029005a59d5ede33498",
+  "positive_log_sha256": "a767b312d3ecfac1deaebf3a7fbef185068c7742494bd331e7f46b0d39566255",
+  "restored_source_sha256": "e103dab8d89653f8b1b583b6b189f91889ba831fd2932a9dcbd6db23135fdfb8",
+  "probe_clean_after_restore": true,
+  "shared_target_released": true
+}

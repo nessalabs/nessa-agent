@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
@@ -40,6 +41,48 @@ test("a tool launch is the recorded agent, and a scenario launch is not", () => 
   assert.equal(scenario.command.argv.at(-1), TEXT_REPLY_SCENARIO)
   assert.equal(scenario.command.argv.includes("review_rows"), false)
   assert.throws(() => scriptedLaunch("claude", {}))
+})
+
+test("focused native context arguments are canonical, stable and Claude only", () => {
+  const directory = mkdtempSync(join(tmpdir(), "native-context-launch-"))
+  try {
+    const workspace = join(directory, "workspace")
+    const native = join(directory, "native")
+    mkdirSync(workspace)
+    mkdirSync(native)
+    const nativeContext = { directory: native, workspace }
+    const launch = scriptedLaunch("claude", {
+      scenario: TEXT_REPLY_SCENARIO,
+      nativeContext,
+    })
+    assert.deepEqual(launch.command.semanticArgs.slice(-4), [
+      "--native-context-directory",
+      realpathSync(native),
+      "--native-context-workspace",
+      realpathSync(workspace),
+    ])
+    assert.deepEqual(
+      scriptedLaunch("claude", { scenario: TEXT_REPLY_SCENARIO, nativeContext }).command
+        .semanticArgs,
+      launch.command.semanticArgs,
+    )
+    assert.equal(
+      scriptedLaunch("codex", {
+        scenario: TEXT_REPLY_SCENARIO,
+        nativeContext,
+      }).command.semanticArgs.includes("--native-context-directory"),
+      false,
+    )
+    for (const invalid of [{ directory: native }, { directory: "relative", workspace }])
+      assert.throws(() =>
+        scriptedLaunch("claude", {
+          scenario: TEXT_REPLY_SCENARIO,
+          nativeContext: invalid,
+        }),
+      )
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test("evidence wraps the agent and the MCP server with the recorder", () => {

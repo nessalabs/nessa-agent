@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs b/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
+index 5efd1e050..0e501f701 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
+@@ -1011,7 +1011,7 @@ impl SessionManager {
+             } else {
+                 ProviderContext::recorded_after(
+                     session.id().clone(),
+-                    super::validation::terminal_prefix(&snapshot.invocations),
++                    snapshot.invocations.len(),
+                 )
+             };
+             if before != after {

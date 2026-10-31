@@ -86,7 +86,8 @@ async fn checkpoint_fixture() -> TranscriptFold {
         .await
         .unwrap();
     let next = receipt.next_for(&first, 1).unwrap();
-    let context = ProviderContext::Recorded(ExecutionSessionId::new("next-context").unwrap());
+    let context =
+        ProviderContext::recorded_after(ExecutionSessionId::new("next-context").unwrap(), 0);
     let change = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
         after: context.clone(),
@@ -289,7 +290,8 @@ async fn completed_prefix_stays_published_during_same_generation_extension_and_c
         .unwrap();
     let original = receipt.next_for(&original, 1).unwrap();
     let mut watch = storage.watch_committed(&id).unwrap();
-    let context = ProviderContext::Recorded(ExecutionSessionId::new("first-context").unwrap());
+    let context =
+        ProviderContext::recorded_after(ExecutionSessionId::new("first-context").unwrap(), 0);
     let first = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
         after: context.clone(),
@@ -328,7 +330,7 @@ async fn completed_prefix_stays_published_during_same_generation_extension_and_c
     assert_eq!(loaded.binding(), &original);
     assert_eq!(loaded.snapshot(), Some(&snapshot));
     let final_context =
-        ProviderContext::Recorded(ExecutionSessionId::new("extended-context").unwrap());
+        ProviderContext::recorded_after(ExecutionSessionId::new("extended-context").unwrap(), 0);
     let second = SessionChange::ProviderContext {
         before: context,
         after: final_context.clone(),

@@ -1,0 +1,242 @@
+starting a dev server of its own on port 38937…
+warmed 1304 modules in 5693 ms
+conversation-stress {"backgroundTasks":1,"inputFiles":0,"pairedCatalogues":1,"modelSwitches":1,"seed":1,"rounds":16,"asides":2,"parallel":2,"turns":3,"switches":3,"stops":2,"fails":1,"usageLimits":1,"reviews":20,"large":1,"restarts":1,"threads":1,"awaits":1,"watches":1,"followers":2,"parks":1,"renames":1,"handoffs":1,"deletes":1,"fresh":2,"windows":1,"rails":1,"waitingRows":1,"streams":1,"panels":1,"onboardings":1,"linkings":1,"pastes":1,"tables":1,"traces":1,"notices":1,"pools":1,"devices":1,"tunnels":1,"drifts":1,"upgrades":1,"menus":1,"menuPanels":1,"githubs":1,"launches":1,"webhooks":1,"channels":1,"long":30}
+1. menu
+2. large allow (ask)
+3. long 30 turns
+4. waitingRow allow (ask)
+5. watch
+6. tunnel
+7. paste
+8. delegate
+9. table
+10. pool
+11. stream
+12. delete
+13. switch ask→auto
+14. permission deny (auto)
+15. fail
+16. reply after fail
+17. fresh
+18. window
+19. onboarding
+20. usageLimit
+21. reply after usageLimit
+22. background
+23. drift
+24. switch auto→ask
+25. permission deny (ask)
+26. menuPanel
+27. trace
+28. notice
+29. fresh
+30. channel
+31. stop
+32. aside
+33. devices
+34. await
+35. aside
+36. restart SIGKILL
+37. rename
+38. launch
+39. upgrade
+40. park
+41. reviews allow (ask)
+42. panel
+43. switch ask→full
+44. permission deny (full)
+45. github
+46. webhook
+47. rail
+48. stop
+49. linking
+50. pairedCatalogue
+51. switch full→ask
+52. model allow (ask)
+53. handoff
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    001 menu [chromium columns]
+ok    002 large [chromium columns]
+long conversation: 30 turns, first 275 ms, last 342 ms
+long conversation reopened in 257 ms; one turn in 34 ms
+long conversation read back to its first turn in 8 pages
+ok    003 long [chromium columns]
+ok    004 waitingRow [chromium columns]
+ok    005 watch [chromium columns]
+ok    006 tunnel [chromium columns]
+ok    007 paste [chromium columns]
+ok    008 delegate [chromium columns]
+ok    009 table [chromium columns]
+pool: worker a10 drained in 55 ms
+pool: worker b10 drained in 58 ms
+ok    010 pool [chromium columns]
+ok    011 stream [chromium columns]
+ok    012 delete [chromium columns]
+ok    013 switch [chromium columns]
+ok    014 permission [chromium columns]
+ok    015 fail [chromium columns]
+ok    016 reply [chromium columns]
+read 7907d959-048f-4356-85f3-f3e47c4ce12b: conversation_not_found
+ok    017 fresh [chromium columns]
+ok    018 window [chromium columns]
+ok    019 onboarding [chromium columns]
+ok    020 usageLimit [chromium columns]
+ok    021 reply [chromium columns]
+ok    022 background [chromium columns]
+read 099185a3-6f63-50a7-b94c-ac877477bcab: conversation_not_found
+ok    023 drift [chromium columns]
+ok    024 switch [chromium columns]
+ok    025 permission [chromium columns]
+ok    026 menuPanel [chromium columns]
+ok    027 trace [chromium columns]
+ok    028 notice [chromium columns]
+read 712e4169-61fa-4bf8-b579-a5c548afd279: conversation_not_found
+ok    029 fresh [chromium columns]
+read 5b5825c7-1032-5d9d-abf6-da3697cecc79: conversation_not_found
+read cba0a8fb-348e-5350-9845-d5fdbc35e6eb: conversation_not_found
+ok    030 channel [chromium columns]
+ok    031 stop [chromium columns]
+ok    032 aside [chromium columns]
+ok    033 devices [chromium columns]
+ok    034 await [chromium columns]
+ok    035 aside [chromium columns]
+ok    036 restart [chromium columns]
+ok    037 rename [chromium columns]
+launch: listed 483ms after the gateway was up
+ok    038 launch [chromium columns]
+upgrade: restarted on a version 6 file
+ok    039 upgrade [chromium columns]
+ok    040 park [chromium columns]
+ok    041 reviews [chromium columns]
+ok    042 panel [chromium columns]
+ok    043 switch [chromium columns]
+ok    044 permission [chromium columns]
+ok    045 github [chromium columns]
+webhook captured fixed Head 46; 46 queued, 0 attempted; loopback policy unchanged
+ok    046 webhook [chromium columns]
+ok    047 rail [chromium columns]
+ok    048 stop [chromium columns]
+ok    049 linking [chromium columns]
+ok    050 pairedCatalogue [chromium columns]
+ok    051 switch [chromium columns]
+ok    052 model [chromium columns]
+ok    053 handoff [chromium columns]
+ok    background [chromium columns]
+ok    at rest [chromium columns]
+ok    followers [chromium columns]
+ok    console [chromium columns]
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ERROR 001 menu [webkit columns]
+        ! locator.waitFor: Timeout 10000ms exceeded.
+Call log:
+[2m  - waiting for locator('[data-overview-listed]') to be visible[22m
+
+ERROR 002 large [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 003 long [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 004 waitingRow [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 005 watch [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 006 tunnel [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 007 paste [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 008 delegate [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 009 table [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 010 pool [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 011 stream [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 012 delete [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 013 switch [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 014 permission [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 015 fail [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 016 reply [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 017 fresh [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 018 window [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 019 onboarding [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 020 usageLimit [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 021 reply [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 022 background [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 023 drift [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 024 switch [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 025 permission [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 026 menuPanel [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 027 trace [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 028 notice [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 029 fresh [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 030 channel [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 031 stop [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 032 aside [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 033 devices [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 034 await [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 035 aside [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 036 restart [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 037 rename [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 038 launch [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 039 upgrade [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 040 park [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 041 reviews [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 042 panel [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 043 switch [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 044 permission [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 045 github [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 046 webhook [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 047 rail [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 048 stop [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 049 linking [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 050 pairedCatalogue [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 051 switch [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 052 model [webkit columns]
+        ! not run: 001 menu did not hold
+ERROR 053 handoff [webkit columns]
+        ! not run: 001 menu did not hold
+ok    background [webkit columns]
+ok    at rest [webkit columns]
+ok    followers [webkit columns]
+wrote /workspace/scratch/durable-qualification/stress-default-retry.json
+conversation-stress: 60/113 held (some could not run)

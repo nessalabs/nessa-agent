@@ -1,0 +1,5 @@
+{
+  "source": "ae6e33529887746079702d4eca5f528ec42146bd",
+  "sha256": "0ea5f55cbf10ed23f5e65995a03186715bd8974a1ebc3ffa2b6caff0ede413b8",
+  "build": "cargo build -p nessa-server -p nessa-mcp; stress-core-build.log"
+}

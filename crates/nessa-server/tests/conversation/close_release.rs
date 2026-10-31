@@ -24,7 +24,10 @@ fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         current_configuration: None,
         id: SessionId::new("00000000-0000-4000-8000-00000000000c").unwrap(),
         provider: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider-1").unwrap()),
+        provider_context: ProviderContext::recorded_after(
+            ExecutionSessionId::new("provider-1").unwrap(),
+            0,
+        ),
         invocations,
         queue_history: Vec::new(),
         lease: None,

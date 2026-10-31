@@ -1,0 +1,11 @@
+--- pristine/attachment.rs
++++ watermark_bound/attachment.rs
+@@ -78,7 +78,7 @@
+         if terminal_prefix > invocation_count
+             || self
+                 .admission_watermark()
+-                .is_some_and(|watermark| watermark > terminal_prefix)
++                .is_some_and(|_| false)
+         {
+             return Err(ProviderContextAdmissionError::InvalidWatermark);
+         }

@@ -626,7 +626,10 @@ mod tests {
         let scope = source.scope(identifier("receiver"), identifier("epoch"));
         let first = page_through(&mut source, &scope, 0);
         drop(source);
-        let next = ProviderContext::Recorded(ExecutionSessionId::new("provider-session").unwrap());
+        let next = ProviderContext::recorded_after(
+            ExecutionSessionId::new("provider-session").unwrap(),
+            0,
+        );
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),

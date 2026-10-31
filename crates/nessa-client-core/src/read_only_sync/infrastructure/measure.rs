@@ -554,8 +554,9 @@ async fn source_records(root: &Path) -> (Scope, Vec<Record>) {
         context: context.clone(),
     }];
     for index in 0..2 {
-        let next = ProviderContext::Recorded(
+        let next = ProviderContext::recorded_after(
             ExecutionSessionId::new(format!("{index:04}{}", "x".repeat(240))).expect("context"),
+            0,
         );
         changes.push(SessionChange::ProviderContext {
             before: context,

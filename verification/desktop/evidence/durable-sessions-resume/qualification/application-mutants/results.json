@@ -1,0 +1,75 @@
+{
+  "source_commit": "a4ca8e4e7ff68e556b30aed223a998004f20e0a3",
+  "source_tree": "00f96ed977d3c621644667bf8017fd15be7a3125",
+  "checkout": "/workspace/scratch/durable-probes",
+  "final_status": "",
+  "environment": "Linux; /usr/local/bin/docker-init -s -- bash -lc; source /workspace/.setup/activate.sh; CARGO_TARGET_DIR=/workspace/nessa-agent/target; cargo test -p nessa-sdk --lib <filter> --offline -- --nocapture",
+  "controls": [
+    {
+      "control": "whole-conversation-admission",
+      "result": "test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1589 filtered out; finished in 0.43s",
+      "patch_sha256": "c7f7518c066dad369ac7a72429a173fbbdd352a8f55302b8681abc2f44a2a036",
+      "mutated_source_sha256": "c197ca931d6d5efddc221c18d9ded889ac48950d809330ce5f4573e74c569bd5  crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs",
+      "log": "/tmp/durable-application-probes-v2/whole-conversation-admission.log"
+    },
+    {
+      "control": "pending-admission-hidden-by-length",
+      "result": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1590 filtered out; finished in 0.18s",
+      "patch_sha256": "ba558b57a302f5163bad95fa7f2bbd8ad5bf537db00c57eedddd724467fe885a",
+      "mutated_source_sha256": "80ea3aea17defcc700076beac20e41340079a09962a16e6e5a4ea2ca87e9e488  crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs",
+      "log": "/tmp/durable-application-probes-v2/pending-admission-hidden-by-length.log"
+    },
+    {
+      "control": "codec-omits-admission",
+      "result": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1590 filtered out; finished in 0.04s",
+      "patch_sha256": "82b6fcc77f8096f4db553d75a042d46d2093534e944806484e9bc7b7e96ab052",
+      "mutated_source_sha256": "3acdc50950dc3d67196c209141d631dec12dd29237e13b9df4f1c04b3c49d6ba  crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs",
+      "log": "/tmp/durable-application-probes-v2/codec-omits-admission.log"
+    },
+    {
+      "control": "namespace-roundtrip-erases-admission",
+      "result": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1590 filtered out; finished in 0.00s",
+      "patch_sha256": "977af83c4f710d8e9063cba8935077102a35ce1fa0ae553bd4c92ef379e755a0",
+      "mutated_source_sha256": "15f1bcae0878d823eed503eb52c6aaf3116e059e7c4bfe4aca30dfba609ebf12  crates/nessa-sdk/src/application/agent_execution/sessions/records.rs",
+      "log": "/tmp/durable-application-probes-v2/namespace-roundtrip-erases-admission.log"
+    }
+  ],
+  "positives": [
+    {
+      "label": "baseline-current-context",
+      "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1586 filtered out; finished in 1.95s",
+      "log": "/tmp/durable-application-probes-v2/baseline-current-context.log"
+    },
+    {
+      "label": "baseline-context-admission",
+      "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1581 filtered out; finished in 0.54s",
+      "log": "/tmp/durable-application-probes-v2/baseline-context-admission.log"
+    },
+    {
+      "label": "baseline-abandoned-cancellation",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1590 filtered out; finished in 0.00s",
+      "log": "/tmp/durable-application-probes-v2/baseline-abandoned-cancellation.log"
+    },
+    {
+      "label": "restored-current-context",
+      "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1586 filtered out; finished in 0.74s",
+      "log": "/tmp/durable-application-probes-v2/restored-current-context.log"
+    },
+    {
+      "label": "restored-context-admission",
+      "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1581 filtered out; finished in 0.24s",
+      "log": "/tmp/durable-application-probes-v2/restored-context-admission.log"
+    },
+    {
+      "label": "restored-abandoned-cancellation",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1590 filtered out; finished in 0.00s",
+      "log": "/tmp/durable-application-probes-v2/restored-abandoned-cancellation.log"
+    }
+  ],
+  "limits": [
+    "Four scoped controls, not full-suite or CI qualification.",
+    "Codec control fails the semantic equality assertion before later checkpoint assertions; no independent checkpoint-only mutation claimed.",
+    "No real provider, credentials, Boat, publication, merge or dependent-issue implementation.",
+    "Old interrupted v1 runner evidence is not combined with these completed v2 results."
+  ]
+}

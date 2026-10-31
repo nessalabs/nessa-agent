@@ -1,0 +1,101 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-31T00:58:10.512Z",
+  "finished": "2026-10-31T00:59:14.007Z",
+  "target": {
+    "url": "http://127.0.0.1:33769/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15382,
+      "seen": {
+        "index": 1,
+        "kind": "drift"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "001 drift",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 12104,
+      "seen": {
+        "index": 1,
+        "kind": "drift"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: WebSocket connection to 'ws://127.0.0.1:46505/session' failed: Error receiving data: Connection reset by peer [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:46505/session' failed: Could not connect to 127.0.0.1: Connection refused [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:46505/session' failed: Could not connect to 127.0.0.1: Connection refused [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:46505/session' failed: Could not connect to 127.0.0.1: Connection refused [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

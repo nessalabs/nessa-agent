@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-b3cb60bcd5999a3f)
+
+running 10 tests
+test application::agent_execution::sessions::validation::context_admission_tests::namespace_evidence_following_reset_does_not_authorize_it ... ok
+test application::agent_execution::sessions::validation::context_admission_tests::namespace_round_trip_cannot_reset_the_original_context ... ok
+test application::agent_execution::sessions::validation::context_admission_tests::opened_context_cannot_claim_a_preceding_invocation ... ok
+test application::agent_execution::sessions::validation::context_admission_tests::queued_admission_prevents_context_clear_without_provider_observations ... ok
+test application::agent_execution::sessions::validation::context_admission_tests::repeated_native_id_cannot_erase_admission_without_prior_namespace_change ... ok
+test application::agent_execution::sessions::validation::context_admission_tests::a_result_saved_before_final_scheduling_does_not_hide_pending_work ... ok
+test application::agent_execution::sessions::validation::context_admission_tests::fresh_context_publication_requires_the_current_terminal_prefix ... ok
+test application::agent_execution::sessions::validation::context_admission_tests::custom_snapshot_refuses_out_of_range_and_pending_prefix_watermarks ... ok
+test infrastructure::session_storage::snapshot::context::tests::context_admission_checkpoint_rejects_missing_or_contradictory_boundary ... ok
+test infrastructure::session_storage::snapshot::context::tests::context_admission_survives_semantic_and_checkpoint_reopen ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1581 filtered out; finished in 0.24s
+

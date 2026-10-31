@@ -1,0 +1,43 @@
+   Compiling nessa-server v0.1.0 (/workspace/scratch/durable-probes/crates/nessa-server)
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1126:9
+     |
+1126 | /         while at < source.len() {
+1127 | |             if source[at] != b'\r' {
+1128 | |                 hash = (hash ^ source[at] as u64).wrapping_mul(PRIME);
+...    |
+1131 | |         }
+     | |_________^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:51:9
+     |
+  51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  63 | / lease_protocol!(
+  64 | |     "../../../nessa-protocol/src/lease.rs",
+  65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  66 | |     "../env_serve/mod.rs",
+...    |
+ 108 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 109 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 26s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-318e5962898c9074)
+
+running 8 tests
+test agents::infrastructure::credentialed_claude::tests::api_keys_and_oauth_tokens_keep_their_distinct_launch_meaning ... ok
+test agents::infrastructure::credentialed_claude::tests::absent_and_unavailable_credentials_remain_different_answers ... ok
+test agents::infrastructure::credentialed_claude::tests::invalid_context_configuration_cannot_authorize_native_history_reset ... ok
+test agents::infrastructure::credentialed_claude::tests::a_blocked_credential_store_cannot_block_provider_opening ... ok
+test agents::infrastructure::credentialed_claude::tests::context_restoration_delegates_without_reading_credentials ... ok
+test agents::infrastructure::credentialed_claude::tests::the_source_replaces_every_inherited_claude_auth_combination ... ok
+test agents::infrastructure::credentialed_claude::tests::the_credential_wrapper_reports_the_mode_it_launches ... ok
+test agents::infrastructure::credentialed_claude::tests::an_unused_credentialed_claude_context_reopens_without_native_history ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 4414 filtered out; finished in 0.15s
+

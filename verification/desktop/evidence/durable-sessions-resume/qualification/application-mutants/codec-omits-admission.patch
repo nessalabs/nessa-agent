@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs b/crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs
+index 6a4d9a0b4..1bd32caf7 100644
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs
+@@ -16,7 +16,7 @@ pub(super) struct Context {
+ pub(super) fn encode(context: &ProviderContext) -> Option<Context> {
+     context.recorded().map(|id| Context {
+         id: id.as_str().into(),
+-        admitted_before: context.admission_watermark().expect("recorded context"),
++        admitted_before: 0,
+     })
+ }
+ 

@@ -229,7 +229,8 @@ async fn seed(
     storage.initialize().await?;
     let lease = storage.open(id.clone()).await?;
     let provider = ProviderIdentity::new("claude", "claude-sonnet-5", "workspace")?;
-    let context = ProviderContext::Recorded(ExecutionSessionId::new("bench-provider-session")?);
+    let context =
+        ProviderContext::recorded_after(ExecutionSessionId::new("bench-provider-session")?, 0);
     let mut binding = lease.load().await?.binding().clone();
     let opened = SessionSaveUnit::new(vec![SessionChange::Opened {
         id: id.clone(),

@@ -1,0 +1,34 @@
+
+running 10 tests
+test provider_context::absent_context_accepts_a_checkpoint_without_provider_evidence ... ok
+test provider_context::absent_context_rejects_each_provider_fact_independently ... 
+thread 'provider_context::admission_watermark_distinguishes_old_history_from_new_context_work' (27744) panicked at /workspace/scratch/durable-qualification/domain-mutants-c11/provider_context.rs:100:5:
+assertion failed: context.has_admitted_work(4)
+ok
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test provider_context::admission_watermark_distinguishes_old_history_from_new_context_work ... FAILED
+test provider_context::recorded_context_accepts_a_checkpoint_without_provider_evidence ... ok
+
+thread 'provider_context::missing_observations_do_not_authorize_clearing_an_admitted_context' (27745) panicked at /workspace/scratch/durable-qualification/domain-mutants-c11/provider_context.rs:168:5:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err(InvalidTransition)
+test provider_context::missing_observations_do_not_authorize_clearing_an_admitted_context ... FAILED
+test provider_context::recorded_context_accepts_every_combination_of_provider_facts ... ok
+test provider_context::repeated_native_context_preserves_its_admission_boundary ... 
+thread 'provider_context::replacement_preserves_opening_boundary_after_terminal_prefix_grows' (27749) panicked at /workspace/scratch/durable-qualification/domain-mutants-c11/provider_context.rs:143:5:
+assertion failed: captured.has_admitted_work(3)
+ok
+test provider_context::replacement_preserves_opening_boundary_after_terminal_prefix_grows ... FAILED
+test provider_context::admission_boundary_cannot_skip_pending_work_or_exceed_history ... ok
+test provider_context::absent_context_rejects_every_combination_of_provider_facts ... ok
+
+failures:
+
+failures:
+    provider_context::admission_watermark_distinguishes_old_history_from_new_context_work
+    provider_context::missing_observations_do_not_authorize_clearing_an_admitted_context
+    provider_context::replacement_preserves_opening_boundary_after_terminal_prefix_grows
+
+test result: FAILED. 7 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

@@ -1,0 +1,15 @@
+diff --git a/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs b/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
+index 5efd1e050..1095e0899 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs
+@@ -812,9 +812,7 @@ impl SessionManager {
+                 .filter(|saved| {
+                     provider.restores_saved_context(
+                         saved,
+-                        snapshot
+-                            .provider_context
+-                            .has_admitted_work(snapshot.invocations.len()),
++                        !snapshot.invocations.is_empty(),
+                     )
+                 })
+         };

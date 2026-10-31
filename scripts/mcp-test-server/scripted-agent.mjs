@@ -28,6 +28,13 @@
  * handshake is still the harness's. A prompt the file does not answer fails
  * the turn.
  *
+ * Paired --native-context-directory and --native-context-workspace absolute
+ * paths opt one Claude workspace into native-history checks (#1164, C13).
+ * New contexts have no saved marker until a prompt is accepted; resume of a
+ * missing exact ID reports -32002. Other workspaces keep ordinary fixture
+ * behavior. The run owns and removes this private directory. Its events.jsonl
+ * holds method, sessionId and outcome only, never prompts or credentials.
+ *
  * It keeps every stand-in it started for the session: the gateway's own
  * connection to the server, which the view's `resourceUri` and the app's
  * calls use, lives as long as the stand-in does. A stand-in that does not
@@ -55,7 +62,17 @@
  */
 import { spawn, spawnSync } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
+import { isAbsolute, join } from "node:path"
 import { createInterface } from "node:readline"
 import { parseArgs } from "node:util"
 
@@ -86,7 +103,11 @@ let parsed
 try {
   parsed = parseArgs({
     args: process.argv.slice(2),
-    options: { scenario: { type: "string" } },
+    options: {
+      scenario: { type: "string" },
+      "native-context-directory": { type: "string" },
+      "native-context-workspace": { type: "string" },
+    },
     allowPositionals: true,
   })
 } catch (error) {
@@ -94,7 +115,11 @@ try {
   process.exit(2)
 }
 const {
-  values: { scenario: scenarioPath },
+  values: {
+    scenario: scenarioPath,
+    "native-context-directory": nativeDirectoryArgument,
+    "native-context-workspace": nativeWorkspaceArgument,
+  },
   positionals,
 } = parsed
 const [agent, tool, ...rest] = positionals
@@ -108,6 +133,81 @@ if (
   )
   process.exit(2)
 }
+// The focused mode supplies native-existence evidence only. It never chooses
+// whether the SDK may replace a context; the SDK's admission boundary does that.
+let nativeContext = null
+if (nativeDirectoryArgument !== undefined || nativeWorkspaceArgument !== undefined) {
+  try {
+    if (
+      agent !== "claude" ||
+      !nativeDirectoryArgument ||
+      !nativeWorkspaceArgument ||
+      !isAbsolute(nativeDirectoryArgument) ||
+      !isAbsolute(nativeWorkspaceArgument)
+    )
+      throw new Error("native context options require Claude and two absolute paths")
+    const workspace = realpathSync(nativeWorkspaceArgument)
+    if (!statSync(workspace).isDirectory())
+      throw new Error("the native context workspace must be a directory")
+    mkdirSync(nativeDirectoryArgument, { recursive: true, mode: 0o700 })
+    nativeContext = { directory: realpathSync(nativeDirectoryArgument), workspace }
+  } catch (error) {
+    process.stderr.write(`scripted-agent: ${error.message}\n`)
+    process.exit(2)
+  }
+}
+
+class MissingNativeContext extends Error {
+  constructor() {
+    super("Resource not found")
+  }
+}
+
+function focusedNativeWorkspace(cwd) {
+  if (!nativeContext || typeof cwd !== "string" || !isAbsolute(cwd)) return false
+  try {
+    return realpathSync(cwd) === nativeContext.workspace
+  } catch {
+    return false
+  }
+}
+
+function nativeMarker(sessionId) {
+  // The native ID is data, never a path segment supplied by a caller.
+  const digest = createHash("sha256").update(sessionId).digest("hex")
+  return join(nativeContext.directory, `${digest}.used`)
+}
+
+function nativeEvent(method, sessionId, outcome) {
+  appendFileSync(
+    join(nativeContext.directory, "events.jsonl"),
+    `${JSON.stringify({ method, sessionId, outcome })}\n`,
+    { mode: 0o600 },
+  )
+}
+
+function nativeHistoryExists(sessionId) {
+  try {
+    return readFileSync(nativeMarker(sessionId), "utf8") === sessionId
+  } catch (error) {
+    if (error.code === "ENOENT") return false
+    throw error
+  }
+}
+
+function recordNativePrompt(sessionId, session) {
+  if (!session.nativeContext) return
+  const marker = nativeMarker(sessionId)
+  const temporary = `${marker}.${process.pid}.tmp`
+  try {
+    writeFileSync(temporary, sessionId, { mode: 0o600 })
+    renameSync(temporary, marker)
+  } finally {
+    rmSync(temporary, { force: true })
+  }
+  nativeEvent("session/prompt", sessionId, "accepted")
+}
+
 let scenario = null
 if (scenarioPath) {
   let file
@@ -301,6 +401,7 @@ async function openSession(params, sessionId) {
     servers,
     prompt: null,
     recorded: false,
+    nativeContext: focusedNativeWorkspace(params.cwd),
     // Where the harness was told to work, and the system prompt it was given
     // (Claude's `_meta.systemPrompt`), for a turn to say back (`${session.*}`).
     opened: {
@@ -315,7 +416,12 @@ async function openSession(params, sessionId) {
 const handlers = {
   initialize: () => initializeResult(agent),
 
-  "session/new": (params) => openSession(params, randomUUID()),
+  "session/new": async (params) => {
+    const opened = await openSession(params, randomUUID())
+    if (focusedNativeWorkspace(params.cwd))
+      nativeEvent("session/new", opened.sessionId, "opened")
+    return opened
+  },
 
   /**
    * The gateway carrying on a session it had before it restarted. This
@@ -323,12 +429,19 @@ const handlers = {
    * harness whose history is on disk would answer: the prompt that follows
    * is what continues the work.
    */
-  "session/resume": (params) => {
+  "session/resume": async (params) => {
     if (typeof params.sessionId !== "string" || params.sessionId === "")
       throw new Error("session/resume names no session")
     if (sessions.has(params.sessionId))
       throw new Error(`session ${params.sessionId} is already open`)
-    return openSession(params, params.sessionId)
+    const focused = focusedNativeWorkspace(params.cwd)
+    if (focused && !nativeHistoryExists(params.sessionId)) {
+      nativeEvent("session/resume", params.sessionId, "missing")
+      throw new MissingNativeContext()
+    }
+    const opened = await openSession(params, params.sessionId)
+    if (focused) nativeEvent("session/resume", params.sessionId, "restored")
+    return opened
   },
 
   "session/set_config_option": ({ sessionId, configId, value }) => {
@@ -369,6 +482,7 @@ async function recordedTurn({ sessionId }) {
   }
   let result
   try {
+    recordNativePrompt(sessionId, session)
     result = await server.request("tools/call", call)
   } catch (error) {
     // A cancel decides the turn however the call settles.
@@ -406,6 +520,7 @@ async function idleTurn({ sessionId }) {
   if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
   session.prompt = { cancelled: false, waiters: [] }
   try {
+    recordNativePrompt(sessionId, session)
     send({
       method: "session/update",
       params: {
@@ -472,6 +587,7 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
   const update = (frame) =>
     send({ method: "session/update", params: { sessionId, update: frame } })
   try {
+    recordNativePrompt(sessionId, session)
     const outcome = await runSteps(matched.steps, {
       agent,
       sessionId,
@@ -576,7 +692,11 @@ createInterface({ input: process.stdin })
     try {
       send({ id: message.id, result: await handler(message.params ?? {}) })
     } catch (error) {
-      failure(message.id, -32603, error.message)
+      failure(
+        message.id,
+        error instanceof MissingNativeContext ? -32002 : -32603,
+        error.message,
+      )
     }
   })
   .on("close", stop)

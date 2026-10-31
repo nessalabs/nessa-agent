@@ -1,0 +1,973 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-10-31T01:03:55.361Z",
+  "finished": "2026-10-31T01:16:11.208Z",
+  "sdkSource": "ae6e33529887746079702d4eca5f528ec42146bd",
+  "flags": [
+    "--mode dev",
+    "--channel bundled",
+    "--engine chromium,webkit",
+    "--inputFiles 0"
+  ],
+  "results": [
+    {
+      "name": "001 menu",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 11778,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "002 large",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1512,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "003 long",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 18298,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "004 waitingRow",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1346,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "005 watch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2262,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "006 tunnel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 12061,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "007 paste",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2205,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "008 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4749,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "009 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3184,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "010 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15463,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "011 stream",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 17351,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "012 delete",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1559,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "013 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 996,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "014 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1313,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "015 fail",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 733,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "016 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 949,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "017 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3431,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "018 window",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 5381,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "019 onboarding",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 37368,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "020 usageLimit",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1362,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "021 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1117,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "022 background",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 9301,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "023 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 26749,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "024 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1132,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "025 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1335,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "026 menuPanel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 5545,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "027 trace",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 13618,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "028 notice",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 5263,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "029 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4150,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "030 channel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 40864,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "031 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1636,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "032 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1842,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "033 devices",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 32762,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "034 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 5412,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "035 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1935,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "036 restart",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2234,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "037 rename",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2579,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "038 launch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 6131,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "039 upgrade",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1530,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "040 park",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 9266,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "041 reviews",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15428,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "042 panel",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3142,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "043 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1132,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "044 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1429,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "045 github",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 37941,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "046 webhook",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3123,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "047 rail",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 12939,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "048 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1629,
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "049 linking",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 35355,
+      "ok": false,
+      "failures": [
+        "the cancelled code's modal stayed open",
+        "Pair a device was not offered again after cancelling"
+      ]
+    },
+    {
+      "name": "050 pairedCatalogue",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 049 linking did not hold"
+    },
+    {
+      "name": "051 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 049 linking did not hold"
+    },
+    {
+      "name": "052 model",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 049 linking did not hold"
+    },
+    {
+      "name": "053 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 049 linking did not hold"
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "console",
+      "engine": "chromium",
+      "layout": "columns",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "001 menu",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 20056,
+      "ok": false,
+      "cannotRun": false,
+      "failures": [],
+      "error": "locator.waitFor: Timeout 10000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-overview-listed]') to be visible\u001b[22m\n"
+    },
+    {
+      "name": "002 large",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "003 long",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "004 waitingRow",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "005 watch",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "006 tunnel",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "007 paste",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "008 delegate",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "009 table",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "010 pool",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "011 stream",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "012 delete",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "013 switch",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "014 permission",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "015 fail",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "016 reply",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "017 fresh",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "018 window",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "019 onboarding",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "020 usageLimit",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "021 reply",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "022 background",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "023 drift",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "024 switch",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "025 permission",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "026 menuPanel",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "027 trace",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "028 notice",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "029 fresh",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "030 channel",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "031 stop",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "032 aside",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "033 devices",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "034 await",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "035 aside",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "036 restart",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "037 rename",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "038 launch",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "039 upgrade",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "040 park",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "041 reviews",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "042 panel",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "043 switch",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "044 permission",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "045 github",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "046 webhook",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "047 rail",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "048 stop",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "049 linking",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "050 pairedCatalogue",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "051 switch",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "052 model",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "053 handoff",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": false,
+      "cannotRun": true,
+      "failures": [],
+      "error": "not run: 001 menu did not hold"
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "ok": true,
+      "failures": []
+    }
+  ]
+}

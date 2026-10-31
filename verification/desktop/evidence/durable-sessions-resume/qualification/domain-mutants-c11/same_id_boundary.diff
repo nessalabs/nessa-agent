@@ -1,0 +1,11 @@
+--- pristine/attachment.rs
++++ same_id_boundary/attachment.rs
+@@ -117,7 +117,7 @@
+         }
+         if self.recorded() == previous.recorded()
+             && !namespace_changed
+-            && self.admission_watermark() != previous.admission_watermark()
++            && false
+         {
+             return Err(ProviderContextAdmissionError::InvalidTransition);
+         }

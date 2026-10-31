@@ -1,0 +1,30 @@
+✔ a tool launch is the recorded agent, and a scenario launch is not (1.522459ms)
+✔ focused native context arguments are canonical, stable and Claude only (0.77818ms)
+✔ evidence wraps the agent and the MCP server with the recorder (4.352353ms)
+✔ a missing panel credential closes the stack before it escapes (31.142945ms)
+✔ a panel credential is returned and the stack stays open (2.7932ms)
+✔ a throw while building the target closes the stack (36.869615ms)
+✔ native no-send proof requires queued zero-attempt rows in the fixed complete scope (1393.556813ms)
+original-start-failure
+
+✔ the stack preserves startup and retention causes instead of rewriting failed evidence (423.067289ms)
+✔ native trace keeps complete observations and markers name exact used IDs (6.713234ms)
+✔ audit publication identity remains fresh when restart generation repeats (2.273198ms)
+✔ the same numbers and seed give the same plan, and another seed another (4.654318ms)
+✔ every required step appears as often as its number says (0.735245ms)
+✔ a failure is always followed by a reply, and a switch never picks the mode in force (9.723209ms)
+✔ no long conversation is planned when its number is 0 (0.454524ms)
+✔ numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one throws (1.045101ms)
+✔ handoffs run last of all, after every upgrade, whatever the seed (7.093355ms)
+✔ positive model steps retain default and raised counts, run last but for handoffs, and enter Ask (31.449736ms)
+✔ the legacy seed preserves the existing non-model work's relative order (0.357478ms)
+✔ webhook capture/no-send runs once by default and three times at the raised count (0.29972ms)
+✔ native-context drift keeps its default and raised repetition counts (0.35892ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2044.007159

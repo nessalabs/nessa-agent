@@ -1,0 +1,40 @@
+{
+  "checkout": "/workspace/scratch/durable-probes",
+  "head": "a4ca8e4e7ff68e556b30aed223a998004f20e0a3",
+  "changed_paths": [
+    "crates/nessa-sdk/tests/infrastructure/acp/contracts/current_context.rs"
+  ],
+  "test_sha256": "3b3986bf0441926144805e0c55c375fb4c1d79de3e399c68706b63511d348bb4",
+  "production_diff_paths": [],
+  "command": "source /workspace/.setup/activate.sh; CARGO_TARGET_DIR=/workspace/scratch/durable-race-target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 /usr/local/bin/docker-init -s -- cargo test -p nessa-sdk --lib withdrawal_while_fresh_context_opens_preserves_admitted_work_after_restart --offline -- --nocapture",
+  "expected_fail_before": "watermark Some(2) violates asserted Some(1), after confirmed cleanup; no production fix applied",
+  "supervision": "docker-init -s subreaper; live exec session14834",
+  "log": "unchanged-production.log",
+  "exit": "unchanged-production.exit",
+  "result": {
+    "status": "intended fail-before reproduced",
+    "exit_code": 101,
+    "test_result": "0passed,1failed,0ignored,1591filtered",
+    "duration_seconds": 0.18,
+    "build_duration": "3m33s",
+    "assertion_line": 445,
+    "actual_watermark": "Some(2)",
+    "expected_watermark": "Some(1)",
+    "prerequisites_passed": [
+      "oldcontext input completed",
+      "newfingerprint nativeopening held",
+      "secondinput accepted",
+      "actual remove_queued returned Removed",
+      "receipt returned Err(Closed)",
+      "saved stage Cancelled with Withdrawn cause and originalactor",
+      "freshattachment publication completed",
+      "nativeclose and storage shutdown confirmed before failing assertion"
+    ],
+    "after_assertion_not_executed": [
+      "cold reopen typed missing-context and saved-history postconditions"
+    ],
+    "production_fix_applied": false,
+    "log_sha256": "403db0a023f95cbc1706d2389f5202d3aab3e0aea384fbd8a70688fdd3fb7b8c",
+    "binary_sha256": "1610f0c7e74ea6a1c60a8fe5c466c0e8afa7ca0d2ef6e444bbbf4301a1da2b7a"
+  }
+}

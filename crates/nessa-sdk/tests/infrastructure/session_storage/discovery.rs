@@ -51,8 +51,9 @@ async fn save_publications(storage: &RecordStorage, id: &SessionId, count: u64) 
         } else {
             SessionChange::ProviderContext {
                 before: snapshot.as_ref().unwrap().provider_context.clone(),
-                after: ProviderContext::Recorded(
+                after: ProviderContext::recorded_after(
                     ExecutionSessionId::new(format!("context-{generation}")).unwrap(),
+                    0,
                 ),
             }
         };
@@ -62,8 +63,9 @@ async fn save_publications(storage: &RecordStorage, id: &SessionId, count: u64) 
             SessionSnapshot {
                 model_change: None,
                 current_configuration: None,
-                provider_context: ProviderContext::Recorded(
+                provider_context: ProviderContext::recorded_after(
                     ExecutionSessionId::new(format!("context-{generation}")).unwrap(),
+                    0,
                 ),
                 ..snapshot.as_ref().unwrap().clone()
             }
@@ -441,7 +443,10 @@ async fn historical_miss_preserves_known_forward_failure_and_clean_head() {
         let snapshot = snapshot.unwrap();
         let change = SessionChange::ProviderContext {
             before: snapshot.provider_context.clone(),
-            after: ProviderContext::Recorded(ExecutionSessionId::new("later-context").unwrap()),
+            after: ProviderContext::recorded_after(
+                ExecutionSessionId::new("later-context").unwrap(),
+                0,
+            ),
         };
         let receipt = lease
             .save_changes(

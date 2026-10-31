@@ -1,0 +1,63 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-10-31T00:49:16.824Z",
+  "finished": "2026-10-31T00:50:17.965Z",
+  "target": {
+    "url": "http://127.0.0.1:40791/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 drift",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 26257,
+      "seen": {
+        "index": 1,
+        "kind": "drift"
+      },
+      "failures": [
+        "native context: cold reopen tried to resume the missing unused native ID"
+      ],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "webkit",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: WebSocket connection to 'ws://127.0.0.1:44245/session' failed: Could not connect to 127.0.0.1: Connection refused [owned gateway restart; session reconnected]",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:44245/session' failed: Error receiving data: Connection reset by peer [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

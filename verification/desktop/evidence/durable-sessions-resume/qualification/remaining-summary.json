@@ -1,0 +1,331 @@
+{
+  "source": "6d1b413b19d2af4355fdf331778fe98fa4a683a4",
+  "exit": 0,
+  "partition": "remaining",
+  "host_root_uid": 0,
+  "full_all_partition": "failed worker pin; earlier sandbox namespace root65534 storage failure retained separately",
+  "summaries": [
+    {
+      "label": "[nessa-device-client nessa_device_client]",
+      "status": "ok",
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-vault encrypted_file]",
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server nessa_server seeded catalogue]",
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-sdk domain]",
+      "status": "ok",
+      "passed": 278,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-sdk infrastructure]",
+      "status": "ok",
+      "passed": 76,
+      "failed": 0,
+      "ignored": 3
+    },
+    {
+      "label": "[nessa-sdk application]",
+      "status": "ok",
+      "passed": 632,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "label": "[nessa-vault lifecycle]",
+      "status": "ok",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server nessa-backup-plan]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server nessa]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server backup_restore_plan]",
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server backup_verifier]",
+      "status": "ok",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server credential_registry_refusal]",
+      "status": "ok",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server env_serve_binary]",
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server nessa-backup-verify]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server mcp_authorization_benchmark]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "label": "[nessa-server mcp_relay]",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-server native_enrollment]",
+      "status": "ok",
+      "passed": 121,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-vault audit]",
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-vault nessa_vault]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-client-core nessa_client_core]",
+      "status": "ok",
+      "passed": 481,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-protocol phone_wire]",
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-protocol owner_phone_consent_wire]",
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-sdk nessa_sdk]",
+      "status": "ok",
+      "passed": 1576,
+      "failed": 0,
+      "ignored": 16
+    },
+    {
+      "label": "[nessa-auth cedar_flow]",
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth native_transport_failure_order]",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth native_transport_key_update]",
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth origin]",
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth owner_phone_consent_admission]",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth owner_phone_device_proof]",
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth owner_phone_record]",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth pairing_domain]",
+      "status": "ok",
+      "passed": 41,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth revocation]",
+      "status": "ok",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-auth nessa_auth]",
+      "status": "ok",
+      "passed": 216,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-local-storage windows_replacement]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-local-storage nessa_local_storage]",
+      "status": "ok",
+      "passed": 41,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "label": "[nessa-local-storage windows_protected_directory]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-local-storage retained_directory]",
+      "status": "ok",
+      "passed": 39,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[nessa-protocol nessa_protocol]",
+      "status": "ok",
+      "passed": 199,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 60,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "[doctests]",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ]
+}

@@ -1661,7 +1661,10 @@ mod tests {
             .unwrap();
             let change = SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
-                after: ProviderContext::Recorded(ExecutionSessionId::new("context").unwrap()),
+                after: ProviderContext::recorded_after(
+                    ExecutionSessionId::new("context").unwrap(),
+                    0,
+                ),
             };
             let frames =
                 test_save_frames(&stream, 2, 1, &[change], if partial { 100_000 } else { 0 });
@@ -1855,7 +1858,10 @@ mod tests {
             assert_eq!(view.snapshot(), repeated.snapshot());
             let change = SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
-                after: ProviderContext::Recorded(ExecutionSessionId::new("new-context").unwrap()),
+                after: ProviderContext::recorded_after(
+                    ExecutionSessionId::new("new-context").unwrap(),
+                    0,
+                ),
             };
             for frame in test_save_frames(&current, 2, 1, &[change], 0) {
                 runtime.append(&current, frame).await.unwrap();
@@ -2377,7 +2383,7 @@ mod tests {
         assert_eq!(unchanged.snapshot(), view.snapshot());
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0),
         };
         let binding = writer.readable_snapshot().unwrap().binding().clone();
         writer
@@ -2397,7 +2403,7 @@ mod tests {
         assert_eq!(newer.position(), 4);
         assert_eq!(
             newer.snapshot().unwrap().provider_context,
-            ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
+            ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0)
         );
         assert_eq!(
             view.snapshot().unwrap().provider_context,
@@ -2410,7 +2416,7 @@ mod tests {
             let after = if index % 2 == 0 {
                 ProviderContext::Absent
             } else {
-                ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
+                ProviderContext::recorded_after(ExecutionSessionId::new("remote").unwrap(), 0)
             };
             let change = SessionChange::ProviderContext { before, after };
             snapshot =
@@ -3444,8 +3450,9 @@ mod tests {
             .unwrap();
         let mut changes = Vec::new();
         for index in 0..800 {
-            let context = ProviderContext::Recorded(
+            let context = ProviderContext::recorded_after(
                 ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(120))).unwrap(),
+                0,
             );
             changes.push(SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
