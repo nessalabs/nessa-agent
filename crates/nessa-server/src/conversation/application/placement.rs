@@ -44,7 +44,29 @@
 //! a moved conversation's agent opens new context there.
 use super::{CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
+use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, LeaseEndCause, PeerEnvironment};
+
+/// Why a conversation's cloud VM rests: its agent's lease ended in one of
+/// the two ways that leave nothing for the VM to do until the next message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkspaceRest {
+    /// The agent sat idle and was parked.
+    Idle,
+    /// The agent closed its thread.
+    Closed,
+}
+impl WorkspaceRest {
+    /// Whether a lease that ended for `cause` lets its VM rest, and why.
+    /// Any other end (a stop, a revocation, a lost connection) leaves the
+    /// VM to its own time limit.
+    pub(crate) fn of(cause: LeaseEndCause) -> Option<Self> {
+        match cause {
+            LeaseEndCause::Idle => Some(Self::Idle),
+            LeaseEndCause::Closed => Some(Self::Closed),
+            _ => None,
+        }
+    }
+}
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -312,6 +334,18 @@ pub(crate) trait ThreadEnvironments: Send + Sync {
         &self,
         conversation: &ConversationId,
     ) -> Result<Arc<dyn Environment>, ConversationError>;
+    /// Stop `conversation`'s VM, keeping its disk, unless something still
+    /// uses it; the next opening resumes it. `cause` is how its agent's
+    /// lease ended, kept with the record of the stop. Answers whether it
+    /// stopped one.
+    fn rest<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+        cause: WorkspaceRest,
+    ) -> EnvironmentFuture<'a, bool>;
+    /// Whether a new conversation can get a workspace now: a cloud account
+    /// is connected.
+    fn available(&self) -> EnvironmentFuture<'_, bool>;
 }
 pub(crate) const BOAT: &str = "boat:thread";
 /// Bound retained workspace environments independently of saved thread history.
@@ -491,13 +525,18 @@ impl Environments {
 
     /// Record where a conversation about to be created runs: on `requested`,
     /// which must be a configured host or a connected paired environment,
-    /// or here.
+    /// or here. The pool (any paired computer) asked for with none online
+    /// places it in a cloud workspace of its own instead, when a cloud
+    /// account is connected. One computer asked for by name never moves:
+    /// the person chose where it runs.
     pub(crate) async fn place(
         &self,
         conversation: &ConversationId,
         requested: Option<&str>,
     ) -> Result<(), ConversationError> {
+        let mut requested = requested;
         if let Some(name) = requested {
+            let pool = name == POOL;
             let known = name == BOAT && self.workspaces.is_some()
                 || name == POOL && self.bindings.is_some() && self.pool_serves()
                 || match PeerEnvironment::parse(name) {
@@ -508,7 +547,16 @@ impl Environments {
                     Err(_) => self.hosts.contains_key(name),
                 };
             if !known {
-                return Err(ConversationError::EnvironmentNotConfigured);
+                // Any computer asked for, with none online: it runs in a
+                // cloud workspace of its own instead, where one can be had,
+                // rather than not at all.
+                match &self.workspaces {
+                    Some(workspaces) if pool && workspaces.available().await => {
+                        tracing::info!(conversation_id = %conversation, asked = name, "no paired computer is online; the conversation runs in a cloud workspace");
+                        requested = Some(BOAT);
+                    }
+                    _ => return Err(ConversationError::EnvironmentNotConfigured),
+                }
             }
         }
         match &self.placements {
@@ -526,6 +574,28 @@ impl Environments {
         match &self.placements {
             Some(placements) => Ok(placements.placement(conversation).await?),
             None => Ok(None),
+        }
+    }
+
+    /// Whether `conversation` runs in a cloud workspace of its own
+    /// ([`BOAT`]), whose VM rests while its agent does
+    /// ([`Environments::rest`]).
+    pub(crate) async fn in_workspace(&self, conversation: &ConversationId) -> bool {
+        self.workspaces.is_some()
+            && matches!(self.placement(conversation).await, Ok(Some(name)) if name == BOAT)
+    }
+
+    /// Stop `conversation`'s VM, keeping its disk, once its agent has
+    /// stopped and nothing else uses the VM; the next message resumes it.
+    /// Nothing for a conversation that runs anywhere else.
+    pub(crate) async fn rest(&self, conversation: &ConversationId, cause: WorkspaceRest) {
+        if !self.in_workspace(conversation).await {
+            return;
+        }
+        if let Some(workspaces) = &self.workspaces {
+            if workspaces.rest(conversation, cause).await {
+                tracing::info!(conversation_id = %conversation, "stopped the conversation's VM; its next message resumes it");
+            }
         }
     }
 

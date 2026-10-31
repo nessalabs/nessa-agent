@@ -116,6 +116,21 @@ impl Host for Macos {
         });
         Ok(())
     }
+
+    fn open_file(&self, path: &std::path::Path) -> Result<(), String> {
+        // `-t`: the person's default text editor, whatever app claims `.json`
+        // (often a viewer that cannot save).
+        let mut child = Command::new("/usr/bin/open")
+            .arg("-t")
+            .arg(path)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        // Reaped on a thread of its own, as a link's opener is.
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
 }
 
 pub use provider_login::MacosProviderLogin;

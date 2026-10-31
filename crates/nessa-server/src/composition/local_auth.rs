@@ -1280,6 +1280,16 @@ async fn conversations(
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
+        // Its own shell is never used: each VM's install runs over that
+        // VM's connection.
+        installer: Arc::new(
+            crate::conversation::infrastructure::ssh_environment::HostInstaller::this_build(
+                Arc::new(
+                    crate::conversation::infrastructure::ssh_environment::OpenSshConnector::new(),
+                ),
+                root.join("host-builds"),
+            ),
+        ),
         environments: Default::default(),
     });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
@@ -2050,6 +2060,25 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                 thread: thread.clone(),
                 vm: vm.clone(),
                 confirmed: *confirmed,
+            },
+            RecoveryEvent::StopRequested { thread, vm, cause } => {
+                EnvironmentEvent::WorkspaceStopRequested {
+                    thread: thread.clone(),
+                    vm: vm.clone(),
+                    cause: cause.as_str().into(),
+                }
+            }
+            RecoveryEvent::StopAnswered {
+                thread,
+                vm,
+                cause,
+                failure,
+            } => EnvironmentEvent::WorkspaceStopAnswered {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: cause.as_str().into(),
+                accepted: failure.is_none(),
+                failure: failure.map(str::to_owned),
             },
         };
         self.0

@@ -66,6 +66,10 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
+ *   close       another conversation's agent closes its own thread
+ *               (close_thread) while the window shows it; once the turn ends
+ *               its agent is parked though followed (its lease ends `idle`),
+ *               and the next message sent there starts it again
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
@@ -110,6 +114,13 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               up with its card, and answering there takes the notice back;
  *               a second review there stays up across a reload of the
  *               window, and is taken back once another client answers it
+ *   mcp         an MCP server added in Settings › Connections › MCP servers
+ *               with one variable, off for new conversations: one closed
+ *               row ("Local · 1 variable", its switch off); edited from its ⋯
+ *               menu, the command is named and not a field, the variable
+ *               rests as stored, and Replace opened and left empty saves
+ *               without changing the stored value; removed once asked in
+ *               its dialog, gone from the row list and config.json
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -198,6 +209,12 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               card shows its input. While the run is still at work it
  *               alone says so: its line reads "Working", open or folded, the
  *               call at work is named once, and no live row repeats it
+ *   transcriptView  Compact is chosen from the pane's "…" menu, then the
+ *               trace turn is sent: while it works the transcript draws no
+ *               run, only one live row that reads "Working" and names no
+ *               call; once it ends, the reply shows and no run does, while
+ *               the gateway still keeps every call. Compact outlasts a
+ *               reload; Detailed, chosen again, draws the folded run
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -1037,6 +1054,48 @@ async function traceWhileLive(run, failures) {
 }
 
 /**
+ * Chooses `label` ("Detailed" or "Compact") under Transcript in the main
+ * conversation's pane menu, and waits for its transcript to say it is drawn
+ * that way.
+ */
+async function chooseTranscriptView(run, label, failures) {
+  const pane = run.page
+    .locator(css.pane)
+    .filter({ has: run.page.locator(css.conversationDock) })
+  await pane.locator(css.paneActions).click({ timeout: 10_000 })
+  const item = run.page.getByRole("menuitemradio", { name: label, exact: true })
+  await item.waitFor({ timeout: 10_000 })
+  if (run.evidence)
+    await run.page
+      .locator(css.menu)
+      .screenshot({
+        path: join(
+          run.evidence,
+          `transcript-${run.engine ?? "window"}-menu-${label}.png`,
+        ),
+        timeout: 4_000,
+      })
+      .catch((error) =>
+        log(`transcript menu screenshot: ${error.message.split("\n")[0]}`),
+      )
+  await item.click({ timeout: 10_000 })
+  const view = label.toLowerCase()
+  const shown = await waitFor(
+    async () =>
+      (await pane
+        .locator(".workspace-transcript")
+        .getAttribute("data-transcript-view", { timeout: 1_000 })
+        .catch(() => null)) === view,
+    5_000,
+  )
+  if (!shown) failures.push(`choosing ${label} did not draw the transcript ${view}`)
+  // The menu blinks its choice and fades after the view has changed; a click
+  // on the trigger before it has gone closes the next menu as it opens.
+  await run.page.locator(css.menu).waitFor({ state: "detached", timeout: 5_000 })
+  return pane
+}
+
+/**
  * Evidence of the live run, taken from the page by the transcript's box: an
  * element's own screenshot waits for it to keep still, which a shimmering
  * line never does within the hold. A run that ended first is not shot.
@@ -1694,6 +1753,19 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
   for (const path of run.stack.agent === "claude" ? attached : [])
     if (!reply.includes(path))
       failures.push(`the agent in ${channel.name} was not told of ${path}`)
+  // The chat says where its agent runs: a local channel's, on this computer.
+  const place = run.page.locator(
+    `${css.focusedPane} .workspace-heading [data-workspace-place]`,
+  )
+  const placed = await waitFor(
+    async () =>
+      (await place.count()) === 1 && (await place.innerText()) === "This computer",
+    10_000,
+  )
+  if (!placed)
+    failures.push(
+      `the chat in ${channel.name} does not say it runs on this computer: ${(await place.count()) ? await place.innerText() : "nothing"}`,
+    )
 }
 
 const steps = {
@@ -2305,6 +2377,106 @@ const steps = {
       await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async mcp(run, step, failures) {
+    const name = `stress-mcp-r${step.index}-s${run.knobs.seed}`
+    const variable = "STRESS_TOKEN"
+    // Generated, never printed, and looked for in the page and config.json.
+    const value = randomUUID()
+    const config = join(
+      run.stack.gateway.directory,
+      "ci",
+      "instances",
+      INSTANCE,
+      "config.json",
+    )
+    const stored = () =>
+      (JSON.parse(readFileSync(config, "utf8")).agents?.mcpServers ?? []).find(
+        (server) => server.name === name,
+      )
+    const valueOf = (server) => server?.env?.[variable]
+    const page = run.page
+    const row = () => page.locator(selectorFor.mcpRowNamed(name))
+    const shot = (what) =>
+      run.evidence
+        ? page.screenshot({ path: join(run.evidence, `mcp-${what}.png`) }).catch(() => {})
+        : undefined
+    await run.exclusive(async () => {
+      await openMcpServers(page)
+      await shot("list")
+      // Added from the window, off for new conversations so no agent starts it.
+      await page.getByRole("button", { name: names.mcp.add, exact: true }).click()
+      const form = page.locator(css.mcpForm)
+      await form.getByLabel(names.mcp.name, { exact: true }).fill(name)
+      await form.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
+      await form.getByRole("switch", { name: names.mcp.useInNew }).click()
+      await form.getByRole("button", { name: names.mcp.addVariable, exact: true }).click()
+      const added = form.locator(css.mcpVariableAdded).last()
+      await added.getByLabel(names.mcp.variableName, { exact: true }).fill(variable)
+      await added.locator(css.mcpSecret).fill(value)
+      await form.getByRole("button", { name: names.mcp.save, exact: true }).click()
+      const shown = await row()
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false)
+      if (!shown) {
+        failures.push(`${name} was saved but no row came back for it`)
+        // Left as the next step expects: no dialog, no Settings.
+        if (await form.isVisible().catch(() => false)) await page.keyboard.press("Escape")
+        await closeSettings(page).catch(() => {})
+        return
+      }
+      // A closed row: its name, one short line, a switch and its ⋯ menu.
+      const line = await row().locator('[data-slot="settings-row-detail"]').innerText()
+      if (line !== "Local · 1 variable")
+        failures.push(
+          `${name}'s row says ${JSON.stringify(line)}, not "Local · 1 variable"`,
+        )
+      if ((await row().locator(css.mcpSwitch).getAttribute("aria-checked")) !== "false")
+        failures.push(`${name}'s switch is on, though it was saved off`)
+      if (valueOf(stored()) !== value)
+        failures.push(`config.json does not hold ${variable} as typed after the add`)
+      if ((await page.content()).includes(value))
+        failures.push(`${variable}'s value is in the page after the save`)
+      // Edited: no command to change, the stored value at rest, Replace
+      // opened and left empty, saved. The value stays as stored.
+      await mcpMenu(page, name, names.mcp.edit)
+      await shot("edit")
+      if ((await form.locator(selectorFor.mcpField("command")).count()) > 0)
+        failures.push("the edit form offers the command as a field")
+      const command = await form
+        .locator(css.mcpCommand)
+        .innerText()
+        .catch(() => "")
+      if (command !== basename(process.execPath))
+        failures.push(`the edit form names the command ${JSON.stringify(command)}`)
+      const kept = form.locator(selectorFor.mcpVariableNamed(variable))
+      if ((await kept.locator(css.mcpSecretStored).count()) !== 1)
+        failures.push(`${variable} is not shown as stored in the edit form`)
+      await kept.getByRole("button", { name: names.mcp.replaceValue(variable) }).click()
+      await kept.locator(css.mcpSecret).fill("")
+      await form.getByRole("button", { name: names.mcp.save, exact: true }).click()
+      await page.waitForSelector(css.mcpForm, { state: "detached", timeout: 10_000 })
+      if (valueOf(stored()) !== value)
+        failures.push(
+          `${variable}'s stored value changed on a save that did not type one`,
+        )
+      // Removed, once asked in its dialog.
+      await mcpMenu(page, name, names.mcp.remove)
+      const ask = page.locator(selectorFor.mcpAction("confirm"))
+      await shot("remove")
+      await ask.click()
+      await row()
+        .waitFor({ state: "detached", timeout: 10_000 })
+        .catch(() => {})
+      if ((await row().count()) > 0)
+        failures.push(`${name}'s row is still there after Remove`)
+      if (stored()) failures.push(`config.json still holds ${name} after Remove`)
+      await closeSettings(page)
+    })
+    // The gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
@@ -3217,13 +3389,9 @@ const steps = {
   },
 
   async devices(run, step, failures) {
-    // A worker dials the native listener, off until a step turns it on.
-    const linked = await run.exclusive(async () => {
-      await openLinkedDevices(run.page)
-      const on = await switchLinking(run, true, failures)
-      if (on) await closeSettings(run.page)
-      return on
-    })
+    // A worker dials the native listener, off until a step turns it on:
+    // here Add a computer does, as a person with linking off would.
+    const linked = await run.exclusive(() => reachFromDevices(run, failures))
     if (!linked) return
     // With evidence asked for, each page is photographed as it is checked.
     const photograph = (label) =>
@@ -3261,8 +3429,27 @@ const steps = {
         failures.push(`devices.list never named ${worker.name} online with its machine`)
         return
       }
-      if (!(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0))
+      if (
+        !(listed.machine.cpus > 0 && listed.machine.memoryTotalBytes > 0) ||
+        !listed.machine.disks?.length ||
+        listed.machine.diskTotalBytes !==
+          Math.min(
+            Number.MAX_SAFE_INTEGER,
+            listed.machine.disks.reduce((sum, disk) => sum + disk.totalBytes, 0),
+          )
+      )
         failures.push(`the worker reported ${JSON.stringify(listed.machine)}`)
+      // Each page follows the last; together they name the worker once.
+      const pages = []
+      for (let after; pages.length < 1_024;) {
+        const page = await run.client.devices.list(after)
+        pages.push(page)
+        if (!page.next) break
+        after = page.next
+      }
+      const named = pages.flatMap((page) => page.workers).map((each) => each.environment)
+      if (named.filter((name) => name === worker.name).length !== 1)
+        failures.push(`devices.list pages name the worker ${JSON.stringify(named)}`)
       await run.exclusive(async () => {
         const page = run.page
         await setSideRail(page, true, failures)
@@ -3276,6 +3463,21 @@ const steps = {
           ))
         )
           failures.push("the Devices view drew no hub card")
+        // Its cards run under the bottom-left corner, so it draws no "nessa Studio".
+        if ((await page.locator(".side-rail-studio").count()) !== 0)
+          failures.push(`the Devices view still draws "nessa Studio" in its corner`)
+        // Its titlebar's free room moves the window, as over a chat.
+        const drags = await page.evaluate(() => {
+          const space = document.querySelector(".workspace-titlebar-space")
+          if (!space) return false
+          const box = space.getBoundingClientRect()
+          const hit = document.elementFromPoint(
+            box.left + box.width / 2,
+            box.top + box.height / 2,
+          )
+          return hit?.closest("[data-tauri-drag-region]") !== null && hit !== null
+        })
+        if (!drags) failures.push("the Devices titlebar does not move the window")
         for (const stat of ["CPU", "Memory", "Disk"])
           if (
             (await page
@@ -3306,7 +3508,7 @@ const steps = {
             return { fill: style.backgroundColor, ink: style.color }
           })
         if (ink.fill === ink.ink)
-          failures.push(`Add a computer is drawn ${ink.ink} on ${ink.fill}`)
+          failures.push(`Add device is drawn ${ink.ink} on ${ink.fill}`)
         // Its own page: its load, never the agents it runs.
         await tile.click()
         const detail = page.locator('[data-devices-page="worker"]')
@@ -3314,12 +3516,178 @@ const steps = {
         for (const stat of ["Agents", "CPU", "Memory", "Disk"])
           if ((await detail.locator(`[data-devices-stat="${stat}"]`).count()) !== 1)
             failures.push(`the worker's page has no ${stat}`)
+        const volumes = await detail
+          .locator("[data-devices-disks] .devices-stat-label")
+          .allInnerTexts()
+        const reported = listed.machine.disks.map((disk) => disk.mount)
+        if (
+          JSON.stringify(volumes) !== JSON.stringify(reported.length > 1 ? reported : [])
+        )
+          failures.push(`the worker's page names disks ${JSON.stringify(volumes)}`)
         if ((await detail.innerText()).includes("Running here"))
           failures.push("the worker's page lists what runs there")
         await photograph("worker")
         await detail.locator('[data-devices-action="back"]').click()
-        // Add a computer: a code and the two commands that use it.
+        // One list: the computer and the cloud side by side, no sections.
+        const list = page.locator("[data-devices-list]")
+        await list.waitFor({ timeout: 5_000 })
+        if (
+          (await list.locator(`[data-devices-worker="${id}"]`).count()) !== 1 ||
+          (await list.locator("[data-devices-cloud]").count()) !== 1
+        )
+          failures.push("the worker and the cloud are not in one list")
+        if (
+          (await list
+            .locator("[data-devices-cloud] [data-slot=device-figure]")
+            .getAttribute("data-kind")) !== "boat"
+        )
+          failures.push("Boat's tile is not drawn as a boat")
+        const headings = await page
+          .locator('[data-devices-page="list"] h2:not(#devices-hub-name)')
+          .allInnerTexts()
+        if (headings.length) failures.push(`Devices splits its list: ${headings}`)
+        // Boat is managed on its own page, not sent to Settings.
+        if (
+          (await page.locator('[data-devices-page="list"]').innerText()).includes(
+            "Settings ›",
+          )
+        )
+          failures.push("Devices still sends Boat to Settings")
+        await list.locator("[data-devices-cloud]").click()
+        const cloud = page.locator('[data-devices-page="cloud"]')
+        await cloud.waitFor({ timeout: 5_000 })
+        // It says where Boat stands, and offers the one thing to do about it:
+        // unlock while the vault is locked, else a live token field.
+        const settled = await waitFor(async () => {
+          const word = await cloud
+            .locator("[data-devices-cloud-state]")
+            .getAttribute("data-devices-cloud-state")
+          if (word === "Unavailable") return word
+          if (word === "Locked")
+            return (await cloud
+              .locator('[data-boat-action="unlock"]')
+              .isEnabled({ timeout: 500 })
+              .catch(() => false))
+              ? word
+              : null
+          if (word === "Connected" || word === "Not connected")
+            return (await cloud
+              .locator('input[type="password"]')
+              .isEnabled({ timeout: 500 })
+              .catch(() => false))
+              ? word
+              : null
+          return null
+        }, 10_000)
+        if (!settled)
+          failures.push(
+            `Boat's page reads ${await cloud.locator("[data-devices-cloud-state]").innerText()} without its action`,
+          )
+        // Boat is drawn as a boat, on its tile and its page, and floats only
+        // while connected.
+        const boat = await cloud
+          .locator("[data-slot=device-figure]")
+          .evaluate((figure) => ({
+            kind: figure.getAttribute("data-kind"),
+            afloat: figure.hasAttribute("data-afloat"),
+          }))
+        if (boat.kind !== "boat" || boat.afloat !== (settled === "Connected"))
+          failures.push(`Boat's page draws ${JSON.stringify(boat)} while ${settled}`)
+        await photograph("cloud")
+        await cloud.locator('[data-devices-action="back"]').click()
+        // Add device offers each kind; a computer gets a code and the two commands that use it.
         await page.locator('[data-devices-action="add"]').click()
+        const kinds = await page
+          .locator("[data-devices-add]")
+          .evaluateAll((each) =>
+            each.map((button) => button.getAttribute("data-devices-add")),
+          )
+        if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
+          failures.push(`Add device offers ${JSON.stringify(kinds)}`)
+        // A phone pairs right here: Settings' rows, drawn as cards on Devices,
+        // and the code's modal on top of the page, giving focus back on Escape.
+        await page.locator('[data-devices-add="phone"]').click()
+        const phone = page.locator('[data-devices-page="add-phone"]')
+        await phone.waitFor({ timeout: 5_000 })
+        const pair = phone.locator(selectorFor.linkedAction("pair"))
+        if (
+          !(await waitFor(
+            async () => (await pair.count()) === 1 && (await pair.isEnabled()),
+            10_000,
+          ))
+        )
+          failures.push("Add a phone offers no live Pair a device")
+        else {
+          const card = await phone
+            .locator('[data-slot="settings-group-card"]')
+            .first()
+            .evaluate((node) => {
+              const style = getComputedStyle(node)
+              return {
+                fill: style.backgroundColor,
+                radius: parseFloat(style.borderTopLeftRadius),
+              }
+            })
+            .catch(() => null)
+          if (!card || card.fill === "rgba(0, 0, 0, 0)" || !(card.radius > 0))
+            failures.push(
+              `Add a phone draws its rows without a card: ${JSON.stringify(card)}`,
+            )
+          await photograph("phone")
+          await pair.click()
+          const dialog = page.locator(css.pairingDialog)
+          const code = await waitFor(
+            async () => (await dialog.locator(css.pairingCode).count()) > 0,
+            10_000,
+          )
+          if (!code) failures.push("Add a phone's Pair a device opened no code")
+          else {
+            const onTop = await dialog.evaluate((node) => {
+              const box = node.getBoundingClientRect()
+              const hit = document.elementFromPoint(
+                box.left + box.width / 2,
+                box.top + box.height / 2,
+              )
+              return hit !== null && node.contains(hit)
+            })
+            if (!onTop) failures.push("the pairing modal is drawn under the Devices page")
+            await photograph("phone-code")
+            await page.keyboard.press("Escape")
+            await dialog
+              .waitFor({ state: "detached", timeout: 10_000 })
+              .catch(() =>
+                failures.push("Escape did not close the pairing modal on Devices"),
+              )
+            const focusedIn = () =>
+              page.evaluate(() => ({
+                page:
+                  document.activeElement
+                    ?.closest("[data-devices-page]")
+                    ?.getAttribute("data-devices-page") ?? null,
+                tag: document.activeElement?.tagName ?? null,
+                text: document.activeElement?.textContent?.slice(0, 40) ?? null,
+              }))
+            const back = await waitFor(
+              async () => ((await focusedIn()).page === "add-phone" ? true : null),
+              2_000,
+            )
+            const focused = back ? "add-phone" : JSON.stringify(await focusedIn())
+            if (focused !== "add-phone")
+              failures.push(
+                `closing the pairing modal left focus on ${focused ?? "the body"}`,
+              )
+            // Leave no code open: cancel it from its row.
+            await phone.locator(selectorFor.linkedAction("cancel")).click()
+            await pair
+              .waitFor({ timeout: 10_000 })
+              .catch(() =>
+                failures.push("Pair a device was not offered again after cancelling"),
+              )
+          }
+        }
+        await phone.locator('[data-devices-action="back"]').click()
+        await page.locator('[data-devices-action="add"]').click()
+        await page.locator('[data-devices-add="computer"]').click()
         const add = page.locator('[data-devices-page="add"]')
         const shown = await waitFor(
           async () => (await add.locator("[data-devices-command]").count()) === 2,
@@ -4216,6 +4584,88 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  async close(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " close")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // The window shows it, so it is followed: an agent that closed its own
+    // thread is parked anyway, unlike one that is only idle.
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    const closing = prompt(run, STRESS.close, step)
+    const seen = await send(
+      run,
+      conversationId,
+      closing,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const { view: closed } = await settled(
+      run,
+      conversationId,
+      seen,
+      closing,
+      "completed",
+      failures,
+    )
+    if (!closed) return
+    await expectShown(run.page, SAYS.closed, failures)
+    // The parking sweep looks at least every 15 s.
+    const parked = await waitFor(async () => {
+      const lease = (await followedOnce(run, conversationId)).lease
+      return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
+    }, 45_000)
+    if (!parked) {
+      const lease = (await followedOnce(run, conversationId)).lease
+      failures.push(
+        `the closed thread's agent was not parked: its lease is ${lease?.state ?? "missing"}${
+          lease?.cause ? ` (${lease.cause})` : ""
+        }`,
+      )
+      return
+    }
+    const next = prompt(run, STRESS.reply, step, " after close_thread")
+    const after = await send(
+      run,
+      conversationId,
+      next,
+      failures,
+      new Set(closed.messages.map((each) => each.executionId)),
+    )
+    const { view: reopened } = await settled(
+      run,
+      conversationId,
+      after,
+      next,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.echo}${next}`, failures)
+    if (reopened?.lease?.state !== "live")
+      failures.push(
+        `the message after close_thread left the lease ${reopened?.lease?.state ?? "missing"}`,
+      )
+    else if (!(reopened.lease.revision > (closed.lease?.revision ?? 0)))
+      failures.push("the message after close_thread ran on the closed agent's lease")
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
   async rename(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " rename")
@@ -4479,6 +4929,111 @@ const steps = {
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
+  async transcriptView(run, step, failures) {
+    const pane = await chooseTranscriptView(run, "Compact", failures)
+    if (failures.length) return
+    const transcript = pane.locator(".workspace-transcript")
+    const text = prompt(run, STRESS.trace, step, " compact")
+    const seen = await send(run, run.main.id, text, failures)
+    // While the calls run, the compact transcript draws no run and one live
+    // row, which says only that the agent is working: no call is named.
+    const live = await waitFor(
+      () =>
+        transcript.evaluate(
+          (element, tools) => {
+            const rows = [...element.querySelectorAll(".workspace-live")]
+            if (rows.length !== 1) return null
+            const said = rows[0].textContent ?? ""
+            return {
+              said,
+              runs: element.querySelectorAll('[data-slot="tool-trace"]').length,
+              named: tools.filter((tool) => said.includes(tool)),
+            }
+          },
+          TRACE_CALLS.flatMap((call) => [call.tool, call.title ?? call.tool]),
+        ),
+      15_000,
+    )
+    if (!live) failures.push("the compact transcript drew no live row while the turn ran")
+    else {
+      if (!live.said.includes("Working"))
+        failures.push(`the compact live row reads ${JSON.stringify(live.said)}`)
+      if (live.named.length)
+        failures.push(`the compact live row names ${JSON.stringify(live.named)}`)
+      if (live.runs !== 0)
+        failures.push(`the compact transcript drew ${live.runs} tool runs while working`)
+      if (run.evidence) await liveShot(run, transcript, "compact-live")
+    }
+    const { view, turn } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    if (!turn) return
+    // Compact only draws less: the gateway keeps every call.
+    const kept = view.tools.filter((tool) => tool.executionId === turn.executionId)
+    if (kept.length !== TRACE_CALLS.length)
+      failures.push(
+        `the compact turn kept ${kept.length} calls, not ${TRACE_CALLS.length}`,
+      )
+    const message = transcript
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.trace}${text}` })
+    const replied = await waitFor(
+      async () =>
+        (await message.count()) === 1 &&
+        (await transcript.locator(".workspace-live").count()) === 0,
+      15_000,
+    )
+    if (!replied) failures.push("the compact transcript does not show the reply alone")
+    const runs = await transcript.locator('[data-slot="tool-trace"]').count()
+    if (runs !== 0) failures.push(`the compact transcript draws ${runs} tool runs`)
+    if (run.evidence)
+      await transcript.screenshot({
+        path: join(run.evidence, `transcript-${run.engine ?? "window"}-compact.png`),
+      })
+    if (failures.length) return
+    // The choice is remembered: a reload draws the transcript compact again.
+    await run.page.reload()
+    await run.page
+      .locator(selectorFor.sessionListRowFor(run.main.id))
+      .waitFor({ timeout: 30_000 })
+    await unlockRequestedVault(run.client, run.page)
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const reloaded = run.page
+      .locator(css.pane)
+      .filter({ has: run.page.locator(css.conversationDock) })
+      .locator(".workspace-transcript")
+    const remembered = await waitFor(
+      async () =>
+        (await reloaded
+          .getAttribute("data-transcript-view", { timeout: 1_000 })
+          .catch(() => null)) === "compact",
+      15_000,
+    )
+    if (!remembered) failures.push("after a reload the transcript is not compact")
+    // Detailed again draws the same turn's run, folded.
+    await chooseTranscriptView(run, "Detailed", failures)
+    const line = reloaded
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.trace}${text}` })
+      .locator('[data-slot="tool-trace-line"]')
+    const folded = await waitFor(
+      async () =>
+        (await line.count()) === 1 &&
+        ((await line.textContent()) ?? "").includes(`Ran ${TRACE_CALLS.length} tools`),
+      15_000,
+    )
+    if (!folded) failures.push("Detailed, chosen again, does not draw the turn's run")
+    else if (run.evidence)
+      await reloaded.screenshot({
+        path: join(run.evidence, `transcript-${run.engine ?? "window"}-detailed.png`),
+      })
   },
 
   async trace(run, step, failures) {
@@ -5561,6 +6116,23 @@ async function reopened(run, conversationId) {
   return { ms, view, reads }
 }
 
+/** Opens Settings › Connections › MCP servers, as a person does, and waits for its list. */
+async function openMcpServers(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.integrations }).click()
+  await page.waitForSelector(selectorFor.mcpServersIn("listed"), { timeout: 10_000 })
+}
+
+/** Chooses `item` from the ⋯ menu of the MCP server row named `name`. */
+async function mcpMenu(page, name, item) {
+  await page.getByRole("button", { name: names.mcp.more(name), exact: true }).click()
+  await page
+    .locator(selectorFor.mcpMenuOf(name))
+    .getByRole("menuitem", { name: item, exact: true })
+    .click()
+}
+
 /** Opens Settings › Connections › Linked devices, as a person does. */
 async function openLinkedDevices(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
@@ -6375,6 +6947,74 @@ async function pairFromWindow(run, failures) {
     .waitFor({ timeout: 10_000 })
     .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
+}
+
+/**
+ * Turns native linking on from Devices › Add a computer, with linking off:
+ * its "Let other computers reach it" button, which starts the gateway again
+ * in the same process. The page then makes a code, the button is gone, the
+ * run's client is connected again, and config.json holds linking on. Leaves
+ * the side rail closed. Called with nothing else in flight
+ * (`run.exclusive`).
+ */
+async function reachFromDevices(run, failures) {
+  const gateway = run.stack.gateway
+  const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+  const pid = gateway.server.pid
+  const page = run.page
+  await setSideRail(page, true, failures)
+  if (failures.length) return false
+  await page.locator('[data-rail-item="devices"]').click()
+  await page.locator('[data-devices-action="add"]').click()
+  await page.locator('[data-devices-add="computer"]').click()
+  const add = page.locator('[data-devices-page="add"]')
+  const reach = add.locator('[data-devices-action="reach"]')
+  if (!(await waitFor(async () => (await reach.count()) === 1, 10_000))) {
+    failures.push("Add a computer offers no way to let others reach the hub")
+    return false
+  }
+  // The way to turn linking on sits with the code it lets the hub make.
+  if (
+    (await add
+      .locator("section", {
+        has: page.locator("h2", { hasText: "On the computer, run" }),
+      })
+      .locator('[data-devices-action="reach"]')
+      .count()) !== 1
+  )
+    failures.push("Let other computers reach it is not beside the code")
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await reach.click()
+    const made = await waitFor(
+      async () =>
+        (await reach.count()) === 0 &&
+        (await add.locator("[data-devices-command]").count()) === 2,
+      60_000,
+    )
+    if (!made)
+      failures.push(
+        `after reaching, Add a computer reads ${JSON.stringify(await add.innerText())}`,
+      )
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const saved = JSON.parse(readFileSync(config, "utf8")).native
+    if (saved?.enabled === false || saved?.listenAddress !== run.nativeListen)
+      failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+    const { listening } = await run.client.devices.list()
+    if (listening === undefined) failures.push("devices.list names no listener")
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  await add.locator('[data-devices-action="back"]').click()
+  await page.locator('[data-rail-item="agents"]').click()
+  await setSideRail(page, false, failures)
+  return held
 }
 
 /**

@@ -35,6 +35,9 @@ struct State {
     creation_ack: Value,
     read_override: Option<Value>,
     expected_ttl: Option<u32>,
+    /// Reads that still find an archiving VM archiving; the next finds it
+    /// archived.
+    archiving_reads: usize,
 }
 struct Server {
     provider: BoatProvider,
@@ -58,6 +61,7 @@ async fn server() -> Server {
         creation_ack: json!({"ok":true,"type":"sandbox.created","status":"provisioning"}),
         read_override: None,
         expected_ttl: Some(3600),
+        archiving_reads: 0,
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
@@ -76,7 +80,7 @@ async fn server() -> Server {
             let mut state=create.lock().unwrap();
             assert_eq!(request,json!({"type":"small","ttlSeconds":state.expected_ttl,"environment":"nessa","env":{"NESSA_THREAD_ID":"fixture-thread"},"from":"bsh_fixture","snapshots":true}));
             state.created+=1; if state.drift_on_create { state.environment["passGithub"]=json!(true); } let mut body=state.receipt.clone(); for field in ["ok","type","status"] {body.as_object_mut().unwrap().remove(field);} for (field,value) in state.creation_ack.as_object().unwrap() {body[field.as_str()]=value.clone();} body["ttlSeconds"]=json!(state.expected_ttl); async { Json(body) } }))
-        .route("/api/v1/sandboxes/{id}", get(move || { let state=read.lock().unwrap(); let body=state.read_override.as_ref().unwrap_or(&state.receipt).clone(); async { Json(body) } }))
+        .route("/api/v1/sandboxes/{id}", get(move || { let mut state=read.lock().unwrap(); if state.receipt["sandbox"]["state"]==json!("archiving") { if state.archiving_reads==0 { state.receipt["sandbox"]["state"]=json!("archived"); } else { state.archiving_reads-=1; } } let body=state.read_override.as_ref().unwrap_or(&state.receipt).clone(); async { Json(body) } }))
         .route("/api/v1/sandboxes/{id}/resume", post(move |Json(request):Json<Value>| { let mut state=resume.lock().unwrap(); assert_eq!(request["ttlSeconds"],json!(state.expected_ttl)); state.resumed+=1; if state.drift_on_resume { state.environment["passSecrets"]=json!(true); } state.receipt["sandbox"]["state"]=json!("ready"); async move { Json(json!({"ok":true,"type":"sandbox.resumed","id":VM,"status":"ready"})) } }))
         .fallback(move || { commands.lock().unwrap().commands+=1; async { axum::http::StatusCode::FORBIDDEN } });
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -419,6 +423,36 @@ async fn resume_rechecks_environment_before_any_sdk_command_or_grant() {
     );
     let state = server.state.lock().unwrap();
     assert_eq!(state.resumed, 1);
+    assert_eq!(state.commands, 0);
+}
+
+/// A VM still stopping from its thread's last rest is waited out, then
+/// resumed, and checked again before anything runs in it.
+#[tokio::test]
+async fn a_vm_still_stopping_is_resumed_once_it_has_stopped() {
+    let server = server().await;
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    {
+        let mut state = server.state.lock().unwrap();
+        state.receipt["sandbox"]["state"] = json!("archiving");
+        state.archiving_reads = 2;
+        // Stops the opening after the resume, before any SDK command.
+        state.drift_on_resume = true;
+    }
+    assert!(matches!(
+        server
+            .provider
+            .connect(&connection(), "fixture-thread", VM, &receipt.admission)
+            .await,
+        Err(Failure::AdmissionRejected(_))
+    ));
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.archiving_reads, 0, "it waited while the VM stopped");
+    assert_eq!(state.resumed, 1, "then resumed it");
     assert_eq!(state.commands, 0);
 }
 

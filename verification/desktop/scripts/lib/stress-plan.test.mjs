@@ -31,12 +31,14 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("aside"), knobs.asides)
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
+  assert.equal(count("close"), knobs.closes)
   assert.equal(count("rename"), knobs.renames)
   assert.equal(count("handoff"), knobs.handoffs)
   assert.equal(count("delete"), knobs.deletes)
   assert.equal(count("fresh"), knobs.fresh)
   assert.equal(count("window"), knobs.windows)
   assert.equal(count("linking"), knobs.linkings)
+  assert.equal(count("mcp"), knobs.mcpServers)
   assert.equal(count("rail"), knobs.rails)
   assert.equal(count("panel"), knobs.panels)
   assert.equal(count("menuPanel"), knobs.menuPanels)
@@ -46,6 +48,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
   assert.equal(count("trace"), knobs.traces)
+  assert.equal(count("transcriptView"), knobs.transcriptViews)
   assert.equal(count("notice"), knobs.notices)
   assert.equal(count("pool"), knobs.pools)
   assert.equal(count("devices"), knobs.devices)
@@ -146,6 +149,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         backgroundTasks: "0",
         windows: "0",
         linkings: "0",
+        mcpServers: "0",
         rails: "0",
         panels: "0",
         waitingRows: "0",
@@ -153,6 +157,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         onboardings: "0",
         tables: "0",
         traces: "0",
+        transcriptViews: "0",
         notices: "0",
         pools: "0",
         devices: "0",
@@ -167,6 +172,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         webhooks: "0",
         pastes: "0",
         awaits: "0",
+        closes: "0",
         fresh: "0",
         renames: "0",
         deletes: "0",

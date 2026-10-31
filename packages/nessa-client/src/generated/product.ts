@@ -2617,10 +2617,21 @@ export interface DeviceMachine {
   memoryTotalBytes: number
   /** Memory in use; never more than memoryTotalBytes. */
   memoryUsedBytes: number
-  /** Size of the disk holding the machine's Nessa data. */
+  /** Size of every disk in disks together. */
   diskTotalBytes: number
-  /** Space used on that disk; never more than diskTotalBytes. */
+  /** Space used on them together; never more than diskTotalBytes. */
   diskUsedBytes: number
+  /** Each local disk, once however many volumes share it, the root first. Absent or empty when none could be read. */
+  disks?: DeviceDisk[]
+}
+/** One local disk of a machine. */
+export interface DeviceDisk {
+  /** Where it is mounted, e.g. / or /Volumes/Archive. */
+  mount: string
+  /** Its size. */
+  totalBytes: number
+  /** Space used on it; never more than totalBytes. */
+  usedBytes: number
 }
 /** A paired environment (`nessa env serve`) that has served this gateway. */
 export interface DeviceWorker {
@@ -2635,16 +2646,21 @@ export interface DeviceWorker {
   /** Unix milliseconds it last reported, saved at most every few minutes; absent before it first reported. */
   lastSeenMs?: number
 }
-/** Result of devices.list: this gateway's own machine (the hub) and the paired environments that work for it. */
+/** Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it. */
 export interface DevicesListResult {
-  /** The machine this gateway runs on; absent when it cannot be read. */
+  /** The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read. */
   hub?: DeviceMachine
   /** Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it. */
   listening?: string
-  /** The workers connected now or seen before and still paired, at most 64: online first, then draining, then offline, the most recently seen first within each. */
+  /** One page of the workers connected now or seen before and still paired, at most 64, in the order of their environment names, each after the page's after. */
   workers: DeviceWorker[]
-  /** Workers past the 64 listed, not listed. */
-  omitted: number
+  /** The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page. */
+  next?: string
+}
+/** Which page of the hub's workers to list. */
+export interface DevicesListParams {
+  /** Absent on the first page. Later pages echo the previous page's next. */
+  after?: string
 }
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
 export interface ServerReachResult {

@@ -3,8 +3,9 @@
 use super::{
     decode, encode, fingerprint, read_hello, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
-    GrantRefusal, GrantedTerms, Hello, MachineReport, PublishRefusal, Sandbox, StagedArtifact,
-    ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_MACHINE_FIGURE, MAX_MACHINE_TEXT_BYTES,
+    GrantRefusal, GrantedTerms, Hello, MachineDisk, MachineReport, PublishRefusal, Sandbox,
+    StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_MACHINE_DISKS,
+    MAX_MACHINE_FIGURE, MAX_MACHINE_TEXT_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -716,6 +717,11 @@ fn a_machine_report_names_no_lease_and_is_bounded() {
         memory_used_bytes: 8,
         disk_total_bytes: 100,
         disk_used_bytes: 40,
+        disks: vec![MachineDisk {
+            mount: "/".into(),
+            total_bytes: 100,
+            used_bytes: 40,
+        }],
     };
     let frame = FromEnvironment::Machine {
         report: report.clone(),
@@ -750,6 +756,24 @@ fn a_machine_report_names_no_lease_and_is_bounded() {
         },
         MachineReport {
             disk_total_bytes: MAX_MACHINE_FIGURE + 1,
+            ..report.clone()
+        },
+        MachineReport {
+            disks: vec![report.disks[0].clone(); MAX_MACHINE_DISKS + 1],
+            ..report.clone()
+        },
+        MachineReport {
+            disks: vec![MachineDisk {
+                used_bytes: 101,
+                ..report.disks[0].clone()
+            }],
+            ..report.clone()
+        },
+        MachineReport {
+            disks: vec![MachineDisk {
+                mount: "m".repeat(MAX_MACHINE_TEXT_BYTES + 1),
+                ..report.disks[0].clone()
+            }],
             ..report
         },
     ] {

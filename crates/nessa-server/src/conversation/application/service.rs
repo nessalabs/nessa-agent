@@ -312,6 +312,10 @@ pub struct ConversationLimits {
     /// How long an idle agent nobody watches keeps running before it is
     /// parked (`service/parking.rs`); `None` never parks one.
     pub park_after: Option<Duration>,
+    /// How long an idle agent in a cloud workspace of its own keeps running,
+    /// watched or not, before it is parked and its VM stopped, while nothing
+    /// it started in the background runs (`service/parking.rs`).
+    pub workspace_idle: Duration,
 }
 impl ConversationLimits {
     /// Whether `text` is past what one message may say: the one bound a
@@ -321,6 +325,10 @@ impl ConversationLimits {
         text.len() > self.max_input_bytes
     }
 }
+/// How long a cloud thread's agent sits idle before its VM stops: the person
+/// has moved on, and nothing it runs in the background is left.
+pub const WORKSPACE_IDLE: Duration = Duration::from_secs(5 * 60);
+
 /// A small service's limits. The gateway does not use these: it passes
 /// `limits.liveConversations` from its configuration.
 impl Default for ConversationLimits {
@@ -329,6 +337,7 @@ impl Default for ConversationLimits {
             max_conversations: 32,
             max_input_bytes: 8192,
             park_after: None,
+            workspace_idle: WORKSPACE_IDLE,
         }
     }
 }
@@ -828,6 +837,10 @@ struct Slot {
     /// agents, the one with the oldest is parked first
     /// (`service/parking.rs`). Unix milliseconds from the service's clock.
     touched: AtomicU64,
+    /// Its agent closed its thread (`close_thread`): it is parked as soon
+    /// as it is idle, watched or not. Its next opening is a new slot, and
+    /// starts unmarked.
+    closing: AtomicBool,
 }
 impl Slot {
     fn new(now_ms: u64) -> Self {
@@ -837,6 +850,7 @@ impl Slot {
             started: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             touched: AtomicU64::new(now_ms),
+            closing: AtomicBool::new(false),
         }
     }
     /// The conversation is in use at `now_ms`.
@@ -2903,10 +2917,20 @@ impl ConversationService {
                 }
                 return saved_result(&existing);
             }
+            // A model change a restart or failed cleanup left pending is
+            // settled first, as a send settles it, rather than refusing every
+            // mode change until something else opens the conversation. A
+            // pending mode change still refuses this one until an opening
+            // or a send has settled it.
+            service.recover_model_change(&id, &caller).await?;
             service.refuse_pending_model_change(&id, &caller).await?;
             if service.inner.metadata.pending_mode_change(&id).await?.is_some() {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
+            // Recovery may have applied a model change: read what it saved.
+            let record = load_conversation(service.inner.metadata.as_ref(), &id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
             let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
             let place = service.agent_place(&id).await?;
             service
@@ -3960,8 +3984,10 @@ impl ConversationService {
             let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
-            // A message is use: an agent is not parked from under it.
+            // A message is use: an agent is not parked from under it, and
+            // a thread its agent closed is open again for this new work.
             owner.touch(service.inner.clock.unix_milliseconds());
+            owner.closing.store(false, Ordering::SeqCst);
             // Opened again at most once for this message: by the stuck agent
             // it found, or by one that failed while it was being checked.
             let mut reopened = false;
@@ -6898,6 +6924,9 @@ impl ConversationService {
                             if on_confirm == ConfirmedClose::ReleaseSlot {
                                 self.release_slot(id, &slot).await;
                             }
+                            if let Some(rest) = super::WorkspaceRest::of(cause) {
+                                self.rest_workspace(id, rest);
+                            }
                         }
                         closed
                     }
@@ -6909,6 +6938,15 @@ impl ConversationService {
             }
             ready.await;
         }
+    }
+
+    /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
+    /// agent has stopped: nothing for a conversation that has none, nor
+    /// while anything still uses it. The next message resumes it.
+    fn rest_workspace(&self, id: &ConversationId, cause: super::WorkspaceRest) {
+        let service = self.clone();
+        let id = id.clone();
+        tokio::spawn(async move { service.inner.environment.rest(&id, cause).await });
     }
 
     /// Close `live`'s agent under its lease for `cause`, on a task of its
@@ -6985,6 +7023,11 @@ impl ConversationService {
     }
 }
 
+/// Whether an agent's end lets its conversation's VM stop: parked idle
+/// (which an agent that closed its thread is, at once), or closed with its
+/// conversation. Not a suspend that opens it again at once (a handoff, an
+/// agent reopened for a message), nor a lost connection or the gateway's
+/// own stop, which the next opening picks up as it was.
 /// What a pending-mode close did with the agent and its uploads.
 enum PendingClose {
     /// The close confirmed within the budget. `uploads` is this caller's

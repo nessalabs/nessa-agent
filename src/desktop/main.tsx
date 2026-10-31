@@ -14,6 +14,7 @@ import {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  openGatewayConfig,
   onPathsDragged,
   host,
   loadAssignedGatewayEndpoint,
@@ -205,7 +206,18 @@ createRoot(container).render(
               <SubagentsProvider source={dependencies.subagents}>
                 {/* Every icon in the window resolves through the family chosen in Settings. */}
                 <DesktopIconFamilyProvider>
-                  <McpServersProvider gateway={dependencies.mcpServers}>
+                  <McpServersProvider
+                    gateway={dependencies.mcpServers}
+                    // The app's own gateway is on this computer: its config
+                    // file can be opened here, where the host has an opener
+                    // (macOS, Linux). A browser's may be anywhere.
+                    openConfig={
+                      backend === "host" &&
+                      (host.kind === "macos" || host.kind === "linux")
+                        ? openGatewayConfig
+                        : undefined
+                    }
+                  >
                     <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
                       <DevicesProvider gateway={dependencies.devices}>
                         <ClipboardProvider write={writeClipboardText}>

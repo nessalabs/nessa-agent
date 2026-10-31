@@ -849,3 +849,68 @@ async fn background_deletion_does_not_join_admission_blocked_delivery() {
         .any(|message| matches!(message.sender(), MessageSender::Internal)));
     retire(service, storage, metadata).await;
 }
+
+/// Parking asks the task owner whether a background command of a
+/// conversation still runs: yes from its start until its end is settled, and
+/// while it does, a thread its agent closed is not parked.
+#[tokio::test]
+async fn a_running_background_command_is_reported_until_its_end_is_settled() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    // An agent that resumes its session, so closing its thread is taken.
+    provider
+        .session_resume
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (service, _storage, _metadata, tasks, runner) = setup(&root, provider.clone()).await;
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let running = || {
+        service
+            .inner
+            .background_tasks
+            .get()
+            .unwrap()
+            .running_for(&target)
+    };
+    assert!(!running());
+    let release = turn(
+        &service,
+        &provider,
+        &target,
+        "first",
+        vec![update("original", "build", "make")],
+    )
+    .await;
+    start(&service, &target, "build", "make").await.unwrap();
+    runner.started.notified().await;
+    assert!(running(), "the command runs");
+    assert!(!service
+        .inner
+        .background_tasks
+        .get()
+        .unwrap()
+        .running_for(&id()));
+    release.send(()).unwrap();
+    // Its turn ends while the command runs: a thread its agent closed is
+    // still in use, so no sweep parks it.
+    service.close_after_turn(&target).await.unwrap();
+    for _ in 0..20 {
+        assert_eq!(
+            service.sweep(None).await,
+            0,
+            "parked while its command runs"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(running());
+    runner.released.notify_one();
+    wait_delivery(&tasks, &target, "build").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while running() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("its end is settled");
+}

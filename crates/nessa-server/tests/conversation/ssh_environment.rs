@@ -4225,3 +4225,68 @@ async fn workspace_connection_deadline_matches_the_published_client_budget() {
         Some(LeaseRefusal::EnvironmentUnreachable)
     );
 }
+
+/// A workspace's connection is let go only while nothing uses it: not while
+/// a lease is on it, and again once the lease ended and every holder of it
+/// is gone; the next lease connects again.
+#[tokio::test]
+async fn a_workspace_connection_is_let_go_only_while_nothing_uses_it() {
+    // As a VM's runtime does, the connection's owner ends its stream when
+    // it is dropped, so a closed link sees its end.
+    struct Cut(Arc<Connector>);
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.cut();
+        }
+    }
+    struct Through(Arc<Connector>);
+    impl super::connector::WorkspaceConnector for Through {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                let mut connection =
+                    LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
+                        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+                connection.keep = Box::new((connection.keep, Cut(self.0.clone())));
+                Ok(connection)
+            })
+        }
+    }
+    let connector = Connector::new(Reach::Serving);
+    let environment = SshEnvironment::workspace(
+        Arc::new(Through(connector.clone())),
+        Arc::new(Audit::default()),
+    );
+    assert!(environment.let_go().await, "nothing was connected");
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert!(!environment.let_go().await, "a lease is on it");
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Idle).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    assert!(
+        !environment.let_go().await,
+        "the ended lease's provider still holds it"
+    );
+    drop(opened);
+    assert!(environment.let_go().await, "nothing uses it now");
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+    let again = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        2,
+        "the next lease connects again"
+    );
+    again.hold.end(LeaseEndCause::Closed).await;
+}

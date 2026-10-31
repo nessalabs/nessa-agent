@@ -6464,13 +6464,44 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991,
-          "description": "Size of the disk holding the machine's Nessa data."
+          "description": "Size of every disk in disks together."
         },
         "diskUsedBytes": {
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991,
-          "description": "Space used on that disk; never more than diskTotalBytes."
+          "description": "Space used on them together; never more than diskTotalBytes."
+        },
+        "disks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DeviceDisk" },
+          "maxItems": 16,
+          "description": "Each local disk, once however many volumes share it, the root first. Absent or empty when none could be read."
+        }
+      }
+    },
+    "DeviceDisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One local disk of a machine.",
+      "required": ["mount", "totalBytes", "usedBytes"],
+      "properties": {
+        "mount": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Where it is mounted, e.g. / or /Volumes/Archive."
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Its size."
+        },
+        "usedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Space used on it; never more than totalBytes."
         }
       }
     },
@@ -6512,12 +6543,12 @@
     "DevicesListResult": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Result of devices.list: this gateway's own machine (the hub) and the paired environments that work for it.",
-      "required": ["workers", "omitted"],
+      "description": "Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it.",
+      "required": ["workers"],
       "properties": {
         "hub": {
           "$ref": "#/$defs/DeviceMachine",
-          "description": "The machine this gateway runs on; absent when it cannot be read."
+          "description": "The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read."
         },
         "listening": {
           "type": "string",
@@ -6528,15 +6559,29 @@
           "type": "array",
           "items": { "$ref": "#/$defs/DeviceWorker" },
           "maxItems": 64,
-          "description": "The workers connected now or seen before and still paired, at most 64: online first, then draining, then offline, the most recently seen first within each."
+          "description": "One page of the workers connected now or seen before and still paired, at most 64, in the order of their environment names, each after the page's after."
         },
-        "omitted": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991,
-          "description": "Workers past the 64 listed, not listed."
+        "next": {
+          "type": "string",
+          "pattern": "^peer:[0-9a-f]{64}$",
+          "maxLength": 69,
+          "description": "The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page."
         }
       }
+    },
+    "DevicesListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "string",
+          "pattern": "^peer:[0-9a-f]{64}$",
+          "maxLength": 69,
+          "description": "Absent on the first page. Later pages echo the previous page's next."
+        }
+      },
+      "required": [],
+      "description": "Which page of the hub's workers to list."
     },
     "ServerReachResult": {
       "type": "object",

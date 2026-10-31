@@ -1,14 +1,14 @@
 //! [`MachineProbe`] over `sysinfo`: the host's name, system, processors,
-//! memory, and the disk holding a given directory.
+//! memory, and its local disks.
 use crate::devices::application::MachineProbe;
-use nessa_protocol::lease::MachineReport;
+use nessa_protocol::lease::{MachineDisk, MachineReport, MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE};
 use std::{
     path::PathBuf,
     sync::{Mutex, PoisonError, TryLockError},
 };
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, DiskRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
 
-/// This machine, its disk being the one `data` is on.
+/// This machine. With no local disk found, its disk is the one `data` is on.
 pub(crate) struct SystemMachine {
     data: PathBuf,
     /// Kept between reads: processor use is measured between two of them.
@@ -72,7 +72,26 @@ impl MachineProbe for SystemMachine {
         };
         let memory_total_bytes = system.total_memory();
         let memory_used_bytes = system.used_memory().min(memory_total_bytes);
-        let (disk_total_bytes, disk_used_bytes) = disk_of(&self.data);
+        let mut disks = local_disks();
+        if disks.is_empty() {
+            let (total_bytes, used_bytes) = disk_of(&self.data);
+            if total_bytes > 0 {
+                disks.push(MachineDisk {
+                    mount: MachineReport::bounded(&self.data.to_string_lossy()),
+                    total_bytes,
+                    used_bytes,
+                });
+            }
+        }
+        let sum = |figure: fn(&MachineDisk) -> u64| {
+            disks
+                .iter()
+                .map(figure)
+                .fold(0u64, u64::saturating_add)
+                .min(MAX_MACHINE_FIGURE)
+        };
+        let disk_total_bytes = sum(|disk| disk.total_bytes);
+        let disk_used_bytes = sum(|disk| disk.used_bytes).min(disk_total_bytes);
         let report = MachineReport {
             hostname: MachineReport::bounded(&System::host_name().unwrap_or_default()),
             os: MachineReport::bounded(std::env::consts::OS),
@@ -84,10 +103,63 @@ impl MachineProbe for SystemMachine {
             memory_used_bytes,
             disk_total_bytes,
             disk_used_bytes,
+            disks,
         };
         *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some(report.clone());
         Some(report)
     }
+}
+
+/// File systems kept on a disk of this machine. A network share, a memory
+/// file system or a packed image is not one, and is never asked its size: a
+/// share that does not answer would hold the read.
+const LOCAL_FILE_SYSTEMS: &[&str] = &[
+    "apfs", "hfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "bcachefs", "ntfs",
+    "refs", "exfat",
+];
+
+/// Where a volume of the system's own is mounted, beside the one disk it
+/// shares: macOS mounts its data, virtual memory and boot volumes there.
+const SYSTEM_VOLUMES: &[&str] = &["/System/Volumes/", "/private/var/vm", "/boot"];
+
+/// Each local disk, once however many volumes share it, the root first.
+/// Listed without asking any its size, then each kept one is asked alone.
+fn local_disks() -> Vec<MachineDisk> {
+    let listed = Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing());
+    let mut seen = std::collections::BTreeSet::new();
+    let mut kept: Vec<_> = listed
+        .list()
+        .iter()
+        .filter(|disk| {
+            let system = disk.file_system().to_string_lossy().to_ascii_lowercase();
+            let mount = disk.mount_point().to_string_lossy();
+            LOCAL_FILE_SYSTEMS.contains(&system.as_str())
+                && !SYSTEM_VOLUMES
+                    .iter()
+                    .any(|volume| mount.starts_with(volume.trim_end_matches('/')))
+        })
+        .filter_map(|disk| {
+            let (total_bytes, used_bytes) = disk_of(disk.mount_point());
+            // A device mounted twice is one disk; so are the volumes of one
+            // APFS container, which each answer the container's size and
+            // what it has free.
+            let shared = if disk.file_system().eq_ignore_ascii_case("apfs") {
+                format!("apfs {total_bytes} {}", total_bytes - used_bytes)
+            } else {
+                format!("device {}", disk.name().to_string_lossy())
+            };
+            (total_bytes > 0 && seen.insert(shared)).then(|| MachineDisk {
+                mount: MachineReport::bounded(&disk.mount_point().to_string_lossy()),
+                total_bytes: total_bytes.min(MAX_MACHINE_FIGURE),
+                used_bytes: used_bytes.min(total_bytes.min(MAX_MACHINE_FIGURE)),
+            })
+        })
+        .collect();
+    kept.sort_by(|left, right| {
+        (left.mount != "/", &left.mount).cmp(&(right.mount != "/", &right.mount))
+    });
+    kept.truncate(MAX_MACHINE_DISKS);
+    kept
 }
 
 /// The size and use of the disk `path` is on, asked of that one file
