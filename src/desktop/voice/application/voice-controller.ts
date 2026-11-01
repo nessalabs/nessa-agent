@@ -99,8 +99,14 @@ interface Call {
   /** The `event_id` of the `response.create` not yet answered or refused. */
   awaitingCreated: string | null
   responseQueued: boolean
-  /** Sends not answered yet. */
+  /** Sends on their way to the agent, not answered yet (shown as working). */
   sending: number
+  /**
+   * `send_to_agent`s admitted and not yet answered, including those still
+   * waiting for a transcript or for an earlier send. No reply is handed
+   * over while any is (V12).
+   */
+  pending: number
   /**
    * The last `send_to_agent` admitted, settled once it has sent or given
    * up. Each send waits for the one before it, transcript wait included,
@@ -171,6 +177,7 @@ export class VoiceController {
       awaitingCreated: null,
       responseQueued: false,
       sending: 0,
+      pending: 0,
       sends: Promise.resolve(),
       waiting: [],
       ends: new Map(),
@@ -416,6 +423,7 @@ export class VoiceController {
       .map((item) => this.committed(call, item))
       .filter((heard) => !heard.sent)
     for (const heard of covered) heard.sent = true
+    call.pending++
     // Sends go in the order they were asked for (V8).
     const before = call.sends
     let settled = () => {}
@@ -436,12 +444,19 @@ export class VoiceController {
       .map((heard) => tidy(heard.text ?? ""))
       .filter((part) => part !== "")
       .join(" ")
-    if (text === "") return "nothing_heard"
+    if (text === "") {
+      call.pending--
+      // A reply held back for this send can go now.
+      this.replied(call)
+      this.update(call)
+      return "nothing_heard"
+    }
     call.sending++
     this.update(call)
     const { result, turn } = await call.conversation.send(text)
     if (!this.current(call)) return result
     call.sending--
+    call.pending--
     // A message that did not go, or may not have, is not waited on: its
     // answer, if any, is on screen. The voice is told which it was.
     if (result === "sent") call.waiting.push(turn)
@@ -483,7 +498,7 @@ export class VoiceController {
       // Shown before and gone now: it ended past what the window holds.
       else if (call.seen.has(turn)) call.ends.set(turn, { text: "", ended: "finished" })
     }
-    if (call.sending > 0 || call.waiting.some((turn) => !call.ends.has(turn))) return
+    if (call.pending > 0 || call.waiting.some((turn) => !call.ends.has(turn))) return
     const ends = call.waiting.map((turn) => call.ends.get(turn))
     call.waiting.length = 0
     call.ends.clear()

@@ -528,6 +528,39 @@ describe("VoiceController", () => {
     expect(controller.snapshot().phase).toBe("listening")
   })
 
+  it("V12: a send queued behind an unanswered one holds back the first turn's reply", async () => {
+    const { controller, connection, conversation } = setup()
+    const answers: ((sent: SendResult) => void)[] = []
+    conversation.send = async (text: string) => {
+      conversation.sent.push(text)
+      const turn = `turn-${conversation.sent.length}`
+      conversation.turnsSent.push(turn)
+      return {
+        result: await new Promise<SendResult>((resolve) => answers.push(resolve)),
+        turn,
+      }
+    }
+    await controller.start("s-1")
+    says(connection, "i1", "first")
+    calls(connection, "send_to_agent", "c1")
+    await settle()
+    says(connection, "i2", "second")
+    calls(connection, "send_to_agent", "c2")
+    await settle()
+    // The first turn ends before its send is answered; the second waits.
+    conversation.end({ text: "One.", ended: "finished" }, ["turn-1"])
+    answers[0]?.("sent")
+    await settle()
+    expect(connection.told().some((text) => text.startsWith("Agent reply:"))).toBe(false)
+    expect(conversation.sent).toEqual(["First", "Second"])
+    answers[1]?.("sent")
+    await settle()
+    conversation.end({ text: "Two.", ended: "finished" }, ["turn-2"])
+    expect(connection.told().filter((text) => text.startsWith("Agent reply:"))).toEqual([
+      "Agent reply:\nOne.\n\nTwo.",
+    ])
+  })
+
   it("a tool asked for by a response the person talked over is not called", async () => {
     const { controller, connection, conversation } = setup()
     await controller.start("s-1")
