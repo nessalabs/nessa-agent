@@ -1971,10 +1971,19 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     panel?.tabs?.length === 2 &&
     panel.tabs.every((tab) => tabIdBelongs(tab, conversationId)) &&
     plugins.every((plugin) => panel.tabs.some((tab) => tab.plugin === plugin))
-  const opened = await windowRead(run, conversationId, step, " panel open", failures, (said) => {
-    const panel = said.windows?.[0]?.panel
-    return panel?.open === "open" && owned(panel) && panel.front?.plugin === "mcp:panelpin"
-  })
+  const opened = await windowRead(
+    run,
+    conversationId,
+    step,
+    " panel open",
+    failures,
+    (said) => {
+      const panel = said.windows?.[0]?.panel
+      return (
+        panel?.open === "open" && owned(panel) && panel.front?.plugin === "mcp:panelpin"
+      )
+    },
+  )
   if (!opened) return
   const openPanel = opened.windows[0].panel
   const other = page.locator(`${css.chatPanelTabs} [role="tab"][aria-selected="false"]`)
@@ -2000,7 +2009,8 @@ async function focusedChatPanel(run, conversationId, step, failures) {
   await page.keyboard.press("Meta+Alt+KeyB")
   if (
     !(await waitFor(
-      async () => (await page.locator("#workspace-panel").getAttribute("aria-hidden")) === "true",
+      async () =>
+        (await page.locator("#workspace-panel").getAttribute("aria-hidden")) === "true",
       3_000,
     ))
   ) {
@@ -2015,14 +2025,19 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures,
     (said) => {
       const panel = said.windows?.[0]?.panel
-      return panel?.open === "closed" && samePanelTabs(panel, shown) && panel.front?.id === shown.front.id
+      return (
+        panel?.open === "closed" &&
+        samePanelTabs(panel, shown) &&
+        panel.front?.id === shown.front.id
+      )
     },
   )
   if (!hidden) return
   await page.keyboard.press("Meta+Alt+KeyB")
   if (
     !(await waitFor(
-      async () => (await page.locator("#workspace-panel").getAttribute("aria-hidden")) === null,
+      async () =>
+        (await page.locator("#workspace-panel").getAttribute("aria-hidden")) === null,
       3_000,
     ))
   ) {
@@ -2061,7 +2076,11 @@ async function focusedChatPanel(run, conversationId, step, failures) {
   }
   await windowRead(run, conversationId, step, " panel back", failures, (said) => {
     const panel = said.windows?.[0]?.panel
-    return panel?.open === "open" && samePanelTabs(panel, shown) && panel.front?.id === shown.front.id
+    return (
+      panel?.open === "open" &&
+      samePanelTabs(panel, shown) &&
+      panel.front?.id === shown.front.id
+    )
   })
   // Leave the panel closed, as the step found it: a later window read measures
   // the panes against the window's edge.
@@ -2106,7 +2125,6 @@ async function inlineApp(page, selector, timeout = 20_000) {
   }
   return null
 }
-
 
 const steps = {
   async background(run, step, failures) {

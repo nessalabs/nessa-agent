@@ -89,7 +89,8 @@ export function answer(message) {
         tools: [
           {
             name: TOOL_NAME,
-            description: "Pin a note in the chat's panel. Its UI is an MCP App. Takes no arguments.",
+            description:
+              "Pin a note in the chat's panel. Its UI is an MCP App. Takes no arguments.",
             inputSchema: { type: "object", properties: {}, additionalProperties: false },
             _meta: { ui: { resourceUri: PIN_URI } },
           },
