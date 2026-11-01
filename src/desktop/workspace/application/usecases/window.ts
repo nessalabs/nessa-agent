@@ -7,16 +7,19 @@
  * state ─▶ shownWindow ─▶ arrangement (null: nothing is said)
  *                     ├─▶ sidebar, session list: drawn now (`drawnColumns`)
  *                     ├─▶ showing: panes | agents | widget (`content`)
+ *                     ├─▶ panel: drawn (`panelOpen`), the focused chat's tabs and front
  *                     └─▶ columns ─▶ panes: share %, focused, item
  *                                         item: listed session ─▶ conversation
  *                                               draft ─▶ draft
  *                                               widget ─▶ widget
  * ```
  */
+import { focusedPane } from "../../../split-panes/model/pane-layout"
 import { paneItemOf } from "../../model/pane-item"
 import {
   percents,
   type ShownItem,
+  type ShownPanel,
   type ShownWindow,
   type WindowArrangement,
 } from "../../model/shown-window"
@@ -24,6 +27,8 @@ import {
   contentKind,
   draftOf,
   drawnColumns,
+  entry,
+  sessionIn,
   sessionOf,
   windowWidget,
   type WorkspaceState,
@@ -35,6 +40,17 @@ export function arrangementShown(
   { arrangement }: { arrangement: WindowArrangement | null },
 ): WorkspaceState {
   return state.arrangement === arrangement ? state : { ...state, arrangement }
+}
+
+/**
+ * The layout says whether the right panel is drawn. The preference and a
+ * covering rail item stay the layout's; this only records what it said.
+ */
+export function panelShown(
+  state: WorkspaceState,
+  { open }: { open: boolean },
+): WorkspaceState {
+  return state.panelOpen === open ? state : { ...state, panelOpen: open }
 }
 
 /**
@@ -56,6 +72,7 @@ export function shownWindow(state: WorkspaceState): ShownWindow | null {
       kind === "widget" && widget
         ? { kind, widget }
         : { kind: kind === "agents" ? kind : "panes" },
+    panel: shownPanel(state),
     columns: panes.columns.map((column, index) => {
       const heights = percents(column.panes.map((pane) => pane.share))
       return {
@@ -68,6 +85,18 @@ export function shownWindow(state: WorkspaceState): ShownWindow | null {
       }
     }),
   }
+}
+
+/**
+ * The focused chat's panel. No focused session, or a chat with no panel,
+ * has no tabs and no front. `open` is the layout's, not the chat's.
+ */
+function shownPanel(state: WorkspaceState): ShownPanel {
+  const sessionId = state.panes ? sessionIn(focusedPane(state.panes)) : undefined
+  const panel = sessionId ? entry(state.panels, sessionId) : undefined
+  return panel
+    ? { open: state.panelOpen, tabs: panel.tabs, front: panel.front }
+    : { open: state.panelOpen, tabs: [], front: null }
 }
 
 /** A pane's item as shown: a session not started yet is a draft, any other a conversation. */

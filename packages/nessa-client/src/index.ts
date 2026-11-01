@@ -488,6 +488,7 @@ export type {
   WorkspacePane,
   WorkspacePaneItem,
   WorkspacePaneKind,
+  WorkspacePanel,
   WorkspacePublishResult,
   WorkspaceShowing,
   WorkspaceWidget,

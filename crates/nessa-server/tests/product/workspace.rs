@@ -30,12 +30,17 @@ fn code(message: OutgoingMessage) -> String {
     response(message).error.expect("a refusal").code
 }
 
+fn closed_panel() -> Value {
+    json!({ "open": false, "tabs": [] })
+}
+
 fn two_panes() -> Value {
     json!({
         "arrangement": "columns",
         "sidebar": false,
         "sessionList": true,
         "showing": "panes",
+        "panel": closed_panel(),
         "columns": [
             { "widthPercent": 50, "panes": [
                 { "heightPercent": 100, "focused": false,
@@ -115,7 +120,47 @@ fn what_is_not_a_window_is_refused() {
     widget_missing["showing"] = json!("widget");
     let mut no_columns = two_panes();
     no_columns["columns"] = json!([]);
-    for window in [kinds_disagree, two_focused, widget_missing, no_columns] {
+    let mut no_panel = two_panes();
+    no_panel.as_object_mut().unwrap().remove("panel");
+    let mut front_missing = two_panes();
+    front_missing["panel"] = json!({
+        "open": true,
+        "tabs": [{ "plugin": "subagents", "id": "chat" }]
+    });
+    let mut front_stranger = two_panes();
+    front_stranger["panel"] = json!({
+        "open": true,
+        "tabs": [{ "plugin": "subagents", "id": "chat" }],
+        "front": { "plugin": "mcp:huddle", "id": "call-1" }
+    });
+    let mut repeated = two_panes();
+    repeated["panel"] = json!({
+        "open": true,
+        "tabs": [
+            { "plugin": "subagents", "id": "chat" },
+            { "plugin": "subagents", "id": "chat" }
+        ],
+        "front": { "plugin": "subagents", "id": "chat" }
+    });
+    let mut too_many = two_panes();
+    too_many["panel"] = json!({
+        "open": true,
+        "tabs": (0..17)
+            .map(|index| json!({ "plugin": "subagents", "id": index.to_string() }))
+            .collect::<Vec<_>>(),
+        "front": { "plugin": "subagents", "id": "0" }
+    });
+    for window in [
+        kinds_disagree,
+        two_focused,
+        widget_missing,
+        no_columns,
+        no_panel,
+        front_missing,
+        front_stranger,
+        repeated,
+        too_many,
+    ] {
         assert_eq!(
             code(publish(
                 Some(&slot),
@@ -134,6 +179,42 @@ fn what_is_not_a_window_is_refused() {
     ] {
         assert_eq!(code(publish(Some(&slot), frame(params))), "invalid_request");
     }
+}
+
+#[test]
+fn a_published_panel_is_the_focused_chats_and_a_bad_one_changes_nothing() {
+    let (windows, org, person) = owner();
+    let slot = windows.open(org.clone(), person.clone());
+    let mut window = two_panes();
+    window["panel"] = json!({
+        "open": true,
+        "tabs": [
+            { "plugin": "subagents", "id": "chat" },
+            { "plugin": "mcp:huddle", "id": "call-1" }
+        ],
+        "front": { "plugin": "mcp:huddle", "id": "call-1" }
+    });
+    publish(
+        Some(&slot),
+        frame(json!({ "windowId": WINDOW, "revision": 1, "window": window })),
+    );
+    let mut stranger = two_panes();
+    stranger["panel"]["front"] = json!({ "plugin": "subagents", "id": "missing" });
+    assert_eq!(
+        code(publish(
+            Some(&slot),
+            frame(json!({ "windowId": WINDOW, "revision": 2, "window": stranger }))
+        )),
+        "invalid_request"
+    );
+    let held = &windows.of(&org, &person);
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].revision, 1);
+    let panel = held[0].window.panel();
+    assert!(panel.open());
+    assert_eq!(panel.tabs().len(), 2);
+    assert_eq!(panel.front().unwrap().plugin(), "mcp:huddle");
+    assert_eq!(panel.front().unwrap().id(), "call-1");
 }
 
 #[test]

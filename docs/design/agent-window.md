@@ -2,8 +2,9 @@
 
 A person and their agents look at the same desktop window. `read_window`, a
 tool in the gateway's `nessa-agents` server, tells an agent what that window
-shows now: whether the sidebar and session list are open, what fills the
-content region, and every pane left to right, each with where it sits in
+shows now: whether the sidebar, session list and right panel are open,
+what fills the content region, and every pane left to right, each with
+where it sits in
 words ("left", "top right", "full"), its share of the room, whether it has
 focus, and what it shows. The pane that shows the asking conversation is
 marked `you: true`, and `you` at the top says where that is: the focused
@@ -14,6 +15,15 @@ holds (30 KiB) the rest are counted in `more`, the asking conversation's
 windows kept first. A conversation in
 a pane is named by its `threadId`, the id the other thread tools take, so an
 agent can go on to read or message the conversation beside it.
+
+The right panel is the focused chat's. `panel.open` is `"open"` or
+`"closed"`, the same words as the sidebar. `panel.tabs` lists each widget
+tab, plugin and id, in the order it was opened. `panel.front` is the tab in
+front when there is one, and is absent when the chat has no tabs. A widget
+there is on screen only while the panel is open. Another chat's tabs are
+said when that chat is focused. Whether the panel is drawn is the layout's
+(`panelShown`); the tabs are the chat's
+([1120](../adr/done/1120-read-window-panel.md)).
 
 ## One authority for each fact
 
@@ -59,8 +69,8 @@ sequenceDiagram
     G->>G: keep it for this connection
     A->>G: read_window
     G->>G: Cedar workspace.read for the person
-    G->>G: describe each conversation pane the person may read
-    G-->>A: you, windows, panes with positions and threadIds
+    G->>G: describe each conversation pane the person may read, and the focused chat's panel
+    G-->>A: you, windows, panes with positions and threadIds, panel tabs and front
     W--xG: connection closes
     G->>G: window withdrawn
 ```

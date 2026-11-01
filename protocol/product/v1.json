@@ -8023,7 +8023,7 @@
     "WorkspaceWidget": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A widget a pane or the window shows, by the plugin that draws it and its id within that plugin.",
+      "description": "A widget the panel, a pane, or the window shows, by the plugin that draws it and its id within that plugin.",
       "properties": {
         "plugin": {
           "type": "string",
@@ -8113,10 +8113,33 @@
       },
       "required": ["widthPercent", "panes"]
     },
+    "WorkspacePanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The focused chat's right panel. Other chats' panels are not here; focusing that chat is what publishes them. open is whether this panel is drawn. tabs are that chat's, in the order they were opened, and front is the one in front: present exactly when tabs is not empty, and one of them.",
+      "properties": {
+        "open": {
+          "type": "boolean",
+          "description": "Whether the panel is drawn beside the panes. Closed, its tabs are not on screen; they are still this chat's."
+        },
+        "tabs": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/WorkspaceWidget" },
+          "description": "The focused chat's panel tabs, in the order they were opened. Empty when that chat has none. At most 16, the domain's MAX_PANEL_TABS."
+        },
+        "front": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The tab in front. Present exactly when tabs is not empty, and one of them."
+        }
+      },
+      "required": ["open", "tabs"]
+    },
     "WorkspaceWindow": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say.",
+      "description": "What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, the focused chat's right panel, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say.",
       "properties": {
         "arrangement": {
           "$ref": "#/$defs/WorkspaceArrangement",
@@ -8138,6 +8161,10 @@
           "$ref": "#/$defs/WorkspaceWidget",
           "description": "The widget drawn over the panes, when showing is widget."
         },
+        "panel": {
+          "$ref": "#/$defs/WorkspacePanel",
+          "description": "The focused chat's right panel: whether it is drawn, its tabs, and the tab in front."
+        },
         "columns": {
           "type": "array",
           "minItems": 1,
@@ -8146,7 +8173,7 @@
           "description": "The panes' columns, left to right."
         }
       },
-      "required": ["arrangement", "sidebar", "sessionList", "showing", "columns"]
+      "required": ["arrangement", "sidebar", "sessionList", "showing", "panel", "columns"]
     },
     "ChannelErrorCode": {
       "type": "string",

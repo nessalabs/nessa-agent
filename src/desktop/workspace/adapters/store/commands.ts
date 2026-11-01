@@ -49,6 +49,7 @@ export const {
   deleteAsked,
   deleteClosed,
   arrangementShown,
+  panelShown,
   panelTabShown: showPanelTab,
   panelTabClosed: closePanelTab,
 } = workspaceActions

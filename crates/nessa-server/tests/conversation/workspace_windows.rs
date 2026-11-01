@@ -3,7 +3,7 @@
 //! another person's windows.
 use super::*;
 use crate::conversation::domain::{
-    PaneContent, WindowArrangement, WindowColumn, WindowPane, WindowShowing,
+    PaneContent, WindowArrangement, WindowColumn, WindowPane, WindowPanel, WindowShowing,
 };
 
 fn window(sidebar: bool) -> WorkspaceWindow {
@@ -12,6 +12,7 @@ fn window(sidebar: bool) -> WorkspaceWindow {
         sidebar,
         true,
         WindowShowing::Panes,
+        WindowPanel::new(false, vec![], None).unwrap(),
         vec![WindowColumn::new(
             100,
             vec![WindowPane::new(100, true, PaneContent::Draft).unwrap()],
