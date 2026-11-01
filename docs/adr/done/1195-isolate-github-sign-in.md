@@ -31,10 +31,12 @@ of the token bytes. OpenCode is out of scope.
 
 The only durable copy of the GitHub token is the `github-sign-in` entry in
 the encrypted app-session vault. The passphrase-derived key is not written
-to disk. `sign-in.json` is removed without being read, including while the
-vault is locked, on load, save, and disconnect. Nessa is alpha, so an older
-plaintext file is not imported. Sign-in and disconnect keep their existing
-audit records.
+to disk. `sign-in.json` is removed without being read at gateway startup
+and when GitHub connections start or restore, whether or not the vault is
+unlocked, and again on load, save, and disconnect. A failed delete stops
+gateway startup and is `store_unavailable` on the connections owner. Nessa
+is alpha, so an older plaintext file is not imported. Sign-in and disconnect
+keep their existing audit records.
 
 ## States
 
@@ -45,14 +47,14 @@ audit records.
 | Signed in | Ciphertext in `<namespace>/vault/entries.enc`. Plaintext in gateway memory while the vault is unlocked. | The gateway. A same-user command can open the ciphertext file and does not obtain the token. |
 | Token in use | Gateway memory, on the gateway's own request. The agent receives the response body. | The gateway. Not the agent command, the managed shell, or Claude or Codex. |
 | Disconnect | Vault entry deleted, and the plaintext path removed, before signed-out is published. A failed delete leaves the sign-in in place. | Nobody, when delete succeeds. |
-| Gateway restart | Ciphertext on disk. Memory is empty until the passphrase unlocks the vault. | Same as signed in, after unlock. While locked, memory holds no token and the file does not hold the token bytes. |
+| Gateway restart | Ciphertext on disk. A leftover `sign-in.json` is deleted during startup, before any agent starts, including while the vault is locked. Memory is empty until unlock. | Same as signed in, after unlock. While locked, memory holds no token and the plaintext path is already gone. |
 
 ## Invariants
 
 | Guarantee | Enforcer |
 | --- | --- |
 | No untrusted process can read the token bytes from a path it knows. The key is not stored beside the ciphertext. | Vault encryption. `an_agent_command_that_knows_the_path_cannot_read_the_token` runs `/bin/bash --noprofile --norc -c` (the managed shell's program) against the sign-in path, the vault file, and every file in the namespace. |
-| A plaintext `sign-in.json` is never the store, including while the vault is locked. | `GithubTokenVault` deletes it before it answers. `a_plaintext_sign_in_is_removed_and_not_adopted` and `locked_vault_removes_plaintext_and_refuses_save_or_disconnect`. |
+| A plaintext `sign-in.json` is removed at gateway startup and at GitHub-connections startup, whether or not the vault is unlocked. Its bytes are not imported. A failed delete is not a clean signed-out. | `remove_plaintext_sign_in`, called from gateway setup, GitHub composition, `GithubConnections::load`, and `restore`. `a_locked_startup_removes_a_plaintext_sign_in` goes through `load` with a locked vault. `a_plaintext_sign_in_that_cannot_be_removed_fails_startup` reports `store_unavailable`. |
 | Disconnect removes the vault entry and the plaintext path. A failed delete does not publish signed-out. | Existing disconnect ordering. The store deletes the file before the vault entry. |
 
 ## Alternatives considered

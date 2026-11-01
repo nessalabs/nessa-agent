@@ -190,6 +190,9 @@ impl GithubTokenStore for MemoryStore {
         *self.held.lock().unwrap() = None;
         Ok(())
     }
+    async fn discard_plaintext(&self) -> Result<(), StoreUnavailable> {
+        Ok(())
+    }
 }
 
 /// Which events an audit refuses to keep.
@@ -1447,6 +1450,136 @@ async fn a_closed_vault_during_approved_receipts_preserves_a_new_restoration_and
             1
         );
     }
+}
+
+#[tokio::test]
+async fn a_locked_startup_removes_a_plaintext_sign_in() {
+    use nessa_local_storage::create_directory;
+    use nessa_vault::{
+        application::{Clock, ObservationClock, Vault},
+        domain::Failure,
+        infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
+    };
+    use std::sync::Arc;
+    struct Time;
+    impl Clock for Time {
+        fn seconds(&self) -> u64 {
+            0
+        }
+    }
+    impl ObservationClock for Time {
+        fn unix_millis(&self) -> Result<u64, Failure> {
+            Ok(1793030400000)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let vault = Vault::new(
+        Arc::new(EncryptedFileVault::new(
+            root.path().join("vault"),
+            Arc::new(OsEntropy),
+        )),
+        Arc::new(FileAudit::new(root.path().join("audit"), Arc::new(Time))),
+        Arc::new(Time),
+    );
+    let directory = root.path().join("github");
+    create_directory(&directory).unwrap();
+    let file = directory.join("sign-in.json");
+    std::fs::write(
+        &file,
+        br#"{"accountId":7,"login":"octo","token":"ghu_locked_startup"}"#,
+    )
+    .unwrap();
+    let access = Arc::new(crate::github::infrastructure::GithubVaultAccess(
+        vault.clone(),
+    ));
+    assert!(vault.unlocked_generation().is_none());
+    let store = Arc::new(crate::github::infrastructure::GithubTokenVault::new(
+        directory,
+        Arc::new(crate::secrets::VaultSecret::new(
+            vault,
+            nessa_vault::domain::EntryName::new("github-sign-in").unwrap(),
+        )),
+    ));
+    let fixture = Fixture::new();
+    let start = |store| {
+        let github = fixture.github.clone();
+        let access = access.clone();
+        let audit = fixture.audit.clone();
+        let timer = fixture.timer.clone();
+        async move { GithubConnections::load(github, access, store, audit, timer).await }
+    };
+    let connections = start(store.clone()).await;
+    assert!(!file.exists());
+    assert_eq!(
+        connections.status(),
+        GithubStatus::SignedOut {
+            last: None,
+            unrecorded: false,
+        }
+    );
+    let connections = start(store).await;
+    assert!(!file.exists());
+    assert_eq!(
+        connections.status(),
+        GithubStatus::SignedOut {
+            last: None,
+            unrecorded: false,
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_plaintext_sign_in_that_cannot_be_removed_fails_startup() {
+    use nessa_local_storage::create_directory;
+    use nessa_vault::{
+        application::{Clock, ObservationClock, Vault},
+        domain::Failure,
+        infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
+    };
+    use std::sync::Arc;
+    struct Time;
+    impl Clock for Time {
+        fn seconds(&self) -> u64 {
+            0
+        }
+    }
+    impl ObservationClock for Time {
+        fn unix_millis(&self) -> Result<u64, Failure> {
+            Ok(1793030400000)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let vault = Vault::new(
+        Arc::new(EncryptedFileVault::new(
+            root.path().join("vault"),
+            Arc::new(OsEntropy),
+        )),
+        Arc::new(FileAudit::new(root.path().join("audit"), Arc::new(Time))),
+        Arc::new(Time),
+    );
+    let directory = root.path().join("github");
+    create_directory(&directory.join("sign-in.json")).unwrap();
+    let access = Arc::new(crate::github::infrastructure::GithubVaultAccess(
+        vault.clone(),
+    ));
+    let store = Arc::new(crate::github::infrastructure::GithubTokenVault::new(
+        directory.clone(),
+        Arc::new(crate::secrets::VaultSecret::new(
+            vault,
+            nessa_vault::domain::EntryName::new("github-sign-in").unwrap(),
+        )),
+    ));
+    let fixture = Fixture::new();
+    let connections =
+        GithubConnections::load(fixture.github, access, store, fixture.audit, fixture.timer).await;
+    assert!(directory.join("sign-in.json").is_dir());
+    assert_eq!(
+        connections.status(),
+        GithubStatus::SignedOut {
+            last: Some(ConnectEnd::StoreUnavailable),
+            unrecorded: false,
+        }
+    );
 }
 
 mod read_http;

@@ -96,11 +96,38 @@ impl GithubTokenVault {
         self.secret.delete(generation).map_err(|_| StoreUnavailable)
     }
     fn remove_legacy(&self) -> Result<(), StoreUnavailable> {
-        match std::fs::remove_file(self.directory.join(FILE_NAME)) {
-            Ok(()) => sync_directory(&self.directory).map_err(|_| StoreUnavailable),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(StoreUnavailable),
-        }
+        remove_plaintext(&self.directory)
+    }
+}
+
+/// Remove `directory/sign-in.json` without reading it. A missing file or a
+/// missing directory is success, so startup can call this more than once.
+/// The credential lock is taken when the directory can be locked; a lock
+/// failure does not skip the delete.
+pub async fn remove_plaintext_sign_in(directory: PathBuf) -> Result<(), StoreUnavailable> {
+    blocking(move || discard_at(&directory)).await
+}
+
+fn discard_at(directory: &std::path::Path) -> Result<(), StoreUnavailable> {
+    if !directory.exists() {
+        return Ok(());
+    }
+    let _lock = lock_if_possible(directory);
+    remove_plaintext(directory)
+}
+
+fn lock_if_possible(directory: &std::path::Path) -> Option<std::fs::File> {
+    create_directory(directory).ok()?;
+    let lock = open(&directory.join("credential-lock"), OpenMode::OpenOrCreate).ok()?;
+    lock.lock().ok()?;
+    Some(lock)
+}
+
+fn remove_plaintext(directory: &std::path::Path) -> Result<(), StoreUnavailable> {
+    match std::fs::remove_file(directory.join(FILE_NAME)) {
+        Ok(()) => sync_directory(directory).map_err(|_| StoreUnavailable),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(StoreUnavailable),
     }
 }
 
@@ -130,6 +157,9 @@ async fn blocking<T: Send + 'static>(
 
 #[async_trait]
 impl GithubTokenStore for GithubTokenVault {
+    async fn discard_plaintext(&self) -> Result<(), StoreUnavailable> {
+        remove_plaintext_sign_in(self.directory.clone()).await
+    }
     async fn load(&self, generation: u64) -> Result<Option<GithubSignIn>, StoreUnavailable> {
         let store = Self::new(self.directory.clone(), self.secret.clone());
         blocking(move || store.read(generation)).await

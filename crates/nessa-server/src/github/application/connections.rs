@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::ports::{
     ApiFailure, AuditUnavailable, DeviceCode, EndCause, GithubAccess, GithubApi, GithubAudit,
     GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubReadFailure, GithubTokenStore,
-    PollAnswer,
+    PollAnswer, StoreUnavailable,
 };
 use crate::github::domain::{
     AccessToken, ConnectEnd, GithubReadKind, GithubRepository, GithubSignIn, GithubStatus,
@@ -127,9 +127,17 @@ impl GithubConnections {
         timer: Arc<dyn Timer>,
     ) -> Self {
         let generation = access.generation();
-        let saved = match generation {
-            Some(generation) => store.load(generation).await,
-            None => Ok(None),
+        // The plaintext file is not the store. Remove it before asking whether
+        // the vault is unlocked, and do not read it. A failed delete is the
+        // startup result; it is not a clean signed-out.
+        let saved = if store.discard_plaintext().await.is_err() {
+            tracing::error!("the plaintext GitHub sign-in could not be removed");
+            Err(StoreUnavailable)
+        } else {
+            match generation {
+                Some(generation) => store.load(generation).await,
+                None => Ok(None),
+            }
         };
         let state = match saved {
             Ok(Some(sign_in)) if generation.is_some() && access.generation() == generation => {
@@ -233,6 +241,10 @@ impl GithubConnections {
 
     /// Restore encrypted persistence after an explicit vault unlock. No provider call.
     pub async fn restore(&self) -> Result<(), GithubError> {
+        if self.inner.store.discard_plaintext().await.is_err() {
+            tracing::error!("the plaintext GitHub sign-in could not be removed");
+            return Err(GithubError::StoreUnavailable);
+        }
         let generation = self
             .inner
             .access
