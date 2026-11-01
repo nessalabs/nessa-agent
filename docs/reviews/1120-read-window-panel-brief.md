@@ -40,8 +40,8 @@ goes into code.
 - Widget pane items and a widget drawn over the panes (`showing`). Those stay.
 - Maximized as its own fact. An expanded panel reads as open with its front tab.
 - Publishing every chat's panel.
-- A conversation-stress step. The existing `window` step already calls
-  `read_window`. Say so if that is no longer true.
+- A new stress kind. The existing `window` step opens the panel tabs, changes
+  the front tab, hides and shows the panel, and switches the focused chat.
 - Cedar. Who may publish and who may read does not change.
 
 ## What to falsify

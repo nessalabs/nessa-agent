@@ -99,7 +99,7 @@ covered cause. The 16-tab bound is past a readable strip. A chat that somehow
 held more would be refused as a window and the publication withdrawn, the same
 as too many columns.
 
-The existing stress `window` step already asks `read_window` through the live
-desktop. It checks panes. It does not open a panel tab. The state table is
-enforced at the publisher and at `read_window`, against the current chat panel,
-not by a new stress step.
+The stress `window` step asks `read_window` through the live desktop. It
+opens two panel widgets on the focused chat, brings the other tab to the
+front, hides and shows the panel, and focuses the other chat, and each of
+those is what `read_window` says.
