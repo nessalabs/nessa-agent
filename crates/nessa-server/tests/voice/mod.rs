@@ -386,30 +386,70 @@ async fn k8_k9_a_refused_mint_is_recorded_with_its_reason() {
     }
 }
 
+/// An audit that keeps every record but the `nth` (counting from 1).
+struct RefuseNth {
+    nth: usize,
+    seen: Mutex<usize>,
+}
+
+impl RefuseNth {
+    fn new(nth: usize) -> Arc<Self> {
+        Arc::new(Self {
+            nth,
+            seen: Mutex::new(0),
+        })
+    }
+}
+
+impl VoiceAudit for RefuseNth {
+    fn record(&self, _: &VoiceRecord) -> Result<(), AuditUnavailable> {
+        let mut seen = self.seen.lock().unwrap();
+        *seen += 1;
+        if *seen == self.nth {
+            Err(AuditUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[tokio::test]
 async fn k8_a_refusal_that_cannot_be_recorded_is_still_answered() {
     let f = fixture(Err(MintFailure::Rejected));
     f.calls.save_key(caller(), key("sk-1")).await.unwrap();
     // The request is kept; the refusal's record is the one that fails.
-    struct RefuseSecond(Mutex<usize>);
-    impl VoiceAudit for RefuseSecond {
-        fn record(&self, _: &VoiceRecord) -> Result<(), AuditUnavailable> {
-            let mut seen = self.0.lock().unwrap();
-            *seen += 1;
-            if *seen == 2 {
-                Err(AuditUnavailable)
-            } else {
-                Ok(())
-            }
-        }
-    }
-    let calls = VoiceCalls::new(
-        f.secret.clone(),
-        f.provider.clone(),
-        Arc::new(RefuseSecond(Mutex::new(0))),
-    );
+    let calls = VoiceCalls::new(f.secret.clone(), f.provider.clone(), RefuseNth::new(2));
     assert_eq!(
         calls.start_call(caller(), CONVERSATION.into()).await,
         Err(VoiceError::KeyRejected)
     );
+}
+
+#[tokio::test]
+async fn a_grant_whose_minting_cannot_be_recorded_is_not_handed_out() {
+    let f = fixture(Ok(grant()));
+    f.calls.save_key(caller(), key("sk-1")).await.unwrap();
+    let calls = VoiceCalls::new(f.secret.clone(), f.provider.clone(), RefuseNth::new(2));
+    assert_eq!(
+        calls.start_call(caller(), CONVERSATION.into()).await,
+        Err(VoiceError::AuditUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn a_key_change_whose_outcome_cannot_be_recorded_is_not_answered_as_done() {
+    let f = fixture(Ok(grant()));
+    let calls = VoiceCalls::new(f.secret.clone(), f.provider.clone(), RefuseNth::new(2));
+    assert_eq!(
+        calls.save_key(caller(), key("sk-1")).await,
+        Err(VoiceError::AuditUnavailable)
+    );
+    // The change was made; the answer does not pretend it was undone.
+    assert!(calls.status().unwrap().key_saved);
+    let calls = VoiceCalls::new(f.secret.clone(), f.provider.clone(), RefuseNth::new(2));
+    assert_eq!(
+        calls.forget_key(caller()).await,
+        Err(VoiceError::AuditUnavailable)
+    );
+    assert!(!calls.status().unwrap().key_saved);
 }

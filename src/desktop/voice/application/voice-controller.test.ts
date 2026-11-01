@@ -302,6 +302,26 @@ describe("VoiceController", () => {
     expect(conversation.sent).toEqual(["Run the build"])
   })
 
+  it("V8: a later request never reaches the agent ahead of one waiting for its words", async () => {
+    const { controller, connection, conversation } = setup()
+    await controller.start("s-1")
+    connection.emit({ type: "input_audio_buffer.committed", item_id: "i1" })
+    calls(connection, "send_to_agent", "c1")
+    await settle()
+    says(connection, "i2", "then deploy it")
+    calls(connection, "send_to_agent", "c2")
+    await settle()
+    expect(conversation.sent).toEqual([])
+    connection.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "i1",
+      transcript: "first run the tests",
+    })
+    await settle()
+    await settle()
+    expect(conversation.sent).toEqual(["First run the tests", "Then deploy it"])
+  })
+
   it("V9: a transcript that never comes is waited for only so long", async () => {
     const { controller, connection, conversation, clock } = setup()
     await controller.start("s-1")

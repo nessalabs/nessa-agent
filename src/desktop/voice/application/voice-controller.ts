@@ -102,6 +102,12 @@ interface Call {
   /** Sends not answered yet. */
   sending: number
   /**
+   * The last `send_to_agent` admitted, settled once it has sent or given
+   * up. Each send waits for the one before it, transcript wait included,
+   * so a later request never reaches the agent ahead of an earlier one.
+   */
+  sends: Promise<void>
+  /**
    * The turns the voice started, by their names, whose answer it has not
    * handed over. Whether each has ended is the conversation's to say; once
    * every one has, what they said is handed over together (V11, V12). A
@@ -165,6 +171,7 @@ export class VoiceController {
       awaitingCreated: null,
       responseQueued: false,
       sending: 0,
+      sends: Promise.resolve(),
       waiting: [],
       ends: new Map(),
       seen: new Set(),
@@ -409,6 +416,19 @@ export class VoiceController {
       .map((item) => this.committed(call, item))
       .filter((heard) => !heard.sent)
     for (const heard of covered) heard.sent = true
+    // Sends go in the order they were asked for (V8).
+    const before = call.sends
+    let settled = () => {}
+    call.sends = new Promise((resolve) => (settled = resolve))
+    try {
+      await before
+      return await this.sendCovered(call, covered)
+    } finally {
+      settled()
+    }
+  }
+
+  private async sendCovered(call: Call, covered: readonly Heard[]): Promise<ToolOutcome> {
     const written = () => covered.every((heard) => heard.text !== null)
     if (!written()) await this.waitFor(call, written)
     if (!this.current(call)) return "not_sent"

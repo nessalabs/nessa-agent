@@ -136,11 +136,11 @@ impl VoiceCalls {
         record_in(self.audit.as_ref(), operation_id, caller, event)
     }
 
-    /// An outcome's record, once the change was made or refused. The outcome
-    /// is answered whether or not it is kept; one that is not is said in the
-    /// log, which is all that is left.
-    fn record_outcome(&self, operation_id: &str, caller: &VoiceCaller, event: VoiceEvent) {
-        record_outcome_in(self.audit.as_ref(), operation_id, caller, event)
+    /// A failure's record, once the change was refused. The failure is what
+    /// the caller hears; a record of it that cannot be kept does not hide
+    /// it, and is said in the log.
+    fn record_failure(&self, operation_id: &str, caller: &VoiceCaller, event: VoiceEvent) {
+        record_failure_in(self.audit.as_ref(), operation_id, caller, event)
     }
 
     fn status_with(&self, key_saved: bool) -> VoiceStatus {
@@ -170,15 +170,15 @@ impl VoiceCalls {
             VoiceEvent::KeySaveRequested { replacing },
         )?;
         if let Err(problem) = self.key.write(key.as_bytes()) {
-            // The failure is what the caller hears; a record of it that
-            // cannot be kept does not hide it, and is said in the log.
-            self.record_outcome(&operation_id, &caller, VoiceEvent::KeySaveFailed);
+            self.record_failure(&operation_id, &caller, VoiceEvent::KeySaveFailed);
             return Err(match problem {
                 SecretUnavailable::Locked => VoiceError::VaultLocked,
                 SecretUnavailable::Unavailable => VoiceError::StorageUnavailable,
             });
         }
-        self.record_outcome(&operation_id, &caller, VoiceEvent::KeySaved);
+        // A change made but not recorded is never answered as a success: the
+        // key stays saved, and the caller hears that the audit failed.
+        self.record(&operation_id, &caller, VoiceEvent::KeySaved)?;
         Ok(self.status_with(true))
     }
 
@@ -197,13 +197,13 @@ impl VoiceCalls {
         let operation_id = Uuid::new_v4().to_string();
         self.record(&operation_id, &caller, VoiceEvent::KeyForgetRequested)?;
         if let Err(problem) = self.key.delete() {
-            self.record_outcome(&operation_id, &caller, VoiceEvent::KeyForgetFailed);
+            self.record_failure(&operation_id, &caller, VoiceEvent::KeyForgetFailed);
             return Err(match problem {
                 SecretUnavailable::Locked => VoiceError::VaultLocked,
                 SecretUnavailable::Unavailable => VoiceError::StorageUnavailable,
             });
         }
-        self.record_outcome(&operation_id, &caller, VoiceEvent::KeyForgotten);
+        self.record(&operation_id, &caller, VoiceEvent::KeyForgotten)?;
         Ok(self.status_with(false))
     }
 
@@ -240,14 +240,21 @@ impl VoiceCalls {
                     reason: *reason,
                 },
             };
-            record_outcome_in(audit.as_ref(), &operation_id, &caller, event);
-            outcome
+            match outcome {
+                // A grant whose minting is not on record is not handed out.
+                Ok(grant) => {
+                    record_in(audit.as_ref(), &operation_id, &caller, event).map(|()| grant)
+                }
+                Err(reason) => {
+                    record_failure_in(audit.as_ref(), &operation_id, &caller, event);
+                    Err(match reason {
+                        MintFailure::Rejected => VoiceError::KeyRejected,
+                        MintFailure::Unreachable => VoiceError::Unreachable,
+                    })
+                }
+            }
         });
-        match mint.await {
-            Ok(Ok(grant)) => Ok(grant),
-            Ok(Err(MintFailure::Rejected)) => Err(VoiceError::KeyRejected),
-            Ok(Err(MintFailure::Unreachable)) | Err(_) => Err(VoiceError::Unreachable),
-        }
+        mint.await.unwrap_or(Err(VoiceError::Unreachable))
     }
 }
 
@@ -266,7 +273,7 @@ fn record_in(
         .map_err(|AuditUnavailable| VoiceError::AuditUnavailable)
 }
 
-fn record_outcome_in(
+fn record_failure_in(
     audit: &dyn VoiceAudit,
     operation_id: &str,
     caller: &VoiceCaller,
@@ -275,7 +282,7 @@ fn record_outcome_in(
     if record_in(audit, operation_id, caller, event).is_err() {
         tracing::warn!(
             operation_id,
-            "a voice outcome could not be recorded in the audit"
+            "a voice failure could not be recorded in the audit"
         );
     }
 }

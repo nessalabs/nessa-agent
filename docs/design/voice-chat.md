@@ -82,7 +82,7 @@ conversation ends the one running.
 | V5 | connecting | end | idle; the connect is aborted (microphone released), and a late answer or transport is closed when it arrives |
 | V6 | listening / working / speaking | words heard (partial) | the live line shows them |
 | V7 | any open | a turn's transcript | kept, unsent, in order of the model's items |
-| V8 | any open | `send_to_agent`, in a response that completed (a cancelled response's calls are not made), with unsent transcripts | they are tidied and joined into one message, sent as typed; the function answers `sent`; working |
+| V8 | any open | `send_to_agent`, in a response that completed (a cancelled response's calls are not made), with unsent transcripts | they are tidied and joined into one message, sent as typed; the function answers `sent`; working. Sends go out in the order they were asked for: one waits for the one before it, transcript wait included |
 | V9 | any open | `send_to_agent` while a transcript it covers has not arrived | waits up to 5 s for it (a failed transcript is nothing heard, at once); then sends what it has, or answers `nothing_heard` |
 | V10 | any open | `send_to_agent`, send refused or unanswered | the function answers `not_sent`, or `unknown` when the gateway gave no answer (the voice says it may not have gone and does not resend); not waited on; the window shows the send failure as for typing |
 | V11 | working | every turn the voice started has ended (the conversation says so per turn, named by the message that started it: its reply no longer being written, or its end marked) | what those turns said, in order, and how the last ended are handed to the model once, with a response asked; speaking until the response is done. Checked on every change of the conversation and once each send is answered, so a turn that ended before the window saw it at work is not missed. A turn typed in the composer is never one of them, and an earlier message with the same words is never mistaken for it |
@@ -120,7 +120,10 @@ exist), so no call is minted about a chat the caller cannot use.
 Every change is recorded before it is made and its outcome after, under
 one operation id, so a request is never read as its effect. A mint runs on
 its own task: a caller that goes away mid-mint still leaves its outcome on
-record.
+record. A change or mint whose outcome cannot be recorded is answered
+`voice_audit_unavailable`, never as a success (a saved key stays saved; a minted
+secret is not handed out). A failure whose record cannot be kept is still
+answered as that failure, and said in the log.
 
 `NESSA_VOICE_REALTIME` (a provider file: `apiBase`, `transport`, `callUrl`)
 may point only at this machine's loopback addresses, since the saved key goes
