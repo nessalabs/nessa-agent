@@ -128,3 +128,13 @@ export function parkingEvidence(log, offset, conversationId) {
     recent: current.slice(-12),
   }
 }
+
+/** A new message must open beyond the latest ended idle lease, not an older view. */
+export function leaseReopenedAfter(lease, parked) {
+  return (
+    lease?.state === "live" &&
+    parked?.state === "ended" &&
+    parked?.cause === "idle" &&
+    lease.revision > parked.revision
+  )
+}

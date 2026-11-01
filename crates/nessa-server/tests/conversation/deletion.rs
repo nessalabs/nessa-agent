@@ -836,6 +836,15 @@ impl ConversationRepository for Unfenceable {
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.0.requires_mode_verification(id)
     }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.0.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.0.thread_closed(id)
+    }
     fn observe_mode_application(
         &self,
         id: &ConversationId,
@@ -1053,6 +1062,15 @@ impl ConversationRepository for Faulty {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.repository.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.repository.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.repository.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.repository.thread_closed(id)
     }
     fn observe_mode_application(
         &self,
@@ -2233,6 +2251,15 @@ impl ConversationRepository for PausingRepository {
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.inner.requires_mode_verification(id)
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.inner.thread_closed(id)
     }
     fn observe_mode_application(
         &self,

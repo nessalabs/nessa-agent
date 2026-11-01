@@ -156,6 +156,7 @@ struct Fixture {
     clock: Arc<ManualClock>,
     id: ConversationId,
     save_gate: Option<Arc<CompletionSaveGate>>,
+    repository: Arc<MemoryRepository>,
 }
 
 impl Fixture {
@@ -267,7 +268,7 @@ impl Fixture {
                 attachments: images.then(|| Arc::new(MemoryAttachments::default()) as Arc<_>),
                 summaries: summaries.clone(),
                 listing: Arc::new(MemoryListing {
-                    repository,
+                    repository: repository.clone(),
                     summaries,
                 }),
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
@@ -307,6 +308,7 @@ impl Fixture {
             clock,
             id,
             save_gate,
+            repository,
         };
         fixture.attached().await;
         fixture
@@ -718,6 +720,117 @@ async fn a_close_cleared_before_the_park_takes_the_lock_keeps_the_thread() {
             .await
     );
     assert!(fixture.slot().await.is_some());
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// A close from a running turn that lands while a new message opens the
+/// thread waits for that opening, so the store and the agent's mark say the
+/// same: closed, as the later close left it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_close_during_a_messages_opening_leaves_store_and_mark_agreeing() {
+    let fixture = Fixture::new(None).await;
+    fixture.service.close_after_turn(&fixture.id).await.unwrap();
+    let held = fixture.repository.open_thread_gate.lock().await;
+    let sending = fixture.send("more");
+    tokio::time::timeout(BOUND, fixture.repository.thread_opened.notified())
+        .await
+        .expect("the message opens the thread");
+    let closing = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        tokio::spawn(async move { service.close_after_turn(&id).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    drop(held);
+    tokio::time::timeout(BOUND, closing)
+        .await
+        .expect("the close ends")
+        .unwrap()
+        .unwrap();
+    let sent = tokio::time::timeout(BOUND, sending)
+        .await
+        .expect("the message is admitted")
+        .unwrap();
+    assert!(sent.is_ok(), "the message is admitted: {sent:?}");
+    let slot = fixture.slot().await.expect("still open");
+    let stored = fixture
+        .repository
+        .closed_threads
+        .lock()
+        .unwrap()
+        .contains(&fixture.id);
+    assert_eq!(slot.closing.load(Ordering::SeqCst), stored);
+    assert!(stored, "the later close holds");
+    drop(slot);
+    fixture.completed("more").await;
+    fixture.wait_until_idle().await;
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// A thread its agent closed stays closed whatever opens it before a new
+/// message: a read opens it, as a read does, and its agent is parked again
+/// once idle, watched or not. Only the next message opens the thread.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_closed_thread_opened_by_a_read_is_parked_again() {
+    let fixture = Fixture::new(None).await;
+    let follower = fixture.service.live_changes(&fixture.id);
+    fixture.service.close_after_turn(&fixture.id).await.unwrap();
+    assert_eq!(fixture.service.sweep(None).await, 1);
+    assert!(fixture.slot().await.is_none());
+    fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    let opened = fixture.slot().await.expect("the read opened it");
+    assert!(
+        opened.closing.load(Ordering::SeqCst),
+        "it opened still closed"
+    );
+    // Its agent holds its history's lease while anything holds the slot.
+    drop(opened);
+    fixture.wait_until_idle().await;
+    assert_eq!(fixture.service.sweep(None).await, 1);
+    assert!(fixture.slot().await.is_none());
+    // A message is new work: the thread is open again, and stays so.
+    fixture.turn("again").await;
+    assert!(!fixture
+        .service
+        .inner
+        .metadata
+        .thread_closed(&fixture.id)
+        .await
+        .unwrap());
+    assert_eq!(fixture.service.sweep(None).await, 0);
+    assert!(fixture.slot().await.is_some());
+    drop(follower);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// A retry of the message whose turn closed the thread is not new work: the
+/// agent answers it from what it has, and the thread stays closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retry_of_the_message_that_closed_the_thread_keeps_it_closed() {
+    let fixture = Fixture::new(None).await;
+    fixture.turn("closing").await;
+    fixture.service.close_after_turn(&fixture.id).await.unwrap();
+    let retried = tokio::time::timeout(BOUND, fixture.send("closing"))
+        .await
+        .expect("the retry is answered")
+        .unwrap();
+    assert!(
+        retried.is_ok(),
+        "the retry recovers its delivery: {retried:?}"
+    );
+    assert!(fixture
+        .service
+        .inner
+        .metadata
+        .thread_closed(&fixture.id)
+        .await
+        .unwrap());
+    assert_eq!(fixture.service.sweep(None).await, 1);
+    assert!(fixture.slot().await.is_none());
     fixture.service.shutdown().await.unwrap();
 }
 

@@ -4,7 +4,12 @@ import {
   completedUpdate,
   permissionCall,
 } from "../../../../scripts/mcp-test-server/scripted-scenario.mjs"
-import { closeAcceptance, parkingEvidence, readFailureView } from "./stress-close.mjs"
+import {
+  closeAcceptance,
+  parkingEvidence,
+  readFailureView,
+  leaseReopenedAfter,
+} from "./stress-close.mjs"
 
 const closing = "11111111-1111-4111-8111-111111111111"
 const other = "22222222-2222-4222-8222-222222222222"
@@ -225,4 +230,22 @@ test("receipt order and contradictory or repeated terminal outcomes cannot manuf
   ])
     assert.equal(acceptance(terminals).state, "unconfirmed")
   assert.equal(acceptance(accepted).state, "accepted")
+})
+
+test("a message must advance beyond the latest read-opened then parked lease", () => {
+  const initial = { state: "live", revision: 1 }
+  const latest = { state: "ended", cause: "idle", revision: 2 }
+  assert.equal(leaseReopenedAfter({ state: "live", revision: 2 }, latest), false)
+  assert.equal(leaseReopenedAfter({ state: "live", revision: 1 }, latest), false)
+  assert.equal(leaseReopenedAfter({ state: "ended", revision: 3 }, latest), false)
+  assert.equal(leaseReopenedAfter({ state: "live", revision: 3 }, latest), true)
+  assert.equal(leaseReopenedAfter({ state: "live", revision: 3 }, initial), false)
+  assert.equal(
+    leaseReopenedAfter({ state: "live", revision: 3 }, { ...latest, state: "live" }),
+    false,
+  )
+  assert.equal(
+    leaseReopenedAfter({ state: "live", revision: 3 }, { ...latest, cause: "stopped" }),
+    false,
+  )
 })

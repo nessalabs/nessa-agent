@@ -1111,6 +1111,7 @@ async fn a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history(
             stopping: AtomicBool::new(false),
             touched: std::sync::atomic::AtomicU64::new(0),
             closing: std::sync::atomic::AtomicBool::new(false),
+            closing_changes: tokio::sync::Mutex::new(()),
         }),
     );
     let (view, cursor) = fixture

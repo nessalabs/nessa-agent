@@ -78,7 +78,8 @@ import {
  *   close       another conversation's agent closes its own thread
  *               (close_thread) while the window shows it; once the turn ends
  *               its agent is parked though followed (its lease ends `idle`),
- *               and the next message sent there starts it again
+ *               a read then opens it, still closed, and it is parked again;
+ *               only the next message sent there starts it again
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
@@ -314,7 +315,12 @@ import {
   waitFor,
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
-import { closeAcceptance, parkingEvidence, readFailureView } from "./lib/stress-close.mjs"
+import {
+  closeAcceptance,
+  parkingEvidence,
+  readFailureView,
+  leaseReopenedAfter,
+} from "./lib/stress-close.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import {
   composerControls,
@@ -5385,7 +5391,9 @@ const steps = {
       return
     }
     await expectShown(run.page, SAYS.closed, failures)
-    // The parking sweep looks at least every 15 s.
+    // The parking sweep looks at least every 15 s. The read that saw the
+    // turn settle may have opened it again after a first park; the thread
+    // is still closed, so that opening is parked too.
     const parked = await waitFor(async () => {
       const lease = (await followedOnce(run, conversationId)).lease
       return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
@@ -5398,6 +5406,32 @@ const steps = {
       failures.push(
         `the closed thread's agent was not parked: its lease is ${lease?.state ?? "missing"}${
           lease?.cause ? ` (${lease.cause})` : ""
+        }`,
+      )
+      return
+    }
+    // A read opens its agent, as a read does, and the thread is still
+    // closed: that agent is parked again once idle, though the window
+    // follows it. Only a message opens the thread.
+    await run.client.conversation.read(conversationId)
+    const again = await waitFor(async () => {
+      const lease = (await followedOnce(run, conversationId)).lease
+      return lease?.state === "ended" &&
+        lease?.cause === "idle" &&
+        lease.revision > parked.revision
+        ? lease
+        : null
+    }, 45_000)
+    log(
+      `close_thread reopened-read parking ${JSON.stringify({ conversationId, ...parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId) })}`,
+    )
+    if (!again) {
+      const lease = (await followedOnce(run, conversationId)).lease
+      failures.push(
+        `the closed thread a read opened was not parked again: its lease is ${
+          lease?.state ?? "missing"
+        }${lease?.cause ? ` (${lease.cause})` : ""}, revision ${lease?.revision} after ${
+          parked.revision
         }`,
       )
       return
@@ -5423,7 +5457,7 @@ const steps = {
       failures.push(
         `the message after close_thread left the lease ${reopened?.lease?.state ?? "missing"}`,
       )
-    else if (!(reopened.lease.revision > (closed.lease?.revision ?? 0)))
+    else if (!leaseReopenedAfter(reopened.lease, again))
       failures.push("the message after close_thread ran on the closed agent's lease")
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
