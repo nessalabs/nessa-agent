@@ -8,6 +8,7 @@
 import { measureAdoptedPill, pressScale } from "./lib/adopted-pill.mjs"
 import { openPage, need, waitUntilSettled, withEngines } from "./lib/browser.mjs"
 import { attempt, chosen } from "./lib/cli.mjs"
+import { waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, names } from "./lib/selectors.mjs"
 
@@ -640,11 +641,15 @@ const checks = {
         failures.push(`no kit row with a ${kind} beside it on load`)
     // Pointed at, a count or a running glyph at a row's end leaves the row its fill.
     for (const kind of ["count", "glyph"]) {
-      const beside = page
-        .locator(
-          `${css.sidebar} :is([data-trailing="${kind}"], [data-row-actions]) + [data-slot="sidebar-menu-item-trailing"] ${kind === "count" ? css.countBadge : ".workspace-status"}`,
-        )
-        .first()
+      // A row with actions first, where they swap with the count or glyph.
+      const mark = kind === "count" ? css.countBadge : ".workspace-status"
+      const trailing = `+ [data-slot="sidebar-menu-item-trailing"] ${mark}`
+      const withActions = page.locator(`${css.sidebar} [data-row-actions] ${trailing}`)
+      const beside = (
+        (await withActions.count())
+          ? withActions
+          : page.locator(`${css.sidebar} [data-trailing="${kind}"] ${trailing}`)
+      ).first()
       if (!(await beside.count())) {
         // The tree lays its folded summary in the kit's own badge slot, with no `data-trailing`.
         measured.hover[`kit row under its ${kind}`] = "none on this layout"
@@ -665,49 +670,95 @@ const checks = {
         failures.push(
           `a kit row pointed at by its ${kind} is ${fill}, not ${scale.hover}`,
         )
+      // Under the pointer a row's actions take the count's or glyph's cell, so
+      // a click there is theirs; a row without actions passes it through.
       if (layout === "columns") {
-        const through = await beside.evaluate((element, sel) => {
+        const hit = await beside.evaluate((element, sel) => {
           const frame = element.closest(sel.kitRowFrame)
           const control = frame.querySelector(sel.kitRow)
+          const actions = frame.querySelector(".workspace-row-actions")
           const box = element.getBoundingClientRect()
-          const hit = document.elementFromPoint(
+          const at = document.elementFromPoint(
             box.x + box.width / 2,
             box.y + box.height / 2,
           )
-          return hit === control || control.contains(hit)
+          if (actions) return actions.contains(at) ? "actions" : "elsewhere"
+          return at === control || control.contains(at) ? "row" : "elsewhere"
         }, css)
-        if (!through) failures.push(`the row's decorative ${kind} intercepts its click`)
+        measured.hover[`kit row's ${kind} cell clicks`] = hit
+        if (hit === "elsewhere")
+          failures.push(
+            `a click on a row's ${kind} reaches neither the row nor its actions`,
+          )
       }
       await page.mouse.move(1, 1)
     }
     if (layout === "columns") {
-      const actions = await page
-        .locator(`${css.sidebar} ${css.channelSettingsOpen}`)
-        .evaluateAll(
-          (buttons, sel) =>
-            buttons.map((button) => {
-              const frame = button.closest(sel.kitRowFrame)
-              const label = frame.querySelector(sel.rowLabel)
-              const band = button.closest('[data-slot="sidebar-menu-item-trailing"]')
-              const box = button.getBoundingClientRect()
-              const hit = document.elementFromPoint(
-                box.x + box.width / 2,
-                box.y + box.height / 2,
-              )
-              return {
-                labelClear:
-                  label.getBoundingClientRect().right <=
-                  band.getBoundingClientRect().left,
-                reachable: hit === button || button.contains(hit),
-              }
-            }),
-          css,
+      // A channel's settings show only under the pointer (or keyboard focus),
+      // in the place of its count or running glyph.
+      const settings = page.locator(`${css.sidebar} ${css.channelSettingsOpen}`)
+      const shown = () =>
+        settings.evaluateAll((buttons) =>
+          buttons.map((button) => {
+            let opacity = 1
+            for (let at = button; at; at = at.parentElement)
+              opacity *= Number(getComputedStyle(at).opacity)
+            return opacity
+          }),
         )
+      // Hit-testing at each button's centre: the row's own, or the button's.
+      const reached = () =>
+        settings.evaluateAll((buttons) =>
+          buttons.map((button) => {
+            const box = button.getBoundingClientRect()
+            const hit = document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            )
+            return hit === button || button.contains(hit)
+          }),
+        )
+      // Settled, not after a fixed wait: the kit fades them over its transition.
+      const settle = async (wanted) => {
+        let now = await shown()
+        await waitFor(async () => wanted((now = await shown())), 5_000)
+        return now
+      }
+      await page.mouse.move(1, 1)
+      const atRest = await settle((all) => all.every((opacity) => opacity === 0))
+      measured.settingsAtRest = atRest
+      if (atRest.some((opacity) => opacity > 0))
+        failures.push(`a channel's settings show at rest: ${JSON.stringify(atRest)}`)
+      if ((await reached()).some(Boolean))
+        failures.push("a channel's hidden settings still take clicks")
+      await settings
+        .first()
+        .locator(`xpath=ancestor::*[@data-slot="sidebar-menu-item-row"][1]`)
+        .locator(":scope > [data-size]")
+        .hover()
+      const pointed = (await settle((all) => all[0] === 1))[0]
+      measured.settingsPointedAt = pointed
+      if (pointed !== 1)
+        failures.push(`a channel pointed at shows its settings at ${pointed}`)
+      if (!(await reached())[0])
+        failures.push("a channel pointed at cannot receive its settings click")
+      const actions = await settings.evaluateAll(
+        (buttons, sel) =>
+          buttons.map((button) => {
+            const frame = button.closest(sel.kitRowFrame)
+            const label = frame.querySelector(sel.rowLabel)
+            const band = button.closest('[data-slot="sidebar-menu-item-trailing"]')
+            return {
+              labelClear:
+                label.getBoundingClientRect().right <= band.getBoundingClientRect().left,
+            }
+          }),
+        css,
+      )
+      await page.mouse.move(1, 1)
       if (!actions.length) failures.push("no channel settings action beside the row")
-      if (actions.some((action) => !action.labelClear || !action.reachable))
-        failures.push(
-          "a channel settings action overlaps its label or cannot receive its click",
-        )
+      if (actions.some((action) => !action.labelClear))
+        failures.push("a channel settings action overlaps its label")
       measured.actions = actions
     }
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
