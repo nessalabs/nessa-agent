@@ -9,6 +9,7 @@ import {
   CHART_URI,
   PROTOCOL_VERSION,
   REVIEW_URI,
+  TALK_URI,
   TOOLS,
   answer,
   initializeDelayMs,
@@ -39,6 +40,7 @@ test("tools/list declares every tool without its implementation, and the app too
       "always_fails",
       "show_chart",
       "review_rows",
+      "talk_board",
       "app_delete_row",
       "model_only_note",
       "model_only_chart",
@@ -50,12 +52,14 @@ test("tools/list declares every tool without its implementation, and the app too
   const named = (name) => tools.find((tool) => tool.name === name)
   assert.equal(named("show_chart")._meta.ui.resourceUri, CHART_URI)
   assert.equal(named("review_rows")._meta.ui.resourceUri, REVIEW_URI)
+  assert.equal(named("talk_board")._meta.ui.resourceUri, TALK_URI)
   // The tools before the app's own declare nothing new.
   assert.deepEqual(
     tools.filter((tool) => tool._meta).map((tool) => tool.name),
     [
       "show_chart",
       "review_rows",
+      "talk_board",
       "app_delete_row",
       "model_only_note",
       "model_only_chart",
@@ -131,8 +135,9 @@ test("the app tool's UI resource is listed and read with the MCP Apps MIME type"
   assert.deepEqual(resources, [
     { uri: CHART_URI, name: "chart", mimeType: APP_MIME_TYPE },
     { uri: REVIEW_URI, name: "review", mimeType: APP_MIME_TYPE },
+    { uri: TALK_URI, name: "talk", mimeType: APP_MIME_TYPE },
   ])
-  for (const uri of [CHART_URI, REVIEW_URI]) {
+  for (const uri of [CHART_URI, REVIEW_URI, TALK_URI]) {
     const { contents } = answer({
       jsonrpc: "2.0",
       id: 1,
@@ -147,6 +152,12 @@ test("the app tool's UI resource is listed and read with the MCP Apps MIME type"
       resourceDomains: [],
     })
   }
+  // Only the talk app asks for the microphone, as a voice app does.
+  const read = (uri) =>
+    answer({ jsonrpc: "2.0", id: 1, method: "resources/read", params: { uri } }).result
+      .contents[0]._meta.ui.permissions
+  assert.deepEqual(read(TALK_URI), { microphone: {} })
+  assert.equal(read(REVIEW_URI), undefined)
 })
 
 /**
@@ -412,7 +423,7 @@ test("the stdio loop answers each line, including a parse error, in order", asyn
       [2, false],
     ],
   )
-  assert.equal(Object.keys(TOOLS).length, 9)
+  assert.equal(Object.keys(TOOLS).length, 10)
 })
 
 test("--initialize-delay-ms holds initialize's answer, and keeps every answer in order", async () => {

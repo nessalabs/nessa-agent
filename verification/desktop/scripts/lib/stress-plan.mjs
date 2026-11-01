@@ -181,6 +181,10 @@ export const KNOBS = {
     default: 1,
     what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
+  passphrases: {
+    default: 1,
+    what: "vault passphrase changes through Settings, each sealed and explicitly unlocked, followed by a conversation reply",
+  },
   githubs: {
     default: 1,
     what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
@@ -196,6 +200,10 @@ export const KNOBS = {
   webhooks: {
     default: 1,
     what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
+  },
+  huddles: {
+    default: 1,
+    what: "turns that show a voice app (the test server's talk board): its frame is allowed the microphone, it opens in the chat's panel as one tab, and after Always allow its next message goes unasked",
   },
   channels: {
     default: 1,
@@ -293,7 +301,9 @@ export function plan(knobs) {
   add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))
+  add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))
+  add(knobs.huddles, () => ({ kind: "huddle" }))
   add(knobs.webhooks, () => ({ kind: "webhook" }))
   add(knobs.pastes, () => ({ kind: "paste" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
@@ -374,4 +384,23 @@ export function describe(steps) {
       return `${step.index}. ${step.kind}${extra}`
     })
     .join("\n")
+}
+
+/** Select existing planned steps without changing a single knob or deadline.
+ * The unfiltered plan remains the full qualification; a selected run reports
+ * its scope explicitly and cannot stand in for the unselected feature checks. */
+export function selectedPlan(knobs, only) {
+  const planned = plan(knobs)
+  if (!only) return planned
+  const selected = new Set(
+    only
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  )
+  const available = new Set(planned.map((step) => step.kind))
+  const unknown = [...selected].filter((kind) => !available.has(kind))
+  if (selected.size === 0 || unknown.length)
+    throw new Error(`No planned stress step matches: ${unknown.join(",") || only}`)
+  return planned.filter((step) => selected.has(step.kind))
 }

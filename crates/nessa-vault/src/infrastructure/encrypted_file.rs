@@ -1,9 +1,9 @@
 use crate::{
     application::{Entropy, Repository},
     contract,
-    domain::{EntryName, Failure, Passphrase, Secret, VaultKey},
+    domain::{ChangePublication, EntryName, Failure, Passphrase, Secret, VaultKey},
 };
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{Algorithm, Argon2, Block, Params, Version};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chacha20poly1305::{
     aead::{Aead, Payload},
@@ -13,8 +13,8 @@ use nessa_local_storage::{create_directory, open, OpenMode, PrivateTempFile};
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::{Read, Write},
-    path::PathBuf,
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use zeroize::Zeroizing;
@@ -28,15 +28,56 @@ impl Entropy for OsEntropy {
         getrandom::fill(bytes).map_err(|_| Failure::Unavailable)
     }
 }
+/// Atomic ciphertext-file effects, separated so publication failures can be
+/// tested before and after replacement without touching any real user vault.
+/// The adapter reports IO facts; the repository owns publication classification.
+pub trait FilePublication: Send + Sync {
+    fn prepare(&self, directory: &Path, bytes: &[u8]) -> Result<PrivateTempFile, Failure>;
+    fn replace(&self, temporary: PrivateTempFile, destination: &Path) -> Result<(), Failure>;
+    fn publish_new(&self, temporary: PrivateTempFile, destination: &Path) -> Result<(), Failure>;
+    fn sync(&self, directory: &Path) -> Result<(), Failure>;
+}
+/// The existing private-file publication and platform durability implementation.
+pub struct NativeFilePublication;
+impl FilePublication for NativeFilePublication {
+    fn prepare(&self, directory: &Path, bytes: &[u8]) -> Result<PrivateTempFile, Failure> {
+        let mut temporary = PrivateTempFile::new_in(directory).map_err(io)?;
+        temporary.as_file_mut().write_all(bytes).map_err(io)?;
+        temporary.as_file().sync_all().map_err(io)?;
+        Ok(temporary)
+    }
+    fn replace(&self, temporary: PrivateTempFile, destination: &Path) -> Result<(), Failure> {
+        temporary.persist(destination).map_err(io)
+    }
+    fn publish_new(&self, temporary: PrivateTempFile, destination: &Path) -> Result<(), Failure> {
+        temporary.publish(destination).map_err(io)
+    }
+    fn sync(&self, directory: &Path) -> Result<(), Failure> {
+        nessa_local_storage::sync_directory(directory).map_err(io)
+    }
+}
 /// One bounded encrypted file. All mutations reload durable truth under a shared
 /// private lock before atomic replacement, so competing processes cannot lose updates.
 pub struct EncryptedFileVault {
     directory: PathBuf,
     entropy: Arc<dyn Entropy>,
+    publication: Arc<dyn FilePublication>,
 }
 impl EncryptedFileVault {
     pub fn new(directory: PathBuf, entropy: Arc<dyn Entropy>) -> Self {
-        Self { directory, entropy }
+        Self::with_publication(directory, entropy, Arc::new(NativeFilePublication))
+    }
+    /// Inject ciphertext publication effects, preserving the same repository rules.
+    pub fn with_publication(
+        directory: PathBuf,
+        entropy: Arc<dyn Entropy>,
+        publication: Arc<dyn FilePublication>,
+    ) -> Self {
+        Self {
+            directory,
+            entropy,
+            publication,
+        }
     }
     fn path(&self) -> PathBuf {
         self.directory.join("entries.enc")
@@ -54,8 +95,11 @@ impl EncryptedFileVault {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(Failure::Unavailable),
         };
+        Self::read_bytes(&mut file).map(Some)
+    }
+    fn read_bytes(file: &mut File) -> Result<Vec<u8>, Failure> {
         let mut bytes = Vec::new();
-        Read::by_ref(&mut file)
+        Read::by_ref(file)
             .take((contract::MAXIMUM_FILE_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
             .map_err(io)?;
@@ -65,7 +109,7 @@ impl EncryptedFileVault {
         {
             return Err(Failure::Unavailable);
         }
-        Ok(Some(bytes))
+        Ok(bytes)
     }
     fn required(&self) -> Result<Vec<u8>, Failure> {
         self.load()?.ok_or(Failure::Unavailable)
@@ -78,9 +122,12 @@ impl EncryptedFileVault {
             Some(32),
         )
         .map_err(|_| Failure::Unavailable)?;
+        // Argon2's allocating convenience method does not erase its block Vec.
+        // Own the scratch allocation so it is erased on success, error and unwind.
+        let mut memory = Zeroizing::new(vec![Block::default(); params.block_count()]);
         let mut key = Zeroizing::new([0; 32]);
         Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-            .hash_password_into(passphrase.bytes(), salt, &mut *key)
+            .hash_password_into_with_memory(passphrase.bytes(), salt, &mut *key, &mut *memory)
             .map_err(|_| Failure::Unavailable)?;
         Ok(VaultKey(key))
     }
@@ -173,19 +220,49 @@ impl EncryptedFileVault {
         Ok(bytes)
     }
     fn persist(&self, bytes: &[u8], new: bool) -> Result<(), Failure> {
-        let mut temporary = PrivateTempFile::new_in(&self.directory).map_err(io)?;
-        temporary.as_file_mut().write_all(bytes).map_err(io)?;
-        temporary.as_file().sync_all().map_err(io)?;
+        let temporary = self.publication.prepare(&self.directory, bytes)?;
         if new {
-            temporary.publish(&self.path()).map_err(io)?;
+            self.publication.publish_new(temporary, &self.path())?;
         } else {
-            temporary.persist(&self.path()).map_err(io)?;
+            self.publication.replace(temporary, &self.path())?;
         }
-        nessa_local_storage::sync_directory(&self.directory).map_err(io)?;
+        self.publication.sync(&self.directory)?;
         if self.required()? != bytes {
             return Err(Failure::Unavailable);
         }
         Ok(())
+    }
+    fn prepared_change(
+        &self,
+        current_key: &VaultKey,
+        new_passphrase: &Passphrase,
+    ) -> Result<(PrivateTempFile, Vec<u8>), Failure> {
+        let previous = self.required()?;
+        let entries = Self::entries(&previous, current_key).map_err(|_| Failure::Unavailable)?;
+        let mut salt = [0; SALT];
+        self.entropy.fill(&mut salt)?;
+        let new_key = Self::derive(new_passphrase, &salt)?;
+        let bytes = self.seal(&salt, &entries, &new_key)?;
+        let mut temporary = self.publication.prepare(&self.directory, &bytes)?;
+        temporary
+            .as_file_mut()
+            .seek(SeekFrom::Start(0))
+            .map_err(io)?;
+        let prepared = Self::read_bytes(temporary.as_file_mut())?;
+        if prepared != bytes {
+            return Err(Failure::Unavailable);
+        }
+        let verified = Self::entries(&prepared, &new_key).map_err(|_| Failure::Unavailable)?;
+        if verified.len() != entries.len()
+            || verified.iter().zip(entries.iter()).any(
+                |((actual_name, actual), (expected_name, expected))| {
+                    actual_name != expected_name || actual.as_slice() != expected.as_slice()
+                },
+            )
+        {
+            return Err(Failure::Unavailable);
+        }
+        Ok((temporary, bytes))
     }
     fn modify(
         &self,
@@ -222,6 +299,7 @@ impl Repository for EncryptedFileVault {
         passphrase: &Passphrase,
         initial: &[(EntryName, Secret)],
     ) -> Result<VaultKey, Failure> {
+        passphrase.validate_setup()?;
         let _lock = self.lock()?;
         if self.load()?.is_some() {
             return Err(Failure::AlreadyConfigured);
@@ -247,6 +325,40 @@ impl Repository for EncryptedFileVault {
         let key = Self::derive(passphrase, &bytes[MAGIC.len()..MAGIC.len() + SALT])?;
         Self::entries(&bytes, &key)?;
         Ok(key)
+    }
+    fn change_passphrase(
+        &self,
+        current_key: &VaultKey,
+        new_passphrase: &Passphrase,
+    ) -> ChangePublication {
+        if let Err(problem) = new_passphrase.validate_setup() {
+            return ChangePublication::Unchanged(problem);
+        }
+        let _lock = match self.lock() {
+            Ok(lock) => lock,
+            Err(problem) => return ChangePublication::Unchanged(problem),
+        };
+        let (temporary, bytes) = match self.prepared_change(current_key, new_passphrase) {
+            Ok(prepared) => prepared,
+            Err(problem) => return ChangePublication::Unchanged(problem),
+        };
+        // From this call onward, an IO failure cannot prove that the old file won.
+        let receipt = self
+            .publication
+            .replace(temporary, &self.path())
+            .and_then(|()| self.publication.sync(&self.directory))
+            .and_then(|()| self.required())
+            .and_then(|actual| {
+                if actual == bytes {
+                    Ok(())
+                } else {
+                    Err(Failure::Unavailable)
+                }
+            });
+        match receipt {
+            Ok(()) => ChangePublication::Committed,
+            Err(problem) => ChangePublication::Uncertain(problem),
+        }
     }
     fn read(&self, key: &VaultKey, name: &EntryName) -> Result<Option<Secret>, Failure> {
         let _lock = self.lock()?;

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import { channelRuntimeSettings, openAccounts } from "./lib/boat-runtime-settings.mjs"
-import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
+import {
+  changeVaultPassphrase,
+  unlockRequestedVault,
+  unlockVault,
+  VAULT_PASSPHRASE,
+} from "./lib/vault.mjs"
 /**
  * The conversation stress check: a person using one conversation for many
  * rounds through the real gateway and the desktop window, with the scripted
@@ -205,6 +210,11 @@ import { unlockRequestedVault, unlockVault } from "./lib/vault.mjs"
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
  *               their folders, and each conversation in its own
+ *   huddle      a turn shows the test server's talk board, the host side of
+ *               a voice app: its frame is allowed the microphone, it opens in
+ *               the chat's panel as one tab however often it asks (its card a
+ *               row), its first message is reviewed and answered Always allow
+ *               this app, and its next message is sent with no review
  *   menu        the pane's ⋯ menu opens with every row leading with its
  *               icon at the menu recipe's row height; in the overview's
  *               filter the chosen scope and span each show their check
@@ -286,8 +296,9 @@ import {
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { appFrame } from "./lib/apps.mjs"
 import { browse } from "./lib/mdns-probe.mjs"
-import { openPage, withEngines } from "./lib/browser.mjs"
+import { noteLiveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
 import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
 import {
@@ -331,7 +342,7 @@ import {
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
-import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
+import { KNOBS, describe, knobsFrom, selectedPlan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
@@ -362,6 +373,7 @@ const meta = {
   options: {
     agent: { type: "string", default: "claude" },
     evidence: { type: "string" },
+    only: { type: "string" },
     ...Object.fromEntries(Object.keys(KNOBS).map((name) => [name, { type: "string" }])),
   },
   help: `
@@ -383,7 +395,9 @@ ${Object.entries(KNOBS)
 Options:
   --agent claude|codex  the harness profile the scripted agent speaks (default:
                         claude; Linux offers full access only on Claude's model)
-  --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/`,
+  --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/
+  --only <kinds>        explicit comma-separated selected-step qualification; keeps
+                        all knobs/deadlines and reports selected scope, not a full run`,
 }
 
 /**
@@ -2418,6 +2432,29 @@ const steps = {
       await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async passphrase(run, step, failures) {
+    await run.exclusive(async () => {
+      const needsUnlock = (await run.client.vault.status()).state === "locked"
+      await openAccounts(run.page)
+      if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+      await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
+      const locked = async () => (await run.client.vault.status()).state === "locked"
+      await changeVaultPassphrase(
+        run.page,
+        `disposable cobalt orchard vault stress passphrase ${step.index}`,
+        { locked },
+      )
+      // Keep the shared disposable fixture phrase for restart/other steps.
+      await changeVaultPassphrase(run.page, VAULT_PASSPHRASE, { locked })
+      if ((await run.client.vault.status()).state !== "unlocked")
+        failures.push(
+          "Explicit unlock after passphrase change was not reflected by gateway",
+        )
+      await closeSettings(run.page)
+    })
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
@@ -4811,6 +4848,44 @@ const steps = {
     else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
       failures.push("the next message ran on the parked agent's lease, not a new one")
     await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async huddle(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.huddle, step)
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (!view) return
+    const page = run.page
+    const shot = (what) =>
+      run.evidence
+        ? page
+            .screenshot({ path: join(run.evidence, `huddle-${what}.png`) })
+            .catch(() => {})
+        : undefined
+    await run.exclusive(async () => {
+      try {
+        await openStressConversation(
+          page,
+          conversationId,
+          await titleOf(run, conversationId),
+        )
+        await talkBoard(run, step, conversationId, failures, shot)
+      } finally {
+        await openStressConversation(page, run.main.id, run.main.title)
+      }
+    })
   },
 
   async close(run, step, failures) {
@@ -7580,6 +7655,172 @@ async function background(run, n) {
   return { conversationId, failures }
 }
 
+/** The app server the scripted agent's tools come from. */
+const TEST_APP_SERVER = "mcptest"
+
+/**
+ * Whether the gateway keeps `server` trusted: its
+ * `<namespace>/conversations/trusted-apps.json`, `{"servers": [...]}`.
+ */
+function appTrusted(run, server) {
+  const file = join(
+    run.stack.gateway.directory,
+    "ci",
+    "instances",
+    INSTANCE,
+    "conversations",
+    "trusted-apps.json",
+  )
+  try {
+    return (JSON.parse(readFileSync(file, "utf8")).servers ?? []).includes(server)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The `huddle` step in the window: the talk board a voice app stands in
+ * for. Its frame is allowed the microphone because its resource asks; it
+ * opens in the chat's panel as one tab however often it asks, its card
+ * becoming a row; its first message is reviewed, offering Always allow this
+ * app, and once that is chosen its next message goes unasked. Trust is kept
+ * gateway-wide by server, so a later repetition finds it already trusted and
+ * checks that its first message goes unasked too.
+ */
+async function talkBoard(run, step, conversationId, failures, shot) {
+  const page = run.page
+  const live = (frame) =>
+    frame
+      .waitForSelector('body[data-talk-state="live"]', { timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false)
+  let inline
+  try {
+    inline = await appFrame(page, "inline", 20_000)
+  } catch {
+    failures.push("the talk board's turn drew no app")
+    return
+  }
+  if (!(await live(inline.app))) {
+    failures.push("the talk board never went live inline")
+    return
+  }
+  const allow = await (await inline.app.frameElement()).getAttribute("allow")
+  if (allow !== "microphone *")
+    failures.push(
+      `the talk board's frame allows ${JSON.stringify(allow)}, not the microphone`,
+    )
+  await shot("inline")
+  // In the chat's panel, one tab, and the card gives way to a row.
+  const tabs = page.locator(`${css.chatPanelTabs} [title^="Close "]`)
+  const tabsBefore = await tabs.count()
+  const sidePanel = page.locator("#workspace-panel")
+  const panelShown = async () => (await sidePanel.getAttribute("aria-hidden")) === null
+  const panelWasShown = await panelShown()
+  await inline.app.click('[data-talk="panel"]')
+  let panel
+  try {
+    panel = await appFrame(page, "panel", 20_000)
+  } catch {
+    failures.push("the talk board's fullscreen request opened no panel tab")
+    return
+  }
+  if (!(await live(panel.app))) {
+    failures.push("the talk board never went live in the panel")
+    return
+  }
+  const rowOnly = await waitFor(
+    async () => !(await page.$(selectorFor.appFrameIn("inline"))),
+    5_000,
+  )
+  if (!rowOnly)
+    failures.push("the talk board is drawn inline while it is open in the panel")
+  // Its panel mount went live and the card stayed a row, so an unsized
+  // `/mcp-resources` abort from the gateway that serves it is the delivered
+  // fetch (#473). Every other abort stays a failure.
+  else noteLiveMountResourceAbort(run.opened, "live", run.stack.gateway.url)
+  await panel.app.click('[data-talk="panel"]')
+  await sleep(1_000)
+  const opened = (await tabs.count()) - tabsBefore
+  if (opened !== 1) failures.push(`the talk board opened ${opened} panel tabs, not one`)
+  await shot("panel")
+  // A message as the person: asked about once, then Always allow.
+  const ask = async (text) => {
+    await panel.app.fill("#text", text)
+    await panel.app.click('[data-talk="send"]')
+  }
+  const sent = (ms) =>
+    waitFor(async () => {
+      const said = await panel.app.evaluate(
+        () => document.getElementById("sent")?.textContent ?? "",
+      )
+      return said !== "" && said !== "pending" ? said : null
+    }, ms)
+  const firstText = `${STRESS.reply} from the talk board r${step.index} first`
+  const card = page.locator(css.appApprovalCard).filter({ visible: true }).first()
+  const trustedBefore = appTrusted(run, TEST_APP_SERVER)
+  await ask(firstText)
+  if (trustedBefore) {
+    // An earlier repetition chose Always allow: nothing is asked now.
+    const firstSaid = await sent(30_000)
+    if (firstSaid !== "ok")
+      failures.push(
+        `the already trusted talk board's first message ended ${JSON.stringify(firstSaid)}`,
+      )
+    if (await card.isVisible().catch(() => false))
+      failures.push("the already trusted talk board's first message was reviewed")
+  } else {
+    const always = card.getByRole("button", { name: /always allow/i })
+    const offered = await always
+      .waitFor({ state: "visible", timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!offered) {
+      failures.push(
+        "the talk board's first message was not reviewed with Always allow this app",
+      )
+      return
+    }
+    await shot("review")
+    await always.click()
+    const firstSaid = await sent(30_000)
+    if (firstSaid !== "ok")
+      failures.push(`after Always allow the talk board says ${JSON.stringify(firstSaid)}`)
+    if (!(await waitFor(async () => appTrusted(run, TEST_APP_SERVER), 5_000)))
+      failures.push("Always allow this app was not kept in trusted-apps.json")
+  }
+  await expectShown(page, `${SAYS.echo}${firstText}`, failures)
+  // Its next message goes as the person, with no review.
+  const secondText = `${STRESS.reply} from the talk board r${step.index} second`
+  await ask(secondText)
+  const secondSaid = await sent(30_000)
+  if (secondSaid !== "ok")
+    failures.push(`the talk board's second message ended ${JSON.stringify(secondSaid)}`)
+  if (await card.isVisible().catch(() => false))
+    failures.push("the talk board's second message was reviewed after Always allow")
+  const reviews = (await readWithReviews(run.client, conversationId)).permissions.filter(
+    (review) => review.origin?.kind === "app",
+  )
+  if (reviews.length)
+    failures.push(`${reviews.length} app reviews are still pending after Always allow`)
+  await expectShown(page, `${SAYS.echo}${secondText}`, failures)
+  // Its tab closed, nothing of it is left running.
+  await tabs.last().click()
+  const closed = await waitFor(
+    async () => !(await page.$(selectorFor.appFrameIn("panel"))),
+    5_000,
+  )
+  if (!closed)
+    failures.push("the talk board's panel frame is still drawn after its tab closed")
+  // The right panel stays open with its last tab gone; leave it as found,
+  // or the next step that toggles it closes it instead.
+  if (!panelWasShown && (await panelShown())) {
+    await page.keyboard.press("Meta+Alt+KeyB")
+    if (!(await waitFor(async () => !(await panelShown()), 3_000)))
+      failures.push("⌥⌘B did not close the right panel after the talk board")
+  }
+}
+
 /** What must hold once everything has run, in every conversation the run made. */
 async function titleOf(run, conversationId) {
   const title = await waitFor(async () => {
@@ -7684,8 +7925,10 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
-  if (knobs.inputFiles > 0) phoneFilesVerifier()
-  if (knobs.pairedCatalogues > 0) await preparePairedCatalogue()
+  const selected = selectedPlan(knobs, options.only)
+  if (selected.some((step) => step.kind === "inputFiles")) phoneFilesVerifier()
+  if (selected.some((step) => step.kind === "pairedCatalogue"))
+    await preparePairedCatalogue()
   // Linking listens on every interface, as Settings sets it up, so the
   // gateway announces itself; clients on this machine dial it on loopback.
   const nativePort = await freePort()
@@ -7708,7 +7951,7 @@ async function startStack(options) {
     mkdirSync(options.evidence, { recursive: true })
     writeFileSync(
       join(options.evidence, "plan.txt"),
-      `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
+      `${JSON.stringify(knobs)}\n${options.only ? `SELECTED SCOPE: ${options.only}\n` : "FULL PLAN\n"}${describe(selectedPlan(knobs, options.only))}\n`,
     )
   }
   // The `github` step's GitHub, on this machine, which the gateway reads its
@@ -7802,7 +8045,7 @@ await main(
   meta,
   async ({ options, rep, target: stack }) => {
     const knobs = stack.knobs
-    const planned = plan(knobs)
+    const planned = selectedPlan(knobs, options.only)
     log(`conversation-stress ${JSON.stringify(knobs)}\n${describe(planned)}`)
     const origin = new URL(stack.url).origin
     await withEngines(options, rep, async (engine, browser) => {
@@ -7831,7 +8074,11 @@ await main(
       const run = new Run(stack, opened, knobs, restartConsole)
       run.evidence = options.evidence
       run.engine = engine
-      const base = { engine, layout }
+      const base = {
+        engine,
+        layout,
+        scope: options.only ? `selected:${options.only}` : "full",
+      }
       let followers = []
       try {
         const id = randomUUID()
