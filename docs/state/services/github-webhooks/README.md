@@ -147,11 +147,15 @@ saved locally. Reconnect does not silently skip it. The owner can acknowledge th
 missing range; that transition records its original cursor and cause before
 advancing. Local retention is seven days from import, cleaned during page commits,
 with the same payload/event caps and at most 16 account/repository bindings.
-Page commits and Settings selection trim local audit records. Direct gap and CLI
-acceptance paths may exceed that row cap until the next cleanup; the
-[source-observed follow-up](https://github.com/nessalabs/nessa-agent/issues/1185)
-needs an API-level runtime regression and a transaction-owned correction. This
-exception concerns encrypted local audit metadata, not the cloud payload cap.
+Page commits, Settings selection, a direct gap, and accepting that gap from
+the command line each trim the local audit store they write before that
+transaction commits. The cap is `auditRows` in the relay contract. A failed
+audit write rolls the gap, the cursor, and the new audit row back together.
+Rows already past the cap are not migrated; the next transition that writes
+that store brings it back to the cap. [ADR 1185](../../../adr/done/1185-bound-native-relay-audit-retention.md)
+records the transitions. This bound is encrypted local audit metadata, not
+the cloud payload cap. The page checkpoint above was not moved: this paragraph
+is the #1185 correction, and the rest of this page was not re-reviewed.
 Erasing retention also ends that store's deduplication history.
 
 ## User and stage boundaries

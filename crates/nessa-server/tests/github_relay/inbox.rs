@@ -1,7 +1,7 @@
 use crate::{
     env::Stage,
     github_relay::{
-        application::{catch_up, RelaySource, RelayStore},
+        application::{catch_up, LiveEventStore, RelaySource, RelayStore},
         domain::{Binding, Event, Failure, Page},
         infrastructure::{relay_configuration, SqliteRelayStore},
     },
@@ -1008,4 +1008,335 @@ async fn an_in_flight_old_unlock_cannot_remove_a_new_live_selection() {
         )
         .unwrap();
     assert_eq!(stale_deletions, 0);
+}
+
+fn inbox_db(directory: &tempfile::TempDir) -> nessa_local_database::rusqlite::Connection {
+    nessa_local_database::open_encrypted(
+        &directory.path().join("private/inbox.sqlite"),
+        &nessa_local_database::Schema::new(include_str!(
+            "../../src/github_relay/infrastructure/schema.sql"
+        ))
+        .unwrap(),
+        &nessa_local_database::DatabaseKey::new([11; 32]),
+    )
+    .unwrap()
+}
+fn audit_cap() -> i64 {
+    crate::github_relay::domain::contract::AUDIT_ROWS
+}
+fn fill_store_to_cap(db: &nessa_local_database::rusqlite::Connection, table: &str, columns: &str) {
+    let existing: i64 = db
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let mut remaining = audit_cap() - existing;
+    assert!(remaining >= 0, "{table} already held {existing}");
+    while remaining > 0 {
+        let batch = remaining.min(500);
+        db.execute(
+            &format!(
+                "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n < ?) \
+                 INSERT INTO {table}({columns}) SELECT '11','42','seed','system:test',n FROM numbers"
+            ),
+            [batch],
+        )
+        .unwrap();
+        remaining -= batch;
+    }
+}
+fn assert_audit_stores_at_cap(directory: &tempfile::TempDir) {
+    let db = inbox_db(directory);
+    let audit: i64 = db
+        .query_row("SELECT COUNT(*) FROM audit", [], |row| row.get(0))
+        .unwrap();
+    let bindings: i64 = db
+        .query_row("SELECT COUNT(*) FROM binding_audit", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        (audit, bindings),
+        (audit_cap(), audit_cap()),
+        "audit stores after the committed transition"
+    );
+}
+fn audit_rows(directory: &tempfile::TempDir, cause: &str, after_cursor: i64) -> i64 {
+    inbox_db(directory)
+        .query_row(
+            "SELECT COUNT(*) FROM audit WHERE cause=? AND after_cursor=?",
+            nessa_local_database::rusqlite::params![cause, after_cursor],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+#[derive(Debug, PartialEq, Eq)]
+struct CursorAudit {
+    user_id: String,
+    repository_id: String,
+    before_cursor: i64,
+    after_cursor: i64,
+    cause: String,
+    initiator: String,
+    observed_at: i64,
+}
+fn latest_cursor_audit(directory: &tempfile::TempDir, cause: &str) -> CursorAudit {
+    let db = inbox_db(directory);
+    db.query_row(
+        "SELECT user_id,repository_id,before_cursor,after_cursor,cause,initiator,observed_at \
+         FROM audit WHERE cause=? ORDER BY id DESC LIMIT 1",
+        [cause],
+        |row| {
+            Ok(CursorAudit {
+                user_id: row.get(0)?,
+                repository_id: row.get(1)?,
+                before_cursor: row.get(2)?,
+                after_cursor: row.get(3)?,
+                cause: row.get(4)?,
+                initiator: row.get(5)?,
+                observed_at: row.get(6)?,
+            })
+        },
+    )
+    .unwrap()
+}
+fn cursor_audit(cause: &str, initiator: &str, before: i64, after: i64) -> CursorAudit {
+    CursorAudit {
+        user_id: "11".into(),
+        repository_id: "42".into(),
+        before_cursor: before,
+        after_cursor: after,
+        cause: cause.into(),
+        initiator: initiator.into(),
+        observed_at: 1_000_000,
+    }
+}
+
+/// ADR 1185. Both stores start at `auditRows`. Each direct gap, repeated gap,
+/// and CLI acceptance is checked before any later selection or page commit
+/// can trim `audit` for them.
+#[tokio::test]
+async fn direct_gap_and_acceptance_keep_each_audit_store_within_its_cap() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let db = inbox_db(&directory);
+    fill_store_to_cap(
+        &db,
+        "audit",
+        "user_id,repository_id,cause,initiator,observed_at",
+    );
+    fill_store_to_cap(
+        &db,
+        "binding_audit",
+        "user_id,repository_id,cause,initiator,observed_at",
+    );
+    drop(db);
+    assert_audit_stores_at_cap(&directory);
+
+    let mut cursor = 0;
+    for _ in 0..4 {
+        let through = cursor + 10;
+        store.gap(&binding, through).await.unwrap();
+        assert_audit_stores_at_cap(&directory);
+        assert_eq!(audit_rows(&directory, "cloud_retention_gap", through), 1);
+        assert_eq!(
+            latest_cursor_audit(&directory, "cloud_retention_gap"),
+            cursor_audit("cloud_retention_gap", "system:cloud-relay", cursor, through)
+        );
+        store.gap(&binding, through).await.unwrap();
+        assert_audit_stores_at_cap(&directory);
+        assert_eq!(audit_rows(&directory, "cloud_retention_gap", through), 1);
+        assert_eq!(store.cursor(&binding).await, Err(Failure::Gap(through)));
+        store.bind(&binding, true).await.unwrap();
+        assert_audit_stores_at_cap(&directory);
+        assert_eq!(
+            latest_cursor_audit(&directory, "gap_accepted"),
+            cursor_audit("gap_accepted", "local-owner:github:11", cursor, through)
+        );
+        assert_eq!(store.cursor(&binding).await.unwrap(), through);
+        cursor = through;
+    }
+
+    let db = inbox_db(&directory);
+    db.execute_batch("CREATE TRIGGER refuse_audit_trim BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'trim failed'); END;").unwrap();
+    assert_eq!(
+        store.gap(&binding, cursor + 10).await,
+        Err(Failure::Storage)
+    );
+    assert_eq!(store.cursor(&binding).await.unwrap(), cursor);
+    assert_eq!(
+        audit_rows(&directory, "cloud_retention_gap", cursor + 10),
+        0
+    );
+    assert_audit_stores_at_cap(&directory);
+    db.execute_batch("DROP TRIGGER refuse_audit_trim;").unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_cloud_gap BEFORE INSERT ON audit WHEN NEW.cause='cloud_retention_gap' BEGIN SELECT RAISE(ABORT,'injected cloud gap audit failure'); END;").unwrap();
+    assert_eq!(
+        store.gap(&binding, cursor + 10).await,
+        Err(Failure::Storage)
+    );
+    assert_eq!(store.cursor(&binding).await.unwrap(), cursor);
+    assert_eq!(
+        audit_rows(&directory, "cloud_retention_gap", cursor + 10),
+        0
+    );
+    assert_audit_stores_at_cap(&directory);
+    db.execute_batch("DROP TRIGGER refuse_cloud_gap;").unwrap();
+    store.gap(&binding, cursor + 10).await.unwrap();
+    assert_audit_stores_at_cap(&directory);
+    assert_eq!(
+        latest_cursor_audit(&directory, "cloud_retention_gap"),
+        cursor_audit(
+            "cloud_retention_gap",
+            "system:cloud-relay",
+            cursor,
+            cursor + 10
+        )
+    );
+
+    db.execute_batch("CREATE TRIGGER refuse_audit_trim BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'trim failed'); END;").unwrap();
+    assert_eq!(store.bind(&binding, true).await, Err(Failure::Storage));
+    assert_eq!(store.cursor(&binding).await, Err(Failure::Gap(cursor + 10)));
+    assert_eq!(audit_rows(&directory, "gap_accepted", cursor + 10), 0);
+    assert_audit_stores_at_cap(&directory);
+    db.execute_batch("DROP TRIGGER refuse_audit_trim;").unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_gap_acceptance BEFORE INSERT ON audit WHEN NEW.cause='gap_accepted' BEGIN SELECT RAISE(ABORT,'injected acceptance audit failure'); END;").unwrap();
+    assert_eq!(store.bind(&binding, true).await, Err(Failure::Storage));
+    assert_eq!(store.cursor(&binding).await, Err(Failure::Gap(cursor + 10)));
+    assert_eq!(audit_rows(&directory, "gap_accepted", cursor + 10), 0);
+    assert_audit_stores_at_cap(&directory);
+    db.execute_batch("DROP TRIGGER refuse_gap_acceptance;")
+        .unwrap();
+    drop(db);
+    store.bind(&binding, true).await.unwrap();
+    assert_audit_stores_at_cap(&directory);
+    assert_eq!(store.cursor(&binding).await.unwrap(), cursor + 10);
+    assert_eq!(
+        latest_cursor_audit(&directory, "gap_accepted"),
+        cursor_audit("gap_accepted", "local-owner:github:11", cursor, cursor + 10)
+    );
+
+    let saved = page("11", cursor + 11);
+    store.commit(&binding, cursor + 10, &saved).await.unwrap();
+    assert_audit_stores_at_cap(&directory);
+    let page_receipt: (String, String, String, i64, i64, String) = inbox_db(&directory)
+        .query_row(
+            "SELECT user_id,repository_id,cause,before_cursor,after_cursor,initiator \
+             FROM binding_audit WHERE cause='page_committed' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        page_receipt,
+        (
+            "11".into(),
+            "42".into(),
+            "page_committed".into(),
+            cursor + 10,
+            cursor + 11,
+            "system:local-relay".into(),
+        )
+    );
+
+    store.gap(&binding, cursor + 20).await.unwrap();
+    assert_audit_stores_at_cap(&directory);
+    let acknowledged = Binding::new(
+        binding.user_id().into(),
+        binding.repository_id().into(),
+        binding.repository_name().into(),
+        uuid::Uuid::new_v4(),
+    )
+    .unwrap();
+    store
+        .select(
+            1,
+            std::slice::from_ref(&acknowledged),
+            "principal:owner/credential:one",
+            true,
+        )
+        .await
+        .unwrap();
+    assert_audit_stores_at_cap(&directory);
+    assert_eq!(store.cursor(&acknowledged).await.unwrap(), cursor + 20);
+    let selection: (String, String, String, String, i64, i64, String) = inbox_db(&directory)
+        .query_row(
+            "SELECT user_id,repository_id,before_generation,after_generation,before_cursor,after_cursor,initiator \
+             FROM binding_audit WHERE cause='gap_accepted' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        selection,
+        (
+            "11".into(),
+            "42".into(),
+            binding.generation().to_string(),
+            acknowledged.generation().to_string(),
+            cursor + 11,
+            cursor + 20,
+            "principal:owner/credential:one".into(),
+        )
+    );
+    store
+        .select(1, &[], "principal:owner/credential:one", false)
+        .await
+        .unwrap();
+    assert_audit_stores_at_cap(&directory);
+    let removed: (String, String) = inbox_db(&directory)
+        .query_row(
+            "SELECT cause,initiator FROM audit WHERE delivery_id=?",
+            [&saved.events[0].delivery_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        removed,
+        (
+            "live_events_disabled".into(),
+            "principal:owner/credential:one".into(),
+        )
+    );
+
+    store.bind(&binding, false).await.unwrap();
+    assert_audit_stores_at_cap(&directory);
+    let (first, second) = tokio::join!(store.gap(&binding, 70), store.gap(&binding, 80));
+    assert_eq!((first, second), (Ok(()), Ok(())));
+    assert_audit_stores_at_cap(&directory);
+    assert_eq!(store.cursor(&binding).await, Err(Failure::Gap(80)));
+    let raced: i64 = inbox_db(&directory)
+        .query_row(
+            "SELECT COUNT(*) FROM audit WHERE cause='cloud_retention_gap' AND after_cursor IN (70,80)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(raced, 1);
+    let connected: (String, String, String, i64) = inbox_db(&directory)
+        .query_row(
+            "SELECT user_id,repository_id,initiator,observed_at FROM audit \
+             WHERE cause='connected' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        connected,
+        (
+            "11".into(),
+            "42".into(),
+            "local-owner:github:11".into(),
+            1_000_000
+        )
+    );
 }
