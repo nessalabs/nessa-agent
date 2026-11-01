@@ -5,7 +5,6 @@ use crate::{
     vault::application::{execute, Command, Failure, VaultConnection},
 };
 use nessa_gateway_endpoint::{application::EndpointDiscovery, domain::GatewayEndpoint};
-use std::os::unix::fs::PermissionsExt;
 use std::{io, sync::Arc, time::Duration};
 struct NoPublication;
 impl EndpointDiscovery for NoPublication {
@@ -31,8 +30,7 @@ fn timeout_reaps_a_stalled_child_and_a_stale_timeout_cannot_kill_its_replacement
     let quote =
         |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
     let script=format!("#!/bin/sh\nIFS= read -r init || exit 1\nprintf x >> {}\nprintf '{{\"ready\":true}}\\n'\nwhile IFS= read -r command; do\nif [ ! -e {} ]; then\nprintf x > {}\nIFS= read -r stalled || exit 0\nelse\nprintf '{{\"ok\":true,\"status\":{{\"state\":\"locked\"}}}}\\n'\nfi\ndone\n",quote(&starts),quote(&marker),quote(&marker));
-    std::fs::write(&binary, script).unwrap();
-    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_executable::install(&binary, &script);
     let vault = Arc::new(NativeVault::new(
         binary,
         Arc::new(GatewayEndpointAccess::new(
@@ -99,8 +97,7 @@ fn only_status_reconnects_once_after_a_redacted_transport_failure() {
         let quote =
             |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
         let script=format!("#!/bin/sh\nIFS= read -r init || exit 1\nprintf x >> {}\nprintf '{{\"ready\":true}}\\n'\nIFS= read -r command || exit 1\nif [ ! -e {} ]; then\nprintf x > {}\nprintf '{{\"ok\":false,\"code\":\"vault_unavailable\"}}\\n'\nelse\nprintf '{{\"ok\":true,\"status\":{{\"state\":\"locked\"}}}}\\n'\nfi\nIFS= read -r end\n",quote(&starts),quote(&marker),quote(&marker));
-        std::fs::write(&binary, script).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::test_executable::install(&binary, &script);
         let vault = NativeVault::new(
             binary,
             Arc::new(GatewayEndpointAccess::new(
@@ -143,8 +140,7 @@ fn a_lost_or_malformed_change_reply_is_uncertain_without_replay() {
         let quote =
             |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
         let script = format!("#!/bin/sh\nIFS= read -r init || exit 1\nprintf x >> {}\nprintf '{{\"ready\":true}}\\n'\nIFS= read -r command || exit 1\nprintf x >> {}\n{}\nexit 0\n", quote(&starts), quote(&calls), response);
-        std::fs::write(&binary, script).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::test_executable::install(&binary, &script);
         let vault = NativeVault::new(
             binary,
             Arc::new(GatewayEndpointAccess::new(
@@ -184,8 +180,7 @@ fn change_publication_and_audit_codes_pass_through_the_native_pipe() {
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("vault-child");
         let script = format!("#!/bin/sh\nIFS= read -r init || exit 1\nprintf '{{\"ready\":true}}\\n'\nIFS= read -r command || exit 1\ncase \"$command\" in *'\"operation\":\"changePassphrase\"'*) ;; *) exit 2 ;; esac\nprintf '{{\"ok\":false,\"code\":\"{}\"}}\\n'\nIFS= read -r end\n", code);
-        std::fs::write(&binary, script).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::test_executable::install(&binary, &script);
         let vault = NativeVault::new(
             binary,
             Arc::new(GatewayEndpointAccess::new(
@@ -226,8 +221,7 @@ fn wrong_closed_change_replies_retire_the_child_before_late_answers_can_bleed() 
             |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
         let invalid = invalid.replace('\'', "'\\''");
         let script = format!("#!/bin/sh\nIFS= read -r init || exit 1\nprintf x >> {}\nprintf '{{\"ready\":true}}\\n'\nIFS= read -r command || exit 1\nprintf x >> {}\nif [ ! -e {} ]; then\nprintf x > {}\nprintf '%s\\n' '{}'\nprintf '{{\"ok\":true,\"status\":{{\"state\":\"unlocked\"}}}}\\n'\nIFS= read -r late || exit 0\nelse\nprintf '{{\"ok\":true,\"status\":{{\"state\":\"locked\"}}}}\\n'\nIFS= read -r end\nfi\n",quote(&starts),quote(&calls),quote(&first),quote(&first),invalid);
-        std::fs::write(&binary, script).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::test_executable::install(&binary, &script);
         let vault = NativeVault::new(
             binary,
             Arc::new(GatewayEndpointAccess::new(
