@@ -13,9 +13,10 @@ Nessa does not implement provider OAuth or copy local provider login files.
 
 `workspaces` owns encrypted connection settings and durable allocation receipts.
 Receipt rejection diagnostics distinguish creation decoding, info validation,
-and info decoding using compiled field names and JSON kinds only. Provider
-values, arbitrary keys, decoder error messages and authentication data are not
-logged. Cold POST and ready GET responses are separate fixtures; diagnostics
+and info decoding using compiled field names and JSON kinds. Wipe refusals
+also classify startup as starting, operable or other; raw state strings are not
+logged. Provider values, arbitrary keys, decoder error messages and authentication
+data are not logged. Cold POST and ready GET responses are separate fixtures; diagnostics
 do not change admission, rollback ownership or cleanup confirmation.
 Its application ports separate settings, assignment storage and provider effects.
 Conversation placement owns which environment a thread uses. The conversation
@@ -53,7 +54,9 @@ sequenceDiagram
     User->>Gateway: Create channel thread
     Gateway->>Receipts: Persist creation intent
     Gateway->>Boat: Create VM with thread idempotency key
-    Boat-->>Gateway: VM identity
+    Boat-->>Gateway: VM identity, provisioning acknowledgement
+    Gateway->>Boat: Poll fresh VM startup (90 second bound)
+    Gateway->>Boat: Recheck environment and strict clean receipt
     Gateway->>Receipts: Persist assignment before preparing VM
     Gateway->>SDK: Open attached workspace on assigned VM
     SDK-->>Gateway: Workspace descriptor
@@ -82,6 +85,15 @@ sequenceDiagram
 | B14 | Local thread | Existing local environment | No Boat allocation |
 | B15 | Slow initial channel open | Client allows workspace preparation before agent exchange allowance | Await typed answer; never replay an uncertain mutation automatically |
 | B16 | Receipt persistence fails after create | Attempt provider deletion; retain unresolved intent | Accepted deletion alone is not confirmed cleanup |
+| B17 | Fresh creation acknowledgement names a starting VM | Poll that VM through startup for at most 90 seconds; no attached workspace, SSH, MCP or agent command yet | Preserve the named VM and rollback disposition on timeout or rejection |
+| B18 | Fresh VM becomes ready | Re-read dedicated environment and complete strict info receipt, including exact `wipePendingUntilRestart: false`, before admission | Ready alone never authorizes attachment; a pending wipe still refuses |
+
+Boat documents [asynchronous API readiness](https://docs.boat.dev/readiness) and
+[credential removal before a snapshot deploy can be used](https://docs.boat.dev/snapshots/templates).
+A cold creation response is not a final security receipt. Startup polling is
+read-only and bounded; it does not clear flags, restart a replayed VM, or infer
+cleanup from provider absence. No stop/resume is needed merely to wait for a new
+snapshot deployment. A ready VM with a pending wipe remains refused.
 
 The dedicated `nessa` Boat environment passes connected agent credentials, but
 not arbitrary secrets, sandbox credentials or GitHub credentials when created.

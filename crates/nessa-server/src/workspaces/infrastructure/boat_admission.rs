@@ -327,7 +327,20 @@ pub(super) async fn create(
         ));
     }
     if refusal.is_none() {
-        refusal = match check(http, api, connection, &vm, &admission, ttl_seconds).await {
+        let admitted = async {
+            if disposition == RefusalDisposition::RollbackNewVm {
+                wait_for_start(http, api, &vm).await?;
+            }
+            let found = check(http, api, connection, &vm, &admission, ttl_seconds).await?;
+            if disposition == RefusalDisposition::RollbackNewVm
+                && !found.sandbox.state.is_operable()
+            {
+                Diagnostic::opaque(Stage::InfoValidation, "sandbox", "state", "not_ready").emit();
+                return Err(Failure::Provider);
+            }
+            Ok(found)
+        };
+        refusal = match admitted.await {
             Ok(_) => None,
             Err(Failure::AdmissionRejected(rejection)) => Some(rejection),
             Err(_) => Some(AdmissionRejection::new(
@@ -344,14 +357,35 @@ pub(super) async fn create(
     })
 }
 
-/// The SDK's Sandbox decoder ignores unknown fields. Read the actual JSON once
-/// through the injected client so new credential/access fields cannot disappear.
-pub(super) async fn receipt(
-    http: &reqwest::Client,
-    api: &Api,
-    vm: &str,
-    maximum_ttl: Option<u32>,
-) -> Result<SandboxInfoResponse, Failure> {
+/// A fresh snapshot deployment may still be removing inherited credentials.
+/// Polling grants no workspace authority: the complete strict receipt and
+/// environment check still run afterwards. Replayed targets never enter here.
+async fn wait_for_start(http: &reqwest::Client, api: &Api, vm: &str) -> Result<(), Failure> {
+    tokio::time::timeout(std::time::Duration::from_secs(90), async {
+        loop {
+            let value = info(http, api, vm).await?;
+            match value
+                .get("sandbox")
+                .and_then(|s| s.get("state"))
+                .and_then(Value::as_str)
+            {
+                Some("init" | "provisioning" | "provisioned" | "cloning") => {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                // The final strict reader diagnoses malformed/unsupported states
+                // and rejects unsafe posture, including a wipe pending at ready.
+                _ => return Ok(()),
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        Diagnostic::opaque(Stage::InfoValidation, "sandbox", "state", "startup_timeout").emit();
+        Failure::Provider
+    })?
+}
+
+async fn info(http: &reqwest::Client, api: &Api, vm: &str) -> Result<Value, Failure> {
     let response = http
         .get(format!(
             "{}/sandboxes/{vm}",
@@ -368,7 +402,18 @@ pub(super) async fn receipt(
     if response.status() != reqwest::StatusCode::OK {
         return Err(Failure::Provider);
     }
-    let value = bounded_json(response, Stage::InfoBody).await?;
+    bounded_json(response, Stage::InfoBody).await
+}
+
+/// The SDK's Sandbox decoder ignores unknown fields. Read the actual JSON once
+/// through the injected client so new credential/access fields cannot disappear.
+pub(super) async fn receipt(
+    http: &reqwest::Client,
+    api: &Api,
+    vm: &str,
+    maximum_ttl: Option<u32>,
+) -> Result<SandboxInfoResponse, Failure> {
+    let value = info(http, api, vm).await?;
     let envelope = value.as_object().ok_or_else(|| {
         invalid_receipt(Diagnostic::field(
             Stage::InfoValidation,
@@ -485,6 +530,14 @@ pub(super) async fn receipt(
         ),
     ];
     if let Some((_, scope, field, problem, observed)) = checks.into_iter().find(|check| check.0) {
+        if field == "wipePendingUntilRestart" {
+            let startup_phase = match sandbox.get("state").and_then(Value::as_str) {
+                Some("ready" | "idle" | "running") => "operable",
+                Some("init" | "provisioning" | "provisioned" | "cloning") => "starting",
+                _ => "other",
+            };
+            tracing::warn!(startup_phase, "Boat credential-wipe receipt refused");
+        }
         return Err(invalid_receipt(Diagnostic::field(
             Stage::InfoValidation,
             scope,

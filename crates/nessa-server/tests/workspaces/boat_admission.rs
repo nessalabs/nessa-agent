@@ -110,6 +110,161 @@ async fn cold_creation_with_a_separate_valid_info_receipt_is_admitted() {
     assert_eq!(server.state.lock().unwrap().commands, 0);
 }
 
+/// The API's create acknowledgement precedes readiness and the wipe. No
+/// command is issued while the inherited disk is still being sanitized.
+#[tokio::test]
+async fn cold_snapshot_waits_for_ready_then_requires_a_clean_security_receipt() {
+    use crate::workspaces::domain::RefusalDisposition;
+    let server = server().await;
+    {
+        let mut state = server.state.lock().unwrap();
+        for phase in ["provisioning", "provisioned", "cloning"] {
+            let mut pending = sandbox();
+            pending["sandbox"]["state"] = json!(phase);
+            pending["sandbox"]["wipePendingUntilRestart"] = json!(true);
+            state.startup_receipts.push_back(pending);
+        }
+    }
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    assert!(receipt.refusal.is_none());
+    assert_eq!(receipt.disposition, RefusalDisposition::RollbackNewVm);
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.created, 1);
+    assert_eq!(state.resumed, 0);
+    assert_eq!(state.commands, 0);
+    assert_eq!(state.info_reads, 5); // three pending, ready, final strict receipt
+}
+
+#[tokio::test]
+async fn ready_snapshot_with_pending_wipe_is_still_refused_without_commands() {
+    use tracing::instrument::WithSubscriber;
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let writer = output.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || DiagnosticOutput(writer.clone()))
+        .finish();
+    let server = server().await;
+    server.state.lock().unwrap().receipt["sandbox"]["wipePendingUntilRestart"] = json!(true);
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .with_subscriber(subscriber)
+        .await
+        .unwrap();
+    assert_eq!(
+        receipt.refusal.unwrap().cause(),
+        AdmissionRefusal::InvalidReceipt
+    );
+    let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("startup_phase=\"operable\""), "{text}");
+    assert!(!text.contains("fixture-token"));
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.resumed, 0);
+    assert_eq!(state.commands, 0);
+}
+
+#[tokio::test]
+async fn cold_snapshot_startup_deadline_preserves_target_and_rollback_without_commands() {
+    use crate::workspaces::domain::RefusalDisposition;
+    let mut fixture = server().await;
+    // Keep the HTTP timeout longer than the startup budget, so this test
+    // proves the lifecycle deadline rather than an incidental request timeout.
+    fixture.provider.http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()
+        .unwrap();
+    let server = Arc::new(fixture);
+    server.state.lock().unwrap().receipt["sandbox"]["state"] = json!("provisioning");
+    let owner = server.clone();
+    let opening =
+        tokio::spawn(async move { owner.provider.create(&connection(), "fixture-thread").await });
+    while server.state.lock().unwrap().info_reads == 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(91)).await;
+    let receipt = tokio::time::timeout(std::time::Duration::from_millis(50), opening)
+        .await
+        .expect("fresh startup exceeded its 90 second budget")
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.vm, VM);
+    assert_eq!(receipt.disposition, RefusalDisposition::RollbackNewVm);
+    assert_eq!(
+        receipt.refusal.unwrap().cause(),
+        AdmissionRefusal::ReceiptUnavailable
+    );
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.created, 1);
+    assert_eq!(state.resumed, 0);
+    assert_eq!(state.commands, 0);
+}
+
+#[tokio::test]
+async fn fresh_snapshot_requires_operable_final_receipt_without_changing_replay_resume() {
+    use crate::workspaces::domain::RefusalDisposition;
+    for state_name in [
+        "error",
+        "cancelled",
+        "archived",
+        "archiving",
+        "provisioning",
+    ] {
+        let server = server().await;
+        {
+            let mut state = server.state.lock().unwrap();
+            state.startup_receipts.push_back(sandbox());
+            let mut final_receipt = sandbox();
+            final_receipt["sandbox"]["state"] = json!(state_name);
+            state.read_override = Some(final_receipt);
+        }
+        let receipt = server
+            .provider
+            .create(&connection(), "fixture-thread")
+            .await
+            .unwrap();
+        assert_eq!(receipt.vm, VM);
+        assert_eq!(receipt.disposition, RefusalDisposition::RollbackNewVm);
+        assert_eq!(
+            receipt.refusal.unwrap().cause(),
+            AdmissionRefusal::ReceiptUnavailable,
+            "{state_name}"
+        );
+        let state = server.state.lock().unwrap();
+        assert_eq!(state.created, 1);
+        assert_eq!(state.resumed, 0);
+        assert_eq!(state.commands, 0);
+    }
+}
+
+#[tokio::test]
+async fn replayed_archived_receipt_retains_existing_resume_path_without_startup_wait() {
+    use crate::workspaces::domain::RefusalDisposition;
+    let server = server().await;
+    {
+        let mut state = server.state.lock().unwrap();
+        state.creation_ack["status"] = json!("ready");
+        state.receipt["sandbox"]["state"] = json!("archived");
+    }
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    assert!(receipt.refusal.is_none());
+    assert_eq!(receipt.disposition, RefusalDisposition::RetainTarget);
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.info_reads, 1);
+    assert_eq!(state.resumed, 0);
+    assert_eq!(state.commands, 0);
+}
+
 fn environment() -> Value {
     serde_json::from_str(include_str!("fixtures/boat-v1-environment.json")).unwrap()
 }
@@ -132,6 +287,8 @@ struct State {
     creation_ack: Value,
     creation_receipt: Option<Value>,
     read_override: Option<Value>,
+    startup_receipts: std::collections::VecDeque<Value>,
+    info_reads: usize,
     expected_ttl: Option<u32>,
     /// Reads that still find an archiving VM archiving; the next finds it
     /// archived.
@@ -159,6 +316,8 @@ async fn server() -> Server {
         creation_ack: json!({"ok":true,"type":"sandbox.created","status":"provisioning"}),
         creation_receipt: None,
         read_override: None,
+        startup_receipts: Default::default(),
+        info_reads: 0,
         expected_ttl: Some(3600),
         archiving_reads: 0,
     }));
@@ -179,7 +338,7 @@ async fn server() -> Server {
             let mut state=create.lock().unwrap();
             assert_eq!(request,json!({"type":"small","ttlSeconds":state.expected_ttl,"environment":"nessa","env":{"NESSA_THREAD_ID":"fixture-thread"},"from":"bsh_fixture","snapshots":true}));
             state.created+=1; if state.drift_on_create { state.environment["passGithub"]=json!(true); } let mut body=state.creation_receipt.as_ref().unwrap_or(&state.receipt).clone(); for field in ["ok","type","status"] {body.as_object_mut().unwrap().remove(field);} for (field,value) in state.creation_ack.as_object().unwrap() {body[field.as_str()]=value.clone();} body["ttlSeconds"]=json!(state.expected_ttl); async { Json(body) } }))
-        .route("/api/v1/sandboxes/{id}", get(move || { let mut state=read.lock().unwrap(); if state.receipt["sandbox"]["state"]==json!("archiving") { if state.archiving_reads==0 { state.receipt["sandbox"]["state"]=json!("archived"); } else { state.archiving_reads-=1; } } let body=state.read_override.as_ref().unwrap_or(&state.receipt).clone(); async { Json(body) } }))
+        .route("/api/v1/sandboxes/{id}", get(move || { let mut state=read.lock().unwrap(); state.info_reads+=1; if state.receipt["sandbox"]["state"]==json!("archiving") { if state.archiving_reads==0 { state.receipt["sandbox"]["state"]=json!("archived"); } else { state.archiving_reads-=1; } } let body=state.startup_receipts.pop_front().unwrap_or_else(|| state.read_override.as_ref().unwrap_or(&state.receipt).clone()); async { Json(body) } }))
         .route("/api/v1/sandboxes/{id}/resume", post(move |Json(request):Json<Value>| { let mut state=resume.lock().unwrap(); assert_eq!(request["ttlSeconds"],json!(state.expected_ttl)); state.resumed+=1; if state.drift_on_resume { state.environment["passSecrets"]=json!(true); } state.receipt["sandbox"]["state"]=json!("ready"); async move { Json(json!({"ok":true,"type":"sandbox.resumed","id":VM,"status":"ready"})) } }))
         .fallback(move || { commands.lock().unwrap().commands+=1; async { axum::http::StatusCode::FORBIDDEN } });
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
