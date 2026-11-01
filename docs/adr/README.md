@@ -163,3 +163,7 @@ Keep it to one page. If it needs more than a page, the decision is probably two 
 the Cloudflare Workers Free/D1 ingress contract. Desktop event delivery is
 explicitly outside that initial receiver. Live deployment evidence is tracked
 on [#1107](https://github.com/nessalabs/nessa-agent/issues/1107).
+
+[1185 — Bound native relay audit retention](todo/1185-bound-native-relay-audit-retention.md)
+records that a direct gap and a CLI acceptance trim the audit store they write
+in that same transaction. The state table is in the record.
