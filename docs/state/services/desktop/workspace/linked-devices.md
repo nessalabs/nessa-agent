@@ -5,13 +5,14 @@ kind: statechart
 status: implemented
 summary: Settings shows the gateway's pairing state, approves the exact displayed device key, and rereads after uncertain changes.
 parent: desktop-workspace
-sourceRevision: "b14bdf40fc17117dba10024a3a9bd190d28cc990"
+sourceRevision: "30a58f4e25121a2f503dc3c3c1ed30ffa1a432f7"
 sources:
   - src/desktop/settings/model/linked-devices.ts
   - src/desktop/settings/model/linked-devices.test.ts
   - src/desktop/settings/ui/linked-devices-tab.tsx
   - src/desktop/settings/ui/linked-devices-tab.test.tsx
   - src/desktop/settings/ui/settings-layout.tsx
+  - src/desktop/adapters/linked-device.ts
   - src/desktop/settings/adapters/linked-devices-gateway.ts
   - src/desktop/settings/adapters/linked-devices-gateway.test.ts
   - docs/design/auth/device-pairing.md
@@ -47,7 +48,7 @@ diagramDetails:
 
 # Pair, approve and revoke a linked device
 
-Settings → Connections → Linked devices shows the gateway's current linking state. Pair a device asks for a short-lived code; a claimed request shows a fingerprint for approval or denial. Device access is then managed separately from which conversations it may read.
+Settings → Connections → Linked devices shows the gateway's current linking state. Pair a device asks for a short-lived code; a claimed request shows a fingerprint for approval or denial. A paired owner phone has full conversation access; a read-only linked device uses separate conversation shares.
 
 These charts follow the desktop reducer and its displayed invitation/device evidence. The gateway remains the authorization and physical enrollment owner. A sample window without a gateway offers no pairing action.
 
@@ -125,9 +126,9 @@ stateDiagram-v2
 
 The reducer owns the code's state (open, used, cancelled, expired). Whether the modal shows it is view state only: closing remembers which invitation was closed, so the row offers Show code for that code, and a new code opens the modal again. Closing sends nothing. A device that uses the code is approved inside the modal, and a notice is said there while the modal is up.
 
-The orb is drawn only for an open code whose deadline the window's injected clock (`useNow`, given by composition) has not passed, read again each second; the UI kit's countdown also reports expiry, which the reducer asks the gateway to record. The modal portals into Settings' own layer so it draws above the fixed Settings panel. Focus returns to the row's enabled control, or waits on the row while a read is out.
+The orb is drawn only for an open code whose deadline the window's injected clock (`useNow`, given by composition) has not passed, read again each second; the UI kit's countdown also reports expiry, which the reducer asks the gateway to record. The modal portals into Settings' own layer so it draws above the fixed Settings panel. The pairing screen handles the dialog's close-focus event and returns focus to the row's enabled control, or waits on the row while a read is out. This destination also holds when a WebKit pointer click left focus on an unrelated settings control before the dialog opened; the L5 UI regression and the browser `pair` case cover that ordering.
 
-The active list is built from current credential metadata, excluding the session credential and revoked credentials. The current representation has no device marker: a manually issued credential with the same read-only grant can appear as a linked device. See the design table for that limitation.
+The active list is built from current credential metadata, excluding the session credential and revoked credentials. `linkedDeviceOf` recognizes a read-only paired device or an owner phone with the ordered read/write/server-read grants; the row labels the latter as full access. The current representation has no device marker, so a manually issued credential with the same grants can appear as a linked device. Creating a code here requests owner-phone enrollment; approval still names the displayed device key.
 
 ```mermaid
 stateDiagram-v2

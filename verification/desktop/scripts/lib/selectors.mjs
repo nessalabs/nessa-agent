@@ -1012,8 +1012,8 @@ export const turnOutcomes = {
   terminal: "[data-turn-terminal]",
   /** The gateway's notice, in its own words. */
   notice: "[data-interaction-notice]",
-  /** One question the agent is waiting on, by its id. */
-  question: (id) => `[data-question="${id}"]`,
+  /** Act in the conversation pane; Needs you also renders these questions. */
+  question: (id) => `${css.pane} [data-question="${id}"]`,
   choice: "[data-slot='questionnaire-choice']",
 }
 

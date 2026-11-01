@@ -13,7 +13,9 @@ for both. These lease/composer fixtures are served by the development server onl
 
 `fixture.html` mounts the production `ConversationControls` and `applyView` with
 current published gateway views. Every case passes the actual client decoder
-and the production gateway-to-panel conversion before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
+and the production gateway-to-panel conversion before `applyView`. Reviews and
+questions use typed current-contract entries and decoded details with matching keys;
+the review has a correlated running message and offered mode. Server projection tests own exact live execution
 and command authority. This fixture checks the browser's presentation of their
 published result, including re-enabling controls after an incomplete view.
 

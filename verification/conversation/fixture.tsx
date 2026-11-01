@@ -1,5 +1,9 @@
 import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
-import type { ConversationView as PublishedConversationView } from "@nessa/client"
+import type {
+  ConversationView as PublishedConversationView,
+  ConversationPermission,
+  ConversationQuestion,
+} from "@nessa/client"
 /** Browser inputs are published gateway views; authority is tested in the server projection. */
 import { configureStore } from "@reduxjs/toolkit"
 import { useEffect, useState } from "react"
@@ -7,6 +11,7 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import {
   conversationPermission,
+  conversationQuestion,
   conversationView as decodeView,
 } from "../../packages/nessa-client/src/protocol/conversation-validate"
 import { makeStore } from "../../src/store"
@@ -52,6 +57,7 @@ const states: ConversationTranscriptState[] = [
 // The review the live owner holds, as `permissionReview` reads it whole.
 const COMMITTED_REVIEW_KEY = "0123456789abcdef0123456789abcdef"
 const committedReview = conversationPermission({
+  review: COMMITTED_REVIEW_KEY,
   executionId: "exact-live-execution",
   permissionId: "committed-review",
   toolId: "tool",
@@ -61,9 +67,33 @@ const committedReview = conversationPermission({
   title: "Read committed source",
   argumentsJson: '{"path":"src/main.rs"}',
   options: [{ id: "allow", label: "Allow once", effect: "allow" }],
-})
+} satisfies ConversationPermission)
+const retainedQuestion = conversationQuestion({
+  question: "abcdef0123456789abcdef0123456789",
+  executionId: "exact-live-execution",
+  questionId: "retained-question",
+  message: "Choose the environments",
+  questions: [0, 1, 2].map((index) => ({
+    key: `environment_${index}`,
+    prompt: `Environment ${index}?`,
+    multiSelect: false,
+    freeText: false,
+    required: false,
+    options: [{ value: "staging", label: "Staging" }],
+  })),
+} satisfies ConversationQuestion)
 function decodePanelView(value: unknown, id: string): ConversationView {
-  return panelView(decodeView(value, id), 1_700_000_000_000)
+  const published = decodeView(value, id)
+  return panelView(
+    published,
+    1_700_000_000_000,
+    [],
+    published.questions.map((entry) => ({
+      state: "loaded",
+      entry,
+      shown: retainedQuestion,
+    })),
+  )
 }
 function publishedView(
   state: ConversationTranscriptState,
@@ -160,26 +190,14 @@ function publishedQuestionView(limited: boolean): PublishedConversationView {
         : undefined,
       permissions: [],
       questions: [
-        {
-          executionId: "exact-live-execution",
-          questionId: "retained-question",
-          message: "Choose the environments",
-          questions: [0, 1, 2].map((index) => ({
-            key: `environment_${index}`,
-            prompt: `Environment ${index}?`,
-            multiSelect: false,
-            freeText: false,
-            required: false,
-            options: [{ value: "staging", label: "Staging" }],
-          })),
-        },
+        { question: retainedQuestion.question, message: retainedQuestion.message },
       ],
     },
     "committed-conversation",
   )
 }
 function questionView(limited: boolean): ConversationView {
-  return panelView(publishedQuestionView(limited), 1_700_000_000_000)
+  return decodePanelView(publishedQuestionView(limited), "committed-conversation")
 }
 /** Actual read projection, saved selection and close thunk; the remote port records dispatch. */
 function HistoryTabConsumer() {
