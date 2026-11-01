@@ -843,6 +843,11 @@ struct Slot {
     /// is that fact as the opening read it, written with it by
     /// `close_after_turn` and by a message that opens the thread again.
     closing: AtomicBool,
+    /// Held across each change of the thread's close, its store write and
+    /// `closing` together: a close from a running turn and a new message
+    /// that opens the thread would otherwise interleave, leaving the store
+    /// closed and this open, or the other way round.
+    closing_changes: tokio::sync::Mutex<()>,
 }
 impl Slot {
     fn new(now_ms: u64) -> Self {
@@ -853,6 +858,7 @@ impl Slot {
             stopping: AtomicBool::new(false),
             touched: AtomicU64::new(now_ms),
             closing: AtomicBool::new(false),
+            closing_changes: tokio::sync::Mutex::new(()),
         }
     }
     /// The conversation is in use at `now_ms`.
@@ -4064,8 +4070,11 @@ impl ConversationService {
                 // retry of a message the agent already has is not new work:
                 // the turn that closed the thread may be that very message.
                 if !known && owner.closing.load(Ordering::SeqCst) {
-                    service.inner.metadata.open_thread(&id).await?;
-                    owner.closing.store(false, Ordering::SeqCst);
+                    let _change = owner.closing_changes.lock().await;
+                    if owner.closing.load(Ordering::SeqCst) {
+                        service.inner.metadata.open_thread(&id).await?;
+                        owner.closing.store(false, Ordering::SeqCst);
+                    }
                 }
                 // Asked under the submission lock, which a desktop stop takes
                 // to mark the owner: an owner being stopped is handed no new

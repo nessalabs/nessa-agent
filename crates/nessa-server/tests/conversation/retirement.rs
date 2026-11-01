@@ -506,6 +506,7 @@ async fn an_unsettled_opening_counts_as_holding_resources() {
             stopping: AtomicBool::new(false),
             touched: std::sync::atomic::AtomicU64::new(0),
             closing: std::sync::atomic::AtomicBool::new(false),
+            closing_changes: tokio::sync::Mutex::new(()),
         }),
     );
     assert!(service.owns_unreleased_resources().await);

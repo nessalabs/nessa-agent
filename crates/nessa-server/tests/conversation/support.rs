@@ -194,6 +194,10 @@ pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
     /// Conversations whose agent closed its thread (`close_thread`).
     pub(crate) closed_threads: Mutex<std::collections::HashSet<ConversationId>>,
+    /// Taken by `open_thread` after its write, so a test can hold the
+    /// opening there; `thread_opened` is told once the write is done.
+    pub(crate) open_thread_gate: tokio::sync::Mutex<()>,
+    pub(crate) thread_opened: tokio::sync::Notify,
     /// While set, whether a conversation's mode needs verifying cannot be
     /// read: a submission is refused before the agent sees it.
     pub(crate) verification_unreadable: AtomicBool,
@@ -701,7 +705,11 @@ impl ConversationRepository for MemoryRepository {
     }
     fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         self.closed_threads.lock().unwrap().remove(id);
-        Box::pin(async { Ok(()) })
+        self.thread_opened.notify_one();
+        Box::pin(async move {
+            drop(self.open_thread_gate.lock().await);
+            Ok(())
+        })
     }
     fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         let closed = self.closed_threads.lock().unwrap().contains(id);

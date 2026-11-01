@@ -156,6 +156,7 @@ struct Fixture {
     clock: Arc<ManualClock>,
     id: ConversationId,
     save_gate: Option<Arc<CompletionSaveGate>>,
+    repository: Arc<MemoryRepository>,
 }
 
 impl Fixture {
@@ -267,7 +268,7 @@ impl Fixture {
                 attachments: images.then(|| Arc::new(MemoryAttachments::default()) as Arc<_>),
                 summaries: summaries.clone(),
                 listing: Arc::new(MemoryListing {
-                    repository,
+                    repository: repository.clone(),
                     summaries,
                 }),
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
@@ -307,6 +308,7 @@ impl Fixture {
             clock,
             id,
             save_gate,
+            repository,
         };
         fixture.attached().await;
         fixture
@@ -718,6 +720,50 @@ async fn a_close_cleared_before_the_park_takes_the_lock_keeps_the_thread() {
             .await
     );
     assert!(fixture.slot().await.is_some());
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// A close from a running turn that lands while a new message opens the
+/// thread waits for that opening, so the store and the agent's mark say the
+/// same: closed, as the later close left it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_close_during_a_messages_opening_leaves_store_and_mark_agreeing() {
+    let fixture = Fixture::new(None).await;
+    fixture.service.close_after_turn(&fixture.id).await.unwrap();
+    let held = fixture.repository.open_thread_gate.lock().await;
+    let sending = fixture.send("more");
+    tokio::time::timeout(BOUND, fixture.repository.thread_opened.notified())
+        .await
+        .expect("the message opens the thread");
+    let closing = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        tokio::spawn(async move { service.close_after_turn(&id).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    drop(held);
+    tokio::time::timeout(BOUND, closing)
+        .await
+        .expect("the close ends")
+        .unwrap()
+        .unwrap();
+    let sent = tokio::time::timeout(BOUND, sending)
+        .await
+        .expect("the message is admitted")
+        .unwrap();
+    assert!(sent.is_ok(), "the message is admitted: {sent:?}");
+    let slot = fixture.slot().await.expect("still open");
+    let stored = fixture
+        .repository
+        .closed_threads
+        .lock()
+        .unwrap()
+        .contains(&fixture.id);
+    assert_eq!(slot.closing.load(Ordering::SeqCst), stored);
+    assert!(stored, "the later close holds");
+    drop(slot);
+    fixture.completed("more").await;
+    fixture.wait_until_idle().await;
     fixture.service.shutdown().await.unwrap();
 }
 

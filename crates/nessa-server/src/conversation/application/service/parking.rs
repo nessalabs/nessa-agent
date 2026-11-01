@@ -73,6 +73,9 @@ impl ConversationService {
         // The conversation's, kept before this agent is marked: an opening
         // after it is parked, or after a restart, reads it and is parked
         // again until a new message opens the thread.
+        // With a new message's opening of the thread, one at a time: the
+        // store and the mark always say the same.
+        let _change = slot.closing_changes.lock().await;
         self.inner.metadata.close_thread(id).await?;
         slot.closing.store(true, Ordering::SeqCst);
         tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");

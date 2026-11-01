@@ -129,6 +129,7 @@ conversation again, instead of being refused as a desktop stop refuses it.
 | The agent closed its thread (`close_thread`) | Parked once its turn ends, watched or not | Opens again | `an_agent_that_closed_its_thread_is_parked_once_idle` |
 | A message arrives after `close_thread`, before the sweep | Not parked: the message clears the mark | Runs | `a_message_after_close_thread_keeps_the_thread_open` |
 | A read opens a thread its agent closed, after the park | Opened still closed, and parked again once idle, watched or not | Opens again | `a_closed_thread_opened_by_a_read_is_parked_again` |
+| `close_thread` lands while a new message opens the thread again | The two change the close one at a time, so the store and the agent's mark agree | Whichever comes last holds | `a_close_during_a_messages_opening_leaves_store_and_mark_agreeing` |
 | A retry of the message whose turn closed the thread | Not new work: the thread stays closed and is parked | Answered from what the agent has | `a_retry_of_the_message_that_closed_the_thread_keeps_it_closed` |
 | `close_thread` for a thread not open, or an agent that cannot resume | Refused, nothing marked | | `close_thread_is_refused_where_it_would_do_nothing` |
 | A rest while a lease or an opening holds the workspace's connection | The connection and the VM stay | | `a_workspace_connection_is_let_go_only_while_nothing_uses_it` |
