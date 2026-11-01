@@ -1986,6 +1986,9 @@ async fn dispatch_authorized(
         method if method.starts_with("github.") => {
             super::github::dispatch(state, session, frame).await
         }
+        method if method.starts_with("voice.") => {
+            super::voice::dispatch(state, session, frame).await
+        }
         "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
         "pairing.setTunnel" => super::pairing::set_tunnel(state, session, frame).await,
         "pairing.tunnel" => super::pairing::tunnel(state, frame).await,
@@ -2857,6 +2860,9 @@ mod tests {
     }
     mod vault_tests {
         include!("../../tests/product/socket/vault.rs");
+    }
+    mod voice_tests {
+        include!("../../tests/product/socket/voice.rs");
     }
     pub(super) mod host_fixture {
         include!("../../tests/product/socket/host_fixture.rs");

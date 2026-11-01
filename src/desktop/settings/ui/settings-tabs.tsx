@@ -52,6 +52,7 @@ import {
   usePrototype,
 } from "./settings-controls"
 import { GithubRow } from "./github-row"
+import { VoiceKeyRow } from "./voice-key-row"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
@@ -488,6 +489,7 @@ function AccountsTab() {
   return (
     <Group>
       <GithubRow />
+      <VoiceKeyRow />
       <BoatRow />
       <Row id="vault-passphrase">
         <VaultPassphraseControl />
