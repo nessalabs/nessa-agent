@@ -1,7 +1,7 @@
-//! GitHub sign-in in the injected encrypted vault entry. A pre-existing private
-//! JSON file is consumed only for a verified, crash-retryable one-time upgrade.
+//! GitHub sign-in in the injected encrypted vault entry. The passphrase-derived
+//! key stays in the gateway process. A plaintext `sign-in.json` is not a store:
+//! it is removed without being read, including while the vault is locked.
 use crate::github::application::GithubSecret;
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use zeroize::Zeroizing;
@@ -38,37 +38,14 @@ struct Stored {
 }
 
 impl GithubTokenVault {
-    fn legacy(&self) -> Result<Option<GithubSignIn>, StoreUnavailable> {
-        let file = match open(&self.directory.join(FILE_NAME), OpenMode::Read) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(StoreUnavailable),
-        };
-        let mut bytes = Zeroizing::new(Vec::new());
-        file.take(FILE_LIMIT + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| StoreUnavailable)?;
-        if bytes.len() as u64 > FILE_LIMIT {
-            return Err(StoreUnavailable);
-        }
-        decode(&bytes).map(Some)
-    }
-
     fn read(&self, generation: u64) -> Result<Option<GithubSignIn>, StoreUnavailable> {
         let _lock = self.lock()?;
+        // Delete any plaintext copy before answering, including when the vault
+        // is locked. Its bytes are not imported. Nessa is alpha: there is no
+        // migration of an older file.
+        self.remove_legacy()?;
         let saved = self.secret.read(generation).map_err(|_| StoreUnavailable)?;
-        let decoded = saved.as_ref().map(|bytes| decode(bytes)).transpose()?;
-        match (decoded, self.legacy()?) {
-            (current, None) => Ok(current),
-            (Some(current), Some(legacy)) if current != legacy => Err(StoreUnavailable),
-            (current, Some(legacy)) => {
-                if current.is_none() {
-                    self.write_verified(generation, &legacy)?;
-                }
-                self.remove_legacy()?;
-                Ok(Some(legacy))
-            }
-        }
+        saved.as_ref().map(|bytes| decode(bytes)).transpose()
     }
     fn lock(&self) -> Result<std::fs::File, StoreUnavailable> {
         create_directory(&self.directory).map_err(|_| StoreUnavailable)?;
@@ -198,31 +175,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupted_migration_finishes_only_after_matching_encrypted_receipt() {
+    async fn a_plaintext_sign_in_is_removed_and_not_adopted() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("github");
         create_directory(&directory).unwrap();
-        let secret = Arc::new(Memory::default());
-        let store = GithubTokenVault::new(directory.clone(), secret.clone());
-        let legacy = br#"{"accountId":7,"login":"octo","token":"ghu_one"}"#;
+        let store = GithubTokenVault::new(directory.clone(), Arc::new(Memory::default()));
         let file = directory.join(FILE_NAME);
         let mut private = open(&file, OpenMode::OpenOrCreate).unwrap();
-        std::io::Write::write_all(&mut private, legacy).unwrap();
+        std::io::Write::write_all(
+            &mut private,
+            br#"{"accountId":7,"login":"octo","token":"ghu_one"}"#,
+        )
+        .unwrap();
         drop(private);
-        assert_eq!(store.load(1).await, Ok(Some(sign_in("ghu_one"))));
+        assert_eq!(store.load(1).await, Ok(None));
         assert!(!file.exists());
-        let mut private = open(&file, OpenMode::OpenOrCreate).unwrap();
-        std::io::Write::write_all(&mut private, legacy).unwrap();
-        drop(private);
-        store.write_verified(1, &sign_in("ghu_two")).unwrap();
-        assert_eq!(store.load(1).await, Err(StoreUnavailable));
-        assert!(file.exists());
-        store.write_verified(1, &sign_in("ghu_one")).unwrap();
-        assert_eq!(store.load(1).await, Ok(Some(sign_in("ghu_one"))));
+        store.save(1, &sign_in("ghu_kept")).await.unwrap();
+        assert_eq!(store.load(1).await, Ok(Some(sign_in("ghu_kept"))));
         assert!(!file.exists());
     }
     #[tokio::test]
-    async fn locked_vault_entry_preserves_legacy_source_and_refuses_save_or_disconnect() {
+    async fn locked_vault_removes_plaintext_and_refuses_save_or_disconnect() {
         struct Locked;
         impl GithubSecret for Locked {
             fn read(
@@ -239,8 +212,20 @@ mod tests {
             }
         }
         let root = tempfile::tempdir().unwrap();
-        let store = GithubTokenVault::new(root.path().join("github"), Arc::new(Locked));
+        let directory = root.path().join("github");
+        create_directory(&directory).unwrap();
+        let file = directory.join(FILE_NAME);
+        std::fs::write(
+            &file,
+            br#"{"accountId":7,"login":"octo","token":"ghu_one"}"#,
+        )
+        .unwrap();
+        let store = GithubTokenVault::new(directory, Arc::new(Locked));
         assert_eq!(store.load(1).await, Err(StoreUnavailable));
+        assert!(
+            !file.exists(),
+            "a locked vault must not leave the plaintext token"
+        );
         assert_eq!(
             store.save(1, &sign_in("ghu_one")).await,
             Err(StoreUnavailable)
@@ -269,15 +254,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_file_that_is_not_a_sign_in_is_unavailable_never_signed_out() {
+    async fn a_plaintext_file_is_removed_even_when_it_is_not_a_sign_in() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("github");
-        std::fs::create_dir(&directory).unwrap();
+        create_directory(&directory).unwrap();
         let store = GithubTokenVault::new(directory.clone(), Arc::new(Memory::default()));
+        let file = directory.join(FILE_NAME);
         for bytes in [b"{".to_vec(), vec![b' '; FILE_LIMIT as usize + 1]] {
-            std::fs::write(directory.join(FILE_NAME), bytes).unwrap();
-            assert_eq!(store.load(1).await, Err(StoreUnavailable));
+            std::fs::write(&file, bytes).unwrap();
+            assert_eq!(store.load(1).await, Ok(None));
+            assert!(!file.exists());
         }
+    }
+    #[tokio::test]
+    async fn an_agent_command_that_knows_the_path_cannot_read_the_token() {
+        use nessa_vault::{
+            application::{Clock, ObservationClock, Vault},
+            domain::{EntryName, Failure, Passphrase},
+            infrastructure::{EncryptedFileVault, FileAudit, OsEntropy},
+        };
+        struct Time;
+        impl Clock for Time {
+            fn seconds(&self) -> u64 {
+                0
+            }
+        }
+        impl ObservationClock for Time {
+            fn unix_millis(&self) -> Result<u64, Failure> {
+                Ok(1793030400000)
+            }
+        }
+        let token = "ghu_NsA1195AgentMustNotReadThisTokenValue";
+        let root = tempfile::tempdir().unwrap();
+        let vault = Vault::new(
+            Arc::new(EncryptedFileVault::new(
+                root.path().join("vault"),
+                Arc::new(OsEntropy),
+            )),
+            Arc::new(FileAudit::new(root.path().join("audit"), Arc::new(Time))),
+            Arc::new(Time),
+        );
+        let caller = nessa_vault::application::Caller {
+            principal: "owner".into(),
+            credential: "desktop".into(),
+        };
+        let session = vault.session("sign-in".into(), caller);
+        vault
+            .create(
+                &session.lease(),
+                Passphrase::new("disposable long passphrase".into()).unwrap(),
+                &[],
+            )
+            .unwrap();
+        let generation = vault.unlocked_generation().unwrap();
+        let directory = root.path().join("github");
+        let store = GithubTokenVault::new(
+            directory.clone(),
+            Arc::new(crate::secrets::VaultSecret::new(
+                vault.clone(),
+                EntryName::new("github-sign-in").unwrap(),
+            )),
+        );
+        let plaintext = directory.join(FILE_NAME);
+        create_directory(&directory).unwrap();
+        std::fs::write(&plaintext, format!(r#"{{"token":"{token}"}}"#)).unwrap();
+        store.save(generation, &sign_in(token)).await.unwrap();
+        assert!(!plaintext.exists());
+        let vault_file = root.path().join("vault").join("entries.enc");
+        assert!(vault_file.is_file());
+        let output = agent_command_output(root.path(), &plaintext, &vault_file);
+        assert!(
+            output.contains("NESSA_AGENT_COMMAND_RAN"),
+            "the agent command did not run"
+        );
+        assert!(
+            output.contains("SIGNIN_ABSENT"),
+            "the plaintext sign-in path was still readable"
+        );
+        assert!(
+            output.contains("VAULT_OPENED"),
+            "the command did not open the vault file it was given"
+        );
+        assert!(
+            output.contains("SWEEP_DONE"),
+            "the command did not finish reading the namespace"
+        );
+        assert!(
+            !output.contains(token),
+            "the agent command obtained the token bytes"
+        );
     }
     #[tokio::test]
     async fn an_old_codec_save_or_delete_cannot_touch_a_new_vault_generation() {
@@ -344,5 +409,65 @@ mod tests {
         );
         assert_eq!(store.delete(old).await, Err(StoreUnavailable));
         assert_eq!(store.load(current).await, Ok(Some(sign_in("ghu_current"))));
+    }
+
+    /// The program the managed shell runs (`/bin/bash --noprofile --norc -c`),
+    /// pointed at the sign-in path and the vault file, then at every file under
+    /// the namespace. On Windows the same-user process is `powershell.exe`.
+    fn agent_command_output(
+        root: &std::path::Path,
+        signin: &std::path::Path,
+        vault: &std::path::Path,
+    ) -> String {
+        #[cfg(unix)]
+        let output = {
+            let quote = |path: &std::path::Path| {
+                format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+            };
+            let script = format!(
+            "echo NESSA_AGENT_COMMAND_RAN\n\
+             if [ -f {signin} ]; then echo SIGNIN_OPENED; cat {signin}; else echo SIGNIN_ABSENT; fi\n\
+             if [ -f {vault} ]; then echo VAULT_OPENED; cat {vault}; else echo VAULT_ABSENT; fi\n\
+             echo SWEEP\n\
+             find {root} -type f -exec cat {{}} +\n\
+             echo SWEEP_DONE\n",
+            signin = quote(signin),
+            vault = quote(vault),
+            root = quote(root),
+        );
+            std::process::Command::new("/bin/bash")
+                .args(["--noprofile", "--norc", "-c", &script])
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .current_dir(std::env::temp_dir())
+                .output()
+                .expect("managed shell program")
+        };
+        #[cfg(windows)]
+        let output = {
+            let script = "\
+$enc = [System.Text.Encoding]::GetEncoding(28591)
+function Dump([string]$path) {
+  [Console]::Out.Write($enc.GetString([System.IO.File]::ReadAllBytes($path)))
+}
+Write-Output NESSA_AGENT_COMMAND_RAN
+if (Test-Path -LiteralPath $env:NESSA_SIGNIN) { Write-Output SIGNIN_OPENED; Dump $env:NESSA_SIGNIN } else { Write-Output SIGNIN_ABSENT }
+if (Test-Path -LiteralPath $env:NESSA_VAULT) { Write-Output VAULT_OPENED; Dump $env:NESSA_VAULT } else { Write-Output VAULT_ABSENT }
+Write-Output SWEEP
+Get-ChildItem -LiteralPath $env:NESSA_ROOT -Recurse -File | ForEach-Object { Dump $_.FullName }
+Write-Output SWEEP_DONE
+";
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", script])
+                .env("NESSA_SIGNIN", signin)
+                .env("NESSA_VAULT", vault)
+                .env("NESSA_ROOT", root)
+                .current_dir(std::env::temp_dir())
+                .output()
+                .expect("windows agent command")
+        };
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        text
     }
 }

@@ -1,4 +1,4 @@
-//! GitHub over HTTPS, the OS sign-in entry, the audit, and what agents
+//! GitHub over HTTPS, the encrypted sign-in entry, the audit, and what agents
 //! are given.
 mod api;
 mod app;

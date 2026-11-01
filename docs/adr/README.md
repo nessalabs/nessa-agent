@@ -74,6 +74,7 @@ authorization and parent identity.
 | [270 — Quarantined restore](done/270-quarantined-restore.md) | Stage a verified cut into quarantine, accept by renaming onto an empty live path, and fetch one deferred conversation when it is opened. The desktop and `conversation.read` are not wired. `nessa-backup-plan` stays inspection-only. Ordering table: [quarantined restore](../design/quarantined-restore.md) |
 | [1120 — `read_window` says the focused chat's panel](done/1120-read-window-panel.md) | `workspace.publish` carries whether the focused chat's right panel is drawn, its tabs, and the tab in front. `read_window` says the same. State table: [1120](done/1120-read-window-panel.md#states) |
 | [1185 — Bound native relay audit retention](done/1185-bound-native-relay-audit-retention.md) | A direct gap and a CLI acceptance trim the audit store they write in that transaction. State table: [1185](done/1185-bound-native-relay-audit-retention.md#states) |
+| [1195 — Isolate saved GitHub sign-in](done/1195-isolate-github-sign-in.md) | The GitHub token's only durable copy is the passphrase-sealed vault entry. A plaintext sign-in file is deleted and not imported. An agent command that knows the path does not obtain the token bytes. State table: [1195](done/1195-isolate-github-sign-in.md#states) |
 
 ## Todo — implementation priority
 

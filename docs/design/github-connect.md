@@ -17,7 +17,7 @@ phone or a second window sees the same one. The owner is
 | --- | --- | --- |
 | Which app, and GitHub's addresses | `github/infrastructure/app.rs` | `protocol/defaults/github-app.json`, or the file `NESSA_GITHUB_APP` names (checks point it at a fake GitHub on this machine) |
 | Signed out, waiting for a code, or signed in | `GithubConnections` | memory, and an encrypted vault entry when signed in |
-| The token and whose it is | `GithubTokenVault` | injected entry in the session-unlocked local vault; legacy `sign-in.json` is consumed only for a verified one-time upgrade |
+| The token and whose it is | `GithubTokenVault` | injected entry in the session-unlocked local vault. The key stays in gateway memory. A plaintext `sign-in.json` is deleted and not read ([1195](../adr/done/1195-isolate-github-sign-in.md)) |
 | Each step, for the owner to look back on | `DurableGithubAudit` | `<namespace>/conversations/audit/github`, one private file per record, never a token or a code; a `connect-ended` record names what decided it (`github_answered`, `deadline_passed`, `github_unreachable`, `store_failed`) |
 | What an agent can read through Nessa's sign-in | `GithubConnections` and the built-in `nessa-github` tool | a gateway-side request using the current sign-in, never an agent environment variable |
 | What the person sees | `src/desktop/settings/ui/github-row.tsx` | nothing: it reads `github.status` |
@@ -92,13 +92,14 @@ not imply that a write was authorized or completed.
 | GitHub refuses, redirects, times out, or returns an oversized answer | Return a typed failure without the token | No local GitHub state is inferred from the failure |
 | Agent or shell process opens before or after Connect or Disconnect | No Nessa token or helper is placed in its environment | Process restart cannot resurrect an earlier Nessa sign-in |
 
-The sign-in is persisted in the encrypted app-session vault. A legacy
-`<namespace>/github/sign-in.json` is migration input only: the upgrade verifies
-the encrypted receipt before removing the old plaintext. This PR preserves that
-migration and does not restore ordinary plaintext storage. Removing environment
-injection is a narrower guarantee than isolating an unlocked gateway from other
-processes running as the same OS user. [Issue 1195](https://github.com/nessalabs/nessa-agent/issues/1195)
-tracks that remaining process boundary; this broker does not claim to enforce it.
+The sign-in is persisted in the encrypted app-session vault. The key is
+derived from the passphrase and held only in the gateway while the vault is
+unlocked; it is not written beside the ciphertext. A plaintext
+`<namespace>/github/sign-in.json` is removed without being read, including
+while the vault is locked. Nessa is alpha, so that file is not imported.
+An agent command that knows the path can open the ciphertext and does not
+obtain the token bytes
+([1195](../adr/done/1195-isolate-github-sign-in.md)).
 
 ## Read cancellation and vault ordering
 
