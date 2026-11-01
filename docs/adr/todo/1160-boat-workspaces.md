@@ -343,6 +343,9 @@ opening waits out.
 
 ## Parent Stop integration worker refresh (#981)
 
+The following Dad5 receipt is historical. Its task snapshot was retired after
+fresh-clone qualification of the c516 replacement documented below.
+
 The worker for application source `22a8218b0ff2c392e911e07c75994f33e4896048`
 serves lease protocol `dad5afbc1bc5755f`. Its published image is
 `bsh_-6mHzeuFu3FWNbJWOe0IbXLXxhBcJPNOjq76Bk_nMGI`, snapshot
@@ -382,3 +385,25 @@ records the artifact and cleanup facts. The normal shipping guard remains
 unchanged. This image publication does not claim the separate four-VM live
 Boat acceptance or earlier native/performance gates passed; those remain
 separate qualification records.
+
+### Current integrated worker: c516
+
+Source `66e064de4a6177454e22873314391d8956b5da79` integrates main `100d7aef`
+and serves protocol `c516606214ce8bc2`. Its verified image is
+`bsh_MF9Ppg9XWHyVD8qYw7Wv6mku_yJpX2lS-Dlj4-LZ27E`, snapshot
+`nessa-worker-c5166062-66e064d-linux-x64`. Both Linux binaries were freshly
+built using Rust/Cargo 1.99.1 and the same stripped development profile.
+The locked PTY support restoration and Cargo.lock are unchanged. The new
+[publication receipt](../../../verification/desktop/evidence/parent-stop/recovery/c516-worker-release-receipt.json)
+records both binary identities, fresh-clone checks and completed deletion
+operations for all three new publication VMs. Named credential/state exclusion
+checks do not establish an exhaustive secret scan or secure erasure.
+
+All six task publication VMs are absent. Cumulative usage is US$0.0624; six of
+ten authorized creations are used and four remain for the unchanged live
+verifier. The old Dad5 task snapshot was retired after replacement
+qualification; one task snapshot remains within the included allowance.
+The pin preserves the shipping guard. Live provider acceptance and the earlier
+native/performance gates remain separate; publication is not a merge-ready
+claim. No lifecycle transition changed, so no state diagram or unrelated state
+checkpoint changes for this artifact pin.

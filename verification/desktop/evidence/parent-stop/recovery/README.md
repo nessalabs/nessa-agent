@@ -432,6 +432,10 @@ qualification are pending at this checkpoint.
 
 ## Published matching worker for source22a8218b
 
+This is the historical Dad5 publication. Its task snapshot was retired only
+after the c516 replacement passed fresh-clone qualification; the receipt below
+retains the original publication facts.
+
 The [worker publication receipt](worker-release-receipt.json) records image
 `bsh_-6mHzeuFu3FWNbJWOe0IbXLXxhBcJPNOjq76Bk_nMGI` for protocol
 `dad5afbc1bc5755f`, built from application source
@@ -442,3 +446,22 @@ file hashes, limited credential-path checks and provider-confirmed cleanup of
 all three publication VMs. This replaces the shipping mapping, not the protocol
 matching rule. The four-VM live verifier is prepared but not yet run at this
 publication checkpoint. Native and performance limits above remain distinct.
+
+## Current worker for source66e064de
+
+The [c516 publication receipt](c516-worker-release-receipt.json) binds image
+`bsh_MF9Ppg9XWHyVD8qYw7Wv6mku_yJpX2lS-Dlj4-LZ27E` to protocol
+`c516606214ce8bc2` and frozen source
+`66e064de4a6177454e22873314391d8956b5da79`, integrating main `100d7aef`.
+Both Linux binaries were freshly built and checked in a fresh image clone,
+including checksums, lengths, libraries, MCP initialization, lockfile and
+Node/supervisor/SDK provenance. Named credential/state exclusions are limited
+checks, not an exhaustive secret scan or secure-erasure attestation.
+
+All six publication VMs across Dad5 and c516 are confirmed absent. Cumulative
+usage is US$0.0624; six of the approved ten VM creations are used, four remain,
+and the one retained task snapshot is within the account's included allowance.
+The unchanged four-VM live verifier is awaiting the pin commit at this
+publication checkpoint. The shipping guard and separate native/performance
+qualification requirements are unchanged. This pin changes artifact identity,
+not lifecycle behavior; no unrelated state-page checkpoint is advanced.
