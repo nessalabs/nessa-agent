@@ -38,21 +38,28 @@ and revoking the secret are audited: the credential, a fingerprint of the
 secret, the cause, and the initiator. The secret itself is not in the audit.
 
 The gateway publishes the current tunnel origin on its #266 relay
-registration. A reader asks the relay for that origin. The relay challenges
-the reader; the reader answers with an HMAC of its tunnel secret. The
-gateway accepts the mac only for a secret it still holds, and only then
-does the relay send the origin. The relay sees the mac, not the secret.
+registration, signed with its paired key. A reader asks the relay for that
+origin. The relay challenges the reader; the reader answers with an HMAC of
+its tunnel secret. The gateway accepts the mac only for a secret it still
+holds, and only then does the relay send the origin. The phone checks the
+signature against the key it pinned before it dials, and only then sends
+its tunnel secret. The relay sees the mac, not the secret.
+
+Issuing and revoking write an intent first, then the secret file, then a
+publication that confirms the change. Both records of one change share one
+operation id. A failed file write is not yet a publication, and a retry
+reuses that id.
 
 ## States
 
 | Situation | Outcome |
 | --- | --- |
-| Pairing becomes active | One secret is issued for that credential, audited, and delivered on the Active status. A later status returns the same secret and writes no second audit. |
+| Pairing becomes active | One secret is issued for that credential. The audit records the intent, then the publication, under one operation id. A later status returns the same secret and writes no second intent. A file write that fails leaves the intent unconfirmed, and the retry confirms that same id. |
 | Connect with a valid secret | The ingress takes a permit and upgrades. The connection is then the same tunneled native session as before. |
 | Connect with a missing, wrong, or revoked secret | Refused. No permit is taken, however many such connections are held open. |
 | Unpair or revoke | The secret is forgotten and the revocation is audited. The credential is already ended, so a leftover secret file still does not admit. |
 | The tunnel address changes | The gateway publishes the new origin on its relay registration, replacing the previous one. |
-| A paired phone is away and its saved address fails | It asks the relay with its secret and dials the origin it is told. |
+| A paired phone is away and its saved address fails | It asks the relay while the direct dial is still in progress, both on the one handshake deadline. It dials the origin it is told only after the gateway's signature checks. |
 | A stranger asks the relay | The relay does not send the origin. |
 
 ## Invariants
@@ -61,8 +68,9 @@ does the relay send the origin. The relay sees the mac, not the secret.
 | --- | --- |
 | A request that does not present an active device's secret takes no tunnel permit. | The ingress checks the secret, then takes the permit. `strangers_holding_connections_cannot_keep_a_paired_device_out`. |
 | A revoked or unpaired device's secret no longer matches. | The store drops it, and admission also requires the credential to still be active. `a_revoked_device_is_rejected_and_takes_no_permit` and `issuing_and_revoking_a_secret_is_audited_and_a_revoked_one_is_refused`. |
-| Issue and revoke each leave an audit record naming the credential, the cause, and the initiator, and not the secret. | The file store writes the record before it commits the secret change. The same test reads the files. |
-| Only a paired device is told the published tunnel origin. | The gateway checks the lookup mac before the relay sends the origin. `an_away_phone_is_told_the_new_tunnel_address_through_the_relay`. |
+| Issue and revoke each leave an intent and, once the secret file matches, a publication. Both name the credential, the cause, the initiator, and one operation id, and not the secret. | The file store writes the intent before the file and the publication after it. `issuing_and_revoking_a_secret_is_audited_and_a_revoked_one_is_refused` and `a_failed_publication_is_retried_as_the_same_operation`. |
+| Only a paired device is told the published tunnel origin, and the phone sends its secret only to the gateway that signed it. | The gateway checks the lookup mac before the relay sends the origin. The phone checks the signature before it dials. `an_away_phone_is_told_the_new_tunnel_address_through_the_relay` and `a_relay_that_names_an_attackers_origin_is_never_sent_the_secret`. |
+| A direct dial that hangs does not use up the handshake deadline before the relay is asked. | Discovery starts at the direct head start and shares the one timeout. `a_hung_lan_dial_and_a_stale_address_still_connect_in_time`. |
 
 ## Alternatives considered
 

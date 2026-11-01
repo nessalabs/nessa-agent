@@ -73,7 +73,8 @@ use nessa_sync::replication::{
     },
     domain::{Id, Limits, Scope},
 };
-use relay::{connect_any, race, relay_leg, RelayRoute};
+pub(crate) use relay::race;
+use relay::{connect_any, relay_leg, RelayRoute};
 use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};

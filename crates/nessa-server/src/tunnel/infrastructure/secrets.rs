@@ -1,10 +1,13 @@
 //! Paired devices' tunnel secrets, on disk.
 //!
 //! `<namespace>/tunnel/device-secrets.json` holds each active secret.
-//! `<conversations>/audit/tunnel-device-secrets/` holds one private record
-//! per issue and per revocation: the credential, a fingerprint of the
-//! secret, the cause, and who did it. The secret itself is not in the audit
-//! and not in a log.
+//! `<conversations>/audit/tunnel-device-secrets/` holds two private records
+//! for each issue and each revocation, tied by one operation id: an intent,
+//! written before the secret file changes, and a publication, written only
+//! after that change is stored. A retry of a failed publication keeps the
+//! same operation id and does not write a second intent. The unpublished
+//! secret sits in `<namespace>/tunnel/pending/`, not in the audit. The
+//! secret itself is not in the audit and not in a log.
 //!
 //! A secret admits a tunnel connection, and a relay lookup, only while its
 //! credential is still an active device credential. Revoking the credential
@@ -46,6 +49,9 @@ pub(crate) struct FileDeviceSecrets {
     clock: Arc<dyn Clock>,
     active: Arc<dyn ActiveDeviceCredentials>,
     gate: Mutex<()>,
+    /// Test hook: the next `count` secret-file writes fail before the file changes.
+    #[cfg(test)]
+    fail_publications: std::sync::atomic::AtomicU32,
 }
 
 impl FileDeviceSecrets {
@@ -81,7 +87,16 @@ impl FileDeviceSecrets {
             clock,
             active,
             gate: Mutex::new(()),
+            #[cfg(test)]
+            fail_publications: std::sync::atomic::AtomicU32::new(0),
         }
+    }
+
+    /// Fail the next `count` writes of `device-secrets.json` without changing it.
+    #[cfg(test)]
+    fn fail_next_publications(&self, count: u32) {
+        self.fail_publications
+            .store(count, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn lock(&self) -> MutexGuard<'_, ()> {
@@ -128,6 +143,18 @@ impl FileDeviceSecrets {
     }
 
     fn write(&self, rows: &[Row]) -> Result<(), SecretError> {
+        #[cfg(test)]
+        if self
+            .fail_publications
+            .try_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |count| count.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(SecretError::Storage);
+        }
         let directory = self.secrets.parent().ok_or(SecretError::Storage)?;
         create_directory(directory).map_err(|_| SecretError::Storage)?;
         let devices: Vec<Value> = rows
@@ -152,35 +179,73 @@ impl FileDeviceSecrets {
         sync_directory(directory).map_err(|_| SecretError::Storage)
     }
 
-    fn audit(
+    /// An intent with no matching publication. Its operation id is stable
+    /// across retries. The secret, when one is waiting to be published, is
+    /// in the pending file and not here.
+    fn open_operation(
         &self,
+        credential_id: &str,
+        action: &str,
+    ) -> Result<Option<Open>, SecretError> {
+        let entries = match fs::read_dir(&self.audit) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(SecretError::Audit),
+        };
+        let mut found = None;
+        for entry in entries {
+            let path = entry.map_err(|_| SecretError::Audit)?.path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if !name.starts_with("intent-") {
+                continue;
+            }
+            let value: Value =
+                serde_json::from_slice(&fs::read(&path).map_err(|_| SecretError::Audit)?)
+                    .map_err(|_| SecretError::Audit)?;
+            if value["credentialId"] != credential_id || value["action"] != action {
+                continue;
+            }
+            let operation_id = value["operationId"].as_str().ok_or(SecretError::Audit)?;
+            if self
+                .audit
+                .join(format!("published-{operation_id}.json"))
+                .exists()
+            {
+                continue;
+            }
+            found = Some(Open::parse(&value)?);
+        }
+        Ok(found)
+    }
+
+    fn write_record(
+        &self,
+        open: &Open,
         phase: &str,
-        row: &Row,
-        cause: &str,
-        initiator: &str,
-        before: Option<&str>,
-        after: &str,
+        after: Option<&str>,
     ) -> Result<(), SecretError> {
         create_directory(&self.audit).map_err(|_| SecretError::Audit)?;
-        let mut suffix = [0; 4];
-        getrandom::fill(&mut suffix).map_err(|_| SecretError::Audit)?;
-        let name = format!(
-            "{phase}-{}-{}-{}.json",
-            &fingerprint(row.credential_id.as_bytes())[..8],
-            self.clock.unix_milliseconds(),
-            fingerprint(&suffix)
-        );
+        let name = format!("{phase}-{}.json", open.operation_id);
+        let path = self.audit.join(&name);
+        if path.exists() {
+            return Ok(());
+        }
         let value = json!({
             "kind": "tunnel_device_secret",
-            "recordId": name.trim_end_matches(".json"),
-            "credentialId": row.credential_id,
-            "deviceKey": encode_key(&row.device_key),
-            "fingerprint": fingerprint(&row.secret),
+            "recordId": format!("{phase}-{}", open.operation_id),
+            "operationId": open.operation_id,
+            "action": open.action,
+            "credentialId": open.credential_id,
+            "deviceKey": encode_key(&open.device_key),
+            "fingerprint": open.fingerprint,
             "phase": phase,
-            "cause": cause,
-            "before": before,
+            "cause": open.cause,
+            "before": open.before,
             "after": after,
-            "initiator": { "kind": "principal", "principalId": initiator },
+            "initiator": { "kind": "principal", "principalId": open.initiator },
             "observedAtMs": self.clock.unix_milliseconds(),
         });
         let mut file = PrivateTempFile::new_in(&self.audit).map_err(|_| SecretError::Audit)?;
@@ -189,9 +254,111 @@ impl FileDeviceSecrets {
             .write_all(b"\n")
             .and_then(|_| file.as_file().sync_all())
             .map_err(|_| SecretError::Audit)?;
-        file.publish(&self.audit.join(name))
-            .map_err(|_| SecretError::Audit)?;
+        file.publish(&path).map_err(|_| SecretError::Audit)?;
         sync_directory(&self.audit).map_err(|_| SecretError::Audit)
+    }
+
+    fn intend(&self, open: &Open) -> Result<(), SecretError> {
+        self.write_record(open, "intent", None)
+    }
+
+    fn confirm(&self, open: &Open, after: &str) -> Result<(), SecretError> {
+        self.write_record(open, "published", Some(after))
+    }
+
+    fn pending_path(&self, operation_id: &str) -> Result<PathBuf, SecretError> {
+        Ok(self
+            .secrets
+            .parent()
+            .ok_or(SecretError::Storage)?
+            .join("pending")
+            .join(operation_id))
+    }
+
+    fn write_pending(&self, operation_id: &str, secret: &[u8; 32]) -> Result<(), SecretError> {
+        let path = self.pending_path(operation_id)?;
+        let directory = path.parent().ok_or(SecretError::Storage)?;
+        create_directory(directory).map_err(|_| SecretError::Storage)?;
+        let mut file = PrivateTempFile::new_in(directory).map_err(|_| SecretError::Storage)?;
+        file.as_file_mut()
+            .write_all(secret)
+            .and_then(|_| file.as_file().sync_all())
+            .map_err(|_| SecretError::Storage)?;
+        file.persist(&path).map_err(|_| SecretError::Storage)?;
+        sync_directory(directory).map_err(|_| SecretError::Storage)
+    }
+
+    fn read_pending(&self, open: &Open) -> Result<[u8; 32], SecretError> {
+        let bytes =
+            fs::read(self.pending_path(&open.operation_id)?).map_err(|_| SecretError::Storage)?;
+        let secret: [u8; 32] = bytes.try_into().map_err(|_| SecretError::Storage)?;
+        if fingerprint(&secret) != open.fingerprint {
+            return Err(SecretError::Storage);
+        }
+        Ok(secret)
+    }
+
+    fn clear_pending(&self, operation_id: &str) -> Result<(), SecretError> {
+        match fs::remove_file(self.pending_path(operation_id)?) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(SecretError::Storage),
+        }
+    }
+
+    /// Record the intent to issue, and keep the secret aside until the file
+    /// write lands. The intent names the operation id a retry will reuse.
+    fn intend_issue(
+        &self,
+        credential_id: &str,
+        device_key: &[u8; 32],
+        initiator: &str,
+    ) -> Result<Open, SecretError> {
+        let mut secret = [0; 32];
+        getrandom::fill(&mut secret).map_err(|_| SecretError::Storage)?;
+        let operation_id = operation_id()?;
+        self.write_pending(&operation_id, &secret)?;
+        let open = Open {
+            operation_id,
+            action: ACTION_ISSUE.to_owned(),
+            credential_id: credential_id.to_owned(),
+            device_key: *device_key,
+            fingerprint: fingerprint(&secret),
+            cause: "device_paired".to_owned(),
+            initiator: initiator.to_owned(),
+            before: None,
+        };
+        if let Err(error) = self.intend(&open) {
+            let _ = self.clear_pending(&open.operation_id);
+            return Err(error);
+        }
+        Ok(open)
+    }
+
+    fn intend_revoke(&self, row: &Row, cause: &str, initiator: &str) -> Result<Open, SecretError> {
+        let operation_id = operation_id()?;
+        let open = Open {
+            operation_id,
+            action: ACTION_REVOKE.to_owned(),
+            credential_id: row.credential_id.clone(),
+            device_key: row.device_key,
+            fingerprint: fingerprint(&row.secret),
+            cause: cause.to_owned(),
+            initiator: initiator.to_owned(),
+            before: Some("active".to_owned()),
+        };
+        self.intend(&open)?;
+        Ok(open)
+    }
+
+    /// The secret file already holds `row`. Write the publication if the
+    /// intent is still open, and drop the pending copy either way.
+    fn finish_issue(&self, row: &Row) -> Result<(), SecretError> {
+        if let Some(open) = self.open_operation(&row.credential_id, ACTION_ISSUE)? {
+            self.confirm(&open, "active")?;
+            self.clear_pending(&open.operation_id)?;
+        }
+        Ok(())
     }
 
     fn live(&self) -> Vec<[u8; 32]> {
@@ -218,18 +385,23 @@ impl DeviceTunnelSecrets for FileDeviceSecrets {
         let _held = self.lock();
         let mut rows = self.read()?;
         if let Some(row) = rows.iter().find(|row| row.credential_id == credential_id) {
-            return Ok(row.secret);
+            let secret = row.secret;
+            self.finish_issue(row)?;
+            return Ok(secret);
         }
-        let mut secret = [0; 32];
-        getrandom::fill(&mut secret).map_err(|_| SecretError::Storage)?;
-        let row = Row {
-            credential_id: credential_id.to_owned(),
-            device_key: *device_key,
-            secret,
+        let open = match self.open_operation(credential_id, ACTION_ISSUE)? {
+            Some(open) => open,
+            None => self.intend_issue(credential_id, device_key, initiator)?,
         };
-        self.audit("issued", &row, "device_paired", initiator, None, "active")?;
-        rows.push(row);
+        let secret = self.read_pending(&open)?;
+        rows.push(Row {
+            credential_id: credential_id.to_owned(),
+            device_key: open.device_key,
+            secret,
+        });
         self.write(&rows)?;
+        self.confirm(&open, "active")?;
+        self.clear_pending(&open.operation_id)?;
         Ok(secret)
     }
 
@@ -245,25 +417,25 @@ impl DeviceTunnelSecrets for FileDeviceSecrets {
             .iter()
             .position(|row| row.credential_id == credential_id)
         else {
+            // The secret was never stored. Close an open issue so a retry
+            // cannot publish it after this revocation.
+            if let Some(open) = self.open_operation(credential_id, ACTION_ISSUE)? {
+                self.clear_pending(&open.operation_id)?;
+                self.write_record(&open, "published", None)?;
+            }
             return Ok(());
         };
         let cause = match cause {
             SecretRevocation::Unpaired => "unpaired",
             SecretRevocation::CredentialRevoked => "credential_revoked",
         };
-        // The audit is written before the file loses the secret. A failure
-        // here leaves the secret in place; the credential is already ended,
-        // so `accepts` refuses it, and the retry writes the record.
-        self.audit(
-            "revoked",
-            &rows[index],
-            cause,
-            initiator,
-            Some("active"),
-            "revoked",
-        )?;
+        let open = match self.open_operation(credential_id, ACTION_REVOKE)? {
+            Some(open) => open,
+            None => self.intend_revoke(&rows[index], cause, initiator)?,
+        };
         rows.remove(index);
-        self.write(&rows)
+        self.write(&rows)?;
+        self.confirm(&open, "revoked")
     }
 
     fn accepts(&self, presented: &[u8]) -> bool {
@@ -294,6 +466,60 @@ impl ActiveDeviceCredentials for RegistryIds {
             .map(|ids| ids.into_iter().map(|id| id.as_str().to_owned()).collect())
             .map_err(|_| SecretError::Storage)
     }
+}
+
+const ACTION_ISSUE: &str = "issue";
+const ACTION_REVOKE: &str = "revoke";
+
+/// One operation's intent. The publication record uses the same id.
+struct Open {
+    operation_id: String,
+    action: String,
+    credential_id: String,
+    device_key: [u8; 32],
+    fingerprint: String,
+    cause: String,
+    initiator: String,
+    before: Option<String>,
+}
+
+impl Open {
+    fn parse(value: &Value) -> Result<Self, SecretError> {
+        let text = |field: &str| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or(SecretError::Audit)
+        };
+        let before = match value.get("before") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text)) => Some(text.clone()),
+            Some(_) => return Err(SecretError::Audit),
+        };
+        Ok(Self {
+            operation_id: text("operationId")?,
+            action: text("action")?,
+            credential_id: text("credentialId")?,
+            device_key: decode_key(value["deviceKey"].as_str().ok_or(SecretError::Audit)?)
+                .map_err(|_| SecretError::Audit)?,
+            fingerprint: text("fingerprint")?,
+            cause: text("cause")?,
+            initiator: value
+                .get("initiator")
+                .and_then(|initiator| initiator.get("principalId"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or(SecretError::Audit)?,
+            before,
+        })
+    }
+}
+
+fn operation_id() -> Result<String, SecretError> {
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).map_err(|_| SecretError::Storage)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn encode_key(key: &[u8; 32]) -> String {
@@ -362,27 +588,39 @@ mod tests {
             "a second status returns the same secret"
         );
         assert!(secrets.accepts(&secret));
-        let audits = std::fs::read_dir(_directory.path().join("audit")).unwrap();
-        let issued: Vec<_> = audits
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .starts_with("issued-")
-            })
+        let records = audit_records(_directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["phase"] == "intent" && record["action"] == "issue")
             .collect();
-        assert_eq!(issued.len(), 1, "one issue record, not one per status");
-        let record: Value = serde_json::from_slice(&std::fs::read(&issued[0]).unwrap()).unwrap();
+        let published: Vec<_> = records
+            .iter()
+            .filter(|record| record["phase"] == "published" && record["action"] == "issue")
+            .collect();
+        assert_eq!(intents.len(), 1, "one issue intent, not one per status");
+        assert_eq!(published.len(), 1, "one publication confirms it");
+        assert_eq!(intents[0]["operationId"], published[0]["operationId"]);
+        assert!(intents[0]["after"].is_null());
+        let record = published[0];
         assert_eq!(record["credentialId"], "device-1");
         assert_eq!(record["cause"], "device_paired");
         assert_eq!(record["after"], "active");
         assert_eq!(record["initiator"]["principalId"], "owner");
         assert!(record["fingerprint"].as_str().unwrap().len() == 16);
         assert!(record.get("secret").is_none());
-        let text = String::from_utf8(std::fs::read(&issued[0]).unwrap()).unwrap();
-        assert!(!text.contains(&TunnelSecret::new(secret).encode()));
+        let encoded = TunnelSecret::new(secret).encode();
+        for record in records.iter().filter(|record| record["action"] == "issue") {
+            let text = record.to_string();
+            assert!(!text.contains(&encoded));
+        }
+        assert!(
+            !pending_dir(_directory.path()).exists()
+                || std::fs::read_dir(pending_dir(_directory.path()))
+                    .unwrap()
+                    .next()
+                    .is_none(),
+            "the pending secret is removed once the publication is stored"
+        );
 
         ids.0.lock().unwrap().clear();
         assert!(
@@ -394,21 +632,125 @@ mod tests {
             .revoke("device-1", SecretRevocation::CredentialRevoked, "owner")
             .unwrap();
         assert!(!secrets.accepts(&secret));
-        let revoked = std::fs::read_dir(_directory.path().join("audit"))
+        let records = audit_records(_directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["phase"] == "intent" && record["action"] == "revoke")
+            .collect();
+        let published: Vec<_> = records
+            .iter()
+            .filter(|record| record["phase"] == "published" && record["action"] == "revoke")
+            .collect();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(published.len(), 1);
+        assert_eq!(intents[0]["operationId"], published[0]["operationId"]);
+        assert!(intents[0]["after"].is_null());
+        assert_eq!(published[0]["cause"], "credential_revoked");
+        assert_eq!(published[0]["before"], "active");
+        assert_eq!(published[0]["after"], "revoked");
+        assert_eq!(published[0]["initiator"]["principalId"], "owner");
+    }
+
+    #[test]
+    fn a_failed_publication_is_retried_as_the_same_operation() {
+        let (directory, secrets, _) = store(vec!["device-1".into()]);
+        secrets.fail_next_publications(1);
+        assert_eq!(
+            secrets.issue("device-1", &[7; 32], "owner"),
+            Err(SecretError::Storage)
+        );
+        assert!(!secrets.accepts(&[7; 32]));
+        let records = audit_records(directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "intent")
+            .collect();
+        assert_eq!(intents.len(), 1);
+        assert!(records.iter().all(|record| record["phase"] != "published"));
+        assert!(intents[0]["after"].is_null());
+        let operation = intents[0]["operationId"].as_str().unwrap().to_owned();
+        let fingerprint = intents[0]["fingerprint"].as_str().unwrap().to_owned();
+        let pending = std::fs::read_dir(pending_dir(directory.path())).unwrap();
+        let pending: Vec<_> = pending.map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(std::fs::read(&pending[0]).unwrap().len(), 32);
+        assert!(
+            !directory.path().join("tunnel").join(SECRETS_FILE).exists(),
+            "the secret file was not written"
+        );
+
+        let secret = secrets.issue("device-1", &[7; 32], "owner").unwrap();
+        assert!(secrets.accepts(&secret));
+        let records = audit_records(directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "intent")
+            .collect();
+        let published: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "published")
+            .collect();
+        assert_eq!(intents.len(), 1, "the retry does not write a second intent");
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0]["operationId"], operation);
+        assert_eq!(published[0]["after"], "active");
+        assert_eq!(published[0]["fingerprint"], fingerprint);
+        assert!(published[0].get("secret").is_none());
+        let encoded = TunnelSecret::new(secret).encode();
+        assert!(!published[0].to_string().contains(&encoded));
+        assert!(!intents[0].to_string().contains(&encoded));
+
+        secrets.fail_next_publications(1);
+        assert_eq!(
+            secrets.revoke("device-1", SecretRevocation::Unpaired, "owner"),
+            Err(SecretError::Storage)
+        );
+        assert!(
+            secrets.accepts(&secret),
+            "a failed revocation leaves the secret in place"
+        );
+        let records = audit_records(directory.path());
+        let revoke_intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "revoke" && record["phase"] == "intent")
+            .collect();
+        assert_eq!(revoke_intents.len(), 1);
+        assert!(revoke_intents[0]["after"].is_null());
+        let revoke_operation = revoke_intents[0]["operationId"]
+            .as_str()
             .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .starts_with("revoked-")
-            })
+            .to_owned();
+        secrets
+            .revoke("device-1", SecretRevocation::Unpaired, "owner")
             .unwrap();
-        let record: Value = serde_json::from_slice(&std::fs::read(revoked).unwrap()).unwrap();
-        assert_eq!(record["cause"], "credential_revoked");
-        assert_eq!(record["before"], "active");
-        assert_eq!(record["after"], "revoked");
-        assert_eq!(record["initiator"]["principalId"], "owner");
+        assert!(!secrets.accepts(&secret));
+        let records = audit_records(directory.path());
+        let revoke_intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "revoke" && record["phase"] == "intent")
+            .collect();
+        let revoke_published: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "revoke" && record["phase"] == "published")
+            .collect();
+        assert_eq!(revoke_intents.len(), 1);
+        assert_eq!(revoke_published.len(), 1);
+        assert_eq!(revoke_published[0]["operationId"], revoke_operation);
+        assert_eq!(revoke_published[0]["before"], "active");
+        assert_eq!(revoke_published[0]["after"], "revoked");
+        assert_ne!(revoke_operation, operation);
+    }
+
+    fn audit_records(root: &std::path::Path) -> Vec<Value> {
+        std::fs::read_dir(root.join("audit"))
+            .unwrap()
+            .map(|entry| {
+                serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+            })
+            .collect()
+    }
+
+    fn pending_dir(root: &std::path::Path) -> std::path::PathBuf {
+        root.join("tunnel").join("pending")
     }
 }

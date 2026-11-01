@@ -50,6 +50,7 @@ zeroize = "=1.9.0"
 # The unmarked checkpoint fixture. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
+socket2 = "0.6"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

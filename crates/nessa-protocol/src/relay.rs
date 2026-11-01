@@ -32,9 +32,14 @@ use std::{
 pub const VERSION: u8 = 1;
 /// Version, type and body length.
 pub const HEADER: usize = 3;
-/// The longest tunnel origin a relay frame carries. Longer than this is not
-/// published; a quick or named hostname fits.
+/// The longest body a relay frame carries. A signed tunnel origin is an
+/// Ed25519 signature ([`ORIGIN_SIGNATURE`] bytes) and then the origin text.
 pub const MAX_PUBLISHED: usize = 255;
+/// Ed25519 signature prefixed to a published tunnel origin.
+pub const ORIGIN_SIGNATURE: usize = 64;
+/// The longest origin text that still fits once its signature is prefixed.
+/// Longer than this is not published; a quick or named hostname fits.
+pub const MAX_ORIGIN: usize = MAX_PUBLISHED - ORIGIN_SIGNATURE;
 /// The longest frame: a header and a published tunnel origin.
 pub const MAX_FRAME: usize = HEADER + MAX_PUBLISHED;
 /// How long a connection may take to send its whole preamble, or a
@@ -161,10 +166,43 @@ pub struct PublishedOrigin {
 }
 
 impl PublishedOrigin {
-    /// `text` as an origin, when it is non-empty ASCII within [`MAX_PUBLISHED`].
+    /// `text` as an origin, before the gateway signs it. Empty, non-ASCII, or
+    /// longer than [`MAX_ORIGIN`] does not fit in a signed frame.
     pub fn new(text: &str) -> Option<Self> {
-        let raw = text.as_bytes();
-        if raw.is_empty() || raw.len() > MAX_PUBLISHED || !text.is_ascii() {
+        Self::raw(text.as_bytes()).filter(|_| !text.is_empty() && text.is_ascii())
+    }
+
+    /// The bytes a relay carries for `text`: its Ed25519 signature, then the text.
+    pub fn signed(signature: &[u8; ORIGIN_SIGNATURE], text: &str) -> Option<Self> {
+        if text.is_empty() || !text.is_ascii() || text.len() > MAX_ORIGIN {
+            return None;
+        }
+        let mut raw = [0; MAX_PUBLISHED];
+        raw[..ORIGIN_SIGNATURE].copy_from_slice(signature);
+        raw[ORIGIN_SIGNATURE..ORIGIN_SIGNATURE + text.len()].copy_from_slice(text.as_bytes());
+        Some(Self {
+            len: u8::try_from(ORIGIN_SIGNATURE + text.len()).unwrap_or(u8::MAX),
+            bytes: raw,
+        })
+    }
+
+    /// The signature and origin text, when this body is a signed origin.
+    pub fn signature_and_text(&self) -> Option<([u8; ORIGIN_SIGNATURE], &str)> {
+        let bytes = self.as_bytes();
+        if bytes.len() <= ORIGIN_SIGNATURE {
+            return None;
+        }
+        let mut signature = [0; ORIGIN_SIGNATURE];
+        signature.copy_from_slice(&bytes[..ORIGIN_SIGNATURE]);
+        let text = std::str::from_utf8(&bytes[ORIGIN_SIGNATURE..]).ok()?;
+        if text.is_empty() || !text.is_ascii() {
+            return None;
+        }
+        Some((signature, text))
+    }
+
+    fn raw(raw: &[u8]) -> Option<Self> {
+        if raw.is_empty() || raw.len() > MAX_ORIGIN {
             return None;
         }
         let mut bytes = [0; MAX_PUBLISHED];
@@ -200,6 +238,9 @@ impl PublishedOrigin {
 
 impl fmt::Debug for PublishedOrigin {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some((_, text)) = self.signature_and_text() {
+            return write!(formatter, "PublishedOrigin({text})");
+        }
         match self.text() {
             Some(text) => write!(formatter, "PublishedOrigin({text})"),
             None => formatter.write_str("PublishedOrigin(none)"),

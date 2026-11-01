@@ -36,6 +36,10 @@ impl RelayKey for Key {
         self.proves
             .then(|| self.identity.sign_relay_challenge(challenge).unwrap())
     }
+    fn sign_origin(&self, origin: &[u8]) -> Option<[u8; 64]> {
+        self.proves
+            .then(|| self.identity.sign_tunnel_origin(origin).unwrap())
+    }
 }
 
 /// Relay permits from a pool of `size`.

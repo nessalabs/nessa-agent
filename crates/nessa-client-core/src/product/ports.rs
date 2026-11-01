@@ -77,8 +77,11 @@ impl ProductWake for ThreadProductWake {
 /// Real TCP composition adapter; the stop handle owns a cloned descriptor.
 /// With a tunnel it dials direct first, then the gateway's web tunnel once
 /// the direct dial has not connected within the head start or was refused
-/// (`retained::dial_native`). Either way the socket carries the same pinned
-/// TLS.
+/// (`retained::dial_native`). When a relay is known, asking it for the
+/// gateway's current origin starts on that same head start and shares the
+/// one connect budget, so a direct dial that hangs cannot spend it. The
+/// origin is dialed only after its signature matches the paired gateway.
+/// Either way the socket carries the same pinned TLS.
 #[derive(Default)]
 pub struct LocalProductConnector {
     tunnel: Option<TunnelAddress>,
@@ -115,14 +118,10 @@ impl LocalProductConnector {
         Some(TunnelSecret::new(bytes))
     }
 
-    /// The origin the relay now publishes, dialed with this device's secret.
-    /// `None` when this connector has no relay or no secret to ask with.
-    fn published(
-        &self,
-        secret: Option<&TunnelSecret>,
-        timeout: Duration,
-    ) -> Option<IoResult<std::net::TcpStream>> {
-        let secret = *secret?;
+    /// What a relay lookup needs. `None` when this connector has no relay, no
+    /// secret, or no paired gateway key to check the answer against.
+    fn discovery(&self) -> Option<Discovery> {
+        let secret = self.secret()?;
         let relay = self
             .relay
             .lock()
@@ -130,16 +129,39 @@ impl LocalProductConnector {
             .clone()?;
         let credential = self.secrets.as_ref()?.load_credential().ok()??;
         let key = nessa_auth::adapters::pairing::relay_key(credential.gateway_pin())?;
-        Some(
-            match crate::tunnel::published_address(&relay, &key, &secret, timeout) {
-                Ok(Some(origin)) => crate::tunnel::dial(&origin, &secret, timeout),
-                Ok(None) => Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "the gateway has no tunnel address",
-                )),
-                Err(error) => Err(error),
-            },
-        )
+        Some(Discovery { relay, key, secret })
+    }
+}
+
+/// One lookup of the origin the paired gateway has published, then a dial
+/// of that origin. Both steps share the duration `dial` is given.
+struct Discovery {
+    relay: RelayAddress,
+    key: nessa_protocol::relay::GatewayKey,
+    secret: TunnelSecret,
+}
+
+impl Discovery {
+    fn dial(self, timeout: Duration) -> IoResult<TcpStream> {
+        let deadline = std::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let origin =
+            match crate::tunnel::published_address(&self.relay, &self.key, &self.secret, timeout) {
+                Ok(Some(origin)) => origin,
+                Ok(None) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "the gateway has no tunnel address",
+                    ))
+                }
+                Err(error) => return Err(error),
+            };
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        }
+        crate::tunnel::dial(&origin, &self.secret, left)
     }
 }
 struct Socket(TcpStream);
@@ -174,13 +196,27 @@ impl ProductInterrupt for Socket {
 }
 impl ProductConnector for LocalProductConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-        let secret = self.secret();
-        let tunnel = self.tunnel.as_ref().zip(secret.as_ref());
-        let socket = match crate::retained::dial_native(address, tunnel, timeout) {
-            Ok(socket) => socket,
-            Err(error) => self
-                .published(secret.as_ref(), timeout)
-                .unwrap_or(Err(error))?,
+        let saved = self.tunnel.clone().zip(self.secret());
+        let socket = if let Some(discovery) = self.discovery() {
+            crate::retained::race(
+                move |left| {
+                    crate::retained::dial_native(
+                        address,
+                        saved.as_ref().map(|(tunnel, secret)| (tunnel, secret)),
+                        left,
+                    )
+                },
+                move |left| discovery.dial(left),
+                timeout,
+                nessa_protocol::relay::DIRECT_HEAD_START,
+                &|| false,
+            )?
+        } else {
+            crate::retained::dial_native(
+                address,
+                saved.as_ref().map(|(tunnel, secret)| (tunnel, secret)),
+                timeout,
+            )?
         };
         let interrupt = Arc::new(Socket(socket.try_clone()?));
         Ok(ConnectedProduct {

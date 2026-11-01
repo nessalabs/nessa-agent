@@ -40,6 +40,9 @@ impl RelayKey for IdentityKey {
     fn prove(&self, challenge: &[u8; 32]) -> Option<[u8; 64]> {
         self.0.identity().sign_relay_challenge(challenge).ok()
     }
+    fn sign_origin(&self, origin: &[u8]) -> Option<[u8; 64]> {
+        self.0.identity().sign_tunnel_origin(origin).ok()
+    }
 }
 
 impl RelayAdmission<RelayPermit> for NativeEnrollmentConnections {

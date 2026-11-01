@@ -75,6 +75,10 @@ pub(crate) trait RelayKey: Send + Sync {
     /// The key's relay proof over `challenge`, or `None` when it cannot be
     /// made.
     fn prove(&self, challenge: &[u8; 32]) -> Option<[u8; 64]>;
+    /// The key's signature over a tunnel origin it is publishing, or `None`
+    /// when it cannot be made. The phone checks this before it sends its
+    /// tunnel secret to that origin.
+    fn sign_origin(&self, origin: &[u8]) -> Option<[u8; 64]>;
 }
 
 /// The listener's relay permits, a pool of their own so relayed readers
@@ -185,15 +189,7 @@ where
         let mut watch_address = true;
         let current = *published.borrow_and_update();
         if let Some(origin) = current {
-            if !self
-                .send(
-                    &mut writer,
-                    RelayFrame::Publish {
-                        origin: Box::new(origin),
-                    },
-                )
-                .await
-            {
+            if !self.publish(&mut writer, origin).await {
                 return;
             }
         }
@@ -254,10 +250,7 @@ where
                                 Some(origin) => origin,
                                 None => PublishedOrigin::clear(),
                             };
-                            let frame = RelayFrame::Publish {
-                                origin: Box::new(origin),
-                            };
-                            if !self.send(&mut writer, frame).await {
+                            if !self.publish(&mut writer, origin).await {
                                 return;
                             }
                         }
@@ -302,6 +295,34 @@ where
                 Err(_) => tracing::debug!("relay accept timed out"),
             }
         });
+    }
+
+    /// Publish `origin`, signed by this gateway's key. An empty origin clears
+    /// the one the relay holds. A key that cannot sign sends nothing: an
+    /// unsigned origin would be an address a phone cannot trust.
+    async fn publish(
+        &self,
+        stream: &mut (impl AsyncWrite + Unpin),
+        origin: PublishedOrigin,
+    ) -> bool {
+        let Some(frame) = self.signed_publish(origin) else {
+            tracing::error!("the gateway key cannot sign its tunnel origin");
+            return true;
+        };
+        self.send(stream, frame).await
+    }
+
+    fn signed_publish(&self, origin: PublishedOrigin) -> Option<RelayFrame> {
+        if origin.as_bytes().is_empty() {
+            return Some(RelayFrame::Publish {
+                origin: Box::new(PublishedOrigin::clear()),
+            });
+        }
+        let text = origin.text()?;
+        let signature = self.key.sign_origin(text.as_bytes())?;
+        Some(RelayFrame::Publish {
+            origin: Box::new(PublishedOrigin::signed(&signature, text)?),
+        })
     }
 
     /// Write one frame on the registration, bounded by the ping interval.

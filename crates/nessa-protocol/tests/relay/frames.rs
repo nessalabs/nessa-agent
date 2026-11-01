@@ -22,6 +22,11 @@ fn every_frame() -> Vec<RelayFrame> {
             origin: Box::new(PublishedOrigin::new("https://a.trycloudflare.com").unwrap()),
         },
         RelayFrame::Publish {
+            origin: Box::new(
+                PublishedOrigin::signed(&[6; 64], "https://a.trycloudflare.com").unwrap(),
+            ),
+        },
+        RelayFrame::Publish {
             origin: Box::new(PublishedOrigin::clear()),
         },
         RelayFrame::Lookup { key: [8; 32] },

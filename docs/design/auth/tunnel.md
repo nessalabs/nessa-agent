@@ -118,7 +118,10 @@ a limit of 200 requests in flight, which one person's devices never reach.
 Settings says plainly that a quick address changes and a named one does
 not. A phone that is away asks the relay, where it already looks the
 gateway up by its key, and uses the address the gateway has published.
-Only a paired device's tunnel secret is told that address.
+Only a paired device's tunnel secret is told that address. The phone
+checks the gateway's signature on that address before it sends the secret
+to it. The lookup starts while the direct dial is still in progress, and
+both share the one handshake deadline.
 
 The named tunnel's token is written to a file only the gateway can read
 and passed with `--token-file`, never on the command line, where other
