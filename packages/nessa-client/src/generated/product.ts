@@ -3560,6 +3560,56 @@ export interface ConversationWebhookResetResult {
   /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
   appliedAtMs: number
 }
+/** Result of voice.status, voice.saveKey and voice.forgetKey: whether the gateway holds a realtime voice key. The key itself is never returned. */
+export interface VoiceStatus {
+  /** Whether a key is saved in the gateway's vault. */
+  keySaved: boolean
+  /** The realtime model a call runs. */
+  model: string
+}
+/** Save the realtime voice provider's API key in the gateway's vault, replacing any saved one (voice.saveKey). */
+export interface VoiceSaveKeyParams {
+  /** The key: printable ASCII with no spaces. */
+  key: string
+}
+/** Start a voice call about one conversation (voice.startCall): the gateway mints a short-lived client secret with its saved key. */
+export interface VoiceStartCallParams {
+  /** The conversation the call talks to. */
+  conversationId: string
+}
+/** How the window connects a call. webrtc: OpenAI's realtime calls over WebRTC, with the microphone and spoken audio. scripted: a WebSocket carrying the same realtime events and no audio, served by a scripted provider the gateway was started with (the stress check's fake). */
+export const VoiceTransport = { Webrtc: "webrtc", Scripted: "scripted" } as const
+export type VoiceTransport = (typeof VoiceTransport)[keyof typeof VoiceTransport]
+/** The functions a voice call may call. send_to_agent: send what the person asked, in their own transcribed words, to the conversation as a message. stop_agent: stop the agent's running turn, as the Stop button does. */
+export const VoiceToolName = {
+  SendToAgent: "send_to_agent",
+  StopAgent: "stop_agent",
+} as const
+export type VoiceToolName = (typeof VoiceToolName)[keyof typeof VoiceToolName]
+/** Result of voice.startCall: how to connect one call. The secret is good for one connection before expiresAt; what the call is told and may call was fixed when it was minted. */
+export interface VoiceCall {
+  /** How to connect. */
+  transport: VoiceTransport
+  /** Where to connect: the WebRTC offer's address, or the scripted provider's WebSocket. */
+  callUrl: string
+  /** The short-lived secret the connection presents. Never the saved key. */
+  clientSecret: string
+  /** Unix milliseconds after which the secret connects nothing. */
+  expiresAt: number
+  /** The realtime model the call runs. */
+  model: string
+}
+/** Why the gateway refused a voice method. voice_not_configured: this gateway has no voice provider. voice_key_missing: no key is saved. voice_key_rejected: the provider refused the saved key. voice_unreachable: the provider could not be reached or answered something unreadable. voice_storage_unavailable: the vault could not save or delete the key; what was saved still is. voice_audit_unavailable: the change could not be recorded, so nothing changed and no call started. vault_locked: unlock Nessa first. */
+export const VoiceErrorCode = {
+  VoiceNotConfigured: "voice_not_configured",
+  VoiceKeyMissing: "voice_key_missing",
+  VoiceKeyRejected: "voice_key_rejected",
+  VoiceUnreachable: "voice_unreachable",
+  VoiceStorageUnavailable: "voice_storage_unavailable",
+  VoiceAuditUnavailable: "voice_audit_unavailable",
+  VaultLocked: "vault_locked",
+} as const
+export type VoiceErrorCode = (typeof VoiceErrorCode)[keyof typeof VoiceErrorCode]
 export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
@@ -3621,7 +3671,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 106,
+  maxReadyMethods: 110,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3949,6 +3999,10 @@ export const ProductMethod = {
   BoatSetRuntimeSettings: "boat.setRuntimeSettings",
   ConversationWebhookCursor: "conversation.webhook.cursor",
   ConversationWebhookReset: "conversation.webhook.reset",
+  VoiceStatus: "voice.status",
+  VoiceSaveKey: "voice.saveKey",
+  VoiceForgetKey: "voice.forgetKey",
+  VoiceStartCall: "voice.startCall",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -4068,6 +4122,10 @@ export const productReadyMethods = [
   "boat.setRuntimeSettings",
   "conversation.webhook.cursor",
   "conversation.webhook.reset",
+  "voice.status",
+  "voice.saveKey",
+  "voice.forgetKey",
+  "voice.startCall",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -4178,6 +4236,10 @@ export const productMethodGrants = {
   "boat.setRuntimeSettings": "credential.manage",
   "conversation.webhook.cursor": "credential.manage",
   "conversation.webhook.reset": "credential.manage",
+  "voice.status": "credential.manage",
+  "voice.saveKey": "credential.manage",
+  "voice.forgetKey": "credential.manage",
+  "voice.startCall": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {
