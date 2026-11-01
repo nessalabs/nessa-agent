@@ -69,6 +69,12 @@ const desktopRoles = [
   "fast",
   "access",
   "enter",
+  // A voice call from the composer
+  "voice",
+  "microphone",
+  "microphoneOff",
+  "speaker",
+  "speakerOff",
   // The home header's picture
   "customize",
   "zoomIn",

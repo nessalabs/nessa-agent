@@ -242,6 +242,19 @@ export {
   type GithubCode,
   type GithubConnection,
 } from "./generated/product.js"
+export { type VoiceApi } from "./presentation/voice-api.js"
+export {
+  NessaVoiceError,
+  VoiceRefusalCode,
+  type VoiceMethod,
+} from "./application/voice-error.js"
+export {
+  VoiceErrorCode,
+  VoiceToolName,
+  VoiceTransport,
+  type VoiceCall,
+  type VoiceStatus,
+} from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,
