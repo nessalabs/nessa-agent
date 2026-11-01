@@ -314,6 +314,7 @@ import {
   waitFor,
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
+import { closeAcceptance, parkingEvidence, readFailureView } from "./lib/stress-close.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import {
   composerControls,
@@ -5324,6 +5325,8 @@ const steps = {
 
   async close(run, step, failures) {
     const conversationId = randomUUID()
+    run.failureConversationId = conversationId
+    const parkingOffset = run.stack.gateway.log().length
     const first = prompt(run, STRESS.reply, step, " close")
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
     run.checked.push(conversationId)
@@ -5363,12 +5366,33 @@ const steps = {
       failures,
     )
     if (!closed) return
+    let acceptance
+    try {
+      acceptance = closeAcceptance(
+        readFileSync(run.acpRecording, "utf8"),
+        closing,
+        conversationId,
+      )
+    } catch {
+      acceptance = { state: "invalid-recording", threadId: null, closing: null }
+    }
+    log(`close_thread acceptance ${JSON.stringify({ conversationId, ...acceptance })}`)
+    if (acceptance.state !== "accepted") {
+      failures.push(`close_thread did not accept this thread: ${acceptance.state}`)
+      log(
+        `close_thread parking ${JSON.stringify(parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId))}`,
+      )
+      return
+    }
     await expectShown(run.page, SAYS.closed, failures)
     // The parking sweep looks at least every 15 s.
     const parked = await waitFor(async () => {
       const lease = (await followedOnce(run, conversationId)).lease
       return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
     }, 45_000)
+    log(
+      `close_thread parking ${JSON.stringify({ conversationId, ...parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId) })}`,
+    )
     if (!parked) {
       const lease = (await followedOnce(run, conversationId)).lease
       failures.push(
@@ -8580,6 +8604,7 @@ await main(
             rep.add({ name, ...base, cannotRun: true, error: `not run: ${stopped}` })
             continue
           }
+          run.failureConversationId = null
           const at = Date.now()
           const failures = []
           let error
@@ -8601,9 +8626,7 @@ await main(
           if (!entry.ok) {
             stopped = `${name} did not hold`
             if (options.evidence) {
-              const view = await readWithReviews(run.client, run.main.id).catch(
-                () => null,
-              )
+              const view = await readFailureView(run, readWithReviews).catch(() => null)
               if (view)
                 writeView(
                   options.evidence,

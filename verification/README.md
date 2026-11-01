@@ -158,6 +158,7 @@ verification/
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-stack.mjs   a real gateway, the dev server or a production preview before it, and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
         stress-profile.mjs  explicit stress scenario/model requirements and refusal provider-effect checks; stress-profile.test.mjs covers incompatible fixtures and counted Ask-only work
+        stress-close.mjs    exact close-thread tool acceptance, fresh-target failure views and sanitized bounded parking diagnostics; stress-close.test.mjs covers refusal, identity and evidence redaction
         acp-recording.mjs   complete JSONL and JSON-RPC envelope validation shared by parent Stop and access-refusal evidence
         stress-access-refusals.test.mjs exact window Full-request refusal correlation, sharing the review command observer
         scripted-evidence.mjs the scripted command's verdict line and the pull-request summary; page lines are read from the checks' own results
