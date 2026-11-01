@@ -561,6 +561,42 @@ describe("VoiceController", () => {
     ])
   })
 
+  it("V13: a stop withdraws a send still queued and lands after the one on its way", async () => {
+    const { controller, connection, conversation } = setup()
+    const order: string[] = []
+    const answers: ((sent: SendResult) => void)[] = []
+    conversation.send = async (text: string) => {
+      order.push(`send:${text}`)
+      conversation.sent.push(text)
+      const turn = `turn-${conversation.sent.length}`
+      conversation.turnsSent.push(turn)
+      return {
+        result: await new Promise<SendResult>((resolve) => answers.push(resolve)),
+        turn,
+      }
+    }
+    conversation.stop = async () => {
+      order.push("stop")
+      return true
+    }
+    await controller.start("s-1")
+    says(connection, "i1", "first")
+    calls(connection, "send_to_agent", "c1")
+    await settle()
+    says(connection, "i2", "second")
+    calls(connection, "send_to_agent", "c2")
+    await settle()
+    calls(connection, "stop_agent", "c3")
+    await settle()
+    expect(order).toEqual(["send:First"])
+    answers[0]?.("sent")
+    await settle()
+    await settle()
+    expect(order).toEqual(["send:First", "stop"])
+    expect(connection.outputs()).toContain("not_sent")
+    expect(connection.outputs()).toContain("stopped")
+  })
+
   it("a tool asked for by a response the person talked over is not called", async () => {
     const { controller, connection, conversation } = setup()
     await controller.start("s-1")

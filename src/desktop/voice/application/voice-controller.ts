@@ -114,6 +114,14 @@ interface Call {
    */
   sends: Promise<void>
   /**
+   * How many times the voice asked to stop. A send admitted before a stop
+   * and not yet on its way is withdrawn, so a stop is never undone by a
+   * request the person made before it (V13).
+   */
+  stops: number
+  /** The send on its way to the agent now, which a stop waits out. */
+  dispatching: Promise<unknown> | null
+  /**
    * The turns the voice started, by their names, whose answer it has not
    * handed over. Whether each has ended is the conversation's to say; once
    * every one has, what they said is handed over together (V11, V12). A
@@ -179,6 +187,8 @@ export class VoiceController {
       sending: 0,
       pending: 0,
       sends: Promise.resolve(),
+      stops: 0,
+      dispatching: null,
       waiting: [],
       ends: new Map(),
       seen: new Set(),
@@ -402,7 +412,11 @@ export class VoiceController {
         outcome = await this.sendHeard(call)
         break
       case VoiceToolName.StopAgent:
-        // V13
+        // V13: what is still queued is withdrawn; what is already on its
+        // way is waited out, so the stop lands after it.
+        call.stops++
+        await call.dispatching
+        if (!this.current(call)) return
         outcome = (await call.conversation.stop()) ? "stopped" : "nothing_running"
         break
       default:
@@ -424,19 +438,24 @@ export class VoiceController {
       .filter((heard) => !heard.sent)
     for (const heard of covered) heard.sent = true
     call.pending++
+    const stops = call.stops
     // Sends go in the order they were asked for (V8).
     const before = call.sends
     let settled = () => {}
     call.sends = new Promise((resolve) => (settled = resolve))
     try {
       await before
-      return await this.sendCovered(call, covered)
+      return await this.sendCovered(call, covered, stops)
     } finally {
       settled()
     }
   }
 
-  private async sendCovered(call: Call, covered: readonly Heard[]): Promise<ToolOutcome> {
+  private async sendCovered(
+    call: Call,
+    covered: readonly Heard[],
+    stops: number,
+  ): Promise<ToolOutcome> {
     const written = () => covered.every((heard) => heard.text !== null)
     if (!written()) await this.waitFor(call, written)
     if (!this.current(call)) return "not_sent"
@@ -444,16 +463,20 @@ export class VoiceController {
       .map((heard) => tidy(heard.text ?? ""))
       .filter((part) => part !== "")
       .join(" ")
-    if (text === "") {
+    const withdrawn = call.stops !== stops
+    if (text === "" || withdrawn) {
       call.pending--
       // A reply held back for this send can go now.
       this.replied(call)
       this.update(call)
-      return "nothing_heard"
+      return withdrawn ? "not_sent" : "nothing_heard"
     }
     call.sending++
     this.update(call)
-    const { result, turn } = await call.conversation.send(text)
+    const sending = call.conversation.send(text)
+    call.dispatching = sending.catch(() => {})
+    const { result, turn } = await sending
+    call.dispatching = null
     if (!this.current(call)) return result
     call.sending--
     call.pending--
