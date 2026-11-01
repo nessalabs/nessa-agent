@@ -2,6 +2,10 @@
 //! words a person uses, and a window no screen could draw is refused.
 use super::*;
 
+fn widget(plugin: &str, id: &str) -> WidgetRef {
+    WidgetRef::new(plugin.into(), id.into()).unwrap()
+}
+
 fn conversation(n: u8) -> PaneContent {
     PaneContent::Conversation(
         ConversationId::new(&format!("00000000-0000-4000-8000-0000000000{n:02x}")).unwrap(),
@@ -12,12 +16,17 @@ fn pane(focused: bool, content: PaneContent) -> WindowPane {
     WindowPane::new(50, focused, content).unwrap()
 }
 
+fn shut() -> WindowPanel {
+    WindowPanel::new(false, vec![], None).unwrap()
+}
+
 fn window(columns: Vec<WindowColumn>) -> Result<WorkspaceWindow, WindowRefusal> {
     WorkspaceWindow::new(
         WindowArrangement::Columns,
         true,
         true,
         WindowShowing::Panes,
+        shut(),
         columns,
     )
 }
@@ -120,4 +129,54 @@ fn a_window_no_screen_could_draw_is_refused() {
         Err(WindowRefusal::Widget)
     );
     assert!(WidgetRef::new("plugin".into(), "x".repeat(MAX_WIDGET_ID_BYTES)).is_ok());
+}
+
+#[test]
+fn a_panels_front_is_one_of_its_tabs_and_sixteen_is_the_last_it_holds() {
+    let subagents = widget("subagents", "chat");
+    let app = widget("mcp:huddle", "call-1");
+    let open = WindowPanel::new(
+        true,
+        vec![subagents.clone(), app.clone()],
+        Some(app.clone()),
+    );
+    let open = open.unwrap();
+    assert!(open.open());
+    assert_eq!(open.tabs(), &[subagents.clone(), app.clone()]);
+    assert_eq!(open.front(), Some(&app));
+
+    assert_eq!(
+        WindowPanel::new(true, vec![subagents.clone()], None),
+        Err(WindowRefusal::Panel)
+    );
+    assert_eq!(
+        WindowPanel::new(false, vec![], Some(subagents.clone())),
+        Err(WindowRefusal::Panel)
+    );
+    assert_eq!(
+        WindowPanel::new(
+            true,
+            vec![subagents.clone()],
+            Some(widget("subagents", "other"))
+        ),
+        Err(WindowRefusal::Panel)
+    );
+    assert_eq!(
+        WindowPanel::new(
+            true,
+            vec![subagents.clone(), subagents.clone()],
+            Some(subagents)
+        ),
+        Err(WindowRefusal::Panel)
+    );
+    let sixteen: Vec<_> = (0..MAX_PANEL_TABS)
+        .map(|index| widget("subagents", &index.to_string()))
+        .collect();
+    assert!(WindowPanel::new(true, sixteen.clone(), Some(sixteen[0].clone())).is_ok());
+    let mut seventeen = sixteen;
+    seventeen.push(widget("subagents", "more"));
+    assert_eq!(
+        WindowPanel::new(true, seventeen, None),
+        Err(WindowRefusal::Panel)
+    );
 }

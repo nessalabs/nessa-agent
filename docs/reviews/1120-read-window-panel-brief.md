@@ -19,7 +19,7 @@ says it. An agent can tell that a widget (the subagents widget, an MCP App)
 is open in the panel.
 
 The decision, the state table, the invariants and the alternatives are
-[ADR 1120](../adr/todo/1120-read-window-panel.md). Review the implementation
+[ADR 1120](../adr/done/1120-read-window-panel.md). Review the implementation
 against that table. A new state or ordering goes into the table before it
 goes into code.
 

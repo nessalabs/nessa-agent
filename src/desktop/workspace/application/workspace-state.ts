@@ -228,6 +228,11 @@ export interface WorkspaceState {
    * (`usecases/window.ts`) is said only while one is.
    */
   readonly arrangement: WindowArrangement | null
+  /**
+   * Whether the right panel is drawn, as the layout last said
+   * (`panelShown`). False until a layout has said.
+   */
+  readonly panelOpen: boolean
   readonly tree: Tree
   /**
    * Whether a session can be shared from this window: composition gave it a
@@ -450,6 +455,7 @@ export const initialWorkspace: WorkspaceState = {
     sessionListWidth: 312,
   },
   arrangement: null,
+  panelOpen: false,
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
   shareable: false,
   share: null,

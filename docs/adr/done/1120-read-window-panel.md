@@ -4,11 +4,11 @@
 
 An agent reading the desktop with `read_window` should be able to tell that a
 widget is open in the focused chat's right panel. Since widgets became tabs
-there ([326](../done/326-widgets.md), amended), the publication still described
+there ([326](326-widgets.md), amended), the publication still described
 only panes and a widget drawn over the window.
 
 - **Date:** 2026-11-01
-- **Status:** proposed
+- **Status:** accepted
 
 ## Context
 
@@ -71,7 +71,7 @@ the sidebar and the session list. The wire field stays a boolean, as those do.
 ## Alternatives considered
 
 - **Publish a panel widget as a pane item.** That is the old path. A widget is
-  not a pane ([326](../done/326-widgets.md)); saying it is one tells the agent
+  not a pane ([326](326-widgets.md)); saying it is one tells the agent
   the window has a pane it does not draw.
 - **Omit `panel` when it is closed, or omit `tabs` when it is closed.** Closed
   with tabs, open with none, and a publisher that forgot the field become the

@@ -3246,7 +3246,7 @@ export const WorkspaceShowing = {
   Widget: "widget",
 } as const
 export type WorkspaceShowing = (typeof WorkspaceShowing)[keyof typeof WorkspaceShowing]
-/** A widget a pane or the window shows, by the plugin that draws it and its id within that plugin. */
+/** A widget the panel, a pane, or the window shows, by the plugin that draws it and its id within that plugin. */
 export interface WorkspaceWidget {
   /** The plugin that draws the widget. */
   plugin: string
@@ -3285,7 +3285,16 @@ export interface WorkspaceColumn {
   /** The column's panes, top to bottom. */
   panes: WorkspacePane[]
 }
-/** What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say. */
+/** The focused chat's right panel. Other chats' panels are not here; focusing that chat is what publishes them. open is whether this panel is drawn. tabs are that chat's, in the order they were opened, and front is the one in front: present exactly when tabs is not empty, and one of them. */
+export interface WorkspacePanel {
+  /** Whether the panel is drawn beside the panes. Closed, its tabs are not on screen; they are still this chat's. */
+  open: boolean
+  /** The focused chat's panel tabs, in the order they were opened. Empty when that chat has none. At most 16, the domain's MAX_PANEL_TABS. */
+  tabs: WorkspaceWidget[]
+  /** The tab in front. Present exactly when tabs is not empty, and one of them. */
+  front?: WorkspaceWidget
+}
+/** What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, the focused chat's right panel, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say. */
 export interface WorkspaceWindow {
   /** The window's layout. */
   arrangement: WorkspaceArrangement
@@ -3297,6 +3306,8 @@ export interface WorkspaceWindow {
   showing: WorkspaceShowing
   /** The widget drawn over the panes, when showing is widget. */
   widget?: WorkspaceWidget
+  /** The focused chat's right panel: whether it is drawn, its tabs, and the tab in front. */
+  panel: WorkspacePanel
   /** The panes' columns, left to right. */
   columns: WorkspaceColumn[]
 }
