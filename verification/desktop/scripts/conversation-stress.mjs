@@ -2899,14 +2899,18 @@ const steps = {
     // queued behind the running turn: the call works on until both end.
     const follow = prompt(run, `Also ${STRESS.reply}`, step, " voice")
     const told = realtime.told().length
+    // Outputs since a point, so an earlier "sent" never stands for this one.
+    const since = (from) => realtime.outputs().slice(from)
+    const beforeFollow = realtime.outputs().length
     realtime.say(follow)
     run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
-    if (!(await waitFor(() => realtime.outputs().at(-1) === "sent", 10_000)))
-      failures.push(`the follow-up answered ${JSON.stringify(realtime.outputs().at(-1))}`)
+    if (!(await waitFor(() => since(beforeFollow).includes("sent"), 10_000)))
+      failures.push(`the follow-up answered ${JSON.stringify(since(beforeFollow))}`)
+    const beforeStop = realtime.outputs().length
     realtime.ask("stop_agent")
     await settled(run, run.main.id, waiting, wait, "cancelled", failures)
-    if (!(await waitFor(() => realtime.outputs().at(-1) === "stopped", 10_000)))
-      failures.push(`stop_agent answered ${JSON.stringify(realtime.outputs().at(-1))}`)
+    if (!(await waitFor(() => since(beforeStop).includes("stopped"), 10_000)))
+      failures.push(`stop_agent answered ${JSON.stringify(since(beforeStop))}`)
     // Once the agent stops work, what it said since the first message is
     // handed over once, and the call listens again.
     const handedOnce = await waitFor(
