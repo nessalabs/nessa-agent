@@ -24,6 +24,8 @@ mod install;
 mod link;
 mod open_ssh;
 mod peer;
+mod peer_update;
+pub(crate) use peer_update::PeerUpdates;
 mod release;
 mod sftp;
 mod transfer;

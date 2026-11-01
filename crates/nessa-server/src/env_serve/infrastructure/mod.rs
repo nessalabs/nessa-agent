@@ -8,7 +8,9 @@
 //! each is placed in the workspace. `dial.rs`
 //! is how a paired environment reaches its gateway instead of being reached,
 //! and `pairing.rs` is that machine's pairing (`environment/pairing`),
-//! enrolled and asked whether the owner approved it. `grants.rs` is what
+//! enrolled and asked whether the owner approved it; `self_update.rs` is
+//! that machine taking its gateway's build when the gateway speaks another
+//! lease protocol, and running it in place of its own. `grants.rs` is what
 //! this host's owner grants each gateway (`environment/grants.json`), and
 //! `grant_audit.rs` the journal of every change made to it; `cedar/` is
 //! the lease policy deciding, over a peer's entry there, whether it may
@@ -27,6 +29,7 @@ mod ledger;
 mod lock;
 mod outbox;
 mod pairing;
+mod self_update;
 pub(crate) use cedar::CedarLeasePolicy;
 pub(crate) use commands::{ShepherdCommands, COMMAND_VARIABLES};
 pub(crate) use dial::dial;
@@ -38,3 +41,4 @@ pub(crate) use ledger::FileLedger;
 pub(crate) use lock::{ServeLock, ServeLockError};
 pub(crate) use outbox::FileOutbox;
 pub(crate) use pairing::{Approved, FileEnrollmentCode, FilePairingEnvironment};
+pub(crate) use self_update::{fetch, kept_for, run_in_place, this_build, FETCH_DEADLINE};

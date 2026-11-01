@@ -676,6 +676,7 @@ impl LeaseConnector for Connector {
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
             artifacts: super::connector::ArtifactTransport::Channels(Arc::new(NoChannels)),
+            updates: None,
         })
     }
 }
