@@ -22,7 +22,10 @@ import {
  *               full access, nothing is asked and the tool runs
  *   reviews     one turn asks `--reviews` reviews in a row, each a card
  *   large       one review larger than the old 16 KB display limit
- *   stop        Send turns into Stop while the turn runs; Stop cancels it
+ *   stop        Send turns into Stop while the turn runs; Stop cancels it.
+ *               While it runs, the chat's channel in the sidebar shows a
+ *               spinner at its end, which its settings replace only under
+ *               the pointer; stopped, the spinner is gone
  *   fail        the turn fails; the next message is sent in the same conversation
  *   usageLimit  the turn ends in a usage limit; the card shows, the project
  *               preference is turned on and back off, and the turn is not resumed
@@ -717,6 +720,94 @@ async function channelShowsList(page, failures) {
     failures.push("choosing a channel left the session list hidden")
   const panes = await page.locator(css.pane).count()
   if (panes !== 1) failures.push(`choosing a channel left ${panes} panes, not 1`)
+}
+
+/** The sidebar channel the main conversation is listed in. */
+const MAIN_CHANNEL = "Conversations"
+
+/**
+ * A channel in the sidebar shows that something runs in it with a spinner at
+ * its row's end, and its name says "Running" to a reader. Its settings stay
+ * hidden until the row is pointed at, and then take the spinner's place.
+ * Without a running turn no spinner is drawn.
+ */
+async function channelRunning(page, name, running, failures) {
+  const row = page
+    .locator(`${css.sidebar} ${css.kitRowFrame}`)
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .filter({ has: page.locator(".workspace-row-icon") })
+    .first()
+  const read = () =>
+    row.evaluate((frame) => {
+      // How much of an element shows: its opacity times every ancestor's.
+      const shown = (element) => {
+        if (!element) return null
+        let opacity = 1
+        for (let at = element; at; at = at.parentElement)
+          opacity *= Number(getComputedStyle(at).opacity)
+        return opacity
+      }
+      return {
+        // A count waiting on the person takes the spinner's place.
+        counted: frame.querySelector("[data-trailing='count']") !== null,
+        spinner: shown(frame.querySelector('.workspace-status[data-status="running"]')),
+        settings: shown(frame.querySelector("[data-channel-settings-open]")),
+        said: (
+          frame.querySelector("[data-size]")?.getAttribute("aria-label") ?? ""
+        ).includes("Running"),
+      }
+    })
+  if (!(await row.count())) {
+    // The tree layout draws its channels as branches, whose controls already
+    // show only under the pointer; this check is the columns layout's.
+    const branch = page.locator(`${css.sidebar} [data-row="channel"]`, { hasText: name })
+    if (!(await branch.count())) failures.push(`no channel ${name} in the sidebar`)
+    return
+  }
+  // Away from the window's left edge, where the pointer would peek the sidebar out.
+  await page.mouse.move(600, 400)
+  const wanted = (now) =>
+    now.counted
+      ? !running || now.spinner === null
+      : (now.spinner !== null) === running && now.said === running
+  let now = await read()
+  await waitFor(async () => wanted((now = await read())), 10_000)
+  if (!wanted(now))
+    failures.push(
+      `channel ${name} ${running ? "shows no spinner while" : "still shows a spinner after"} a turn runs: ${JSON.stringify(now)}`,
+    )
+  // A count waiting on the person stands in the spinner's place: the spinner
+  // goes unchecked this time, and the run says so.
+  if (running && now.counted)
+    log(`channel ${name} held a waiting count, so its spinner was not checked`)
+  if (now.settings === null) {
+    failures.push(`channel ${name} has no settings`)
+    return
+  }
+  // Settled, not after a fixed wait: the kit fades them over its transition.
+  const spins = running && !now.counted
+  const atRest =
+    (await waitFor(async () => {
+      const at = await read()
+      return at.settings === 0 && (!spins || at.spinner === 1) ? at : null
+    }, 5_000)) ?? (await read())
+  if (atRest.settings !== 0)
+    failures.push(`channel ${name} shows its settings at rest (${atRest.settings})`)
+  if (spins && atRest.spinner !== 1)
+    failures.push(`channel ${name}'s spinner shows at ${atRest.spinner} at rest`)
+  await row.locator(":scope > [data-size]").hover({ timeout: 10_000 })
+  const pointed =
+    (await waitFor(async () => {
+      const at = await read()
+      return at.settings === 1 && !(at.spinner > 0) ? at : null
+    }, 5_000)) ?? (await read())
+  if (pointed.settings !== 1)
+    failures.push(`channel ${name} pointed at shows its settings at ${pointed.settings}`)
+  if (pointed.spinner > 0)
+    failures.push(
+      `channel ${name} pointed at still shows its spinner (${pointed.spinner})`,
+    )
+  await page.mouse.move(600, 400)
 }
 
 /** The compact rail and the window bar keep separate geometry. */
@@ -2209,11 +2300,15 @@ const steps = {
       failures.push("Send did not turn into Stop while the turn ran")
       return
     }
+    await channelRunning(run.page, MAIN_CHANNEL, true, failures)
     await dock(run.page)
       .getByRole(...composerControls.stop)
       .click({ timeout: 10_000 })
     await settled(run, run.main.id, seen, text, "cancelled", failures)
     if (!(await sendShown(run.page))) failures.push("Stop did not turn back into Send")
+    // Background turns run in the same channel and keep it running: the
+    // channel is idle only once they are drained and held.
+    await run.exclusive(() => channelRunning(run.page, MAIN_CHANNEL, false, failures))
   },
 
   async fail(run, step, failures) {
