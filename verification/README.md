@@ -143,6 +143,8 @@ verification/
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         workspace.test.mjs  a measured drop must change pane order and remove its carried copy (#370)
+        hover-state.mjs     pinned visual control and pointer owner, finite-animation samples and action hits captured before the pointer leaves
+        hover-state.test.mjs strict hover evidence; NESSA_HOVER_BROWSER=bundled (or a local executable path) runs the sibling-action browser regression, also required by the pinned Chromium CI job
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         perf.test.mjs       the frame budget's unrounded decision, and the LoAF sample clock (#369)
@@ -344,3 +346,15 @@ Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-co
 
 The app-review fixture contract and ordering evidence are in
 [app review verification](../docs/design/app-review-verification.md).
+
+## Hover evidence
+
+The sampler pins the input, visual control and pointer owner before moving the pointer. A sibling action belongs to the logical row frame; its fill still comes from that frame's original control. The default pointer owner remains the visual control. A detached or reparented input/control cannot borrow another frame's pointer evidence. Membership means the node's nearest configured row is the captured row, not merely its ancestor; input, control, pointer and action classification share this one predicate. Hit classification uses the captured frame and actual pointer in that same snapshot; callers cannot reselect a row.
+
+| Stage | Evidence |
+| --- | --- |
+| Input hovered | Read the pinned control's fill and the owner's actual pointer containment |
+| Finite animations settled | Read input/control membership, fill and the actual pointer hit in the same pinned row while hover is held |
+| Pointer moved away | Record the away state, then remove the listener and dispose the pinned handles |
+
+`NESSA_HOVER_BROWSER=bundled node --test verification/desktop/scripts/lib/hover-state.test.mjs` runs the sibling-action and reparenting regression with Playwright's installed Chromium. An executable path selects an existing local Chromium instead. The existing browser CI job runs this after installing the pinned browsers; ordinary browser-free helper runs explicitly skip that browser case.

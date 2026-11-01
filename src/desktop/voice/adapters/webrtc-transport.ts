@@ -36,6 +36,8 @@ export function webrtcTransport(): RealtimeTransport {
   return {
     async connect(call: VoiceCall, signal: AbortSignal): Promise<RealtimeConnection> {
       const refused = () => new TransportRefused("Couldn’t connect the call. Try again.")
+      const audio = new Audio()
+      audio.autoplay = true
       let microphone: MediaStream
       try {
         microphone = await navigator.mediaDevices.getUserMedia({
@@ -54,11 +56,11 @@ export function webrtcTransport(): RealtimeTransport {
         for (const track of microphone.getTracks()) track.stop()
         throw refused()
       }
-      const peer = new RTCPeerConnection()
-      const audio = new Audio()
-      audio.autoplay = true
-      const context = new AudioContext()
-      const input = meter(context, microphone)
+      // Everything below is let go of by `release`, which owns the microphone
+      // from here on: a constructor that throws still stops it.
+      let peer: RTCPeerConnection | null = null
+      let context: AudioContext | null = null
+      let input = () => 0
       let output = () => 0
       let listener: (event: RealtimeEvent) => void = () => {}
       let closedListener: () => void = () => {}
@@ -71,46 +73,55 @@ export function webrtcTransport(): RealtimeTransport {
         signal.removeEventListener("abort", aborted)
         for (const track of microphone.getTracks()) track.stop()
         audio.srcObject = null
-        peer.close()
-        void context.close().catch(() => {})
+        peer?.close()
+        void context?.close().catch(() => {})
         return true
       }
       let opened = false
       const aborted = () => release()
       signal.addEventListener("abort", aborted)
-      peer.addEventListener("track", (event) => {
-        const [stream] = event.streams
-        if (!stream || released) return
-        audio.srcObject = stream
-        output = meter(context, stream)
-      })
-      for (const track of microphone.getTracks()) peer.addTrack(track, microphone)
-      const channel = peer.createDataChannel("oai-events")
-      channel.addEventListener("message", (message) => {
-        try {
-          const event: unknown = JSON.parse(String(message.data))
-          if (
-            typeof event === "object" &&
-            event !== null &&
-            typeof (event as { type?: unknown }).type === "string"
-          )
-            listener(event as RealtimeEvent)
-        } catch {
-          console.warn("The voice call sent something unreadable")
-        }
-      })
-      // After it opened, the far side or the network ending the call is a drop.
-      const ended = () => {
-        if (opened && release()) closedListener()
-      }
-      channel.addEventListener("close", ended)
-      peer.addEventListener("connectionstatechange", () => {
-        if (peer.connectionState === "failed" || peer.connectionState === "closed")
-          ended()
-      })
+      let channel: RTCDataChannel
       try {
-        const offer = await peer.createOffer()
-        await peer.setLocalDescription(offer)
+        const connection = new RTCPeerConnection()
+        peer = connection
+        const meters = new AudioContext()
+        context = meters
+        input = meter(meters, microphone)
+        connection.addEventListener("track", (event) => {
+          const [stream] = event.streams
+          if (!stream || released) return
+          audio.srcObject = stream
+          output = meter(meters, stream)
+        })
+        for (const track of microphone.getTracks()) connection.addTrack(track, microphone)
+        channel = connection.createDataChannel("oai-events")
+        channel.addEventListener("message", (message) => {
+          try {
+            const event: unknown = JSON.parse(String(message.data))
+            if (
+              typeof event === "object" &&
+              event !== null &&
+              typeof (event as { type?: unknown }).type === "string"
+            )
+              listener(event as RealtimeEvent)
+          } catch {
+            console.warn("The voice call sent something unreadable")
+          }
+        })
+        // After it opened, the far side or the network ending the call is a drop.
+        const ended = () => {
+          if (opened && release()) closedListener()
+        }
+        channel.addEventListener("close", ended)
+        connection.addEventListener("connectionstatechange", () => {
+          if (
+            connection.connectionState === "failed" ||
+            connection.connectionState === "closed"
+          )
+            ended()
+        })
+        const offer = await connection.createOffer()
+        await connection.setLocalDescription(offer)
         const response = await fetch(call.callUrl, {
           method: "POST",
           body: offer.sdp,
@@ -123,7 +134,7 @@ export function webrtcTransport(): RealtimeTransport {
         if (!response.ok) throw new Error(`call refused (${response.status})`)
         const answer = await response.text()
         if (released) throw new Error("ended while connecting")
-        await peer.setRemoteDescription({ type: "answer", sdp: answer })
+        await connection.setRemoteDescription({ type: "answer", sdp: answer })
         await new Promise<void>((resolve, reject) => {
           if (channel.readyState === "open") return resolve()
           const timer = setTimeout(() => reject(new Error("timed out")), OPEN_TIMEOUT_MS)

@@ -302,6 +302,26 @@ describe("VoiceController", () => {
     expect(conversation.sent).toEqual(["Run the build"])
   })
 
+  it("V8: a later request never reaches the agent ahead of one waiting for its words", async () => {
+    const { controller, connection, conversation } = setup()
+    await controller.start("s-1")
+    connection.emit({ type: "input_audio_buffer.committed", item_id: "i1" })
+    calls(connection, "send_to_agent", "c1")
+    await settle()
+    says(connection, "i2", "then deploy it")
+    calls(connection, "send_to_agent", "c2")
+    await settle()
+    expect(conversation.sent).toEqual([])
+    connection.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "i1",
+      transcript: "first run the tests",
+    })
+    await settle()
+    await settle()
+    expect(conversation.sent).toEqual(["First run the tests", "Then deploy it"])
+  })
+
   it("V9: a transcript that never comes is waited for only so long", async () => {
     const { controller, connection, conversation, clock } = setup()
     await controller.start("s-1")
@@ -506,6 +526,75 @@ describe("VoiceController", () => {
     connection.emit({ type: "response.done", response: { status: "completed" } })
     connection.emit({ type: "response.done", response: { status: "completed" } })
     expect(controller.snapshot().phase).toBe("listening")
+  })
+
+  it("V12: a send queued behind an unanswered one holds back the first turn's reply", async () => {
+    const { controller, connection, conversation } = setup()
+    const answers: ((sent: SendResult) => void)[] = []
+    conversation.send = async (text: string) => {
+      conversation.sent.push(text)
+      const turn = `turn-${conversation.sent.length}`
+      conversation.turnsSent.push(turn)
+      return {
+        result: await new Promise<SendResult>((resolve) => answers.push(resolve)),
+        turn,
+      }
+    }
+    await controller.start("s-1")
+    says(connection, "i1", "first")
+    calls(connection, "send_to_agent", "c1")
+    await settle()
+    says(connection, "i2", "second")
+    calls(connection, "send_to_agent", "c2")
+    await settle()
+    // The first turn ends before its send is answered; the second waits.
+    conversation.end({ text: "One.", ended: "finished" }, ["turn-1"])
+    answers[0]?.("sent")
+    await settle()
+    expect(connection.told().some((text) => text.startsWith("Agent reply:"))).toBe(false)
+    expect(conversation.sent).toEqual(["First", "Second"])
+    answers[1]?.("sent")
+    await settle()
+    conversation.end({ text: "Two.", ended: "finished" }, ["turn-2"])
+    expect(connection.told().filter((text) => text.startsWith("Agent reply:"))).toEqual([
+      "Agent reply:\nOne.\n\nTwo.",
+    ])
+  })
+
+  it("V13: a stop withdraws a send still queued and lands after the one on its way", async () => {
+    const { controller, connection, conversation } = setup()
+    const order: string[] = []
+    const answers: ((sent: SendResult) => void)[] = []
+    conversation.send = async (text: string) => {
+      order.push(`send:${text}`)
+      conversation.sent.push(text)
+      const turn = `turn-${conversation.sent.length}`
+      conversation.turnsSent.push(turn)
+      return {
+        result: await new Promise<SendResult>((resolve) => answers.push(resolve)),
+        turn,
+      }
+    }
+    conversation.stop = async () => {
+      order.push("stop")
+      return true
+    }
+    await controller.start("s-1")
+    says(connection, "i1", "first")
+    calls(connection, "send_to_agent", "c1")
+    await settle()
+    says(connection, "i2", "second")
+    calls(connection, "send_to_agent", "c2")
+    await settle()
+    calls(connection, "stop_agent", "c3")
+    await settle()
+    expect(order).toEqual(["send:First"])
+    answers[0]?.("sent")
+    await settle()
+    await settle()
+    expect(order).toEqual(["send:First", "stop"])
+    expect(connection.outputs()).toContain("not_sent")
+    expect(connection.outputs()).toContain("stopped")
   })
 
   it("a tool asked for by a response the person talked over is not called", async () => {
