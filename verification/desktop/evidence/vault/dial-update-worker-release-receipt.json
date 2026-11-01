@@ -9,7 +9,12 @@
   "target": "x86_64-unknown-linux-gnu",
   "source": "public GitHub archive of the commit, checked byte-identical to git archive; the builder held no Git or account credentials",
   "seedImage": "bsh_SuwMO3FoyEUsQUOyr6Hm_hvHw6iyY85H-s6jRWjXszM",
-  "replaced": ["/opt/nessa/bin/nessa", "/opt/nessa/bin/nessa-mcp", "/opt/nessa/BUILD.json", "/opt/nessa/Cargo.lock"],
+  "replaced": [
+    "/opt/nessa/bin/nessa",
+    "/opt/nessa/bin/nessa-mcp",
+    "/opt/nessa/BUILD.json",
+    "/opt/nessa/Cargo.lock"
+  ],
   "image": "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4",
   "share": "shr_d55d002bdffc1f06",
   "snapshot": "nessa-worker-a8cbfd3c-b3fcbc5-linux-x64",
