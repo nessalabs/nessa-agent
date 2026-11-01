@@ -10,7 +10,8 @@ import {
   type BoatApi,
   type CredentialApi,
   type DevicesApi,
-  type DevicesListResult,
+  type DeviceMachine,
+  type DeviceWorker,
   type PairingApi,
 } from "@nessa/client"
 import {
@@ -52,13 +53,40 @@ export interface WorkerCode {
   readonly pairing: WorkerPairing
 }
 
+/**
+ * Every page of `devices.list`, read one after another: the hub as the
+ * first page read it, and each worker once, in the order of their keys.
+ */
+export interface DevicesRead {
+  readonly hub?: DeviceMachine
+  /** Where the hub's native listener is bound; absent while linking is off. */
+  readonly listening?: string
+  readonly workers: readonly DeviceWorker[]
+  /** More pages than [`MAX_PAGES`] follow: workers past these are not read. */
+  readonly more: boolean
+}
+
+/**
+ * The most pages one read follows: 64 workers each, so a fleet of tens of
+ * thousands is read whole, and a hub that never ends its list still lets
+ * the read end.
+ */
+export const MAX_PAGES = 1_024
+
 /** Whether a cloud (Boat) connection is saved. */
 export type CloudState = "connected" | "disconnected" | "locked"
 
 export interface DevicesGateway {
   /** How often an open view reads again. */
   readonly pollMs: number
-  list(): Promise<Outcome<DevicesListResult>>
+  list(): Promise<Outcome<DevicesRead>>
+  /**
+   * Let other computers reach the hub: turn native linking on, which also
+   * moves a listener Settings once bound to this machine alone to every
+   * interface. `"restarting"`: the gateway starts again with it, and this
+   * connection closes.
+   */
+  reach(): Promise<Outcome<"restarting" | "unchanged">>
   cloud(): Promise<Outcome<CloudState>>
   /** Phones and apps linked to the hub (Settings › Linked devices). */
   linked(): Promise<Outcome<readonly LinkedDevice[]>>
@@ -106,7 +134,29 @@ export function devicesGateway(options: {
   }
   return {
     pollMs: options.pollMs ?? 5_000,
-    list: () => answer((client) => client.devices.list()),
+    list: () =>
+      answer(async (client) => {
+        const first = await client.devices.list()
+        const workers = [...first.workers]
+        let next = first.next
+        for (let pages = 1; next !== undefined && pages < MAX_PAGES; pages += 1) {
+          const after: string = next
+          const page = await client.devices.list(after)
+          workers.push(...page.workers)
+          next = page.next
+          // Pages go forward by key: one that does not would read the same
+          // workers again, so the read ends there as one cut short.
+          if (next !== undefined && next <= after) break
+        }
+        return {
+          ...(first.hub ? { hub: first.hub } : {}),
+          ...(first.listening !== undefined ? { listening: first.listening } : {}),
+          workers,
+          more: next !== undefined,
+        }
+      }),
+    reach: () =>
+      answer(async (client) => (await client.pairing.setLinking(true)).applies),
     cloud: () => answer(async (client) => (await client.boat.status()).state),
     linked: () =>
       answer(async (client) => {

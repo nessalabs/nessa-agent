@@ -18,8 +18,22 @@ import {
 import type { Direction, PaneKey } from "../../../split-panes/model/pane-layout"
 import { useHeaderImage } from "../../../adapters/header-image"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
-import { MenuItem, MenuSeparator, MenuShortcut } from "../../../ui/menu"
+import {
+  MenuItem,
+  MenuLabel,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuShortcut,
+} from "../../../ui/menu"
+import { useTranscriptViewPreference } from "../../adapters/storage/transcript-view-preference"
+import { transcriptViews, type TranscriptView } from "../../model/transcript-view"
 import { useWorkspaceFrame, type ShortcutCommand } from "../workspace-frame"
+
+const viewIcons: Record<TranscriptView, DesktopIconRole> = {
+  detailed: "transcriptDetailed",
+  compact: "transcriptCompact",
+}
 
 const moves: readonly [Direction, string, ShortcutCommand, DesktopIconRole][] = [
   ["left", "Move Left", "moveLeft", "moveLeft"],
@@ -32,7 +46,9 @@ const moves: readonly [Direction, string, ShortcutCommand, DesktopIconRole][] = 
  * What a pane offers, in its "…" menu and on its header's context menu:
  * split it with a new session, open another beside it (where the layout has
  * a switcher), move it (context menu), even the panes out, show its session
- * in the sidebar, change the header picture, close it. Mounted only while a
+ * in the sidebar, choose how much of the agent's work conversations show
+ * (`transcript-view.ts`; one choice for every pane), change the header
+ * picture, close it. Mounted only while a
  * menu is open: the picture is chosen through `onChooseHeaderPicture`, which
  * the pane's header holds, since the file dialog answers after the menu has
  * gone.
@@ -51,6 +67,7 @@ export function PaneMenuItems({
   onChooseHeaderPicture: () => void
 }) {
   const [picture, , clearPicture] = useHeaderImage()
+  const [view, chooseView] = useTranscriptViewPreference()
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const count = useWorkspaceSelector(selectPaneCount)
@@ -127,6 +144,22 @@ export function PaneMenuItems({
           Show in Sidebar
         </MenuItem>
       ) : null}
+      <MenuSeparator />
+      <MenuLabel>Transcript</MenuLabel>
+      <MenuRadioGroup
+        value={view}
+        onValueChange={(next) => {
+          const chosen = transcriptViews.find((each) => each.id === next)
+          if (chosen) chooseView(chosen.id)
+        }}
+      >
+        {transcriptViews.map((each) => (
+          <MenuRadioItem key={each.id} value={each.id}>
+            <DesktopIcon name={viewIcons[each.id]} />
+            {each.label}
+          </MenuRadioItem>
+        ))}
+      </MenuRadioGroup>
       <MenuSeparator />
       {/* The header's own choices, from any pane, however small. */}
       <MenuItem onSelect={onChooseHeaderPicture}>

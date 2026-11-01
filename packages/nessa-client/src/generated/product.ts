@@ -2617,10 +2617,21 @@ export interface DeviceMachine {
   memoryTotalBytes: number
   /** Memory in use; never more than memoryTotalBytes. */
   memoryUsedBytes: number
-  /** Size of the disk holding the machine's Nessa data. */
+  /** Size of every disk in disks together. */
   diskTotalBytes: number
-  /** Space used on that disk; never more than diskTotalBytes. */
+  /** Space used on them together; never more than diskTotalBytes. */
   diskUsedBytes: number
+  /** Each local disk, once however many volumes share it, the root first. Absent or empty when none could be read. */
+  disks?: DeviceDisk[]
+}
+/** One local disk of a machine. */
+export interface DeviceDisk {
+  /** Where it is mounted, e.g. / or /Volumes/Archive. */
+  mount: string
+  /** Its size. */
+  totalBytes: number
+  /** Space used on it; never more than totalBytes. */
+  usedBytes: number
 }
 /** A paired environment (`nessa env serve`) that has served this gateway. */
 export interface DeviceWorker {
@@ -2635,16 +2646,21 @@ export interface DeviceWorker {
   /** Unix milliseconds it last reported, saved at most every few minutes; absent before it first reported. */
   lastSeenMs?: number
 }
-/** Result of devices.list: this gateway's own machine (the hub) and the paired environments that work for it. */
+/** Result of devices.list: this gateway's own machine (the hub) and one page of the paired environments that work for it. */
 export interface DevicesListResult {
-  /** The machine this gateway runs on; absent when it cannot be read. */
+  /** The machine this gateway runs on, on the first page (one asked with no after); absent on later pages and when it cannot be read. */
   hub?: DeviceMachine
   /** Where this gateway's native listener, which workers dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it. */
   listening?: string
-  /** The workers connected now or seen before and still paired, at most 64: online first, then draining, then offline, the most recently seen first within each. */
+  /** One page of the workers connected now or seen before and still paired, at most 64, in the order of their environment names, each after the page's after. */
   workers: DeviceWorker[]
-  /** Workers past the 64 listed, not listed. */
-  omitted: number
+  /** The last worker listed, when more follow: ask again with it as after for the next page. Absent on the last page. */
+  next?: string
+}
+/** Which page of the hub's workers to list. */
+export interface DevicesListParams {
+  /** Absent on the first page. Later pages echo the previous page's next. */
+  after?: string
 }
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
 export interface ServerReachResult {
@@ -3393,6 +3409,15 @@ export interface VaultStatus {
   /** Whether protected local credentials are unconfigured, locked, or available to this app session. */
   state: VaultState
 }
+/** A confirmed passphrase change seals the vault; explicitly unlock again with the new phrase. */
+export const VaultPassphraseChangeState = { Locked: "locked" } as const
+export type VaultPassphraseChangeState =
+  (typeof VaultPassphraseChangeState)[keyof typeof VaultPassphraseChangeState]
+/** Confirmed passphrase replacement. Its complete success payload is locked; this does not confirm audit-failed or unknown publication outcomes. */
+export interface VaultPassphraseChangeStatus {
+  /** The vault is sealed after a confirmed passphrase change; explicitly unlock with the new phrase before protected use. */
+  state: VaultPassphraseChangeState
+}
 /** Transient passphrase proof for creating or unlocking the local vault. Mutations must never be automatically replayed. */
 export interface VaultPassphraseParams {
   /** Transient secret input, never logged or saved. Strength and byte bounds are owned by defaults/vault-contract.json. */
@@ -3401,6 +3426,7 @@ export interface VaultPassphraseParams {
 /** Redacted local-vault failures. Wrong passphrase can also mean damaged authenticated ciphertext; no failure resets the vault. */
 export const VaultErrorCode = {
   VaultUnavailable: "vault_unavailable",
+  VaultForbidden: "vault_forbidden",
   VaultLocked: "vault_locked",
   VaultPassphrasePolicy: "vault_passphrase_policy",
   VaultWrongPassphrase: "vault_wrong_passphrase",
@@ -3412,6 +3438,11 @@ export const VaultErrorCode = {
   VaultCapacity: "vault_capacity",
   VaultAuditUnavailable: "vault_audit_unavailable",
   VaultMigrationUnavailable: "vault_migration_unavailable",
+  VaultChangeUnchanged: "vault_change_unchanged",
+  VaultChangeUnchangedAuditUnavailable: "vault_change_unchanged_audit_unavailable",
+  VaultChangeNotConfirmed: "vault_change_not_confirmed",
+  VaultChangeNotConfirmedAuditUnavailable: "vault_change_not_confirmed_audit_unavailable",
+  VaultChangedAuditUnavailable: "vault_changed_audit_unavailable",
 } as const
 export type VaultErrorCode = (typeof VaultErrorCode)[keyof typeof VaultErrorCode]
 /** Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription. */
@@ -3529,6 +3560,56 @@ export interface ConversationWebhookResetResult {
   /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
   appliedAtMs: number
 }
+/** Result of voice.status, voice.saveKey and voice.forgetKey: whether the gateway holds a realtime voice key. The key itself is never returned. */
+export interface VoiceStatus {
+  /** Whether a key is saved in the gateway's vault. */
+  keySaved: boolean
+  /** The realtime model a call runs. */
+  model: string
+}
+/** Save the realtime voice provider's API key in the gateway's vault, replacing any saved one (voice.saveKey). */
+export interface VoiceSaveKeyParams {
+  /** The key: printable ASCII with no spaces. */
+  key: string
+}
+/** Start a voice call about one conversation (voice.startCall): the gateway mints a short-lived client secret with its saved key. */
+export interface VoiceStartCallParams {
+  /** The conversation the call talks to. */
+  conversationId: string
+}
+/** How the window connects a call. webrtc: OpenAI's realtime calls over WebRTC, with the microphone and spoken audio. scripted: a WebSocket carrying the same realtime events and no audio, served by a scripted provider the gateway was started with (the stress check's fake). */
+export const VoiceTransport = { Webrtc: "webrtc", Scripted: "scripted" } as const
+export type VoiceTransport = (typeof VoiceTransport)[keyof typeof VoiceTransport]
+/** The functions a voice call may call. send_to_agent: send what the person asked, in their own transcribed words, to the conversation as a message. stop_agent: stop the agent's running turn, as the Stop button does. */
+export const VoiceToolName = {
+  SendToAgent: "send_to_agent",
+  StopAgent: "stop_agent",
+} as const
+export type VoiceToolName = (typeof VoiceToolName)[keyof typeof VoiceToolName]
+/** Result of voice.startCall: how to connect one call. The secret is good for one connection before expiresAt; what the call is told and may call was fixed when it was minted. */
+export interface VoiceCall {
+  /** How to connect. */
+  transport: VoiceTransport
+  /** Where to connect: the WebRTC offer's address, or the scripted provider's WebSocket. */
+  callUrl: string
+  /** The short-lived secret the connection presents. Never the saved key. */
+  clientSecret: string
+  /** Unix milliseconds after which the secret connects nothing. */
+  expiresAt: number
+  /** The realtime model the call runs. */
+  model: string
+}
+/** Why the gateway refused a voice method. voice_not_configured: this gateway has no voice provider. voice_key_missing: no key is saved. voice_key_rejected: the provider refused the saved key. voice_unreachable: the provider could not be reached or answered something unreadable. voice_storage_unavailable: the vault could not save or delete the key; what was saved still is. voice_audit_unavailable: the change could not be recorded, so nothing changed and no call started. vault_locked: unlock Nessa first. */
+export const VoiceErrorCode = {
+  VoiceNotConfigured: "voice_not_configured",
+  VoiceKeyMissing: "voice_key_missing",
+  VoiceKeyRejected: "voice_key_rejected",
+  VoiceUnreachable: "voice_unreachable",
+  VoiceStorageUnavailable: "voice_storage_unavailable",
+  VoiceAuditUnavailable: "voice_audit_unavailable",
+  VaultLocked: "vault_locked",
+} as const
+export type VoiceErrorCode = (typeof VoiceErrorCode)[keyof typeof VoiceErrorCode]
 export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
@@ -3590,7 +3671,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 105,
+  maxReadyMethods: 110,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3909,6 +3990,7 @@ export const ProductMethod = {
   VaultStatus: "vault.status",
   VaultSetup: "vault.setup",
   VaultUnlock: "vault.unlock",
+  VaultChangePassphrase: "vault.changePassphrase",
   VaultLock: "vault.lock",
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
@@ -3917,6 +3999,10 @@ export const ProductMethod = {
   BoatSetRuntimeSettings: "boat.setRuntimeSettings",
   ConversationWebhookCursor: "conversation.webhook.cursor",
   ConversationWebhookReset: "conversation.webhook.reset",
+  VoiceStatus: "voice.status",
+  VoiceSaveKey: "voice.saveKey",
+  VoiceForgetKey: "voice.forgetKey",
+  VoiceStartCall: "voice.startCall",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -4027,6 +4113,7 @@ export const productReadyMethods = [
   "vault.status",
   "vault.setup",
   "vault.unlock",
+  "vault.changePassphrase",
   "vault.lock",
   "boat.status",
   "boat.save",
@@ -4035,6 +4122,10 @@ export const productReadyMethods = [
   "boat.setRuntimeSettings",
   "conversation.webhook.cursor",
   "conversation.webhook.reset",
+  "voice.status",
+  "voice.saveKey",
+  "voice.forgetKey",
+  "voice.startCall",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -4136,6 +4227,7 @@ export const productMethodGrants = {
   "vault.status": "credential.manage",
   "vault.setup": "credential.manage",
   "vault.unlock": "credential.manage",
+  "vault.changePassphrase": "credential.manage",
   "vault.lock": "credential.manage",
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",
@@ -4144,6 +4236,10 @@ export const productMethodGrants = {
   "boat.setRuntimeSettings": "credential.manage",
   "conversation.webhook.cursor": "credential.manage",
   "conversation.webhook.reset": "credential.manage",
+  "voice.status": "credential.manage",
+  "voice.saveKey": "credential.manage",
+  "voice.forgetKey": "credential.manage",
+  "voice.startCall": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

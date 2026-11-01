@@ -98,10 +98,15 @@ const DESTRUCTIVE = "app_delete_row"
 const MESSAGE_TEXT = "Please review row 2."
 const MESSAGE_ARGUMENTS = JSON.stringify({ text: MESSAGE_TEXT })
 
-/** `message` and `context` run only with `--scripted`: they need the idle second turn, and a live agent is never required. */
+/**
+ * `message` and `context` run only with `--scripted`: they need the idle second
+ * turn, and a live agent is never required. `release` is last: once the app
+ * opens in the panel its card stays a row, so no step after it has an inline app.
+ */
 function stepNames(scripted) {
-  const names = ["renders", "hidden", "allow", "deny", "release"]
+  const names = ["renders", "hidden", "allow", "deny"]
   if (scripted) names.push("message", "context")
+  names.push("release")
   return names
 }
 /** Steps whose failure leaves the page as the next step needs it: they stop nothing after them. */
@@ -158,9 +163,10 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
             directly
   deny      a second call: its review, Deny in the window, and the app shows
             that the person declined
-  release   in a tab of the chat's right panel (the app's fullscreen request), a
-            third call left waiting; closing the tab takes the app away and
-            withdraws its review, and the inline app stays live
+  release   in a tab of the chat's right panel (the app's fullscreen request):
+            the app lives in one place, so its inline frame goes and the card
+            is a row; a third call left waiting; closing the tab takes the app
+            away and withdraws its review, and the card stays a row (last step)
   message   (--scripted only) the app's message opens its review; Allow lands
             that send in the transcript, labelled as the app's. The engines
             share the conversation and send the same text, so the step
@@ -869,6 +875,16 @@ const checks = {
     const panel = await appFrame(page, "panel", 20_000)
     if ((await paneCount(page)) !== panes)
       failures.push("the app's fullscreen request opened a pane, not a tab in the panel")
+    // One live copy of an app: the inline frame gives way to the card's row.
+    await until(
+      page,
+      (frame) => !document.querySelector(frame),
+      selectorFor.appFrameIn("inline"),
+      5000,
+    )
+    const inlineGone = !(await page.$(selectorFor.appFrameIn("inline")))
+    if (!inlineGone)
+      failures.push("the inline app is still drawn while it is open in the panel")
     // The mount going live is what lets a later, unsized `/mcp-resources`
     // abort be treated as delivered (#473). A timeout leaves it a failure.
     const panelLive = await panel.app
@@ -940,11 +956,10 @@ const checks = {
     const cardGoneAfterWithdrawnMs =
       withdrawn && cardGone ? Date.now() - withdrawnAt : null
     if (!cardGone) failures.push("the window still shows the review after its tab closed")
-    // The inline mount is another: untouched.
-    const inlineState = await inline.app.evaluate(() =>
-      document.body.getAttribute("data-review-state"),
-    )
-    if (inlineState !== "live") failures.push(`the inline app is ${inlineState} after`)
+    // The call opened in the panel lives there: its card stays a row.
+    const inlineState = (await page.$(selectorFor.appFrameIn("inline"))) ? "drawn" : "row"
+    if (inlineState !== "row")
+      failures.push("the card drew the app again after its tab closed")
     return {
       seen: {
         panelMode,
@@ -955,6 +970,7 @@ const checks = {
         withdrawnMs,
         cardGone,
         cardGoneAfterWithdrawnMs,
+        inlineGone,
         inlineState,
         panelLive,
       },
@@ -1152,12 +1168,12 @@ await main(
             await opened.settleRequests()
             // A fully read `/mcp-resources` can still be reported aborted
             // with no size. Once this step has seen the pane mount live, and
-            // the inline mount stayed live, that same-origin line is the
+            // the card stayed a row, that same-origin line is the
             // delivered fetch (#473). Every other abort stays a failure.
             if (
               name === "release" &&
-              result.seen?.paneLive === true &&
-              result.seen?.inlineState === "live"
+              result.seen?.panelLive === true &&
+              result.seen?.inlineState === "row"
             ) {
               opened.reclassifyHeld(
                 (line) => liveMountResourceAbort(line, opened.page.url()),

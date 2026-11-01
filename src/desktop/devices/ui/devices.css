@@ -103,8 +103,11 @@
 }
 
 .devices-stat-label {
+  overflow: hidden;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .devices-stat-value {
@@ -125,19 +128,6 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.devices-section-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-}
-
-.devices-section-head h2 {
-  margin: 0;
-  font-size: var(--desktop-text-read);
-  font-weight: 600;
 }
 
 .devices-grid {
@@ -316,6 +306,23 @@ button.devices-tile:focus-visible,
   box-shadow: var(--desktop-card-rim);
 }
 
+.devices-disks {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 24px;
+  border-radius: var(--desktop-radius-lg);
+  background: var(--desktop-pane-fill);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.devices-disks h2 {
+  margin: 0;
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+}
+
 .devices-facts {
   display: flex;
   flex-direction: column;
@@ -405,4 +412,17 @@ button.devices-tile:focus-visible,
 
 :root[data-motion="reduced"] button.devices-tile:hover {
   transform: none;
+}
+
+/* ——— Settings shown on a device's page ——— */
+
+/* The detail head's one action stands at its far end. */
+.devices-detail-action {
+  margin-left: auto;
+}
+
+/* Boat's and the phone's settings, drawn by Settings' own rows, at a reading width. */
+.devices-settings {
+  width: 100%;
+  max-width: 720px;
 }

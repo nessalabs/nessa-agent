@@ -13,6 +13,12 @@ use workspace_sdk::{
     OpenRequest, ProviderId, WorkspaceId, WorkspaceSdk,
 };
 
+/// How long an opening waits for a VM that is stopping to have stopped.
+/// With the 90 s wait for it to be ready after its resume, the opening stays
+/// within the workspace connect budget (`agent-startup-budgets.json`,
+/// 120 s); a stop slower than this fails the opening as unreachable.
+const STOP_WAIT: Duration = Duration::from_secs(25);
+
 pub(crate) struct BoatProvider {
     pub(crate) http: reqwest::Client,
     pub(crate) api_base: String,
@@ -107,8 +113,19 @@ impl Provider for BoatProvider {
         admission: &EnvironmentIdentity,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let api = api(connection, &self.api_base)?;
-        let found =
+        let mut found =
             super::boat_admission::check(&self.http, &api, connection, vm, admission, None).await?;
+        // A VM still stopping from its thread's last rest is resumed once it
+        // has stopped.
+        let stopping_until = tokio::time::Instant::now() + STOP_WAIT;
+        while found.sandbox.state == SandboxState::Archiving {
+            if tokio::time::Instant::now() >= stopping_until {
+                return Err(Failure::Provider);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            found = super::boat_admission::check(&self.http, &api, connection, vm, admission, None)
+                .await?;
+        }
         let resumed = found.sandbox.state == SandboxState::Archived;
         if resumed {
             api.resume(
@@ -186,9 +203,19 @@ impl Provider for BoatProvider {
             vm,
             self.relay_socket.clone(),
             self.relay_program.clone(),
+            root.clone(),
         )
         .await?;
         Ok(Arc::new(super::runtime::BoatRuntime { access }))
+    }
+    async fn stop(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure> {
+        // Boat archives it: its disk is kept as a snapshot, nothing runs or
+        // is billed, and `connect` resumes it.
+        api(connection, &self.api_base)?
+            .stop(vm, None)
+            .await
+            .map_err(|_| Failure::Provider)?;
+        Ok(())
     }
     async fn remove(&self, connection: &BoatConnection, vm: &str) -> Result<(), Failure> {
         api(connection, &self.api_base)?

@@ -12,7 +12,7 @@ use crate::app_call_test_support::{
     caller, Fixture, Hold, INSTANCE, OTHER_INSTANCE, SERVER, UI_TOOL,
 };
 use crate::conversation::application::app_reviews::{
-    ALLOW, APP_REVIEW_DEADLINE, DENY, MAX_HELD_CONTEXTS, MAX_OPEN_APP_REVIEWS,
+    ALLOW, ALLOW_APP, APP_REVIEW_DEADLINE, DENY, MAX_HELD_CONTEXTS, MAX_OPEN_APP_REVIEWS,
 };
 use crate::conversation::application::{
     ContextDrop, ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
@@ -734,6 +734,45 @@ async fn m7_every_message_asks_and_allowing_one_allows_no_other() {
     assert!(!two.is_finished());
     fixture.answer(&second, DENY).await;
     assert_eq!(refused(two.await.unwrap()), McpAppError::ApprovalDenied);
+}
+
+#[tokio::test]
+async fn m7_always_allowing_an_app_sends_its_later_messages_unasked() {
+    use crate::conversation::application::TrustedApps;
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held_message(INSTANCE, "first").await;
+    // A message offers to allow the app from now on.
+    assert_eq!(
+        review
+            .options
+            .iter()
+            .map(|option| option.id.as_str())
+            .collect::<Vec<_>>(),
+        [ALLOW, ALLOW_APP, DENY]
+    );
+    fixture.answer(&review, ALLOW_APP).await;
+    task.await.unwrap().unwrap();
+    assert!(fixture.trusted.trusts(SERVER));
+    // The choice is on record apart from the one message's approval.
+    let phases = fixture.audit.phases();
+    let approved = phases
+        .iter()
+        .position(|phase| matches!(phase, McpAppAuditPhase::Approved { .. }))
+        .unwrap();
+    assert!(matches!(
+        &phases[approved + 1],
+        McpAppAuditPhase::AppTrusted { permission_id, kept: true }
+            if *permission_id == review.permission_id
+    ));
+    fixture.idle().await;
+    // Every later message of the app goes without a review, from any mount.
+    fixture
+        .send_message(OTHER_INSTANCE, "second")
+        .await
+        .unwrap();
+    assert!(fixture.app_reviews().await.is_empty());
+    fixture.idle().await;
+    assert_eq!(fixture.provider.executions.lock().unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -3142,6 +3181,7 @@ async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as
         started: std::sync::atomic::AtomicBool::new(true),
         stopping: std::sync::atomic::AtomicBool::new(false),
         touched: std::sync::atomic::AtomicU64::new(0),
+        closing: std::sync::atomic::AtomicBool::new(false),
     });
     let live = fixture
         .service

@@ -148,6 +148,16 @@ impl BuiltInServer for ConversationTools {
                 },
                 "annotations": {"readOnlyHint": true, "openWorldHint": false},
             }),
+            json!({
+                "name": "close_thread",
+                "description": "Close this thread once its work is done and nothing you started needs to keep running. When this turn ends, the thread's agent stops, and a thread in the cloud also stops its VM, keeping its files. The thread stays: the person's next message to it opens it again where it left off. Do not call it while a background command should keep running.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+            }),
         ]
     }
     fn call(
@@ -253,6 +263,10 @@ struct Stop {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Window {}
+/// `close_thread` takes nothing: it closes the calling agent's own thread.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Close {}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Follow {
@@ -631,6 +645,29 @@ async fn run(
                 .map_err(code)?;
             let reading = service.read_windows(&source.caller()).await.map_err(code)?;
             Ok(window_view(source.conversation(), &reading))
+        }
+        "close_thread" => {
+            let _: Close = parse(arguments)?;
+            let action = identity(&source, &call, "close");
+            let source = service
+                .admit_agent_tool(
+                    source,
+                    call.clone(),
+                    tool,
+                    None,
+                    AgentToolRequest {
+                        logical: call,
+                        command: action,
+                    },
+                    stop,
+                )
+                .await
+                .map_err(code)?;
+            service
+                .close_after_turn(source.conversation())
+                .await
+                .map_err(code)?;
+            Ok(json!({"threadId": source.conversation().to_string(), "closing": true}))
         }
         _ => Err("unknown_tool".into()),
     }
@@ -1234,6 +1271,7 @@ mod tests {
                 "stop_thread" => parse::<Stop>(arguments).map(|_| ()),
                 "subscribe" => parse::<Follow>(arguments).map(|_| ()),
                 "read_window" => parse::<Window>(arguments).map(|_| ()),
+                "close_thread" => parse::<Close>(arguments).map(|_| ()),
                 _ => panic!("uncovered published tool: {tool}"),
             }
         }
@@ -1344,7 +1382,8 @@ mod tests {
                 "send_message",
                 "subscribe",
                 "stop_thread",
-                "read_window"
+                "read_window",
+                "close_thread"
             ]
         );
         for tool in tools {

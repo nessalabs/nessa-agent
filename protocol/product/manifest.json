@@ -287,7 +287,7 @@
       "grant": "credential.manage"
     },
     "devices.list": {
-      "params": null,
+      "params": "DevicesListParams",
       "grant": "server.read"
     },
     "github.cancel": {
@@ -394,6 +394,10 @@
       "params": "VaultPassphraseParams",
       "grant": "credential.manage"
     },
+    "vault.changePassphrase": {
+      "params": "VaultPassphraseParams",
+      "grant": "credential.manage"
+    },
     "vault.lock": {
       "params": null,
       "grant": "credential.manage"
@@ -425,6 +429,22 @@
     "conversation.webhook.reset": {
       "params": "ConversationWebhookResetParams",
       "grant": "credential.manage"
+    },
+    "voice.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "voice.saveKey": {
+      "params": "VoiceSaveKeyParams",
+      "grant": "credential.manage"
+    },
+    "voice.forgetKey": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "voice.startCall": {
+      "params": "VoiceStartCallParams",
+      "grant": "conversation.write"
     }
   },
   "events": {

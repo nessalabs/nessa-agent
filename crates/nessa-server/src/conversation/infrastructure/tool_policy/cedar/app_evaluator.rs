@@ -3,7 +3,7 @@
 use cedar_policy::{Authorizer, Context, Entity, RestrictedExpression};
 
 use crate::conversation::application::{
-    AppCallPolicyEvaluator, AppQuestion, ToolDecision, ToolPolicyUnavailable,
+    AppCallPolicyEvaluator, AppQuestion, ToolDecision, ToolPolicyUnavailable, UnreviewedMessage,
 };
 
 use super::bundle::Bundle;
@@ -14,6 +14,7 @@ const MCP_SERVER: &str = "Nessa::McpServer";
 const MCP_TOOL: &str = "Nessa::McpTool";
 const APP_REACH: &str = "app.reach";
 const APP_CALL_TOOL: &str = "app.callTool";
+const APP_SEND_UNREVIEWED: &str = "app.sendUnreviewed";
 
 /// The MCP App call policy port's Cedar adapter. Build it once, in
 /// composition.
@@ -90,6 +91,44 @@ impl AppCallPolicyEvaluator for CedarAppCallPolicyEvaluator {
             resource,
             others,
             context: Context::empty(),
+        };
+        decide(&self.authorizer, &self.bundle, self.bundle.policies(), ask)
+    }
+
+    fn message_unreviewed(
+        &self,
+        app_server: &str,
+        message: UnreviewedMessage<'_>,
+    ) -> Result<ToolDecision, ToolPolicyUnavailable> {
+        let own = server(app_server)?;
+        let app = entity(
+            APP,
+            app_server,
+            [("server", RestrictedExpression::new_entity_uid(own.uid()))],
+        )?;
+        let asked = server(message.server)?;
+        let others = if asked.uid() == own.uid() {
+            Vec::new()
+        } else {
+            vec![own]
+        };
+        let context = Context::from_pairs([
+            (
+                "approvalMode".to_owned(),
+                RestrictedExpression::new_string(message.approval_mode.to_owned()),
+            ),
+            (
+                "trustedApp".to_owned(),
+                RestrictedExpression::new_bool(message.trusted_app),
+            ),
+        ])
+        .map_err(|_| ToolPolicyUnavailable)?;
+        let ask = Ask {
+            principal: app,
+            action: APP_SEND_UNREVIEWED,
+            resource: asked,
+            others,
+            context,
         };
         decide(&self.authorizer, &self.bundle, self.bundle.policies(), ask)
     }

@@ -756,10 +756,30 @@ pub struct MachineReport {
     pub memory_total_bytes: u64,
     /// Memory in use, in bytes.
     pub memory_used_bytes: u64,
-    /// Size of the disk holding the environment's data, in bytes.
+    /// Size of every disk in [`Self::disks`] together, in bytes.
     pub disk_total_bytes: u64,
-    /// Bytes in use on that disk.
+    /// Bytes in use on them together.
     pub disk_used_bytes: u64,
+    /// Each local disk, at most [`MAX_MACHINE_DISKS`]: one entry per disk,
+    /// however many volumes share it.
+    #[serde(default)]
+    pub disks: Vec<MachineDisk>,
+}
+
+/// The most disks a [`MachineReport`] lists; a machine with more lists the
+/// first of them.
+pub const MAX_MACHINE_DISKS: usize = 16;
+
+/// One local disk of a [`MachineReport`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineDisk {
+    /// Where it is mounted, at most [`MAX_MACHINE_TEXT_BYTES`].
+    pub mount: String,
+    /// Its size, in bytes.
+    pub total_bytes: u64,
+    /// Bytes in use on it.
+    pub used_bytes: u64,
 }
 
 impl MachineReport {
@@ -784,6 +804,12 @@ impl MachineReport {
             && self.disk_total_bytes <= MAX_MACHINE_FIGURE
             && self.memory_used_bytes <= self.memory_total_bytes
             && self.disk_used_bytes <= self.disk_total_bytes
+            && self.disks.len() <= MAX_MACHINE_DISKS
+            && self.disks.iter().all(|disk| {
+                disk.mount.len() <= MAX_MACHINE_TEXT_BYTES
+                    && disk.total_bytes <= MAX_MACHINE_FIGURE
+                    && disk.used_bytes <= disk.total_bytes
+            })
     }
 }
 

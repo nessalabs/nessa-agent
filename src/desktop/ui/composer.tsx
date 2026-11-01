@@ -22,6 +22,7 @@ import {
   MenuItem,
   MenuLabel,
 } from "./menu"
+import { IconButton } from "./icon-button"
 import { ThinkingControl } from "./thinking-control"
 import { tooltip } from "./tooltip"
 
@@ -63,6 +64,22 @@ export interface ComposerImages {
 }
 
 /**
+ * A voice call from the composer, owned outside (`voice/ui/composer-voice.ts`):
+ * the button that starts one, and while one talks to this conversation
+ * (`active`) its speaker and microphone switches and the round end button,
+ * in place of the voice button.
+ */
+export interface ComposerVoice {
+  readonly active: boolean
+  readonly start: () => void
+  readonly end: () => void
+  readonly microphoneOn: boolean
+  readonly speakerOn: boolean
+  readonly setMicrophone: (on: boolean) => void
+  readonly setSpeaker: (on: boolean) => void
+}
+
+/**
  * The home composer: a message, and beneath it the three choices a turn is
  * sent with — model, thinking, and what the agent may do without asking.
  * Nothing is sent yet: the shell has no conversation wiring, and says so.
@@ -78,6 +95,7 @@ export function Composer({
   onSend,
   onStop,
   access,
+  voice,
   text,
   onTextChange,
   placeholder = "What would you like to work on?",
@@ -111,6 +129,8 @@ export function Composer({
    * and the shield is disabled rather than showing a choice nobody keeps.
    */
   access?: ComposerAccess
+  /** A voice call; without it the composer offers none. */
+  voice?: ComposerVoice
   /**
    * What is typed and not sent, held by whoever owns it — the workspace keeps
    * a session's in its state, so it outlives a change of layout — and told of
@@ -293,6 +313,7 @@ export function Composer({
               }
             />
           </span>
+          {voice ? <VoiceControls voice={voice} /> : null}
           {onStop ? (
             <button
               key="stop"
@@ -323,6 +344,53 @@ export function Composer({
         </div>
       </div>
     </form>
+  )
+}
+
+/** The voice button, or a call's speaker, microphone and end. */
+function VoiceControls({ voice }: { voice: ComposerVoice }) {
+  if (!voice.active)
+    return (
+      <IconButton
+        key="voice"
+        icon="voice"
+        label="Talk"
+        tooltipSide="above"
+        className="desktop-voice-start"
+        onClick={voice.start}
+      />
+    )
+  return (
+    <>
+      <IconButton
+        key="speaker"
+        icon={voice.speakerOn ? "speaker" : "speakerOff"}
+        label={voice.speakerOn ? "Mute voice" : "Unmute voice"}
+        tooltipSide="above"
+        className="desktop-voice-toggle"
+        aria-pressed={voice.speakerOn}
+        onClick={() => voice.setSpeaker(!voice.speakerOn)}
+      />
+      <IconButton
+        key="microphone"
+        icon={voice.microphoneOn ? "microphone" : "microphoneOff"}
+        label={voice.microphoneOn ? "Mute microphone" : "Unmute microphone"}
+        tooltipSide="above"
+        className="desktop-voice-toggle"
+        aria-pressed={voice.microphoneOn}
+        onClick={() => voice.setMicrophone(!voice.microphoneOn)}
+      />
+      <button
+        key="end"
+        type="button"
+        className="desktop-voice-end"
+        aria-label="End call"
+        {...tooltip("End call", { side: "above" })}
+        onClick={voice.end}
+      >
+        <DesktopIcon name="close" />
+      </button>
+    </>
   )
 }
 

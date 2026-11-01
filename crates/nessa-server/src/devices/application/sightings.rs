@@ -171,4 +171,10 @@ fn same_machine(left: &MachineReport, right: &MachineReport) -> bool {
         && left.cpus == right.cpus
         && left.memory_total_bytes == right.memory_total_bytes
         && left.disk_total_bytes == right.disk_total_bytes
+        && left.disks.len() == right.disks.len()
+        && left
+            .disks
+            .iter()
+            .zip(&right.disks)
+            .all(|(left, right)| left.mount == right.mount && left.total_bytes == right.total_bytes)
 }

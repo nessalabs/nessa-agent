@@ -51,6 +51,11 @@ examples.
 
 - [GitHub updates](CODING_STANDARDS.md#github-updates) — issue and pull request
   explanations, ordering diagrams, and the evidence an update refers to.
+- Before writing a pull request or issue description, read the pull-requests
+  skill's [Writing the description](https://github.com/nessalabs/skills/blob/wip/skills/engineering/pull-requests/SKILL.md#writing-the-description)
+  and [diagrams](https://github.com/nessalabs/skills/blob/wip/skills/engineering/pull-requests/references/diagrams.md)
+  (also under `skills/engineering/pull-requests/` in a `skills` checkout
+  beside this one). The template's comments only summarize them.
 - [Audit evidence is part of the behavior](CODING_STANDARDS.md#audit-evidence-is-part-of-the-behavior)
   — consequential transitions keep their target, before/after meaning, cause, and
   initiator, on cleanup and failure paths too. The required regression evidence

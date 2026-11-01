@@ -590,10 +590,11 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
 | M5 | — | the mount was released, or its opening ended | — | `Refused(mcp_cancelled)`, by the system |
 | M6 | — | the derived execution is a turn the live conversation holds (a retry) | Sending | `Admitted`; no review |
 | M6b | a message with this execution id in review or sending | the same request again | — | `Refused(temporarily_unavailable)`, by the system |
-| M7 | — | otherwise, and the review fits | Waiting | `ApprovalRequested{permission_id}` |
+| M6c | — | Cedar's `app.sendUnreviewed` permits it: the conversation's approval mode is `full` (`app.message_full_access`), or the person chose "Always allow this app" for the app's server (`app.message_trusted_app`, kept in `<conversations>/trusted-apps.json`) | Sending | `Admitted`; no review |
+| M7 | — | otherwise, and the review fits | Waiting | `ApprovalRequested{permission_id}`; a message offers Allow, Always allow this app (`nessa.remember.allow`), Deny |
 | M7b | — | the review does not fit 16 000 bytes | — | `Refused(mcp_request_too_large)`; no review |
 | M7c | — | 16 app reviews open, or 16 000 bytes held | — | `Withdrawn(RequestCancelled)` by the system; `temporarily_unavailable` |
-| M8 | Waiting | the person allows | Sending | `Approved{permission_id}`, by that person |
+| M8 | Waiting | the person allows (once, or always for this app: the app's server is kept trusted before it is sent; a trust that cannot be kept is logged and only this message goes) | Sending | `Approved{permission_id}`, by that person; for always, then `AppTrusted{permission_id, kept}`, by that person |
 | M9 | Waiting | denied or cancelled / deadline / caller gone / release / close, delete, stop or gateway stop | — | `Denied` → `mcp_approval_denied` / `Expired` → `mcp_approval_expired` / `Withdrawn(cause)` → `mcp_cancelled` |
 | M10 | Sending, under the submission lock | the mount was released; the opening ended, was deleted, or the gateway stopped or retired it before the recheck; or another epoch; or the submission is refused before the agent was asked, and the writer's own apps say, as it is refused, that the opening had ended or the mount been released (`apps.admit(epoch, mount)`) | — | `Refused(mcp_cancelled)`, by the system; not sent; no opening started; nothing taken. Only a refusal while the message's own opening is still live is M13; a release or stop after the refusal leaves its code as it was |
 | M11 | Sending, under the lock | a turn runs or input waits (not for M6) | — | `Refused(turn_running)`; nothing taken |
@@ -721,6 +722,7 @@ Each row has at least one test, named after it.
   - M6, M17 `m6_m17_the_same_request_again_is_the_same_turn_and_nobody_is_asked_again`, and after a reopening `m17_a_retry_of_a_sent_message_after_a_reopening_is_not_asked_again`
   - M6b `m6b_the_same_request_while_it_is_in_flight_is_refused` (and M6 once it settled), `m6b_a_request_whose_caller_went_is_free_to_be_sent_again`
   - M7, M8, M12 `m7_m8_m12_a_message_asks_and_allowed_lands_as_the_persons_turn_written_by_the_app`; every message asks: `m7_every_message_asks_and_allowing_one_allows_no_other`
+  - M6c `m7_always_allowing_an_app_sends_its_later_messages_unasked`; the policy, full access included: `app_message_full_access_a_message_goes_unasked_with_full_access`, `app_message_trusted_app_a_message_goes_unasked_for_an_always_allowed_app`
   - M7b `m7b_a_message_whose_review_does_not_fit_is_refused_and_no_review_is_opened`
   - M7c `m7c_with_the_reviews_full_a_message_is_withdrawn_and_unavailable`
   - M9 `m9_a_denied_message_is_not_sent_and_the_next_asks_again`, `m9_a_message_nobody_answers_expires_and_is_not_sent`, `m9_a_message_whose_caller_went_is_withdrawn_on_record`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_the_mounts_release`, `m9_a_message_waiting_on_its_review_is_withdrawn_by_a_close`

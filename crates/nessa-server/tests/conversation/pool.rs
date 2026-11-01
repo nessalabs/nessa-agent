@@ -137,6 +137,127 @@ async fn the_pool_is_placed_on_only_while_a_worker_serves_and_is_not_draining() 
     assert!(pool.environments.named(POOL).is_none());
 }
 
+#[cfg(unix)]
+/// A cloud account connected or not, for [`Environments::with_workspaces`].
+struct Cloud(bool);
+#[cfg(unix)]
+impl crate::conversation::application::ThreadEnvironments for Cloud {
+    fn environment(
+        &self,
+        _: &ConversationId,
+    ) -> Result<Arc<dyn crate::conversation::application::Environment>, ConversationError> {
+        Ok(in_process_environment())
+    }
+    fn rest<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: crate::conversation::application::WorkspaceRest,
+    ) -> crate::conversation::application::EnvironmentFuture<'a, bool> {
+        Box::pin(async { false })
+    }
+    fn available(&self) -> crate::conversation::application::EnvironmentFuture<'_, bool> {
+        let connected = self.0;
+        Box::pin(async move { connected })
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn with_no_paired_computer_online_the_pool_runs_in_the_cloud_when_it_can() {
+    for (connected, asked) in [(true, POOL.to_owned()), (false, POOL.to_owned())] {
+        let root = tempfile::tempdir().unwrap();
+        let workers = Arc::new(Workers::default());
+        let environments = Environments::new(
+            in_process_environment(),
+            BTreeMap::new(),
+            Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+        )
+        .with_peers(
+            workers.clone(),
+            Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
+        )
+        .with_workspaces(Arc::new(Cloud(connected)));
+        let placed = environments.place(&conversation(), Some(&asked)).await;
+        if connected {
+            placed.unwrap();
+            assert_eq!(
+                environments
+                    .placement(&conversation())
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some(crate::conversation::application::placement::BOAT),
+                "{asked}"
+            );
+        } else {
+            // No cloud account: refused, as before.
+            assert!(matches!(
+                placed,
+                Err(ConversationError::EnvironmentNotConfigured)
+            ));
+        }
+    }
+    // One computer asked for by name, offline, stays refused: the person
+    // chose where it runs.
+    let root = tempfile::tempdir().unwrap();
+    let environments = Environments::new(
+        in_process_environment(),
+        BTreeMap::new(),
+        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+    )
+    .with_peers(
+        Arc::new(Workers::default()),
+        Arc::new(FileBindings::new(root.path().join("bindings")).unwrap()),
+    )
+    .with_workspaces(Arc::new(Cloud(true)));
+    assert!(matches!(
+        environments
+            .place(&conversation(), Some(&worker(1).name()))
+            .await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+    // A host the configuration does not name is never sent to the cloud.
+    let root = tempfile::tempdir().unwrap();
+    let environments = Environments::new(
+        in_process_environment(),
+        BTreeMap::new(),
+        Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+    )
+    .with_workspaces(Arc::new(Cloud(true)));
+    assert!(matches!(
+        environments.place(&conversation(), Some("devbox")).await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+}
+
+/// Boat asked for by name with no Boat account connected is refused as not
+/// configured, at placement and, for a chat placed there before the account
+/// went away, at its next lease: never as a host that cannot be reached.
+#[cfg(unix)]
+#[tokio::test]
+async fn boat_without_a_connected_account_is_not_configured() {
+    use crate::conversation::application::placement::BOAT;
+    let root = tempfile::tempdir().unwrap();
+    let with = |connected| {
+        Environments::new(
+            in_process_environment(),
+            BTreeMap::new(),
+            Arc::new(FilePlacements::new(root.path().join("placements")).unwrap()),
+        )
+        .with_workspaces(Arc::new(Cloud(connected)))
+    };
+    assert!(matches!(
+        with(false).place(&conversation(), Some(BOAT)).await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+    with(true).place(&conversation(), Some(BOAT)).await.unwrap();
+    assert!(with(true).for_lease(&conversation(), &[]).await.is_ok());
+    assert!(matches!(
+        with(false).for_lease(&conversation(), &[]).await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+}
+
 #[tokio::test]
 async fn a_gateway_that_pairs_no_environments_places_nothing_on_the_pool() {
     let root = tempfile::tempdir().unwrap();

@@ -1,12 +1,23 @@
 // @vitest-environment jsdom
+import type { BoatGateway } from "../../settings/adapters/boat-gateway"
+import { BoatProvider } from "../../settings/ui/boat-row"
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import type { DevicesListResult } from "@nessa/client"
 import { ClockProvider } from "../../../clock"
-import type { DevicesGateway, WorkerPairing } from "../adapters/devices-gateway"
+import type {
+  DevicesGateway,
+  DevicesRead,
+  WorkerPairing,
+} from "../adapters/devices-gateway"
 import { DevicesProvider, DevicesView } from "./devices-view"
-import { commands, hubAddress, listeningPort, onlyThisMachine } from "./add-computer"
+import {
+  commands,
+  hubAddress,
+  listeningPort,
+  onlyThisMachine,
+  reachable,
+} from "./add-computer"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -42,7 +53,7 @@ const machine = (hostname: string, os = "linux") => ({
   diskUsedBytes: 256 * GB,
 })
 const KEY = "ab".repeat(32)
-const listed: DevicesListResult = {
+const listed: DevicesRead = {
   hub: { ...machine("Studio", "macos"), osVersion: "26.1", arch: "aarch64" },
   workers: [
     {
@@ -56,11 +67,18 @@ const listed: DevicesListResult = {
       environment: `peer:${KEY}`,
       state: "online",
       agents: 4,
-      machine: machine("build-box"),
+      machine: {
+        ...machine("build-box"),
+        disks: [
+          { mount: "/", totalBytes: 512 * GB, usedBytes: 128 * GB },
+          { mount: "/srv/data", totalBytes: 512 * GB, usedBytes: 128 * GB },
+        ],
+      },
       lastSeenMs: 999_000,
     },
   ],
-  omitted: 0,
+  listening: "0.0.0.0:47650",
+  more: false,
 }
 
 function pairing(phase: WorkerPairing["phase"], claimed = false): WorkerPairing {
@@ -95,6 +113,7 @@ function fakeGateway(overrides: Partial<DevicesGateway> = {}) {
       { ok: true, value: pairing("active", true) }
     ),
     cancel: async () => (calls.push("cancel"), { ok: true, value: pairing("terminal") }),
+    reach: async () => (calls.push("reach"), { ok: true, value: "restarting" }),
     ...overrides,
   }
   return { gateway, calls }
@@ -103,20 +122,33 @@ function fakeGateway(overrides: Partial<DevicesGateway> = {}) {
 async function mount(
   gateway: DevicesGateway,
   strict = false,
+  boat?: BoatGateway,
 ): Promise<{ host: HTMLElement; root: Root }> {
   const host = document.createElement("div")
   document.body.append(host)
   const root = createRoot(host)
   const view = (
     <ClockProvider now={() => 1_000_000}>
-      <DevicesProvider gateway={gateway}>
-        <DevicesView />
-      </DevicesProvider>
+      <BoatProvider gateway={boat}>
+        <DevicesProvider gateway={gateway}>
+          <DevicesView />
+        </DevicesProvider>
+      </BoatProvider>
     </ClockProvider>
   )
   await act(async () => root.render(strict ? <StrictMode>{view}</StrictMode> : view))
   await act(async () => {})
   return { host, root }
+}
+
+/** Add device, then Computer. */
+async function addComputer(host: HTMLElement) {
+  await act(async () =>
+    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
+  )
+  await act(async () =>
+    (host.querySelector('[data-devices-add="computer"]') as HTMLElement).click(),
+  )
 }
 
 const text = (host: HTMLElement, selector: string) =>
@@ -152,6 +184,143 @@ it("lists the hub, its computers online first, the cloud and the linked phone", 
   expect(vi.getTimerCount()).toBe(0)
 })
 
+it("shows every device in one list, each saying what it is, with Add device last", async () => {
+  const { host, root } = await mount(fakeGateway().gateway)
+  const list = host.querySelector("[data-devices-list]")
+  expect(
+    [...(list?.children ?? [])].map(
+      (tile) =>
+        tile.getAttribute("data-devices-worker")?.slice(0, 2) ??
+        (tile.hasAttribute("data-devices-cloud")
+          ? "cloud"
+          : tile.hasAttribute("data-devices-linked")
+            ? "phone"
+            : tile.getAttribute("data-devices-action")),
+    ),
+  ).toEqual(["ab", "cd", "cloud", "phone", "add-tile"])
+  expect(text(host, "[data-devices-cloud] .devices-tile-body .devices-muted")).toBe(
+    "Cloud VMs",
+  )
+  expect(host.querySelectorAll("h2:not(#devices-hub-name)")).toHaveLength(0)
+  expect(text(host, '[data-devices-action="add"]')).toBe("Add device")
+  await act(async () => root.unmount())
+})
+
+it("manages Boat from its own page, with no trip to Settings", async () => {
+  const calls: string[] = []
+  const boat: BoatGateway = {
+    runtimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
+    setRuntimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
+    read: async () => ({ state: "connected", environment: "nessa" }),
+    save: async () => ({ state: "connected", environment: "nessa" }),
+    disconnect: async () => {
+      calls.push("disconnect")
+      return { state: "disconnected" }
+    },
+  }
+  // Not connected is where the list once said "Connect in Settings ›".
+  const { gateway, calls: reads } = fakeGateway({
+    cloud: async () => ({ ok: true, value: "disconnected" }),
+  })
+  const { host, root } = await mount(gateway, false, boat)
+  expect(text(host, "[data-devices-cloud] .devices-tile-foot")).toBe("Not connected")
+  expect(host.textContent).not.toContain("Settings ›")
+  // Boat is drawn as a boat; one not connected sits still.
+  const tileBoat = host.querySelector("[data-devices-cloud] [data-slot=device-figure]")
+  expect(tileBoat?.getAttribute("data-kind")).toBe("boat")
+  expect(tileBoat?.hasAttribute("data-afloat")).toBe(false)
+  await act(async () =>
+    (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
+  )
+  await act(async () => {})
+  expect(host.querySelector('[data-devices-page="cloud"] h1')?.textContent).toBe("Boat")
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Connected")
+  expect(host.querySelector('input[type="password"]')).not.toBeNull()
+  const pageBoat = () =>
+    host.querySelector('[data-devices-page="cloud"] [data-slot=device-figure]')
+  expect(pageBoat()?.getAttribute("data-afloat")).toBe("true")
+  const before = reads.filter((call) => call === "list").length
+  await act(async () =>
+    (host.querySelector('[data-devices-action="disconnect"]') as HTMLElement).click(),
+  )
+  await act(async () => {})
+  expect(calls).toEqual(["disconnect"])
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Not connected")
+  expect(pageBoat()?.hasAttribute("data-afloat")).toBe(false)
+  // The list reads again, so going back shows the new state.
+  expect(reads.filter((call) => call === "list").length).toBeGreaterThan(before)
+  await act(async () => root.unmount())
+})
+
+it("offers Unlock, not a token field, while the vault is locked, then reads Boat again", async () => {
+  let locked = true
+  let cloud: "locked" | "connected" = "locked"
+  const boat: BoatGateway = {
+    runtimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
+    setRuntimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
+    read: async () =>
+      locked ? { state: "locked" } : { state: "connected", environment: "nessa" },
+    save: async () => ({ state: "connected", environment: "nessa" }),
+    disconnect: async () => ({ state: "disconnected" }),
+  }
+  const { gateway } = fakeGateway({ cloud: async () => ({ ok: true, value: cloud }) })
+  const { host, root } = await mount(gateway, false, boat)
+  expect(text(host, "[data-devices-cloud] .devices-tile-foot")).toBe("Locked")
+  await act(async () =>
+    (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
+  )
+  await act(async () => {})
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Locked")
+  expect(host.querySelector('input[type="password"]')).toBeNull()
+  expect(host.querySelector('[data-boat-action="unlock"]')).not.toBeNull()
+  // The vault opens elsewhere: the list's next read notices, and the page reads again.
+  locked = false
+  cloud = "connected"
+  await act(async () => vi.advanceTimersByTime(5_000))
+  await act(async () => {})
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Connected")
+  expect(host.querySelector('input[type="password"]')).not.toBeNull()
+  await act(async () => root.unmount())
+})
+
+it("says Unavailable, not Reading, when there is no Boat to read", async () => {
+  const { host, root } = await mount(fakeGateway().gateway)
+  await act(async () =>
+    (host.querySelector("[data-devices-cloud]") as HTMLElement).click(),
+  )
+  await act(async () => {})
+  expect(text(host, "[data-devices-cloud-state]")).toContain("Unavailable")
+  await act(async () => root.unmount())
+})
+
+it("adds a phone or the cloud from Add device too", async () => {
+  const { host, root } = await mount(fakeGateway().gateway)
+  await act(async () =>
+    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
+  )
+  expect(
+    [...host.querySelectorAll("[data-devices-add]")].map((each) =>
+      each.getAttribute("data-devices-add"),
+    ),
+  ).toEqual(["computer", "phone", "cloud"])
+  await act(async () =>
+    (host.querySelector('[data-devices-add="phone"]') as HTMLElement).click(),
+  )
+  expect(host.querySelector('[data-devices-page="add-phone"]')).not.toBeNull()
+  expect(host.querySelector('[data-setting="linked-devices"]')).not.toBeNull()
+  await act(async () =>
+    (host.querySelector('[data-devices-action="back"]') as HTMLElement).click(),
+  )
+  await act(async () =>
+    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
+  )
+  await act(async () =>
+    (host.querySelector('[data-devices-add="cloud"]') as HTMLElement).click(),
+  )
+  expect(host.querySelector('[data-devices-page="cloud"]')).not.toBeNull()
+  await act(async () => root.unmount())
+})
+
 it("reads again every poll while open", async () => {
   const { gateway, calls } = fakeGateway()
   const { root } = await mount(gateway)
@@ -170,6 +339,11 @@ it("opens a computer's page with its usage and no list of what runs there", asyn
     "build-box",
   )
   expect(text(host, '[data-devices-stat="Agents"] .devices-stat-value')).toBe("4")
+  expect(
+    [...host.querySelectorAll("[data-devices-disks] .devices-stat-label")].map(
+      (label) => label.textContent,
+    ),
+  ).toEqual(["/", "/srv/data"])
   expect(host.textContent).not.toContain("Running here")
   await act(async () =>
     (host.querySelector('[data-devices-action="back"]') as HTMLElement).click(),
@@ -181,9 +355,7 @@ it("opens a computer's page with its usage and no list of what runs there", asyn
 it("adds a computer: a code, its commands, then approving the key that used it", async () => {
   const { gateway, calls } = fakeGateway()
   const { host, root } = await mount(gateway)
-  await act(async () =>
-    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
-  )
+  await addComputer(host)
   await act(async () => {})
   const shown = [...host.querySelectorAll("[data-devices-command] code")].map(
     (code) => code.textContent,
@@ -209,9 +381,7 @@ it("adds a computer: a code, its commands, then approving the key that used it",
 it("cancels the code when the page closes before approving", async () => {
   const { gateway, calls } = fakeGateway()
   const { host, root } = await mount(gateway)
-  await act(async () =>
-    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
-  )
+  await addComputer(host)
   await act(async () => {})
   await act(async () => root.unmount())
   expect(calls).toContain("cancel")
@@ -233,9 +403,7 @@ it("asks for one code at a time, as the hub makes them", async () => {
     },
   })
   const { host } = await mount(gateway, true)
-  await act(async () =>
-    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
-  )
+  await addComputer(host)
   for (let i = 0; i < 4; i += 1) await act(async () => {})
   expect(calls).not.toContain("busy")
   expect(host.querySelectorAll("[data-devices-command]")).toHaveLength(2)
@@ -251,9 +419,7 @@ it("leaving while approving keeps the approval, and cancels a refused one", asyn
       },
     })
     const { host, root } = await mount(gateway)
-    await act(async () =>
-      (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
-    )
+    await addComputer(host)
     await act(async () => {})
     await act(async () => vi.advanceTimersByTime(2_000))
     await act(async () => {})
@@ -271,6 +437,146 @@ it("leaving while approving keeps the approval, and cancels a refused one", asyn
   }
 })
 
+it("says when more computers work for the hub than one read follows", async () => {
+  const { host, root } = await mount(
+    fakeGateway({ list: async () => ({ ok: true, value: { ...listed, more: true } }) })
+      .gateway,
+  )
+  expect(host.querySelector("[data-devices-more]")).not.toBeNull()
+  await act(async () => root.unmount())
+})
+
+it("lets other computers reach a hub with linking off, then makes a new code", async () => {
+  let listening: string | undefined
+  const { gateway, calls } = fakeGateway({
+    list: async () => (
+      calls.push("list"),
+      {
+        ok: true,
+        value: { ...listed, ...(listening ? { listening } : { listening: undefined }) },
+      }
+    ),
+    reach: async () => (calls.push("reach"), { ok: true, value: "restarting" }),
+  })
+  const { host, root } = await mount(gateway)
+  await addComputer(host)
+  await act(async () => {})
+  expect(host.querySelector("[data-devices-loopback]")).toBeNull()
+  const reach = host.querySelector('[data-devices-action="reach"]') as HTMLButtonElement
+  await act(async () => reach.click())
+  expect(calls).toContain("reach")
+  expect(reach.disabled).toBe(true)
+  // Restarting, it listens only to itself until it has started again.
+  listening = "127.0.0.1:47650"
+  await act(async () => vi.advanceTimersByTime(1_000))
+  expect(calls.filter((call) => call === "pair")).toHaveLength(1)
+  listening = "0.0.0.0:47650"
+  await act(async () => vi.advanceTimersByTime(1_000))
+  await act(async () => {})
+  await act(async () => {})
+  expect(calls.filter((call) => call === "pair")).toHaveLength(2)
+  expect(host.querySelector('[data-devices-action="reach"]')).toBeNull()
+  await act(async () => root.unmount())
+})
+
+it("offers turning linking on where a code could not be made, with no trip to Settings", async () => {
+  let on = false
+  const { gateway, calls } = fakeGateway({
+    list: async () => (
+      calls.push("list"),
+      { ok: true, value: { ...listed, listening: on ? "0.0.0.0:47650" : undefined } }
+    ),
+    // With linking off the hub makes no code.
+    pair: async () =>
+      on
+        ? (calls.push("pair"),
+          { ok: true, value: { code: "ABCD-2345", pairing: pairing("available") } })
+        : (calls.push("refused"), { ok: false }),
+    reach: async () => (
+      (on = true),
+      calls.push("reach"),
+      { ok: true, value: "restarting" }
+    ),
+  })
+  const { host, root } = await mount(gateway)
+  await addComputer(host)
+  await act(async () => {})
+  // One button, beside the failure it explains, and no "Try again" that would fail the same way.
+  const reaches = host.querySelectorAll('[data-devices-action="reach"]')
+  expect(reaches).toHaveLength(1)
+  expect(reaches[0]?.closest("[data-devices-reach]")?.textContent).toContain(
+    "couldn't make a code",
+  )
+  expect(host.textContent).not.toContain("Try again")
+  expect(host.textContent).not.toContain("Settings ›")
+  // It sits in the card the code goes in.
+  expect(reaches[0]?.closest(".devices-card")?.querySelector("h2")?.textContent).toBe(
+    "2. On the computer, run",
+  )
+  await act(async () => (reaches[0] as HTMLButtonElement).click())
+  await act(async () => vi.advanceTimersByTime(1_000))
+  await act(async () => {})
+  await act(async () => {})
+  expect(calls).toContain("pair")
+  expect(host.querySelectorAll("[data-devices-command]")).toHaveLength(2)
+  await act(async () => root.unmount())
+})
+
+it("a hub that does not come back listening says so, with no pointer to Settings", async () => {
+  const { gateway } = fakeGateway({
+    list: async () => ({ ok: true, value: { ...listed, listening: undefined } }),
+    reach: async () => ({ ok: false }),
+  })
+  const { host, root } = await mount(gateway)
+  await addComputer(host)
+  await act(async () => {})
+  const reach = host.querySelector('[data-devices-action="reach"]') as HTMLElement
+  await act(async () => reach.click())
+  await act(async () => {})
+  expect(text(host, "[data-devices-reach]")).toContain("didn't start listening")
+  expect(host.textContent).not.toContain("Settings ›")
+  // Still one button, in the same place.
+  expect(host.querySelectorAll('[data-devices-action="reach"]')).toHaveLength(1)
+  await act(async () => root.unmount())
+})
+
+it("turns linking on at a loopback address chosen by hand, then says to change it", async () => {
+  const hub: { listening?: string } = {}
+  const { gateway, calls } = fakeGateway({
+    list: async () => ({ ok: true, value: { ...listed, listening: hub.listening } }),
+  })
+  const { host, root } = await mount(gateway)
+  await addComputer(host)
+  await act(async () => {})
+  await act(async () =>
+    (host.querySelector('[data-devices-action="reach"]') as HTMLElement).click(),
+  )
+  hub.listening = "127.0.0.1:47700"
+  await act(async () => vi.advanceTimersByTime(1_000))
+  for (let i = 0; i < 3; i += 1) await act(async () => {})
+  expect(calls.filter((call) => call === "pair")).toHaveLength(2)
+  expect(host.querySelector('[data-devices-action="reach"]')).toBeNull()
+  expect(text(host, "[data-devices-loopback]")).toContain("127.0.0.1:47700")
+  await act(async () => root.unmount())
+})
+
+it("says so when the hub does not start listening for others", async () => {
+  const { gateway } = fakeGateway({
+    list: async () => ({ ok: true, value: { ...listed, listening: undefined } }),
+  })
+  const { host, root } = await mount(gateway)
+  await addComputer(host)
+  await act(async () => {})
+  await act(async () =>
+    (host.querySelector('[data-devices-action="reach"]') as HTMLElement).click(),
+  )
+  for (let i = 0; i < 31; i += 1) await act(async () => vi.advanceTimersByTime(1_000))
+  expect(text(host, "[data-devices-reach] [role=status]")).toContain(
+    "didn't start listening",
+  )
+  await act(async () => root.unmount())
+})
+
 it("dials the port the hub listens on, and says when only it can reach that", () => {
   expect(listeningPort("0.0.0.0:47700")).toBe(47700)
   expect(listeningPort("[::]:47701")).toBe(47701)
@@ -280,6 +586,13 @@ it("dials the port the hub listens on, and says when only it can reach that", ()
   expect(onlyThisMachine("[::1]:47650")).toBe(true)
   expect(onlyThisMachine("0.0.0.0:47650")).toBe(false)
   expect(onlyThisMachine(undefined)).toBe(false)
+  // Turning linking on fixes off and the address Settings once saved; a
+  // loopback address chosen by hand is the person's to change.
+  expect(reachable(null)).toBe(true)
+  expect(reachable("127.0.0.1:47650")).toBe(true)
+  expect(reachable("127.0.0.1:47700")).toBe(false)
+  expect(reachable("0.0.0.0:47650")).toBe(false)
+  expect(reachable(undefined)).toBe(false)
 })
 
 it("writes the address each route dials", () => {

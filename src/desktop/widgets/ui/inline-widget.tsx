@@ -1,7 +1,9 @@
 /**
  * A transcript's widget part (ADR 326): a card in the message, drawn by the
  * plugin's inline view, or — ready, with none — a row with the widget's title
- * and Open, which asks the host for its chat's panel (`open("panel")`). What it cannot
+ * and Open, which asks the host for its chat's panel (`open("panel")`). An app
+ * open as a tab is drawn there alone: its card is that row, whose Open brings
+ * the tab to the front (`openElsewhere`). What it cannot
  * draw it says in one line, from the same table every host reads
  * (`model/host-table.ts`). A card has no close and no Escape of its own.
  */
@@ -17,11 +19,25 @@ import { offeredBy, WidgetAnswerOf } from "./widget-answer"
 import { WidgetLine, WidgetWaiting } from "./widget-line"
 import "./widgets.css"
 
-export function InlineWidget({ widget, host }: { widget: WidgetRef; host: WidgetHost }) {
+export function InlineWidget({
+  widget,
+  host,
+  openElsewhere = false,
+}: {
+  widget: WidgetRef
+  host: WidgetHost
+  openElsewhere?: boolean
+}) {
   return (
     <WidgetAnswerOf widget={widget}>
       {(answer, plugin) => (
-        <InlineCard id={widget.id} answer={answer} plugin={plugin} host={host} />
+        <InlineCard
+          id={widget.id}
+          answer={answer}
+          plugin={plugin}
+          host={host}
+          openElsewhere={openElsewhere}
+        />
       )}
     </WidgetAnswerOf>
   )
@@ -32,14 +48,24 @@ function InlineCard({
   answer,
   plugin,
   host,
+  openElsewhere,
 }: {
   id: string
   answer: WidgetAnswer
   plugin: WidgetPlugin | undefined
   host: WidgetHost
+  openElsewhere: boolean
 }) {
   const card = useRef<HTMLDivElement>(null)
-  const draws = hostDraws("inline", answer, offeredBy(plugin))
+  // Each view of an app is its own running copy (its own call, its own
+  // microphone), so one open elsewhere is drawn there alone; a native view
+  // reads the one store and may be drawn beside its tab.
+  const draws = hostDraws(
+    "inline",
+    answer,
+    offeredBy(plugin),
+    openElsewhere && plugin?.kind === "app",
+  )
   const context = useHostContext(card, draws.kind === "view" && readsHostSize(plugin))
   const View = plugin?.kind === "native" ? plugin.views.inline : undefined
   return (

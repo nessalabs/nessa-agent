@@ -83,3 +83,37 @@ it("keeps a run the agent wrote past at work while a call in it still runs", asy
 it("ends every run once the turn has", async () => {
   expect(await runs(reply("stopped", false))).toEqual([false, false])
 })
+
+it("draws no run in the compact view, only what the agent wrote", async () => {
+  await act(async () =>
+    root.render(
+      <Provider store={testStore()}>
+        <Message
+          sessionId="a"
+          message={reply("completed", true)}
+          isNew={false}
+          view="compact"
+        />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelectorAll("[data-slot=tool-trace]")).toHaveLength(0)
+  expect(host.textContent).toContain("The server is up; reading the logs next.")
+})
+
+it("draws nothing in the compact view for a reply that was only tool runs", async () => {
+  const only: MessageValue = {
+    id: "m",
+    role: "agent",
+    at: 1,
+    parts: [{ kind: "step", step: "run", label: "Run", id: "t1", status: "completed" }],
+  }
+  await act(async () =>
+    root.render(
+      <Provider store={testStore()}>
+        <Message sessionId="a" message={only} isNew={false} view="compact" />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelector(".workspace-message")).toBeNull()
+})

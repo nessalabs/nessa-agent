@@ -32,6 +32,7 @@ export const STRESS = {
   ownedChild: "stress owned child",
   ownedSeed: "stress owned seed",
   await: "stress await",
+  close: "stress close",
   watch: "stress watch",
   long: "stress long",
   oversized: "stress oversized",
@@ -44,6 +45,7 @@ export const STRESS = {
   githubRead: "stress repository read",
   githubShell: "stress shell github",
   channel: "stress channel",
+  huddle: "stress huddle",
 }
 
 /**
@@ -77,6 +79,7 @@ export const SAYS = {
   failure: "the stress scenario failed this turn",
   delegated: "Delegated to ",
   awaited: "Awaited ",
+  closed: "Closing this thread: ",
   report: "Report received.",
   owned: "Owned execution: ",
   backgroundStarted: "Background task started.",
@@ -96,6 +99,7 @@ export const SAYS = {
   carried: "Carried on by ",
   channel: "Working in: ",
   channelPrompt: "System prompt: ",
+  huddle: "Talk board: ",
 }
 
 /**
@@ -282,6 +286,17 @@ export function stressScenario({
       {
         when: STRESS.reply,
         steps: [{ do: "text", chunks: [SAYS.echo, "${prompt.text}"] }, { do: "end" }],
+      },
+      {
+        // The test server's talk app, drawn where the turn shows it: what a
+        // voice app asks of its host (the microphone, the chat's panel, and
+        // messages sent as the person).
+        when: STRESS.huddle,
+        steps: [
+          { do: "tool", tool: "talk_board", arguments: {} },
+          { do: "text", chunks: [SAYS.huddle, "${prompt.text}"] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.long,
@@ -618,6 +633,22 @@ export function stressScenario({
             save: "sent",
           },
           { do: "text", chunks: [SAYS.delegated, "${thread.threadId}"] },
+          { do: "end" },
+        ],
+      },
+      // Closes its own thread, as an agent whose work is done is told to:
+      // the agent stops once this turn ends, and the next message opens it.
+      {
+        when: STRESS.close,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "close_thread",
+            arguments: {},
+            save: "closed",
+          },
+          { do: "text", chunks: [SAYS.closed, "${closed}"] },
           { do: "end" },
         ],
       },

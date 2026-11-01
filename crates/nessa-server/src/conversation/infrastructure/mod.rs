@@ -170,6 +170,8 @@ pub use drive_tool_audit::DurableDriveToolAudit;
 
 mod mcp_app_audit;
 pub use mcp_app_audit::DurableMcpAppAudit;
+mod trusted_apps;
+pub use trusted_apps::DurableTrustedApps;
 
 mod context_drops;
 pub use context_drops::audit_context_drops;

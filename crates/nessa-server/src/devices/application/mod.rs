@@ -21,9 +21,9 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-/// The most workers one list names: online first, then draining, then the
-/// most recently seen. Their reports' text is bounded, so this many fit in
-/// one ordinary product response with room to spare; the rest are counted.
+/// The most workers one page of the list names. Their reports' text is
+/// bounded, so this many fit in one ordinary product response with room to
+/// spare; the next page names the rest.
 pub(crate) const MAX_LISTED_WORKERS: usize = 64;
 
 /// One paired environment's connection as it stands now.
@@ -91,11 +91,11 @@ pub(crate) struct DeviceList {
     /// Where the hub's native listener, which workers dial, is bound;
     /// `None` while native linking is off.
     pub(crate) listening: Option<SocketAddr>,
-    /// At most [`MAX_LISTED_WORKERS`]: online first, then draining, then
-    /// offline, the most recently seen first within each.
+    /// At most [`MAX_LISTED_WORKERS`], in the order of their keys, each
+    /// after the page's `after`.
     pub(crate) workers: Vec<Worker>,
-    /// Workers past [`MAX_LISTED_WORKERS`], not listed.
-    pub(crate) omitted: usize,
+    /// The last worker listed, when more follow it: the next page's `after`.
+    pub(crate) next: Option<PeerEnvironment>,
 }
 
 /// The hub's devices.
@@ -126,33 +126,44 @@ impl Devices {
         let _ = self.listening.set(address);
     }
 
-    /// The hub as it reads now, and the workers connected now or seen
-    /// before and still paired. A serving worker's sighting is saved again
-    /// when it is due; an unpaired one's is forgotten.
-    pub(crate) async fn list(&self) -> DeviceList {
-        let hub = read_machine(&self.hub).await;
+    /// The hub as it reads now, on the first page only (one with no
+    /// `after`), and one page of the workers connected now or seen before
+    /// and still paired: those whose key follows `after`. A
+    /// serving worker's sighting is saved again when it is due; an unpaired
+    /// one's is forgotten.
+    pub(crate) async fn list(&self, after: Option<PeerEnvironment>) -> DeviceList {
+        // Later pages continue the first; reading the hub again would only
+        // cost another sample.
+        let hub = match after {
+            None => read_machine(&self.hub).await,
+            Some(_) => None,
+        };
         let Some((live, paired)) = &self.workers else {
             return DeviceList {
                 hub,
                 listening: self.listening.get().copied(),
                 workers: Vec::new(),
-                omitted: 0,
+                next: None,
             };
         };
-        let mut workers = self.merge(live.live(), paired.paired()).await;
-        workers.sort_by(|left, right| {
-            left.state
-                .cmp(&right.state)
-                .then(right.last_seen_ms.cmp(&left.last_seen_ms))
-                .then(left.peer.cmp(&right.peer))
+        // Pages follow the keys, which never change, so a worker whose state
+        // changes between two pages is still listed once.
+        let mut workers: Vec<Worker> = self
+            .merge(live.live(), paired.paired())
+            .await
+            .into_iter()
+            .filter(|worker| after.is_none_or(|after| worker.peer > after))
+            .take(MAX_LISTED_WORKERS + 1)
+            .collect();
+        let next = (workers.len() > MAX_LISTED_WORKERS).then(|| {
+            workers.truncate(MAX_LISTED_WORKERS);
+            workers[MAX_LISTED_WORKERS - 1].peer
         });
-        let omitted = workers.len().saturating_sub(MAX_LISTED_WORKERS);
-        workers.truncate(MAX_LISTED_WORKERS);
         DeviceList {
             hub,
             listening: self.listening.get().copied(),
             workers,
-            omitted,
+            next,
         }
     }
 

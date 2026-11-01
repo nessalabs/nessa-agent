@@ -12,7 +12,7 @@
  *                   below it where it does not ("The titlebar's safe area"): an
  *                   inline title never overlaps a titlebar control
  *   settings-fold   Settings' sidebar folds for room below a page of 420px
- *   integrations-narrow Settings › Integrations at 800 and 390px: nothing
+ *   integrations-narrow Settings › MCP servers at 800 and 390px: nothing
  *                   outside its card, no sideways scroll, the fold held, and
  *                   under a 420px page a server row's actions under its text
  *                   (`lib/settings.mjs`; with servers listed, the form and the
