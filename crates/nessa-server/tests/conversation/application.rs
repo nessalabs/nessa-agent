@@ -2988,6 +2988,15 @@ impl ConversationRepository for GatedCreateRepository {
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.inner.requires_mode_verification(id)
     }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.close_thread(id)
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.open_thread(id)
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.inner.thread_closed(id)
+    }
     fn observe_mode_application(
         &self,
         id: &ConversationId,

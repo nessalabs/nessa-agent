@@ -285,6 +285,16 @@ pub trait ConversationRepository: Send + Sync {
     /// Whether a committed choice was made without an open provider session.
     /// A cold owner must verify its attachment before admitting a turn.
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
+    /// Record that `id`'s agent closed its thread (`close_thread`): every
+    /// opening of it parks its agent once idle, until [`Self::open_thread`].
+    /// Durable before it returns; closing a closed one is not an error.
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// A new message opened `id`'s thread again: its close is gone. Durable
+    /// before it returns; one not closed is not an error.
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Whether `id`'s agent closed its thread and no message has opened it
+    /// since.
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
     /// Retain the observed provider/deferred outcome before delivering it to
     /// the independent audit sink. Repeated identical observations agree.
     fn observe_mode_application(

@@ -49,8 +49,9 @@ const PARKS_AT_ONCE: usize = 64;
 impl ConversationService {
     /// `id`'s agent closed its own thread (`close_thread`): once its turn
     /// ends, and no background command of it runs, it is parked, watched or
-    /// not, and a thread in a cloud workspace stops its VM with it. The next
-    /// message opens it again.
+    /// not, and a thread in a cloud workspace stops its VM with it. Whatever
+    /// opens it before a new message, a read or a restart's resumption, is
+    /// parked again once idle; the next new message opens it again.
     ///
     /// # Errors
     /// [`ConversationError::Unavailable`] when it is not open now, and
@@ -69,6 +70,13 @@ impl ConversationService {
         if !live.agent.operation_capabilities().session_resume() {
             return Err(ConversationError::AgentUnsupported);
         }
+        // The conversation's, kept before this agent is marked: an opening
+        // after it is parked, or after a restart, reads it and is parked
+        // again until a new message opens the thread.
+        // With a new message's opening of the thread, one at a time: the
+        // store and the mark always say the same.
+        let _change = slot.closing_changes.lock().await;
+        self.inner.metadata.close_thread(id).await?;
         slot.closing.store(true, Ordering::SeqCst);
         tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");
         Ok(())
