@@ -1,6 +1,6 @@
 //! One transaction changes the complete live-event selection, including
 //! deletion evidence. A failed write leaves the previous selection intact.
-use super::sqlite::{failure, SqliteRelayStore};
+use super::sqlite::{failure, trim_binding_audit, trim_event_audit, SqliteRelayStore};
 use crate::github_relay::{
     application::LiveEventStore,
     domain::{Binding, Failure},
@@ -44,7 +44,8 @@ impl LiveEventStore for SqliteRelayStore {
                 tx.execute("INSERT INTO binding_audit(user_id,repository_id,after_generation,cause,initiator,observed_at) VALUES(?,?,?,'live_events_enabled',?,?)",params![b.user_id(),b.repository_id(),b.generation().to_string(),initiator,now]).map_err(failure)?;
                 tx.execute("INSERT INTO bindings(user_id,repository_id,repository_name,generation) VALUES(?,?,?,?)",params![b.user_id(),b.repository_id(),b.repository_name(),b.generation().to_string()]).map_err(failure)?;
             }
-            for table in ["audit","binding_audit"] {tx.execute(&format!("DELETE FROM {table} WHERE id IN (SELECT id FROM {table} ORDER BY id DESC LIMIT -1 OFFSET ?)"),[crate::github_relay::domain::contract::AUDIT_ROWS]).map_err(failure)?;}
+            trim_event_audit(&tx)?;
+            trim_binding_audit(&tx)?;
             let mut pending = Some(tx);
             selection.commit_in_generation(generation, &mut || {
                 pending

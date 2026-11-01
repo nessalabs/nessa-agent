@@ -11,7 +11,7 @@ selection and page commit already trim both stores; this decision makes the
 direct paths do the same for the store they write.
 
 - **Date:** 2026-11-01
-- **Status:** proposed
+- **Status:** accepted
 
 ## Context
 
@@ -67,7 +67,7 @@ rolls the whole row back.
 
 | Guarantee | Enforcer |
 | --- | --- |
-| After every committed transition in the table, a store that transition inserted into has at most `auditRows` rows. A store it did not insert into is unchanged. | The offset delete in that transaction. `direct_gap_and_acceptance_keep_each_audit_store_within_its_cap` starts both stores at the cap, repeats gap and acceptance, and checks both neighbours. |
+| After a committed gap, `audit` has at most `auditRows` rows and `binding_audit` is unchanged. After a committed bind, Settings selection, or page commit, both stores have at most `auditRows` rows. | The offset delete in that transaction. `direct_gap_and_acceptance_keep_each_audit_store_within_its_cap` starts both stores at the cap, repeats gap and acceptance, and checks both neighbours. |
 | The committed row for that transition keeps its target, cause, actor, and before-and-after cursors. | The same test reads the newest row after the trim. The new row is the greatest id. |
 | A failed insert or a failed trim commits nothing: gap, cursor, events, and both stores match the pre-transition rows. | The same test aborts the insert and, separately, the delete. Selection refusal stays `cleanup_audit_failure_refuses_disable`. Page refusal stays `failed_page_rolls_back_events_and_cursor_and_reopen_replays`. |
 | No later job is required for the cap to hold. | There is no sweep and no `COUNT(*)` in the transition. The delete is the statement above. |
@@ -84,7 +84,7 @@ expiry inside the cap, so the expired identities are the rows the trim keeps.
 - **A full-table recount.** `COUNT(*)`, then delete the surplus, reads every
   row to learn what the primary-key offset delete already expresses. The
   cloud relay already refused a full scan at capacity
-  ([1132](1132-github-relay-hardening.md)).
+  ([1132](../todo/1132-github-relay-hardening.md)).
 - **Trim outside the transaction.** The insert can commit and the trim can
   fail. The caller then sees a failure while the gap and the extra row
   remain, or a success with the store over the cap. Rolling back the audit
@@ -95,10 +95,12 @@ expiry inside the cap, so the expired identities are the rows the trim keeps.
 Gap and acceptance stay within the cap without waiting for another
 transition. The cost is one indexed delete of the overflow in the
 transaction that already writes the row. At the cap that delete removes as
-many rows as the transaction inserted. It does not rewrite history, and it
-does not repair a store a transition does not write. Old files over the cap
-stay over until such a transition; that is accepted because this build does
-not migrate.
+many rows as the transaction inserted. `gap` does not trim `binding_audit`,
+which that transition does not write. `bind` trims both stores on every
+call, including a call whose conditional insert wrote nothing: a store
+already within the cap loses nothing. An older file already over the cap
+comes back only when one of these transitions runs its delete. There is no
+separate migration.
 
 The state page's retention section currently says the direct paths may
 exceed the cap. That sentence is updated with this decision. The contract
