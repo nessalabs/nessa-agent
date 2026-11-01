@@ -45,9 +45,10 @@ test("a file with nothing in the newer tables goes back to version 6", (t) => {
   const { directory, path } = current()
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   assert.equal(metadataFile(directory), path)
-  assert.equal(schemaVersion(path), 9)
+  assert.equal(schemaVersion(path), 10)
   assert.equal(asOlderBuild(path), 6)
   assert.equal(schemaVersion(path), 6)
+  assert.ok(!tables(path).includes("closed_threads"))
   assert.ok(!tables(path).includes("agent_switches"))
   assert.ok(!tables(path).includes("unfinished_turns"))
   assert.ok(!tables(path).includes("model_requests"))
@@ -76,7 +77,7 @@ test("a model request keeps every table, at version 7", (t) => {
   assert.ok(tables(path).includes("model_requests"))
 })
 
-test("a file with an agent switch is left as the newest build's", (t) => {
+test("a file with an agent switch goes back to version 9", (t) => {
   const { directory, path } =
     current(`INSERT INTO agent_switches VALUES ('c1', 'r1', 'alice',
     'panel', 'claude', 'm', 'codex', 'n', 'applied', 1);`)
@@ -84,4 +85,15 @@ test("a file with an agent switch is left as the newest build's", (t) => {
   assert.equal(asOlderBuild(path), 9)
   assert.equal(schemaVersion(path), 9)
   assert.ok(tables(path).includes("agent_switches"))
+  assert.ok(!tables(path).includes("closed_threads"))
+})
+
+test("a file with a closed thread is left as the newest build's", (t) => {
+  const { directory, path } = current(
+    "INSERT INTO closed_threads (conversation_id) VALUES ('c1');",
+  )
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  assert.equal(asOlderBuild(path), 10)
+  assert.equal(schemaVersion(path), 10)
+  assert.ok(tables(path).includes("closed_threads"))
 })

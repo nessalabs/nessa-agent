@@ -192,6 +192,8 @@ pub(crate) enum ModeReadbackFault {
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
+    /// Conversations whose agent closed its thread (`close_thread`).
+    pub(crate) closed_threads: Mutex<std::collections::HashSet<ConversationId>>,
     /// While set, whether a conversation's mode needs verifying cannot be
     /// read: a submission is refused before the agent sees it.
     pub(crate) verification_unreadable: AtomicBool,
@@ -692,6 +694,18 @@ impl ConversationRepository for MemoryRepository {
                 _ => Ok(found),
             }
         })
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.closed_threads.lock().unwrap().insert(id.clone());
+        Box::pin(async { Ok(()) })
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.closed_threads.lock().unwrap().remove(id);
+        Box::pin(async { Ok(()) })
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        let closed = self.closed_threads.lock().unwrap().contains(id);
+        Box::pin(async move { Ok(closed) })
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         if self.verification_unreadable.load(Ordering::SeqCst) {

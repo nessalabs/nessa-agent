@@ -838,8 +838,10 @@ struct Slot {
     /// (`service/parking.rs`). Unix milliseconds from the service's clock.
     touched: AtomicU64,
     /// Its agent closed its thread (`close_thread`): it is parked as soon
-    /// as it is idle, watched or not. Its next opening is a new slot, and
-    /// starts unmarked.
+    /// as it is idle, watched or not. The close is the conversation's, kept
+    /// by the metadata store (`ConversationRepository::thread_closed`); this
+    /// is that fact as the opening read it, written with it by
+    /// `close_after_turn` and by a message that opens the thread again.
     closing: AtomicBool,
 }
 impl Slot {
@@ -1996,6 +1998,20 @@ impl ConversationService {
                                     holds: false,
                                 }
                             })?;
+                            // A thread its agent closed stays closed whatever
+                            // opens it, a read or a restart's resumption, until
+                            // a new message opens it again: this agent is
+                            // parked once idle, as the one that closed it was.
+                            let closed = service
+                                .inner
+                                .metadata
+                                .thread_closed(&id)
+                                .await
+                                .map_err(|cause| OpeningFailure {
+                                    cause,
+                                    holds: false,
+                                })?;
+                            owner.closing.store(closed, Ordering::SeqCst);
                             // A record naming an agent this build has no
                             // adapter for is read, listed, and deletable,
                             // and never opened on some other agent. A
@@ -3984,10 +4000,8 @@ impl ConversationService {
             let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
-            // A message is use: an agent is not parked from under it, and
-            // a thread its agent closed is open again for this new work.
+            // A message is use: an agent is not parked from under it.
             owner.touch(service.inner.clock.unix_milliseconds());
-            owner.closing.store(false, Ordering::SeqCst);
             // Opened again at most once for this message: by the stuck agent
             // it found, or by one that failed while it was being checked.
             let mut reopened = false;
@@ -4046,6 +4060,13 @@ impl ConversationService {
                     });
                 let (original, saved_initiation) = original.unzip();
                 let known = original.is_some();
+                // A thread its agent closed is open again for new work. A
+                // retry of a message the agent already has is not new work:
+                // the turn that closed the thread may be that very message.
+                if !known && owner.closing.load(Ordering::SeqCst) {
+                    service.inner.metadata.open_thread(&id).await?;
+                    owner.closing.store(false, Ordering::SeqCst);
+                }
                 // Asked under the submission lock, which a desktop stop takes
                 // to mark the owner: an owner being stopped is handed no new
                 // message (`an_owner_marked_as_stopping_is_handed_no_message`,

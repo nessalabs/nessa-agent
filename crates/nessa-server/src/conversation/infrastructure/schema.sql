@@ -222,4 +222,12 @@ CREATE TABLE unfinished_turns (
     retry_at_ms INTEGER CHECK (retry_at_ms >= 0)
 ) STRICT, WITHOUT ROWID;
 
-PRAGMA user_version = 9;
+-- Each conversation whose agent closed its thread (`close_thread`): its
+-- agent is parked once idle, watched or not, whichever opening it is, until
+-- a new message opens the thread again and removes the row
+-- (docs/design/agent-parking.md).
+CREATE TABLE closed_threads (
+    conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id)
+) STRICT, WITHOUT ROWID;
+
+PRAGMA user_version = 10;
