@@ -397,6 +397,12 @@ pub(super) async fn product_state(
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     // Voice calls, with their key in the same vault.
     let voice = super::voice::compose(namespace, vault.vault.clone());
+    // A leftover plaintext sign-in is removed before agents start, whether or
+    // not the vault is unlocked. A failed delete stops startup; the file is
+    // not left in place and treated as signed out.
+    crate::github::infrastructure::remove_plaintext_sign_in(namespace.join("github"))
+        .await
+        .map_err(|_| RunError::Agent("the plaintext GitHub sign-in could not be removed".into()))?;
     // The GitHub sign-in, composed where agents are: they are what it is for.
     #[cfg(unix)]
     let github = match &settings.agents {

@@ -29,6 +29,13 @@ pub(super) async fn compose(
     environment: &crate::env::Environment,
     vault: Arc<nessa_vault::application::Vault>,
 ) -> Option<GithubComposition> {
+    if crate::github::infrastructure::remove_plaintext_sign_in(namespace.join("github"))
+        .await
+        .is_err()
+    {
+        tracing::error!("a plaintext GitHub sign-in could not be removed");
+        return None;
+    }
     let app = match std::env::var_os("NESSA_GITHUB_APP") {
         None => GithubApp::released(),
         Some(path) => match std::fs::read(&path).map(|bytes| GithubApp::parse(&bytes)) {
