@@ -21,6 +21,7 @@ import {
 import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
+import { useComposerVoice, VoiceDock } from "../../../voice"
 import { useComposerAccess } from "./composer-access"
 import { useComposerImages } from "./composer-images"
 import "./conversation.css"
@@ -161,11 +162,20 @@ export const Conversation = memo(function Conversation({
         onHeadingVisible={onHeadingVisible}
       />
       <div className="workspace-dock" data-split-keeps="foot">
+        <ConversationVoice sessionId={sessionId} />
         <DockComposer sessionId={sessionId} />
       </div>
     </div>
   )
 })
+
+/** The window's call, above the composer, when it talks to this conversation. */
+function ConversationVoice({ sessionId }: { sessionId: string }) {
+  const agent = useWorkspaceSelector(
+    (state) => entry(state.workspace.transcripts, sessionId)?.agent,
+  )
+  return <VoiceDock sessionId={sessionId} agent={agent} />
+}
 
 /** The docked composer, showing the model the session's next message is sent with. */
 const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: string }) {
@@ -173,6 +183,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { send, changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   const stop = useStop(sessionId)
+  const voice = useComposerVoice(sessionId)
   const access = useComposerAccess(sessionId)
   const images = useComposerImages(sessionId)
   const modelChoiceLive = useWorkspaceSelector((state) =>
@@ -231,6 +242,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         modelNotice={modelNotice}
         onSend={modelBusy ? undefined : send}
         onStop={stop}
+        voice={voice}
         access={access}
         images={images}
         // In a conversation the field is a reply, and says so in fewer words than the home's question.

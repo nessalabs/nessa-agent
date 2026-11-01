@@ -35,6 +35,8 @@ export interface WidgetHost {
    * or of the chat in front.
    */
   openWidget(widget: WidgetRef, place: OpenPlace): void
+  /** Brings one of the person's conversations to the front, in the focused pane. */
+  openSession?(sessionId: string): void
   /**
    * Registers a step back for Escape while the view has somewhere to step
    * back to (a detail it opened); returns its removal. Escape reaching the

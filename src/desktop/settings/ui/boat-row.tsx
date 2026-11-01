@@ -140,10 +140,24 @@ export function useBoatConnection(
 
 /** The token form, the VM lifetime, and any error: Boat's settings wherever they are shown. */
 export function BoatConnectionFields({ connection }: { connection: BoatConnection }) {
-  const tokenId = useId()
-  const { gateway, status, token, setToken, busy, error } = connection
   return (
     <div className="settings-boat">
+      <BoatTokenForm connection={connection} />
+      <BoatRuntimeControl gateway={connection.gateway} />
+      {connection.error && <p role="alert">{connection.error}</p>}
+    </div>
+  )
+}
+
+/**
+ * Unlock, or the token field and Connect Boat: the one way Boat is connected,
+ * in Settings and wherever Boat is offered while it is not connected.
+ */
+export function BoatTokenForm({ connection }: { connection: BoatConnection }) {
+  const tokenId = useId()
+  const { gateway, status, token, setToken, busy } = connection
+  return (
+    <>
       {!gateway && <p role="status">Connect a gateway to manage Boat.</p>}
       {status?.state === "locked" ? (
         // Whether a token is saved is unknown until the vault opens: unlock,
@@ -206,9 +220,7 @@ export function BoatConnectionFields({ connection }: { connection: BoatConnectio
           .
         </p>
       )}
-      <BoatRuntimeControl gateway={gateway} />
-      {error && <p role="alert">{error}</p>}
-    </div>
+    </>
   )
 }
 

@@ -26,6 +26,7 @@ import {
   type AgentsApi,
   type AuthApi,
   type GithubApi,
+  type VoiceApi,
   type ConversationView,
   type CredentialApi,
   type McpAppsApi,
@@ -253,6 +254,7 @@ const dependencies = createDesktopDependencies({
         credentials: {} as CredentialApi,
         auth: {} as AuthApi,
         github: {} as GithubApi,
+        voice: {} as VoiceApi,
         vault: {} as import("@nessa/client").VaultApi,
         // The Devices page is not opened here.
         devices: {} as import("@nessa/client").DevicesApi,

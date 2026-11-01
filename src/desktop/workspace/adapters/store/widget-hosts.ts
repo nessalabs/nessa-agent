@@ -23,7 +23,7 @@ import type {
   WidgetHost,
   WidgetRef,
 } from "../../../widgets"
-import { closePanelTab, openWidget, showContent } from "./commands"
+import { closePanelTab, openSession, openWidget, showContent } from "./commands"
 import { useWorkspaceDispatch } from "./hooks"
 
 const noStepBack = () => () => {}
@@ -38,6 +38,7 @@ export function useInlineWidgetHost(widget: WidgetRef, sessionId: string): Widge
       close: () => {},
       openWidget: (other: WidgetRef, place: OpenPlace) =>
         dispatch(openWidget({ widget: other, place, origin: sessionId })),
+      openSession: (other: string) => dispatch(openSession({ sessionId: other })),
       onEscape: noStepBack,
     }),
     [dispatch, widget, sessionId],
@@ -64,6 +65,7 @@ export function usePanelWidgetHost(
       close: () => dispatch(closePanelTab({ sessionId, widget })),
       openWidget: (other: WidgetRef, place: OpenPlace) =>
         dispatch(openWidget({ widget: other, place, origin: origin ?? sessionId })),
+      openSession: (other: string) => dispatch(openSession({ sessionId: other })),
       onEscape: steps.push,
       crumb,
     }),
@@ -87,6 +89,7 @@ export function useWindowWidgetHost(
       close: () => dispatch(showContent({ content: "panes" })),
       openWidget: (other: WidgetRef, place: OpenPlace) =>
         dispatch(openWidget({ widget: other, place, origin })),
+      openSession: (other: string) => dispatch(openSession({ sessionId: other })),
       onEscape: steps.push,
       crumb,
     }),

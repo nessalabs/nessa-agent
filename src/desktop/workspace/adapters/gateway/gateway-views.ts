@@ -615,6 +615,7 @@ export function transcriptFrom(
         parts,
         // Waiting, it is labelled as it will be once it is a turn (D-H).
         ...writtenBy(waiting.app, waiting.agent),
+        waiting: true,
       })
     pushUnreadable(unreadable.byWaiting.get(waiting.executionId) ?? [])
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])

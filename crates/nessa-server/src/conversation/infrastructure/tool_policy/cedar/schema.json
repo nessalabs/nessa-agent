@@ -168,6 +168,26 @@
           "principalTypes": ["App"],
           "resourceTypes": ["McpTool"]
         }
+      },
+      "app.sendUnreviewed": {
+        "appliesTo": {
+          "principalTypes": ["App"],
+          "resourceTypes": ["McpServer"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "approvalMode": {
+                "type": "String",
+                "required": true
+              },
+              "trustedApp": {
+                "type": "Bool",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
       }
     }
   }

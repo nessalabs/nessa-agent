@@ -421,9 +421,11 @@ that their combination describes a possible execution.
 When an issue or pull request comment explains behavior whose order matters,
 include a fenced Mermaid `sequenceDiagram` where it makes the explanation easier
 to follow. This includes ownership handoffs, concurrent operations, retries,
-publication and acknowledgement, persistence, and cleanup. Name the actual
-participants and show the meaningful success, refusal, or failure ordering.
-Simple status or check-result updates do not need a diagram.
+publication and acknowledgement, persistence, and cleanup. Show the meaningful
+success, refusal, or failure ordering between the parts a reader knows, as the
+pull-requests skill's
+[what a sequence diagram says](https://github.com/nessalabs/skills/blob/wip/skills/engineering/pull-requests/references/diagrams.md#what-a-sequence-diagram-says)
+describes. Simple status or check-result updates do not need a diagram.
 
 Keep the diagram consistent with the surrounding evidence. Distinguish observed
 behavior from a proposed correction, and preserve the original head, environment,

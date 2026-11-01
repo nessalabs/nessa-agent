@@ -156,6 +156,19 @@ fn validate(rows: &[Stored]) -> Result<(), Failure> {
                     _ => false,
                 }
             }
+            "passphrase_change" if row.target.is_none() => {
+                match (row.cause.as_str(), row.result.as_str()) {
+                    ("explicit_request", "requested") => {
+                        row.before == "unlocked" && row.after == "unlocked"
+                    }
+                    ("encrypted_receipt", "committed")
+                    | ("storage_refused" | "audit_refused", "unchanged")
+                    | ("storage_unavailable", "not_confirmed") => {
+                        row.before == "locked" && row.after == "locked"
+                    }
+                    _ => false,
+                }
+            }
             "lock" => {
                 row.target.is_none()
                     && row.before == "unlocked"

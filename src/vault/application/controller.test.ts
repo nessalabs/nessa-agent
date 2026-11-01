@@ -14,6 +14,7 @@ function source(state: VaultState): VaultSource {
     setup: vi.fn(async (): Promise<VaultState> => "unlocked"),
     unlock: vi.fn(async (): Promise<VaultState> => "unlocked"),
     lock: vi.fn(async (): Promise<VaultState> => "locked"),
+    changePassphrase: vi.fn(async (): Promise<VaultState> => "locked"),
   }
 }
 describe("one reusable vault dialog", () => {

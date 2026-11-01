@@ -48,6 +48,7 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
+            DurableTrustedApps,
         },
     },
 };
@@ -394,6 +395,8 @@ pub(super) async fn product_state(
     // for every command, passive read and share change (ADR 803 step 3).
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
+    // Voice calls, with their key in the same vault.
+    let voice = super::voice::compose(namespace, vault.vault.clone());
     // The GitHub sign-in, composed where agents are: they are what it is for.
     #[cfg(unix)]
     let github = match &settings.agents {
@@ -541,6 +544,9 @@ pub(super) async fn product_state(
     #[cfg(unix)]
     if let Some(github) = github {
         product = product.with_github(github.routes);
+    }
+    if let Some(voice) = voice {
+        product = product.with_voice(voice);
     }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
@@ -869,6 +875,7 @@ async fn conversations(
 pub(super) fn mcp_app_ports(
     mcp: &mut super::mcp_servers::McpComposition,
     audit: Arc<dyn McpAppAudit>,
+    trusted: Arc<dyn crate::conversation::application::TrustedApps>,
 ) -> McpAppPorts {
     let dropped = mcp.start_recorders(audit.clone());
     McpAppPorts {
@@ -879,6 +886,7 @@ pub(super) fn mcp_app_ports(
         tickets: mcp.resource_tickets.clone(),
         dropped,
         policy: mcp.app_policy.clone(),
+        trusted,
     }
 }
 
@@ -1564,7 +1572,11 @@ async fn conversations(
                 },
                 workspace,
                 tool_uis,
-                mcp_app_ports(mcp, mcp_app_audit.clone()),
+                mcp_app_ports(
+                    mcp,
+                    mcp_app_audit.clone(),
+                    Arc::new(DurableTrustedApps::new(root.clone())),
+                ),
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
         }

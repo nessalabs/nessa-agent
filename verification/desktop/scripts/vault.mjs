@@ -7,6 +7,7 @@ import { VAULT_PASSPHRASE } from "./lib/vault.mjs"
 import { attempt } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { openAccounts } from "./lib/boat-runtime-settings.mjs"
 await main(
   {
     name: "vault",
@@ -15,8 +16,17 @@ await main(
   },
   async ({ options, rep, target: stack }) => {
     await withEngines(options, rep, async (engine, browser) => {
+      let loseChangeReply = false
+      let changeRequests = 0
       const opened = await openPage(browser, {
-        preparePage: (page) => stack.vault.install(page),
+        preparePage: (page) =>
+          page.exposeFunction("__NESSA_VAULT_COMMAND", async (request) => {
+            if (request.operation === "changePassphrase") changeRequests++
+            const reply = await stack.vault.command(request)
+            if (request.operation === "changePassphrase" && loseChangeReply)
+              throw new Error("Synthetic lost response after dispatch")
+            return reply
+          }),
         url: new URL("/desktop.html", stack.url).href,
         layout: "columns",
         width: 1000,
@@ -57,6 +67,24 @@ await main(
                 .isEnabled()
             )
               throw new Error("weak passphrase accepted")
+            await input().fill("legacyphrase")
+            if (
+              await dialog
+                .getByRole("button", { name: "Create vault", exact: true })
+                .isEnabled()
+            )
+              throw new Error("legacy unlock length was reused for new setup")
+            await input().fill("qwertyuiopasdfghjkl")
+            await dialog.getByLabel("Confirm passphrase").fill("qwertyuiopasdfghjkl")
+            await dialog
+              .getByRole("button", { name: "Create vault", exact: true })
+              .click()
+            await dialog
+              .getByRole("alert")
+              .filter({ hasText: "too predictable" })
+              .waitFor()
+            if ((await stack.client.vault.status()).state !== "unconfigured")
+              throw new Error("rejected common phrase created vault")
             await input().fill(VAULT_PASSPHRASE)
             await dialog
               .getByLabel("Confirm passphrase")
@@ -97,6 +125,15 @@ await main(
             throw new Error(
               `Vault unavailable: ${await dialog.innerText()}; ${JSON.stringify(await stack.vault.command({ operation: "status" }))}`,
             )
+          await input().fill("aaaaaaaaaaaa")
+          if (
+            !(await dialog
+              .getByRole("button", { name: "Unlock", exact: true })
+              .isEnabled())
+          )
+            throw new Error("legacy twelve-character unlock input was blocked")
+          await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+          await dialog.getByRole("alert").filter({ hasText: "didn't unlock" }).waitFor()
           await input().fill("wrong passphrase for verification")
           await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
           await dialog.getByRole("alert").filter({ hasText: "didn't unlock" }).waitFor()
@@ -115,6 +152,81 @@ await main(
             eofLocked: true,
             wrongPassphraseRejected: true,
             inputCleared: true,
+          }
+        })
+        await attempt(rep, { engine, name: "passphrase-change" }, async () => {
+          const replacement =
+            "different disposable vault passphrase for change verification"
+          await openAccounts(page)
+          await page
+            .getByRole("button", { name: "Change passphrase", exact: true })
+            .click()
+          const change = page.locator("[data-vault-change]")
+          const submit = () =>
+            change.getByRole("button", { name: "Change passphrase", exact: true })
+          await change.getByLabel("New passphrase", { exact: true }).fill("legacyphrase")
+          if (await submit().isEnabled())
+            throw new Error("Change reused legacy unlock strength")
+          await change.getByLabel("New passphrase", { exact: true }).fill(replacement)
+          await change.getByLabel("Confirm new passphrase").fill("different confirmation")
+          await submit().click()
+          await change.getByRole("alert").filter({ hasText: "don't match" }).waitFor()
+          if (changeRequests !== 0)
+            throw new Error("Mismatched confirmation dispatched a change")
+          await change.getByLabel("Confirm new passphrase").fill(replacement)
+          await submit().click()
+          await change
+            .getByRole("status")
+            .filter({ hasText: "Your passphrase changed" })
+            .waitFor()
+          if ((await stack.client.vault.status()).state !== "locked")
+            throw new Error("Changed vault remained unlocked")
+          if (options.shots)
+            await page
+              .getByRole("dialog", { name: "Change vault passphrase", exact: true })
+              .screenshot({ path: `${options.shots}/vault-changed-${engine}.png` })
+          await change.getByRole("button", { name: "Unlock vault", exact: true }).click()
+          await input().fill(VAULT_PASSPHRASE)
+          await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+          await dialog.getByRole("alert").filter({ hasText: "didn't unlock" }).waitFor()
+          await input().fill(replacement)
+          await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+          await dialog.waitFor({ state: "hidden" })
+          await page
+            .getByRole("button", { name: "Change passphrase", exact: true })
+            .click()
+          await change
+            .getByLabel("New passphrase", { exact: true })
+            .fill(VAULT_PASSPHRASE)
+          await change.getByLabel("Confirm new passphrase").fill(VAULT_PASSPHRASE)
+          loseChangeReply = true
+          await submit().click()
+          await change
+            .getByRole("alert")
+            .filter({ hasText: "new passphrase first" })
+            .waitFor()
+          await page.evaluate(() => window.dispatchEvent(new Event("focus")))
+          if (changeRequests !== 2)
+            throw new Error("Lost answer replayed a passphrase change")
+          if (await change.locator('input[type="password"]').count())
+            throw new Error("Unconfirmed change retained passphrase input")
+          if (options.shots)
+            await page
+              .getByRole("dialog", { name: "Change vault passphrase", exact: true })
+              .screenshot({
+                path: `${options.shots}/vault-change-not-confirmed-${engine}.png`,
+              })
+          await change.getByRole("button", { name: "Unlock vault", exact: true }).click()
+          await input().fill(VAULT_PASSPHRASE)
+          await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+          await dialog.waitFor({ state: "hidden" })
+          if (changeRequests !== 2) throw new Error("Explicit recovery replayed a change")
+          return {
+            sealedAfterChange: true,
+            oldPhraseRefused: true,
+            newPhraseAccepted: true,
+            unconfirmedRecovery: true,
+            changes: changeRequests,
           }
         })
       } finally {

@@ -94,6 +94,7 @@ pub(super) fn serve() -> Result<(), RunError> {
             Some("setup") => "vault.setup",
             Some("unlock") => "vault.unlock",
             Some("lock") => "vault.lock",
+            Some("changePassphrase") => "vault.changePassphrase",
             _ => return Err(problem()),
         };
         let params = match object.remove("passphrase") {
@@ -108,13 +109,27 @@ pub(super) fn serve() -> Result<(), RunError> {
         match result {
             Ok(status) => output(&json!({"ok":true,"status":status}))?,
             Err(LocalProductError::Vault(code)) => {
-                output(&json!({"ok":false,"code":code.as_str()}))?
+                output(&json!({"ok":false,"code":code.as_str()}))?;
+                if method == "vault.changePassphrase"
+                    && matches!(
+                        code.as_str(),
+                        "vault_change_not_confirmed"
+                            | "vault_change_not_confirmed_audit_unavailable"
+                    )
+                {
+                    return Err(problem());
+                }
             }
             Err(LocalProductError::Unauthorized | LocalProductError::Denied) => {
-                output(&json!({"ok":false,"code":"forbidden"}))?
+                output(&json!({"ok":false,"code":"vault_forbidden"}))?
             }
             Err(_) => {
-                output(&json!({"ok":false,"code":"vault_unavailable"}))?;
+                let code = if method == "vault.changePassphrase" {
+                    "vault_change_not_confirmed"
+                } else {
+                    "vault_unavailable"
+                };
+                output(&json!({"ok":false,"code":code}))?;
                 return Err(problem());
             }
         }
