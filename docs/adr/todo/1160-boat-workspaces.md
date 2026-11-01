@@ -339,3 +339,46 @@ Each stop of a VM is recorded before Boat is asked (`workspace_stop_requested`)
 and once it answers (`workspace_stop_answered`, `accepted` or the failure's
 kind). Accepted means Boat took the stop: the VM archives after it, which an
 opening waits out.
+
+
+## Parent Stop integration worker refresh (#981)
+
+The worker for application source `22a8218b0ff2c392e911e07c75994f33e4896048`
+serves lease protocol `dad5afbc1bc5755f`. Its published image is
+`bsh_-6mHzeuFu3FWNbJWOe0IbXLXxhBcJPNOjq76Bk_nMGI`, snapshot
+`nessa-worker-dad5afbc-22a8218-linux-x64`. Both Linux x86_64 runtime binaries
+are present: `nessa` SHA256
+`9448ba2c2e6c01e6a7a41f23f32183ceae17918a279f4bfc9ddb8113873d019f`
+(146,162,512 bytes), and `nessa-mcp` SHA256
+`4684f72dd49d07c06ab76c168cb8165fab0d7ef6fde62414e00fe26c4c678e25`
+(5,243,680 bytes). The publisher used Rust/Cargo 1.99.1 and the stripped
+development profile with dependency opt-level=0, debug=0 and incremental=0.
+
+This is not an unmodified `cargo vendor` bundle. Vendoring omitted shared
+files used by pinned PTY revision
+`c68837e2b7bf1c9009e1a4587a1a58107ec0425c` and removed its external
+`build = "../../scripts/native/build.rs"` declaration from the normalized
+infrastructure manifest. The publisher restored those pinned inputs and the
+original declaration before building; application source, dependency revisions
+and acceptance rules were unchanged. The only vendor checksum change updated
+`files.Cargo.toml` to the restored manifest digest; checksum validation was not
+disabled. Independent comparison matched all 29 reported restored-file hashes,
+the original manifest, application source tree and Cargo.lock against the locked
+commits. The vendoring restoration is part of the
+build provenance, rather than an application or dependency-version patch.
+
+A fresh image clone verified the protocol, both checksums and byte lengths,
+executables and linked libraries, MCP initialization, supervisor provenance,
+and named build-source/credential-path exclusions plus recursive Claude-config
+auth-field checks. These are not an exhaustive secret scan or an independent
+secure-erasure attestation. All three owned publication
+VMs were confirmed absent after completed deletion. The publication used
+US$0.03031 and three VM creations; four creations remain within the existing
+seven-creation allowance. The one retained snapshot is within the account's
+included allowance. Old published images remain available.
+
+The [publication receipt](../../../verification/desktop/evidence/parent-stop/recovery/worker-release-receipt.json)
+records the artifact and cleanup facts. The normal shipping guard remains
+unchanged. This image publication does not claim the separate four-VM live
+Boat acceptance or earlier native/performance gates passed; those remain
+separate qualification records.

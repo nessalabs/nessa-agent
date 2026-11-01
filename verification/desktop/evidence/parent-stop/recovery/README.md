@@ -428,3 +428,17 @@ actor/receipt/single-cancellation assertions remain. A minor unbounded final
 replay found in review was fixed; the fresh final review was clean. Compilation,
 actual lock-order negative control, restored execution and fresh Windows
 qualification are pending at this checkpoint.
+
+
+## Published matching worker for source22a8218b
+
+The [worker publication receipt](worker-release-receipt.json) records image
+`bsh_-6mHzeuFu3FWNbJWOe0IbXLXxhBcJPNOjq76Bk_nMGI` for protocol
+`dad5afbc1bc5755f`, built from application source
+`22a8218b0ff2c392e911e07c75994f33e4896048`. Both `nessa` and `nessa-mcp`
+were freshly verified with their recorded checksums and lengths. The receipt
+includes the locked PTY vendoring restoration, independently compared upstream
+file hashes, limited credential-path checks and provider-confirmed cleanup of
+all three publication VMs. This replaces the shipping mapping, not the protocol
+matching rule. The four-VM live verifier is prepared but not yet run at this
+publication checkpoint. Native and performance limits above remain distinct.
