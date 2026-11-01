@@ -16,6 +16,151 @@ use crate::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Barrier, Semaphore};
 
+async fn manager_with_refused_sdk_lease(
+    fail_save: bool,
+) -> (SessionManager, Arc<FaultLease>, OwnedCleanupScope) {
+    use crate::domain::agent_execution::{leases::*, subagents::AgentLifetimeId};
+    let (manager, store, _) = manager(0).await;
+    let scope = OwnedCleanupScope::new(
+        AgentLifetimeId::new("refused-sdk-lifetime").unwrap(),
+        manager.id().clone(),
+    );
+    store.fail_save.store(fail_save, Ordering::SeqCst);
+    let commit = manager
+        .record_lease(|_| {
+            (
+                vec![LeaseRecord::Refused {
+                    lease: LeaseId::new("refused-sdk-lease").unwrap(),
+                    revision: LeaseRevision::FIRST,
+                    terms: LeaseTerms {
+                        environment: EnvironmentRef::Here,
+                        work: LeaseWork::Agent(AgentWork::new("fixture", "model").unwrap()),
+                        sandbox: SandboxProfile::HarnessDefault,
+                        grants: LeaseGrants::Opening,
+                        deadline: LeaseDeadline::UntilEnded,
+                    },
+                    refusal: LeaseRefusal::EnvironmentUnreachable,
+                    actor: ActionContext::new("person", "panel", "refused-opening").unwrap(),
+                }],
+                (),
+            )
+        })
+        .await
+        .unwrap();
+    if fail_save {
+        assert!(matches!(
+            commit.saved,
+            Err(LeaseRecordError::Storage(StorageError::Io(_)))
+        ));
+    } else {
+        commit.saved.unwrap();
+    }
+    (manager, store, scope)
+}
+
+#[tokio::test]
+async fn refused_sdk_lease_cleanup_keeps_refusal_without_inventing_an_issued_ack() {
+    let (manager, store, scope) = manager_with_refused_sdk_lease(false).await;
+    let before = manager.snapshot().await.unwrap().lease.unwrap();
+    let writes = store.changes.lock().unwrap().len();
+    manager.acknowledge_sdk_cleanup(&scope).await.unwrap();
+    assert_eq!(
+        manager.snapshot().await.unwrap().lease,
+        Some(before.clone())
+    );
+    assert_eq!(
+        store.load().await.unwrap().snapshot().unwrap().lease,
+        Some(before)
+    );
+    assert_eq!(store.changes.lock().unwrap().len(), writes);
+}
+
+#[tokio::test]
+async fn unreadable_sdk_lease_cleanup_still_refuses_without_writing_an_ack() {
+    let (manager, store, scope) = manager_with_refused_sdk_lease(false).await;
+    let unknown = {
+        let mut evidence = manager.evidence.lock().await;
+        let mut snapshot = evidence.observed().unwrap().clone();
+        let unknown = CurrentLease::apply(
+            snapshot.lease.as_ref(),
+            &LeaseRecord::Unreadable {
+                kind: "future-cleanup-record".into(),
+                body: "{}".into(),
+            },
+        )
+        .unwrap();
+        snapshot.lease = Some(unknown.clone());
+        // The reader may retain a future record; this build's writer cannot
+        // manufacture one. Restore through the existing continuation reader.
+        evidence.observed = Continuation::restore(Some(snapshot)).unwrap();
+        unknown
+    };
+    let writes = store.changes.lock().unwrap().len();
+    assert!(matches!(
+        manager.acknowledge_sdk_cleanup(&scope).await,
+        Err(StorageError::Corrupt(_))
+    ));
+    assert_eq!(manager.snapshot().await.unwrap().lease, Some(unknown));
+    assert_eq!(store.changes.lock().unwrap().len(), writes);
+}
+
+#[tokio::test]
+async fn pending_refused_sdk_lease_cleanup_keeps_write_failure_and_original_refusal() {
+    let (manager, store, scope) = manager_with_refused_sdk_lease(true).await;
+    let before = manager
+        .evidence
+        .lock()
+        .await
+        .observed()
+        .unwrap()
+        .lease
+        .clone()
+        .unwrap();
+    let pending = manager.evidence.lock().await.pending.clone();
+    assert!(store
+        .load()
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .lease
+        .is_none());
+    assert!(matches!(
+        manager.acknowledge_sdk_cleanup(&scope).await,
+        Err(StorageError::Io(_))
+    ));
+    assert_eq!(manager.evidence.lock().await.pending, pending);
+    assert_eq!(
+        manager.evidence.lock().await.observed().unwrap().lease,
+        Some(before.clone())
+    );
+    assert!(manager.snapshot().await.unwrap().lease.is_none());
+    store.fail_save.store(false, Ordering::SeqCst);
+    manager.acknowledge_sdk_cleanup(&scope).await.unwrap();
+    assert!(manager.evidence.lock().await.pending.is_empty());
+    assert_eq!(
+        store.load().await.unwrap().snapshot().unwrap().lease,
+        Some(before)
+    );
+}
+
+#[tokio::test]
+async fn refused_sdk_lease_cleanup_rejects_another_sessions_scope_before_writes() {
+    let (manager, store, scope) = manager_with_refused_sdk_lease(false).await;
+    let wrong_scope = OwnedCleanupScope::new(
+        scope.lifetime().clone(),
+        SessionId::new("another-session").unwrap(),
+    );
+    let before = manager.snapshot().await.unwrap().lease;
+    let writes = store.changes.lock().unwrap().len();
+    assert!(matches!(
+        manager.acknowledge_sdk_cleanup(&wrong_scope).await,
+        Err(StorageError::Corrupt(_))
+    ));
+    assert_eq!(manager.snapshot().await.unwrap().lease, before);
+    assert_eq!(store.changes.lock().unwrap().len(), writes);
+}
+
 /// Evidence that saved `committed` and has `pending` applied after it.
 fn evidence_with(committed: SessionSnapshot, pending: Vec<SessionSaveUnit>) -> Evidence {
     let mut evidence = Evidence {

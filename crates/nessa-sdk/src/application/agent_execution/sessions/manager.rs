@@ -5,7 +5,7 @@ use super::{
     notes::{NoteAdmission, NoteRefusal, NoteSelection},
     records::{continuation::Continuation, AppliedUnits},
     steering_position::SteeringPosition,
-    ArtifactRecord, CurrentLease, HandoffId, HandoffIntent, HandoffRecord,
+    ArtifactRecord, CurrentLease, CurrentLeaseState, HandoffId, HandoffIntent, HandoffRecord,
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, LeaseRecord,
     MessageCommitClock, MessageCommitSleep, NoteCandidates, NoteRecord, NoteRequest,
     ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
@@ -1864,10 +1864,16 @@ impl SessionManager {
         let Some(current) = current else {
             return Ok(());
         };
-        let Some(held) = current.held() else {
-            return Err(StorageError::Corrupt(
-                "SDK close has no readable issued lease".into(),
-            ));
+        let held = match current.state() {
+            CurrentLeaseState::Held(held) => held,
+            // A refused opening issued no lease to acknowledge. Preserve its
+            // writer obligation without manufacturing resource-release proof.
+            CurrentLeaseState::Refused { .. } => return self.save_observed(&mut evidence).await,
+            CurrentLeaseState::Unreadable { .. } => {
+                return Err(StorageError::Corrupt(
+                    "SDK close has no readable issued lease".into(),
+                ));
+            }
         };
         if !current.sdk_cleanup_acknowledged(scope) {
             let record = LeaseRecord::SdkCleanupAcknowledged {

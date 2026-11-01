@@ -1857,6 +1857,9 @@ no assertion, deadline, concurrency or review cap is relaxed.
 | Close overlaps the first cancellation audit | Capture retries only at an idle scheduler boundary. Join the original unanswered receipt, reporting its failure without another audit attempt in that close. A later explicit command can retry the exact prepared input. |
 | SDK cleanup completes before graph close begins | Resource proof names the minted lifetime and current lease; it is independent of a later graph close operation. It cannot acknowledge another lease or lifetime. |
 | SDK was prepared but no provider was opened | The actual installed lifetime gate may publish confirmed no-resource cleanup. A newly prepared cold history writer has no installed gate and cannot fabricate this proof. |
+| SDK closes after the latest lease was refused before attachment | The refusal remains a refusal: no issued lease exists to acknowledge. SDK close records no `SdkCleanupAcknowledged`; environment allocation/release uncertainty remains with the opening owner. |
+| Refusal persistence is still pending when SDK closes | Flush the original decision through the existing writer. Preserve a failed save and its pending evidence; retry may persist the refusal but adds no issued-lease acknowledgement. |
+| SDK closes with unreadable latest lease evidence | Refuse the SDK acknowledgement as corrupt evidence; do not treat unknown history as a refused or absent lease. |
 | Opening completes without ever starting SDK attachment | Exact opening owner plus its actual environment release and correlated current lease establish non-acquisition. Failed history reads or a later different lease cannot use that receipt. |
 | SDK cleanup audit fails | No SDK resource proof, including after successful environment End or cancellation/decline audit repair. |
 
