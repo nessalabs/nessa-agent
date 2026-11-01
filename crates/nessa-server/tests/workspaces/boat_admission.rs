@@ -13,6 +13,103 @@ use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
 const VM: &str = "bx_23456789";
+
+#[derive(Clone)]
+struct DiagnosticOutput(Arc<Mutex<Vec<u8>>>);
+impl std::io::Write for DiagnosticOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Creation and info are separate messages: a cold creation is not a ready
+/// GET fixture relabelled as POST. Each rejection retains its actual stage.
+#[tokio::test]
+async fn cold_receipt_diagnostics_distinguish_stages_without_values_or_unknown_keys() {
+    use tracing::instrument::WithSubscriber;
+    for (case, stage, field, kind) in [
+        (0, "create_decode", "memoryGB", "string"),
+        (1, "info_validation", "setupStatus", "string"),
+        (2, "info_decode", "giftLimitNotice", "object"),
+        (3, "info_validation", "unknown", "not_collected"),
+        (4, "create_validation", "status", "string"),
+        (5, "create_validation", "state", "string"),
+        (6, "info_validation", "state", "string"),
+        (7, "create_validation", "environment", "not_collected"),
+        (8, "info_validation", "environment", "not_collected"),
+    ] {
+        let server = server().await;
+        let mut cold = json!({"sandbox":{
+            "id":VM,"state":"provisioning","environment":"nessa","environmentVersion":2
+        }});
+        {
+            let mut state = server.state.lock().unwrap();
+            match case {
+                0 => cold["sandbox"]["memoryGB"] = json!("SENTINEL_CREATE_VALUE"),
+                1 => state.receipt["sandbox"]["setupStatus"] = json!("SENTINEL_SETUP_VALUE"),
+                2 => state.receipt["giftLimitNotice"] = json!({"value":"SENTINEL_NOTICE_VALUE"}),
+                3 => {
+                    state.receipt["sandbox"]["UNTRUSTED_FIELD_SECRET"] =
+                        json!("SENTINEL_UNKNOWN_VALUE")
+                }
+                4 => state.creation_ack["status"] = json!("SENTINEL_ACK_VALUE"),
+                5 => cold["sandbox"]["state"] = json!("SENTINEL_CREATE_STATE"),
+                6 => state.receipt["sandbox"]["state"] = json!("SENTINEL_INFO_STATE"),
+                7 => cold["sandbox"]["environment"] = json!("SENTINEL_BAD_\u{80}"),
+                _ => state.receipt["sandbox"]["environment"] = json!("SENTINEL_BAD_\u{80}"),
+            }
+            state.creation_receipt = Some(cold);
+        }
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer = output.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || DiagnosticOutput(writer.clone()))
+            .finish();
+        let receipt = server
+            .provider
+            .create(&connection(), "fixture-thread")
+            .with_subscriber(subscriber)
+            .await
+            .unwrap();
+        assert_eq!(
+            receipt.refusal.unwrap().cause(),
+            AdmissionRefusal::InvalidReceipt
+        );
+        assert_eq!(server.state.lock().unwrap().commands, 0);
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(text.contains(&format!("stage=\"{stage}\"")), "{text}");
+        assert!(text.contains(&format!("field=\"{field}\"")), "{text}");
+        assert!(
+            text.contains(&format!("observed_type=\"{kind}\"")),
+            "{text}"
+        );
+        assert!(!text.contains("SENTINEL"), "{text}");
+        assert!(!text.contains("UNTRUSTED_FIELD_SECRET"), "{text}");
+        assert!(!text.contains("fixture-token"), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn cold_creation_with_a_separate_valid_info_receipt_is_admitted() {
+    let server = server().await;
+    server.state.lock().unwrap().creation_receipt = Some(json!({"sandbox":{
+        "id":VM,"state":"provisioning","environment":"nessa","environmentVersion":2
+    }}));
+    let receipt = server
+        .provider
+        .create(&connection(), "fixture-thread")
+        .await
+        .unwrap();
+    assert!(receipt.refusal.is_none());
+    assert_eq!(server.state.lock().unwrap().commands, 0);
+}
+
 fn environment() -> Value {
     serde_json::from_str(include_str!("fixtures/boat-v1-environment.json")).unwrap()
 }
@@ -33,6 +130,7 @@ struct State {
     drift_on_create: bool,
     drift_on_resume: bool,
     creation_ack: Value,
+    creation_receipt: Option<Value>,
     read_override: Option<Value>,
     expected_ttl: Option<u32>,
     /// Reads that still find an archiving VM archiving; the next finds it
@@ -59,6 +157,7 @@ async fn server() -> Server {
         drift_on_create: false,
         drift_on_resume: false,
         creation_ack: json!({"ok":true,"type":"sandbox.created","status":"provisioning"}),
+        creation_receipt: None,
         read_override: None,
         expected_ttl: Some(3600),
         archiving_reads: 0,
@@ -79,7 +178,7 @@ async fn server() -> Server {
             assert_eq!(headers.get("idempotency-key").unwrap(),"nessa-thread-fixture-thread");
             let mut state=create.lock().unwrap();
             assert_eq!(request,json!({"type":"small","ttlSeconds":state.expected_ttl,"environment":"nessa","env":{"NESSA_THREAD_ID":"fixture-thread"},"from":"bsh_fixture","snapshots":true}));
-            state.created+=1; if state.drift_on_create { state.environment["passGithub"]=json!(true); } let mut body=state.receipt.clone(); for field in ["ok","type","status"] {body.as_object_mut().unwrap().remove(field);} for (field,value) in state.creation_ack.as_object().unwrap() {body[field.as_str()]=value.clone();} body["ttlSeconds"]=json!(state.expected_ttl); async { Json(body) } }))
+            state.created+=1; if state.drift_on_create { state.environment["passGithub"]=json!(true); } let mut body=state.creation_receipt.as_ref().unwrap_or(&state.receipt).clone(); for field in ["ok","type","status"] {body.as_object_mut().unwrap().remove(field);} for (field,value) in state.creation_ack.as_object().unwrap() {body[field.as_str()]=value.clone();} body["ttlSeconds"]=json!(state.expected_ttl); async { Json(body) } }))
         .route("/api/v1/sandboxes/{id}", get(move || { let mut state=read.lock().unwrap(); if state.receipt["sandbox"]["state"]==json!("archiving") { if state.archiving_reads==0 { state.receipt["sandbox"]["state"]=json!("archived"); } else { state.archiving_reads-=1; } } let body=state.read_override.as_ref().unwrap_or(&state.receipt).clone(); async { Json(body) } }))
         .route("/api/v1/sandboxes/{id}/resume", post(move |Json(request):Json<Value>| { let mut state=resume.lock().unwrap(); assert_eq!(request["ttlSeconds"],json!(state.expected_ttl)); state.resumed+=1; if state.drift_on_resume { state.environment["passSecrets"]=json!(true); } state.receipt["sandbox"]["state"]=json!("ready"); async move { Json(json!({"ok":true,"type":"sandbox.resumed","id":VM,"status":"ready"})) } }))
         .fallback(move || { commands.lock().unwrap().commands+=1; async { axum::http::StatusCode::FORBIDDEN } });

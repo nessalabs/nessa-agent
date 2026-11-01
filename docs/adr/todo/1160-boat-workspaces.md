@@ -12,6 +12,11 @@ Nessa does not implement provider OAuth or copy local provider login files.
 ## Ownership
 
 `workspaces` owns encrypted connection settings and durable allocation receipts.
+Receipt rejection diagnostics distinguish creation decoding, info validation,
+and info decoding using compiled field names and JSON kinds only. Provider
+values, arbitrary keys, decoder error messages and authentication data are not
+logged. Cold POST and ready GET responses are separate fixtures; diagnostics
+do not change admission, rollback ownership or cleanup confirmation.
 Its application ports separate settings, assignment storage and provider effects.
 Conversation placement owns which environment a thread uses. The conversation
 adapter composes workspace streams with the existing remote lease implementation.
