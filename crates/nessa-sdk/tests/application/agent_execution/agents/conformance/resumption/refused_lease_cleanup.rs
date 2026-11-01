@@ -1,6 +1,7 @@
 //! A refused opening closes the prepared owned Agent without inventing a lease.
 use super::*;
 use nessa_sdk::application::agent_execution::{sessions::LeaseRecord, subagents::*};
+use nessa_sdk::domain::agent_execution::subagents::Initiator;
 use nessa_sdk::domain::agent_execution::{leases::*, subagents::*};
 
 #[tokio::test]
