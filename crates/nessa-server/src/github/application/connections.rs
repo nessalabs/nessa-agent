@@ -12,10 +12,12 @@ use serde_json::Value;
 use tokio::{sync::watch, task::AbortHandle};
 use uuid::Uuid;
 
+#[cfg(any(unix, test))]
+use super::ports::StoreUnavailable;
 use super::ports::{
     ApiFailure, AuditUnavailable, DeviceCode, EndCause, GithubAccess, GithubApi, GithubAudit,
     GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubReadFailure, GithubTokenStore,
-    PollAnswer, StoreUnavailable,
+    PollAnswer,
 };
 use crate::github::domain::{
     AccessToken, ConnectEnd, GithubReadKind, GithubRepository, GithubSignIn, GithubStatus,
