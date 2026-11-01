@@ -200,6 +200,7 @@ impl WorkspaceConnector for Connector {
                     .files
                     .map(ArtifactTransport::Channels)
                     .unwrap_or(ArtifactTransport::Frames),
+                updates: None,
             })
         })
     }

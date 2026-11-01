@@ -185,6 +185,8 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ arrangement: WindowArrangement | null }>,
     ) => window.arrangementShown(state, payload),
+    panelShown: (state, { payload }: Payload<{ open: boolean }>) =>
+      window.panelShown(state, payload),
     toggleSidebar: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>

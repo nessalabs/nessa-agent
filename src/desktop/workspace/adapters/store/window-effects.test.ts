@@ -3,7 +3,14 @@ import { makeDesktopStore } from "../../../store"
 import { createQuestionFlights } from "../../application/question-flights"
 import type { ShownWindow } from "../../model/shown-window"
 import { fakeSource, keptFilter, roomyGrid, settle } from "../../testing"
-import { arrangementShown, loadWorkspace, openBeside, toggleSidebar } from "./commands"
+import {
+  arrangementShown,
+  loadWorkspace,
+  openBeside,
+  openWidget,
+  panelShown,
+  toggleSidebar,
+} from "./commands"
 
 function storeTelling(told: (ShownWindow | null)[]) {
   return makeDesktopStore({
@@ -41,5 +48,27 @@ describe("telling what the window shows", () => {
     // The layout gone: the window shows no panes.
     store.dispatch(arrangementShown({ arrangement: null }))
     expect(told.at(-1)).toBeNull()
+  })
+
+  it("says the focused chat's panel when its tabs or whether it is drawn change", async () => {
+    const told: (ShownWindow | null)[] = []
+    const store = storeTelling(told)
+    await store.dispatch(loadWorkspace())
+    await settle()
+    store.dispatch(arrangementShown({ arrangement: "columns" }))
+    expect(told.at(-1)?.panel).toEqual({ open: false, tabs: [], front: null })
+    store.dispatch(
+      openWidget({ widget: { plugin: "subagents", id: "a" }, place: "panel" }),
+    )
+    expect(told.at(-1)?.panel).toEqual({
+      open: false,
+      tabs: [{ plugin: "subagents", id: "a" }],
+      front: { plugin: "subagents", id: "a" },
+    })
+    store.dispatch(panelShown({ open: true }))
+    expect(told.at(-1)?.panel.open).toBe(true)
+    const before = told.length
+    store.dispatch(panelShown({ open: true }))
+    expect(told).toHaveLength(before)
   })
 })

@@ -2661,7 +2661,8 @@ admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
 persists it. The built-in collection in relay composition keeps these tools
 independent of optional environment commands. See the [ordering and ownership
 contract](design/agent-thread-tools.md). The fifth, `read_window`, reads the
-windows `product/workspace.rs` holds for each connection in
+windows `product/workspace.rs` holds for each connection — panes and the
+focused chat's right panel — in
 `application/workspace_windows.rs` (domain shape in
 `domain/value_objects/workspace_window.rs`), through
 `service/workspace_windows.rs`; see [the window an agent

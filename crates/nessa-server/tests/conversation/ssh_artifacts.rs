@@ -414,6 +414,7 @@ impl LeaseConnector for Connector {
                 true => ArtifactTransport::Frames,
                 false => ArtifactTransport::Channels(host.channels.clone()),
             },
+            updates: None,
         })
     }
 }

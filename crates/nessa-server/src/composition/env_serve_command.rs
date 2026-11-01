@@ -24,8 +24,8 @@ use crate::{
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, LeasePolicyEvaluator,
-            Runners, ServeTimings, Serving,
+            admit_update, refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher,
+            LeasePolicyEvaluator, Runners, ServeEnd, ServeTimings, Serving,
         },
         domain::Peer,
         infrastructure::{
@@ -112,7 +112,8 @@ impl Composed {
         input: R,
         output: W,
         drain: watch::Receiver<bool>,
-    ) where
+    ) -> ServeEnd
+    where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
@@ -144,7 +145,13 @@ impl Composed {
             self.timer.clone(),
             drain,
         )
-        .await;
+        .await
+    }
+
+    /// Whether this host's owner lets `peer` replace this build with its
+    /// gateway's, as the lease policy decides over the grant it holds now.
+    pub(super) fn may_update(&self, peer: &Peer) -> bool {
+        admit_update(self.grants.as_ref(), self.policy.as_ref(), peer).is_ok()
     }
 
     /// Stop serving on this host: what is left of commands is swept, the

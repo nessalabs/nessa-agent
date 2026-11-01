@@ -319,7 +319,7 @@ fn real_time() -> Arc<dyn Timer> {
 struct Gateway {
     frames: FrameStream<ReadHalf<DuplexStream>>,
     writer: WriteHalf<DuplexStream>,
-    served: JoinHandle<()>,
+    served: JoinHandle<ServeEnd>,
     ledger: Arc<MemoryLedger>,
     stopped: Arc<AtomicUsize>,
     launcher: Arc<EchoLauncher>,
@@ -544,6 +544,37 @@ fn hello() -> FromEnvironment {
         protocol: "protocol".into(),
         workspace: "/work".into(),
     }
+}
+
+/// A gateway that speaks another lease protocol says which, in a frame every
+/// build reads alike: serving ends with it, and so the host can fetch that
+/// gateway's build. A lease frame this build cannot read is only dropped.
+#[tokio::test]
+async fn a_gateway_on_another_protocol_ends_serving_with_the_protocol_it_named() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .writer
+        .write_all(
+            &nessa_protocol::build_update::encode(
+                &nessa_protocol::build_update::FromGateway::VersionRefused {
+                    protocol: "theirs".into(),
+                },
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let end = tokio::time::timeout(Duration::from_secs(10), &mut gateway.served)
+        .await
+        .expect("serving ended")
+        .unwrap();
+    assert_eq!(
+        end,
+        ServeEnd::VersionRefused {
+            protocol: "theirs".into()
+        }
+    );
 }
 
 /// Gate 1 and 2: a lease runs a harness whose bytes are carried both ways

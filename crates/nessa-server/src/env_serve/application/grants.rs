@@ -95,6 +95,20 @@ pub(crate) fn admit_command(
     })
 }
 
+/// Whether `peer` may replace this host's build with its own: asked when
+/// its gateway refused this build's protocol and would send its build.
+///
+/// # Errors
+/// [`NotGranted`] when the policy refuses it, or the grants could not be
+/// read.
+pub(crate) fn admit_update(
+    grants: &dyn PeerGrants,
+    policy: &dyn LeasePolicyEvaluator,
+    peer: &Peer,
+) -> Result<(), NotGranted> {
+    admitted(grants, policy, peer, LeaseAsk::Update).map(|_| ())
+}
+
 /// The grant the policy decided over and whose terms an allowed lease
 /// gets: the peer's entry, or [`unwritten`] when it has none.
 fn admitted(

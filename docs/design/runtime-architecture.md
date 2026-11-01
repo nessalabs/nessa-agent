@@ -901,6 +901,31 @@ side so nothing inbound ever opens on a machine that is not yours. A relay
 is the fallback, and it forwards TLS it cannot open because the gateway's
 key was pinned at pairing.
 
+**Keeping every transport on one protocol.** A gateway speaks only its own
+lease protocol, so every update of the gateway that changes it would strand
+the machines serving it. Each transport gets the gateway's build its own way.
+Over SSH the gateway installs it (above), and a cloud VM gets it over its own
+SSH connection (ADR 1160). A paired machine dials in, so the gateway cannot
+start anything there; instead it answers a hello on another protocol with
+`VersionRefused{protocol}` and nothing else, and the machine decides.
+
+```text
+paired machine ── Hello{P'} ──▶ gateway ── VersionRefused{P} ──▶ machine (connection ends)
+machine: does its owner let this gateway run commands here? no ──▶ logs it, keeps dialing
+machine ── UpdateWanted{os, arch, libc} ──▶ gateway (a new connection, first frame)
+gateway ── Update{digest, size, P}, UpdatePart…, UpdateEnd ──▶ machine
+machine: size, SHA-256 and `env protocol` == P? ──▶ environment/builds/<digest>/nessa
+  ──▶ exec it with the same arguments; later starts of the old build exec it too
+```
+
+These frames (`nessa_protocol::build_update`) are the one part of the
+contract that never changes shape, so a machine and a gateway of any two
+builds can still agree on how to bring one to the other. The machine's owner
+decides through the same lease policy that decides its leases
+(`build.update`, allowed with commands only): a gateway that may run any
+command there could replace the build anyway, and one allowed only agents,
+whose harnesses may be sandboxed, never gets a build run outside them.
+
 ## Connecting to a dev environment
 
 The goal is that reaching a dev box through Nessa feels like `ssh` and

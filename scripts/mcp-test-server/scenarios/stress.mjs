@@ -38,6 +38,7 @@ export const STRESS = {
   oversized: "stress oversized",
   stream: "stress stream",
   window: "stress window",
+  panelTabs: "stress panel tabs",
   table: "stress table",
   paste: "stress paste",
   trace: "stress trace",
@@ -90,6 +91,7 @@ export const SAYS = {
   stream: "Streamed: ",
   streamEnd: "Stream finished.",
   window: "Window: ",
+  panelTabs: "Panel tabs: ",
   table: "Tables: ",
   paste: "Images: ",
   trace: "Traced: ",
@@ -552,6 +554,18 @@ export function stressScenario({
             save: "window",
           },
           { do: "text", chunks: [SAYS.window + "${window}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        // Two panel widgets, from two servers, so the chat's panel has two
+        // tabs. The window step opens them, changes the front tab, hides and
+        // shows the panel, and switches chats.
+        when: STRESS.panelTabs,
+        steps: [
+          { do: "tool", tool: "talk_board", arguments: {} },
+          { do: "tool", server: "panelpin", tool: "panel_pin", arguments: {} },
+          { do: "text", chunks: [SAYS.panelTabs] },
           { do: "end" },
         ],
       },

@@ -49,9 +49,14 @@ import {
  *   window      the sidebar is hidden with ⌘B, another conversation is
  *               opened beside the main one with ⌘-click and asks the agent
  *               what the window shows: it is the focused pane on the right,
- *               the main conversation on the left, the sidebar closed; that
- *               pane is closed with ⌘W and the sidebar shown again, and the
- *               main conversation, asked in its composer, is the whole window;
+ *               the main conversation on the left, the sidebar closed; the
+ *               focused chat then opens two panel widgets (the talk board and
+ *               a pin from another server), the front tab is the other one,
+ *               ⌥⌘B hides and shows the panel, and focusing the main chat
+ *               reads that chat's empty panel rather than the one beside;
+ *               the pane beside is closed with ⌘W and the sidebar shown
+ *               again, and the main conversation, asked in its composer, is
+ *               the whole window;
  *               beside, the panes are regions of one flat chat surface that
  *               reaches the window's top, right and bottom edges: no pane
  *               draws a fill or rim of its own, and a hairline down the
@@ -1998,6 +2003,212 @@ async function talkInChannel(run, step, channel, failures, notes, attached = [])
     failures.push(
       `the chat in ${channel.name} does not say it runs on this computer: ${(await place.count()) ? await place.innerText() : "nothing"}`,
     )
+}
+
+/**
+ * The focused chat's right panel, as `read_window` must say it: two widgets
+ * opened there, the other tab brought to the front, the panel hidden and
+ * shown, then the other chat focused. `conversationId` is the chat in front
+ * when this starts, and it is again when this returns.
+ */
+async function focusedChatPanel(run, conversationId, step, failures) {
+  const page = run.page
+  const text = prompt(run, STRESS.panelTabs, step)
+  const seen = await send(
+    run,
+    conversationId,
+    text,
+    failures,
+    undefined,
+    page.locator(css.focusedPane).locator(css.conversationDock),
+  )
+  const { turn } = await settled(run, conversationId, seen, text, "completed", failures)
+  if (!turn) return
+  const talk = await inlineApp(page, '[data-talk="panel"]')
+  const pin = await inlineApp(page, '[data-pin="panel"]')
+  if (!talk || !pin) {
+    failures.push(
+      `the focused chat drew ${talk ? "" : "no talk board"}${talk || pin ? "" : " and "}${pin ? "" : "no panel pin"}`,
+    )
+    return
+  }
+  await talk.waitForSelector('body[data-talk-state="live"]', { timeout: 20_000 })
+  // The button is in the app's frame. Activating it is the click the person
+  // makes; a pointer click from the page does not reach it once two apps
+  // share the pane.
+  await talk.evaluate(() => document.querySelector('[data-talk="panel"]').click())
+  const tabs = () => page.locator(`${css.chatPanelTabs} [role="tab"]`)
+  if (!(await waitFor(async () => (await tabs().count()) === 1, 10_000))) {
+    failures.push("the talk board did not open a panel tab")
+    return
+  }
+  await pin.waitForSelector('body[data-pin-state="live"]', { timeout: 20_000 })
+  await pin.evaluate(() => document.querySelector('[data-pin="panel"]').click())
+  if (!(await waitFor(async () => (await tabs().count()) === 2, 10_000))) {
+    failures.push("the pin did not open a second panel tab")
+    return
+  }
+  // Opening a tab replaces the inline frame. Its resource fetch abort is the
+  // one the mount already took, the same as the huddle step.
+  noteLiveMountResourceAbort(run.opened, "live", run.stack.gateway.url)
+  const plugins = ["mcp:mcptest", "mcp:panelpin"]
+  const owned = (panel) =>
+    panel?.tabs?.length === 2 &&
+    panel.tabs.every((tab) => tabIdBelongs(tab, conversationId)) &&
+    plugins.every((plugin) => panel.tabs.some((tab) => tab.plugin === plugin))
+  const opened = await windowRead(
+    run,
+    conversationId,
+    step,
+    " panel open",
+    failures,
+    (said) => {
+      const panel = said.windows?.[0]?.panel
+      return (
+        panel?.open === "open" && owned(panel) && panel.front?.plugin === "mcp:panelpin"
+      )
+    },
+  )
+  if (!opened) return
+  const openPanel = opened.windows[0].panel
+  const other = page.locator(`${css.chatPanelTabs} [role="tab"][aria-selected="false"]`)
+  await other.click()
+  const front = await windowRead(
+    run,
+    conversationId,
+    step,
+    " panel front",
+    failures,
+    (said) => {
+      const panel = said.windows?.[0]?.panel
+      return (
+        panel?.open === "open" &&
+        samePanelTabs(panel, openPanel) &&
+        panel.front?.plugin === "mcp:mcptest" &&
+        panel.front?.id !== openPanel.front.id
+      )
+    },
+  )
+  if (!front) return
+  const shown = front.windows[0].panel
+  await page.keyboard.press("Meta+Alt+KeyB")
+  if (
+    !(await waitFor(
+      async () =>
+        (await page.locator("#workspace-panel").getAttribute("aria-hidden")) === "true",
+      3_000,
+    ))
+  ) {
+    failures.push("⌥⌘B did not hide the panel")
+    return
+  }
+  const hidden = await windowRead(
+    run,
+    conversationId,
+    step,
+    " panel hidden",
+    failures,
+    (said) => {
+      const panel = said.windows?.[0]?.panel
+      return (
+        panel?.open === "closed" &&
+        samePanelTabs(panel, shown) &&
+        panel.front?.id === shown.front.id
+      )
+    },
+  )
+  if (!hidden) return
+  await page.keyboard.press("Meta+Alt+KeyB")
+  if (
+    !(await waitFor(
+      async () =>
+        (await page.locator("#workspace-panel").getAttribute("aria-hidden")) === null,
+      3_000,
+    ))
+  ) {
+    failures.push("⌥⌘B did not show the panel")
+    return
+  }
+  const focusedKey = () => page.locator(css.focusedPane).getAttribute("data-pane-key")
+  const from = await focusedKey()
+  await page.locator(`${css.pane}:not([data-pane-focused]) textarea`).click()
+  if (!(await waitFor(async () => (await focusedKey()) !== from, 5_000))) {
+    failures.push("clicking the other pane did not bring its chat to the front")
+    return
+  }
+  const elsewhere = await windowRead(
+    run,
+    run.main.id,
+    step,
+    " panel other chat",
+    failures,
+    (said) => {
+      const panel = said.windows?.[0]?.panel
+      return (
+        said.you?.threadId === run.main.id &&
+        panel?.open === "open" &&
+        panel.tabs?.length === 0 &&
+        panel.front === undefined
+      )
+    },
+  )
+  if (!elsewhere) return
+  const backFrom = await focusedKey()
+  await page.locator(`${css.pane}:not([data-pane-focused]) textarea`).click()
+  if (!(await waitFor(async () => (await focusedKey()) !== backFrom, 5_000))) {
+    failures.push("clicking the first chat did not bring it back to the front")
+    return
+  }
+  await windowRead(run, conversationId, step, " panel back", failures, (said) => {
+    const panel = said.windows?.[0]?.panel
+    return (
+      panel?.open === "open" &&
+      samePanelTabs(panel, shown) &&
+      panel.front?.id === shown.front.id
+    )
+  })
+  // Leave the panel closed, as the step found it: a later window read measures
+  // the panes against the window's edge.
+  await page.keyboard.press("Meta+Alt+KeyB")
+  if (
+    !(await waitFor(
+      async () =>
+        (await page.locator("#workspace-panel").getAttribute("aria-hidden")) === "true",
+      3_000,
+    ))
+  )
+    failures.push("⌥⌘B did not hide the panel again")
+}
+
+function tabIdBelongs(tab, conversationId) {
+  try {
+    const id = JSON.parse(tab.id)
+    return Array.isArray(id) && id[0] === conversationId
+  } catch {
+    return false
+  }
+}
+
+function samePanelTabs(left, right) {
+  const key = (tab) => `${tab.plugin}\0${tab.id}`
+  const a = [...(left?.tabs ?? [])].map(key).sort()
+  const b = [...(right?.tabs ?? [])].map(key).sort()
+  return a.length === b.length && a.every((each, index) => each === b[index])
+}
+
+/** The inline app whose document has `selector`, or null once `timeout` passes. */
+async function inlineApp(page, selector, timeout = 20_000) {
+  const until = Date.now() + timeout
+  while (Date.now() < until) {
+    const elements = await page.$$(selectorFor.appFrameIn("inline"))
+    for (const element of elements) {
+      const proxy = await element.contentFrame()
+      const app = proxy?.childFrames()[0]
+      if (app && !app.isDetached() && (await app.$(selector))) return app
+    }
+    await sleep(100)
+  }
+  return null
 }
 
 const steps = {
@@ -4781,6 +4992,11 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
+    if (failures.length) return
+    // The focused chat's panel: two tabs, the front one, hidden and shown,
+    // then the other chat. read_window is what the agent is told.
+    await focusedChatPanel(run, conversationId, step, failures)
+    if (failures.length) return
     // One header per chat, in the titlebar's row — beside the session list,
     // and with the panes alone at the window's edge.
     await headersLand(run.page, "beside the session list", failures)
@@ -8455,6 +8671,13 @@ async function startStack(options) {
   let servers = []
   try {
     if (knobs.githubs > 0) servers = [shellServer(directory)]
+    // A second app server, so the window step's chat can hold two panel tabs.
+    if (selected.some((step) => step.kind === "window"))
+      servers.push({
+        name: "panelpin",
+        command: process.execPath,
+        args: [join(repoRoot, "scripts/mcp-test-server/panel-pin.mjs")],
+      })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })
     throw error

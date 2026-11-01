@@ -154,6 +154,7 @@ impl LeaseConnector for OpenSshConnector {
                 host: host.clone(),
                 control,
             })),
+            updates: None,
         })
     }
 }

@@ -6,7 +6,7 @@ use crate::conversation::application::{
     SourcePermits, SubmissionMode, SubmittedMessage, ThreadEvent, ThreadReport, ThreadTurn,
     WindowReading, MAX_EVENT_READERS,
 };
-use crate::conversation::domain::{PaneContent, WindowShowing};
+use crate::conversation::domain::{PaneContent, WindowPanel, WindowShowing};
 use crate::mcp_servers::application::{BuiltInAnswer, BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -140,7 +140,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "read_window",
-                "description": "Read what the person's Nessa desktop windows show right now, as the window last said: whether the sidebar and session list are open, what fills the content region, and every pane left to right and top to bottom with its position in words (\"left\", \"right\", \"top left\"...), its share of the width and height, whether it is focused, and what it shows. A conversation pane gives its threadId with its title, agent and model, so \"the session on the right\" can be found and used with send_message or subscribe. The pane showing this conversation is marked you: true, and `you` says where this conversation is shown, if anywhere. No windows means no desktop window is open and publishing now.",
+                "description": "Read what the person's Nessa desktop windows show right now, as the window last said: whether the sidebar, session list and right panel are open, what fills the content region, and every pane left to right and top to bottom with its position in words (\"left\", \"right\", \"top left\"...), its share of the width and height, whether it is focused, and what it shows. The right panel is the focused chat's: panel.open is \"open\" or \"closed\", panel.tabs lists each widget tab (plugin and id) in the order opened, and panel.front is the tab in front when there is one. A widget there is on screen only while the panel is open. A conversation pane gives its threadId with its title, agent and model, so \"the session on the right\" can be found and used with send_message or subscribe. The pane showing this conversation is marked you: true, and `you` says where this conversation is shown, if anywhere. No windows means no desktop window is open and publishing now.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
@@ -754,6 +754,7 @@ fn window_view(source: &ConversationId, reading: &WindowReading) -> Value {
             "sessionList": open(window.session_list()),
             "showing": window.showing().name(),
             "covered": covered,
+            "panel": panel_words(window.panel()),
             "panes": panes,
         });
         if let WindowShowing::Widget(widget) = window.showing() {
@@ -789,6 +790,21 @@ fn window_view(source: &ConversationId, reading: &WindowReading) -> Value {
 /// What `read_window` lists, in bytes of JSON: room under the 32 KiB of text
 /// a tool result may be (`answer`).
 const WINDOW_BYTES: usize = 30 * 1024;
+/// The focused chat's panel, in the words `read_window` uses for the side columns.
+fn panel_words(panel: &WindowPanel) -> Value {
+    let mut value = json!({
+        "open": open(panel.open()),
+        "tabs": panel
+            .tabs()
+            .iter()
+            .map(|tab| json!({"plugin": tab.plugin(), "id": tab.id()}))
+            .collect::<Vec<_>>(),
+    });
+    if let Some(front) = panel.front() {
+        value["front"] = json!({"plugin": front.plugin(), "id": front.id()});
+    }
+    value
+}
 fn open(drawn: bool) -> &'static str {
     if drawn {
         "open"
@@ -1429,6 +1445,7 @@ mod tests {
             false,
             true,
             WindowShowing::Panes,
+            WindowPanel::new(false, vec![], None).unwrap(),
             vec![
                 WindowColumn::new(
                     40,
@@ -1494,6 +1511,9 @@ mod tests {
         assert_eq!(window["sidebar"], "closed");
         assert_eq!(window["sessionList"], "open");
         assert_eq!(window["showing"], "panes");
+        assert_eq!(window["panel"]["open"], "closed");
+        assert_eq!(window["panel"]["tabs"], json!([]));
+        assert!(window["panel"].get("front").is_none());
         let panes = window["panes"].as_array().unwrap();
         assert_eq!(panes[0]["position"], "left");
         assert_eq!(panes[0]["title"], "Hey");
@@ -1518,6 +1538,105 @@ mod tests {
     }
 
     #[test]
+    fn read_window_says_the_focused_chats_panel() {
+        use crate::conversation::application::PublishedWindow;
+        use crate::conversation::domain::{
+            WidgetRef, WindowArrangement, WindowColumn, WindowPane, WorkspaceWindow,
+        };
+        let me = ConversationId::new("0b3b8f0e-6f43-4a51-9d55-0e7e4f7f8a11").unwrap();
+        let other = ConversationId::new("1c4c9f1f-7054-4b62-8e66-1f8f5f8f9b22").unwrap();
+        let tab = |plugin: &str, id: &str| WidgetRef::new(plugin.into(), id.into()).unwrap();
+        let subagents = tab("subagents", "chat");
+        let app = tab("mcp:huddle", "call-1");
+        let notes = tab("subagents", "other");
+        let reading_of = |focused: ConversationId,
+                          open: bool,
+                          tabs: Vec<WidgetRef>,
+                          front: Option<WidgetRef>| {
+            let window = WorkspaceWindow::new(
+                WindowArrangement::Columns,
+                true,
+                false,
+                WindowShowing::Panes,
+                WindowPanel::new(open, tabs, front).unwrap(),
+                vec![WindowColumn::new(
+                    100,
+                    vec![WindowPane::new(100, true, PaneContent::Conversation(focused)).unwrap()],
+                )
+                .unwrap()],
+            )
+            .unwrap();
+            window_view(
+                &me,
+                &WindowReading {
+                    windows: vec![PublishedWindow {
+                        id: "7d9f2a4e-1b3c-4d5e-8f60-718293a4b5c6".into(),
+                        revision: 1,
+                        window: Arc::new(window),
+                    }],
+                    conversations: Default::default(),
+                },
+            )
+        };
+        let said = |view: Value| view["windows"][0]["panel"].clone();
+        // Closed: the chat's tabs stay listed, and the front is named.
+        let closed = said(reading_of(
+            me.clone(),
+            false,
+            vec![subagents.clone(), app.clone()],
+            Some(subagents.clone()),
+        ));
+        assert_eq!(closed["open"], "closed");
+        assert_eq!(
+            closed["tabs"],
+            json!([
+                {"plugin": "subagents", "id": "chat"},
+                {"plugin": "mcp:huddle", "id": "call-1"}
+            ])
+        );
+        assert_eq!(
+            closed["front"],
+            json!({"plugin": "subagents", "id": "chat"})
+        );
+        // Open with the same tabs.
+        let open = said(reading_of(
+            me.clone(),
+            true,
+            vec![subagents.clone(), app.clone()],
+            Some(subagents.clone()),
+        ));
+        assert_eq!(open["open"], "open");
+        assert_eq!(open["tabs"], closed["tabs"]);
+        assert_eq!(open["front"], closed["front"]);
+        // The other tab comes to the front. The order stays.
+        let front = said(reading_of(
+            me.clone(),
+            true,
+            vec![subagents.clone(), app.clone()],
+            Some(app),
+        ));
+        assert_eq!(front["open"], "open");
+        assert_eq!(front["tabs"], open["tabs"]);
+        assert_eq!(
+            front["front"],
+            json!({"plugin": "mcp:huddle", "id": "call-1"})
+        );
+        // The other chat in front: its tabs. Open is the window's.
+        let switched = said(reading_of(other, true, vec![notes.clone()], Some(notes)));
+        assert_eq!(switched["open"], "open");
+        assert_eq!(
+            switched["tabs"],
+            json!([{"plugin": "subagents", "id": "other"}])
+        );
+        assert_eq!(switched["front"]["id"], "other");
+        // The last tab closed: the panel stays open and names no front.
+        let empty = said(reading_of(me.clone(), true, vec![], None));
+        assert_eq!(empty["open"], "open");
+        assert_eq!(empty["tabs"], json!([]));
+        assert!(empty.get("front").is_none());
+    }
+
+    #[test]
     fn read_window_names_the_focused_pane_says_what_is_covered_and_fits_one_result() {
         use crate::conversation::application::PublishedWindow;
         use crate::conversation::domain::{
@@ -1531,6 +1650,7 @@ mod tests {
                     true,
                     true,
                     showing,
+                    WindowPanel::new(false, vec![], None).unwrap(),
                     vec![WindowColumn::new(
                         100,
                         vec![
@@ -1572,6 +1692,7 @@ mod tests {
                     true,
                     true,
                     WindowShowing::Panes,
+                    WindowPanel::new(false, vec![], None).unwrap(),
                     (0..8)
                         .map(|_| {
                             WindowColumn::new(

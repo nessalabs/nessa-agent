@@ -3527,6 +3527,14 @@ pub struct WorkspaceColumn {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePanel {
+    pub open: bool,
+    pub tabs: Vec<WorkspaceWidget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<WorkspaceWidget>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceWindow {
     pub arrangement: WorkspaceArrangement,
     pub sidebar: bool,
@@ -3534,6 +3542,7 @@ pub struct WorkspaceWindow {
     pub showing: WorkspaceShowing,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget: Option<WorkspaceWidget>,
+    pub panel: WorkspacePanel,
     pub columns: Vec<WorkspaceColumn>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

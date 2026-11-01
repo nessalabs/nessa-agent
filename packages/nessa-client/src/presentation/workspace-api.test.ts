@@ -9,6 +9,7 @@ const window: WorkspaceWindow = {
   sidebar: true,
   sessionList: true,
   showing: "panes",
+  panel: { open: false, tabs: [] },
   columns: [
     {
       widthPercent: 100,

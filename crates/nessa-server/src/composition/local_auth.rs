@@ -1791,7 +1791,7 @@ fn environments(
     use crate::conversation::infrastructure::{
         ssh_environment::{
             DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
-            SshEnvironment, SshTimings,
+            PeerUpdates, SshEnvironment, SshTimings,
         },
         CedarCommandPolicyEvaluator, FileBindings, FilePlacements,
     };
@@ -1816,6 +1816,13 @@ fn environments(
             audience: serving.audience.clone(),
         }) as Arc<dyn crate::devices::application::PairedKeys>
     });
+    // One installer for SSH hosts and paired ones alike: the same build,
+    // and the same release builds it pins, kept in one cache.
+    let connector = Arc::new(OpenSshConnector::new());
+    let installer = Arc::new(HostInstaller::this_build(
+        connector.clone(),
+        root.join("host-builds"),
+    ));
     let peers = match (serving, &audit) {
         (Some(serving), Some(audit)) => Some(Arc::new(
             PeerEnvironments::new(
@@ -1830,16 +1837,12 @@ fn environments(
                 SshTimings::default(),
                 organization,
             )
-            .with_sightings(Arc::new(SavedSightings(sightings.clone()))),
+            .with_sightings(Arc::new(SavedSightings(sightings.clone())))
+            .with_updates(Arc::new(PeerUpdates::new(installer.clone(), audit.clone()))),
         )),
         _ => None,
     };
     if let (false, Some(audit)) = (hosts.is_empty(), &audit) {
-        let connector = Arc::new(OpenSshConnector::new());
-        let installer = Arc::new(HostInstaller::this_build(
-            connector.clone(),
-            root.join("host-builds"),
-        ));
         for host in hosts {
             environments.insert(
                 host.as_str().to_owned(),
