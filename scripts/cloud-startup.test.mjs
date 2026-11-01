@@ -52,8 +52,29 @@ if (tool === 'timeout') {
 else if (tool === 'uname') console.log(args[0] === '-s' ? 'Linux' : 'x86_64')
 else if (tool === 'dpkg-query') { if (!exists('packages') || (exists('missing-package') && fs.readFileSync(marker('missing-package'),'utf8')===args.at(-1))) process.exit(1); console.log('installed') }
 else if (tool === 'apt-cache') {
-  process.stdout.write('  Candidate: '+(exists('old-driver-candidate')?'4.1.0':'(none)')+'\n')
-  process.stdout.write('  Version table:\n'+'.'.repeat(262144)+'\n')
+  // apt-cache is killed by SIGPIPE (exit 141) when its reader closes early.
+  // Node ignores that signal and would exit 0, which hides a pipefail failure,
+  // so a closed pipe exits 141 here instead. The version table is larger than
+  // the pipe and is written in small pieces: a reader that stops at Candidate
+  // cannot drain it, and a reader that reads through EOF can.
+  let pipeMax = 1024 * 1024
+  try {
+    const configured = Number(fs.readFileSync('/proc/sys/fs/pipe-max-size', 'utf8'))
+    if (Number.isFinite(configured) && configured > pipeMax) pipeMax = Math.min(configured, 8 * 1024 * 1024)
+  } catch {}
+  const candidate = exists('old-driver-candidate') ? '4.1.0' : '(none)'
+  const body = Buffer.from('  Candidate: ' + candidate + '\n  Version table:\n' + '.'.repeat(pipeMax + 65536) + '\n')
+  let offset = 0
+  while (offset < body.length) {
+    try {
+      const wrote = fs.writeSync(1, body, offset, Math.min(4096, body.length - offset))
+      if (wrote <= 0) process.exit(141)
+      offset += wrote
+    } catch (error) {
+      if (error && error.code === 'EPIPE') process.exit(141)
+      throw error
+    }
+  }
 }
 else if (tool === 'sudo') { if (args.includes('install')) touch('packages') }
 else if (tool === 'curl') {
@@ -277,7 +298,22 @@ test("driver policy is fully consumed before choosing the available package", (t
       join(f.repository, "scripts/desktop/install-linux-build-deps.sh"),
       ["webkit2gtk-driver"],
     )
-    assert.equal(result.status, 0, result.stderr)
+    assert.equal(
+      result.status,
+      0,
+      result.stderr || result.stdout || `exit ${result.status} with no output`,
+    )
+    assert.ok(
+      f
+        .calls()
+        .some(
+          ({ tool, args }) =>
+            tool === "apt-cache" &&
+            args[0] === "policy" &&
+            args.at(-1) === "webkit2gtk-driver",
+        ),
+      "the recipe reads package policy through the apt-cache double",
+    )
     const install = f
       .calls()
       .find(({ tool, args }) => tool === "sudo" && args.includes("install"))
@@ -494,7 +530,12 @@ test("present browser executables do not hide missing runtime libraries", (t) =>
 
 test("a stalled browser repair is bounded and cannot publish success", (t) => {
   const f = bootstrapFixture(t)
-  assert.equal(f.prepare("setup").status, 0)
+  const prepared = f.prepare("setup")
+  assert.equal(
+    prepared.status,
+    0,
+    prepared.stderr || prepared.stdout || `exit ${prepared.status} with no output`,
+  )
   const previous = f.receipt()
   rmSync(join(f.root, "browser-libraries"))
   writeFileSync(join(f.root, "stall-browser-repair"), "")
@@ -516,7 +557,15 @@ test("a stalled browser repair is bounded and cannot publish success", (t) => {
 })
 
 function sandboxBrowsers(f) {
-  const sandbox = join(f.root, "sandbox-browsers")
+  // macOS temporary directories are reached through /var, while realpath
+  // resolves that directory to /private/var. The alias is the same
+  // relationship on every host. Equating the two spellings rejects this
+  // executable; the comparison has to use realpath.
+  const canonical = join(f.root, "private-var")
+  const alias = join(f.root, "var")
+  mkdirSync(canonical, { recursive: true })
+  symlinkSync(canonical, alias)
+  const sandbox = join(alias, "sandbox-browsers")
   const chrome = join(sandbox, "chromium-1194/chrome-linux/chrome")
   const shell = join(sandbox, "chromium_headless_shell-1194/chrome-linux/headless_shell")
   for (const file of [chrome, shell]) {
@@ -524,6 +573,10 @@ function sandboxBrowsers(f) {
     writeFileSync(file, "#!/bin/sh\n", { mode: 0o755 })
   }
   return { sandbox, chrome, shell }
+}
+
+function assertSamePath(actual, expected) {
+  assert.equal(realpathSync(actual), realpathSync(expected))
 }
 
 test("a refused browser download falls back to the sandbox's own Chromium", (t) => {
@@ -535,17 +588,16 @@ test("a refused browser download falls back to the sandbox's own Chromium", (t) 
   assert.equal(cold.status, 0, cold.stderr)
   assert.match(cold.stderr, /WebKit checks cannot run/)
   assert.equal(f.receipt().steps.browsers, "sandbox-chromium")
+  assert.notEqual(chrome, realpathSync(chrome))
+  assert.notEqual(realpathSync(chrome), realpathSync(shell))
   const links = join(f.env.NESSA_CLOUD_ROOT, "browsers")
-  assert.equal(realpathSync(join(links, "chromium-1243/chrome-linux64/chrome")), chrome)
-  assert.equal(
-    realpathSync(
-      join(
-        links,
-        "chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell",
-      ),
-    ),
-    shell,
+  const linkedChrome = join(links, "chromium-1243/chrome-linux64/chrome")
+  const linkedShell = join(
+    links,
+    "chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell",
   )
+  assertSamePath(linkedChrome, chrome)
+  assertSamePath(linkedShell, shell)
   const loginShell = (environment) =>
     spawnSync(
       "env",
@@ -568,8 +620,8 @@ test("a refused browser download falls back to the sandbox's own Chromium", (t) 
   const warm = f.prepare("maintenance")
   assert.equal(warm.status, 0, warm.stderr)
   assert.equal(f.receipt().steps.browsers, "sandbox-chromium")
-  assert.equal(realpathSync(join(links, "chromium-1243/chrome-linux64/chrome")), chrome)
-  assert.equal(
+  assertSamePath(linkedChrome, chrome)
+  assertSamePath(
     readFileSync(join(f.env.NESSA_CLOUD_ROOT, "browsers-source"), "utf8"),
     sandbox,
   )
