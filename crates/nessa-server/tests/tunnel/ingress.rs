@@ -2,10 +2,12 @@
 //! the listener's tunnel pool: what is upgraded, what is refused, and that
 //! the bytes cross both ways.
 use super::*;
+use crate::tunnel::application::{MemoryDeviceSecrets, SecretRevocation};
 use futures_util::{SinkExt, StreamExt};
+use nessa_protocol::tunnel::{TunnelSecret, TUNNEL_SECRET_HEADER};
 use std::io::{Read as _, Write as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio_tungstenite::tungstenite::{self, Message};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
 
 const REAL: Duration = Duration::from_secs(10);
 
@@ -19,6 +21,8 @@ impl TunnelAdmission<OwnedSemaphorePermit> for Pool {
 struct Serving {
     address: std::net::SocketAddr,
     pool: Arc<Semaphore>,
+    secrets: Arc<MemoryDeviceSecrets>,
+    paired: [u8; 32],
     joined: mpsc::Receiver<Tunneled<OwnedSemaphorePermit>>,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
@@ -28,16 +32,41 @@ async fn serve(permits: usize) -> Serving {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let pool = Arc::new(Semaphore::new(permits));
-    let (joined_tx, joined) = mpsc::channel(4);
+    let secrets = Arc::new(MemoryDeviceSecrets::new());
+    let paired = secrets.issue("device-1", &[1; 32], "owner").unwrap();
+    let (joined_tx, joined) = mpsc::channel(8);
     let (stop, stopped) = watch::channel(false);
-    let ingress = TunnelIngress::new(listener, Arc::new(Pool(pool.clone())), joined_tx);
+    let ingress = TunnelIngress::new(
+        listener,
+        Arc::new(Pool(pool.clone())),
+        secrets.clone(),
+        joined_tx,
+    );
     Serving {
         address,
         pool,
+        secrets,
+        paired,
         joined,
         stop,
         task: tokio::spawn(ingress.serve(stopped)),
     }
+}
+
+fn request(
+    address: std::net::SocketAddr,
+    secret: Option<&[u8; 32]>,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    let mut request = format!("ws://{address}/native")
+        .into_client_request()
+        .unwrap();
+    if let Some(secret) = secret {
+        request.headers_mut().insert(
+            TUNNEL_SECRET_HEADER,
+            HeaderValue::from_str(&TunnelSecret::new(*secret).encode()).unwrap(),
+        );
+    }
+    request
 }
 
 impl Serving {
@@ -55,7 +84,7 @@ async fn a_websocket_on_the_native_path_reaches_the_listener_and_bytes_cross() {
     let mut serving = serve(4).await;
     let (mut socket, _) = tokio::time::timeout(
         REAL,
-        tokio_tungstenite::connect_async(format!("ws://{}/native", serving.address)),
+        tokio_tungstenite::connect_async(request(serving.address, Some(&serving.paired))),
     )
     .await
     .unwrap()
@@ -120,22 +149,102 @@ async fn any_other_path_is_refused_and_reaches_nothing() {
 }
 
 #[tokio::test]
-async fn with_the_pool_full_a_connection_is_closed_unread() {
+async fn with_the_pool_full_a_paired_device_is_refused_without_a_bridge() {
     let mut serving = serve(0).await;
-    let mut stream = tokio::net::TcpStream::connect(serving.address)
+    let refused =
+        tokio_tungstenite::connect_async(request(serving.address, Some(&serving.paired))).await;
+    match refused {
+        Err(tungstenite::Error::Http(response)) => assert_eq!(response.status(), 503),
+        other => panic!("expected 503, got {other:?}"),
+    }
+    assert!(serving.joined.try_recv().is_err());
+    serving.stop().await;
+}
+
+#[tokio::test]
+async fn strangers_holding_connections_cannot_keep_a_paired_device_out() {
+    let mut serving = serve(4).await;
+    let mut held = Vec::new();
+    for _ in 0..8 {
+        let mut stream = tokio::net::TcpStream::connect(serving.address)
+            .await
+            .unwrap();
+        // A complete upgrade with no secret, and the socket left open.
+        tokio::io::AsyncWriteExt::write_all(
+            &mut stream,
+            b"GET /native HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        )
         .await
         .unwrap();
-    // Closed before any upgrade answer: the read ends at once.
-    let mut rest = Vec::new();
-    tokio::time::timeout(
+        held.push(stream);
+    }
+    let (_socket, _) = tokio::time::timeout(
         REAL,
-        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut rest),
+        tokio_tungstenite::connect_async(request(serving.address, Some(&serving.paired))),
     )
     .await
-    .expect("closed in time")
-    .ok();
-    assert!(rest.is_empty(), "nothing was answered: {rest:?}");
+    .unwrap()
+    .unwrap();
+    let Tunneled { permit, .. } = tokio::time::timeout(REAL, serving.joined.recv())
+        .await
+        .unwrap()
+        .expect("the paired device is admitted");
+    assert_eq!(
+        serving.pool.available_permits(),
+        3,
+        "the eight strangers hold no permit"
+    );
+    drop(permit);
+    drop(_socket);
+    drop(held);
+    serving.stop().await;
+}
+
+#[tokio::test]
+async fn a_revoked_device_is_rejected_and_takes_no_permit() {
+    let mut serving = serve(4).await;
+    serving
+        .secrets
+        .revoke("device-1", SecretRevocation::CredentialRevoked, "owner")
+        .unwrap();
+    let refused =
+        tokio_tungstenite::connect_async(request(serving.address, Some(&serving.paired))).await;
+    match refused {
+        Err(tungstenite::Error::Http(response)) => assert_eq!(response.status(), 401),
+        other => panic!("expected 401, got {other:?}"),
+    }
     assert!(serving.joined.try_recv().is_err());
+    assert_eq!(serving.pool.available_permits(), 4);
+    // The path form of a secret that was never issued is the same refusal.
+    let path = format!(
+        "ws://{}/native/{}",
+        serving.address,
+        TunnelSecret::new(serving.paired).encode()
+    );
+    let refused = tokio_tungstenite::connect_async(path).await;
+    match refused {
+        Err(tungstenite::Error::Http(response)) => assert_eq!(response.status(), 401),
+        other => panic!("expected 401, got {other:?}"),
+    }
+    serving.stop().await;
+}
+
+#[tokio::test]
+async fn a_secret_in_the_path_admits_when_the_header_is_absent() {
+    let mut serving = serve(4).await;
+    let path = format!(
+        "ws://{}/native/{}",
+        serving.address,
+        TunnelSecret::new(serving.paired).encode()
+    );
+    let (_socket, _) = tokio::time::timeout(REAL, tokio_tungstenite::connect_async(path))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(tokio::time::timeout(REAL, serving.joined.recv())
+        .await
+        .unwrap()
+        .is_some());
     serving.stop().await;
 }
 

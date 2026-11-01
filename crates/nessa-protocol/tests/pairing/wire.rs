@@ -83,6 +83,7 @@ fn projected(record: PairingRecord) -> DevicePairingStatus {
         DevicePairingStatus::Active {
             record: Box::new(record),
             access_epoch: CURRENT_EPOCH,
+            tunnel_secret: crate::tunnel::TunnelSecret::new([9; 32]),
         }
     } else {
         DevicePairingStatus::Claimed(Box::new(record))
@@ -226,6 +227,7 @@ fn current_enrollment_messages_preserve_their_representation() {
                 credential: record.credential().unwrap().clone(),
                 receiver: record.receiver_binding().unwrap().0.clone(),
                 access_epoch: CURRENT_EPOCH,
+                tunnel_secret: crate::tunnel::TunnelSecret::new([9; 32]),
             },
             PairingPhase::Terminal => NativePairingStatus::Terminal {
                 consent: Box::new(consent),
@@ -476,6 +478,7 @@ fn only_an_active_record_carries_a_current_epoch() {
             DevicePairingStatus::Active {
                 record: Box::new(record),
                 access_epoch: CURRENT_EPOCH,
+                tunnel_secret: crate::tunnel::TunnelSecret::new([9; 32]),
             }
         };
         assert_eq!(

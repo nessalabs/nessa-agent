@@ -21,8 +21,8 @@
 use super::wire::{next_frame, read_frame, write_frame};
 use crate::timer::{within, Moment, Timer};
 use nessa_protocol::relay::{
-    key_id, GatewayKey, JoinToken, RelayFrame, JOIN_DEADLINE, MISSED_PINGS, PING_INTERVAL,
-    PREAMBLE_DEADLINE,
+    key_id, GatewayKey, JoinToken, PublishedOrigin, RelayFrame, JOIN_DEADLINE, MISSED_PINGS,
+    PING_INTERVAL, PREAMBLE_DEADLINE,
 };
 use std::{
     collections::HashMap,
@@ -72,14 +72,34 @@ impl Default for RelayLimits {
     }
 }
 
+/// What the serve loop sends the gateway.
+enum ToGateway {
+    /// A reader to join.
+    Incoming(JoinToken),
+    /// A lookup for the gateway to allow or deny.
+    Admit {
+        token: JoinToken,
+        nonce: [u8; 32],
+        mac: [u8; 32],
+    },
+}
+
 /// One registered gateway's serve connection.
 struct Registration {
     /// Which serve connection this is, so a replaced one removes only itself.
     id: u64,
-    /// Join tokens for its serve loop to send.
-    incoming: mpsc::Sender<JoinToken>,
+    /// Frames for its serve loop to send.
+    incoming: mpsc::Sender<ToGateway>,
     /// Sent when a newer proved connection takes the key's place.
     replaced: oneshot::Sender<()>,
+    /// The tunnel origin it last published. Empty means none.
+    origin: PublishedOrigin,
+}
+
+/// A reader waiting to be told the tunnel origin, or refused.
+struct LookupWait {
+    key: GatewayKey,
+    answer: oneshot::Sender<bool>,
 }
 
 /// One reader waiting for its gateway to accept.
@@ -93,6 +113,7 @@ struct Waiting<S> {
 struct Table<S> {
     registrations: HashMap<GatewayKey, Registration>,
     waiting: HashMap<JoinToken, Waiting<S>>,
+    lookups: HashMap<JoinToken, LookupWait>,
     next: u64,
 }
 
@@ -122,6 +143,7 @@ where
             table: Mutex::new(Table {
                 registrations: HashMap::new(),
                 waiting: HashMap::new(),
+                lookups: HashMap::new(),
                 next: 0,
             }),
             timer,
@@ -150,6 +172,7 @@ where
         match first {
             RelayFrame::Serve { key } => self.serve(stream, key, deadline).await,
             RelayFrame::Connect { key } => self.connect(stream, key).await,
+            RelayFrame::Lookup { key } => self.lookup(stream, key).await,
             // The permit goes with the stream to the reader's task.
             RelayFrame::Accept { key, token } => return self.accept(stream, key, token, permit),
             other => tracing::debug!(frame = ?other, "relay connection opened with another frame"),
@@ -177,7 +200,8 @@ where
             tracing::debug!(key = %key_id(&key), "relay proof refused");
             return;
         }
-        let (incoming, mut tokens) = mpsc::channel(self.limits.waiting_per_gateway);
+        let (incoming, mut tokens) =
+            mpsc::channel(self.limits.waiting_per_gateway.saturating_mul(2).max(1));
         let (replaced, mut replacing) = oneshot::channel();
         let id = {
             let mut table = self.lock();
@@ -194,6 +218,7 @@ where
                     id,
                     incoming,
                     replaced,
+                    origin: PublishedOrigin::clear(),
                 },
             );
             if let Some(earlier) = earlier {
@@ -227,11 +252,29 @@ where
                             unanswered = 0;
                             reading = Box::pin(next_frame(reader));
                         }
+                        Ok(RelayFrame::Publish { origin }) => {
+                            self.set_origin(key, id, *origin);
+                            reading = Box::pin(next_frame(reader));
+                        }
+                        Ok(RelayFrame::Allow { token }) => {
+                            self.answer_lookup(token, true);
+                            reading = Box::pin(next_frame(reader));
+                        }
+                        Ok(RelayFrame::Deny { token }) => {
+                            self.answer_lookup(token, false);
+                            reading = Box::pin(next_frame(reader));
+                        }
                         _ => break,
                     },
-                    token = tokens.recv() => {
-                        let Some(token) = token else { break };
-                        if !self.send(&mut writer, RelayFrame::Incoming { token }).await {
+                    note = tokens.recv() => {
+                        let Some(note) = note else { break };
+                        let frame = match note {
+                            ToGateway::Incoming(token) => RelayFrame::Incoming { token },
+                            ToGateway::Admit { token, nonce, mac } => {
+                                RelayFrame::Admit { token, nonce, mac }
+                            }
+                        };
+                        if !self.send(&mut writer, frame).await {
                             break;
                         }
                     }
@@ -248,6 +291,128 @@ where
                     }
                 }
             }
+        }
+    }
+
+    /// Tell a paired device the tunnel origin `key` has published, or refuse.
+    async fn lookup(&self, mut stream: S, key: GatewayKey) {
+        enum Prepared<I> {
+            Offline,
+            Full,
+            Ready {
+                token: JoinToken,
+                nonce: [u8; 32],
+                waiting: oneshot::Receiver<bool>,
+                incoming: I,
+            },
+        }
+        let prepared = {
+            let mut table = self.lock();
+            let incoming = table
+                .registrations
+                .get(&key)
+                .map(|registration| registration.incoming.clone());
+            if let Some(incoming) = incoming {
+                let waiting = table
+                    .lookups
+                    .values()
+                    .filter(|lookup| lookup.key == key)
+                    .count();
+                if waiting >= self.limits.waiting_per_gateway {
+                    Prepared::Full
+                } else {
+                    let mut nonce = [0; 32];
+                    self.entropy.fill(&mut nonce);
+                    let token = loop {
+                        let mut token = [0; 16];
+                        self.entropy.fill(&mut token);
+                        if !table.lookups.contains_key(&token) {
+                            break token;
+                        }
+                    };
+                    let (answer, waiting) = oneshot::channel();
+                    table.lookups.insert(token, LookupWait { key, answer });
+                    Prepared::Ready {
+                        token,
+                        nonce,
+                        waiting,
+                        incoming,
+                    }
+                }
+            } else {
+                Prepared::Offline
+            }
+        };
+        let (token, nonce, waiting, incoming) = match prepared {
+            Prepared::Offline => {
+                self.send(&mut stream, RelayFrame::Offline).await;
+                return;
+            }
+            Prepared::Full => {
+                self.send(&mut stream, RelayFrame::Unlisted).await;
+                return;
+            }
+            Prepared::Ready {
+                token,
+                nonce,
+                waiting,
+                incoming,
+            } => (token, nonce, waiting, incoming),
+        };
+        let guard = LookupGuard { relay: self, token };
+        if !self
+            .send(&mut stream, RelayFrame::Challenge { nonce })
+            .await
+        {
+            return;
+        }
+        let deadline = self.timer.now() + PREAMBLE_DEADLINE;
+        let seal = within(&*self.timer, deadline, read_frame(&mut stream)).await;
+        let Ok(Ok(RelayFrame::Seal { mac })) = seal else {
+            self.send(&mut stream, RelayFrame::Unlisted).await;
+            return;
+        };
+        if incoming
+            .try_send(ToGateway::Admit { token, nonce, mac })
+            .is_err()
+        {
+            self.send(&mut stream, RelayFrame::Unlisted).await;
+            return;
+        }
+        let deadline = self.timer.now() + PREAMBLE_DEADLINE;
+        let allowed = within(&*self.timer, deadline, waiting).await;
+        if !matches!(allowed, Ok(Ok(true))) {
+            self.send(&mut stream, RelayFrame::Unlisted).await;
+            return;
+        }
+        let origin = self
+            .lock()
+            .registrations
+            .get(&key)
+            .map(|registration| registration.origin)
+            .unwrap_or_else(PublishedOrigin::clear);
+        self.send(
+            &mut stream,
+            RelayFrame::Located {
+                origin: Box::new(origin),
+            },
+        )
+        .await;
+        drop(guard);
+    }
+
+    fn set_origin(&self, key: GatewayKey, id: u64, origin: PublishedOrigin) {
+        let mut table = self.lock();
+        if let Some(registration) = table.registrations.get_mut(&key) {
+            if registration.id == id {
+                registration.origin = origin;
+            }
+        }
+    }
+
+    fn answer_lookup(&self, token: JoinToken, allow: bool) {
+        if let Some(waiting) = self.lock().lookups.remove(&token) {
+            let _ = waiting.answer.send(allow);
         }
     }
 
@@ -314,7 +479,9 @@ where
             }
         };
         let (deliver, joining) = oneshot::channel();
-        incoming.try_send(token).map_err(|_| RelayFrame::NoAnswer)?;
+        incoming
+            .try_send(ToGateway::Incoming(token))
+            .map_err(|_| RelayFrame::NoAnswer)?;
         table.waiting.insert(token, Waiting { key, deliver });
         Ok((token, joining, slot))
     }
@@ -378,6 +545,19 @@ impl<S> Drop for Registered<'_, S> {
         {
             table.registrations.remove(&self.key);
         }
+        table.lookups.retain(|_, lookup| lookup.key != self.key);
+    }
+}
+
+/// Removes a lookup that ends before the gateway answers it.
+struct LookupGuard<'a, S> {
+    relay: &'a Relay<S>,
+    token: JoinToken,
+}
+
+impl<S> Drop for LookupGuard<'_, S> {
+    fn drop(&mut self) {
+        self.relay.lock().lookups.remove(&self.token);
     }
 }
 

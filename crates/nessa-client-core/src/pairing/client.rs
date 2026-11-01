@@ -314,10 +314,16 @@ impl NativeEnrollmentClient {
                     NativePairingStatus::Active {
                         credential,
                         receiver,
+                        tunnel_secret,
                         ..
-                    } => pending
-                        .save_credential(credential, receiver, public)
-                        .map_err(NativeClientError::Storage)?,
+                    } => {
+                        pending
+                            .save_credential(credential, receiver, public)
+                            .map_err(NativeClientError::Storage)?;
+                        pending
+                            .save_tunnel_secret(tunnel_secret.expose())
+                            .map_err(NativeClientError::Storage)?;
+                    }
                     // Authenticated end of this enrollment: the record goes, and
                     // the returned status is the trusted end signal (row A14).
                     // This device's attempt is no longer pending (failed or

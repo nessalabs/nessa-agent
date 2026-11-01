@@ -18,6 +18,25 @@ fn every_frame() -> Vec<RelayFrame> {
         RelayFrame::Joined,
         RelayFrame::Offline,
         RelayFrame::NoAnswer,
+        RelayFrame::Publish {
+            origin: Box::new(PublishedOrigin::new("https://a.trycloudflare.com").unwrap()),
+        },
+        RelayFrame::Publish {
+            origin: Box::new(PublishedOrigin::clear()),
+        },
+        RelayFrame::Lookup { key: [8; 32] },
+        RelayFrame::Seal { mac: [9; 32] },
+        RelayFrame::Admit {
+            token: [10; 16],
+            nonce: [11; 32],
+            mac: [12; 32],
+        },
+        RelayFrame::Allow { token: [13; 16] },
+        RelayFrame::Deny { token: [14; 16] },
+        RelayFrame::Located {
+            origin: Box::new(PublishedOrigin::new("https://b.trycloudflare.com").unwrap()),
+        },
+        RelayFrame::Unlisted,
     ]
 }
 
@@ -46,8 +65,8 @@ fn another_version_an_unknown_type_or_a_wrong_length_is_refused_before_its_body(
     assert_eq!(parse_header([2, 6, 0]), Err(RelayFrameError::Version(2)));
     assert_eq!(parse_header([VERSION, 0, 0]), Err(RelayFrameError::Type(0)));
     assert_eq!(
-        parse_header([VERSION, 13, 0]),
-        Err(RelayFrameError::Type(13))
+        parse_header([VERSION, 30, 0]),
+        Err(RelayFrameError::Type(30))
     );
     assert_eq!(
         parse_header([VERSION, 1, 255]),

@@ -111,6 +111,8 @@ pub enum NativePairingStatus {
         receiver: ResourceId,
         /// That receiver's access epoch when this status was read.
         access_epoch: u64,
+        /// The tunnel secret this device sends on every tunnel request.
+        tunnel_secret: crate::tunnel::TunnelSecret,
     },
     /// Original claimed enrollment ended; it is not product authorization.
     Terminal {
@@ -299,15 +301,23 @@ fn with_status(
         DevicePairingStatus::Claimed(record) => {
             let consent = DisclosedConsent::from_intent(public, record.intent())
                 .map_err(NativeWireError::Correlation)?;
-            return with_claimed(public, record, &consent, None, envelope);
+            return with_claimed(public, record, &consent, None, None, envelope);
         }
         DevicePairingStatus::Active {
             record,
             access_epoch,
+            tunnel_secret,
         } => {
             let consent = DisclosedConsent::from_intent(public, record.intent())
                 .map_err(NativeWireError::Correlation)?;
-            return with_claimed(public, record, &consent, Some(*access_epoch), envelope);
+            return with_claimed(
+                public,
+                record,
+                &consent,
+                Some(*access_epoch),
+                Some(tunnel_secret),
+                envelope,
+            );
         }
     };
     envelope(value)
@@ -352,6 +362,7 @@ fn with_claimed(
     record: &PairingRecord,
     consent: &DisclosedConsent,
     access_epoch: Option<u64>,
+    tunnel_secret: Option<&crate::tunnel::TunnelSecret>,
     envelope: impl for<'a> FnOnce(WireStatus<'a>) -> Result<Vec<u8>, NativeWireError>,
 ) -> Result<Vec<u8>, NativeWireError> {
     if PublicIntent::from_record(record, public.attempt()).map_err(NativeWireError::Correlation)?
@@ -390,6 +401,10 @@ fn with_claimed(
                 .as_str()
                 .into(),
             access_epoch,
+            tunnel_secret: tunnel_secret
+                .ok_or(NativeWireError::Invalid)?
+                .encode()
+                .into(),
         },
         (PairingPhase::Terminal, None) => WireStatus::Terminal {
             consent,

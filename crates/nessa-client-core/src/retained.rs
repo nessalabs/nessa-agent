@@ -65,7 +65,7 @@ use nessa_protocol::product::generated::{
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordReadErrorCode};
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
-use nessa_protocol::tunnel::TunnelAddress;
+use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -402,17 +402,19 @@ impl Cancellation for Stopping {
 /// Neither route connected in time.
 pub fn dial_native(
     address: SocketAddr,
-    tunnel: Option<&TunnelAddress>,
+    tunnel: Option<(&TunnelAddress, &TunnelSecret)>,
     timeout: Duration,
 ) -> IoResult<TcpStream> {
-    let Some(tunnel) = tunnel.cloned() else {
+    let Some((tunnel, secret)) = tunnel else {
         return TcpStream::connect_timeout(&address, timeout);
     };
+    let tunnel = tunnel.clone();
+    let secret = *secret;
     // The direct leg keeps the typed address, so an IPv6 scope id survives;
     // a `host:port` string would lose it.
     race(
         move |left| TcpStream::connect_timeout(&address, left),
-        move |left| crate::tunnel::dial(&tunnel, left),
+        move |left| crate::tunnel::dial(&tunnel, &secret, left),
         timeout,
         DIRECT_HEAD_START,
         &|| false,
@@ -436,7 +438,7 @@ pub fn dial_native(
 pub fn dial_gateway(
     address: &str,
     relay: Option<(&RelayAddress, &[u8; 44])>,
-    tunnel: Option<&TunnelAddress>,
+    tunnel: Option<(&TunnelAddress, &TunnelSecret)>,
     timeout: Duration,
 ) -> IoResult<TcpStream> {
     let deadline = Instant::now()
@@ -468,16 +470,18 @@ pub fn dial_gateway(
         }
         None => None,
     };
-    let tunnel = tunnel.cloned();
+    let tunnel = tunnel.map(|(tunnel, secret)| (tunnel.clone(), *secret));
     let beyond: Box<dyn FnOnce(Duration) -> IoResult<TcpStream> + Send> = match (route, tunnel) {
         (None, None) => return connect_any(address, deadline),
         (Some(route), None) => Box::new(move |left| relay_leg(&route, left)),
-        (None, Some(tunnel)) => Box::new(move |left| crate::tunnel::dial(&tunnel, left)),
+        (None, Some((tunnel, secret))) => {
+            Box::new(move |left| crate::tunnel::dial(&tunnel, &secret, left))
+        }
         // Both are beyond the local network: neither is preferred.
-        (Some(route), Some(tunnel)) => Box::new(move |left| {
+        (Some(route), Some((tunnel, secret))) => Box::new(move |left| {
             race(
                 move |left| relay_leg(&route, left),
-                move |left| crate::tunnel::dial(&tunnel, left),
+                move |left| crate::tunnel::dial(&tunnel, &secret, left),
                 left,
                 Duration::ZERO,
                 &|| false,

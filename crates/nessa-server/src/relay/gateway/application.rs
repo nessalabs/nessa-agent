@@ -21,8 +21,10 @@
 //! cannot read.
 use super::super::wire::{next_frame, read_frame, write_frame};
 use crate::timer::{within, Timer};
+use crate::tunnel::application::DeviceTunnelSecrets;
 use nessa_protocol::relay::{
-    GatewayKey, JoinToken, RelayFrame, JOIN_DEADLINE, PING_INTERVAL, PREAMBLE_DEADLINE,
+    GatewayKey, JoinToken, PublishedOrigin, RelayFrame, JOIN_DEADLINE, PING_INTERVAL,
+    PREAMBLE_DEADLINE,
 };
 use std::{future::Future, io, pin::Pin, sync::Arc, time::Duration};
 use tokio::{
@@ -98,6 +100,10 @@ pub(crate) struct ThroughRelay<S, P> {
     pub(crate) timer: Arc<dyn Timer>,
     /// Where joined readers go: the listener's side.
     pub(crate) joined: mpsc::Sender<Relayed<S, P>>,
+    /// The tunnel origin to publish. `None` clears it.
+    pub(crate) address: watch::Receiver<Option<PublishedOrigin>>,
+    /// Paired devices' tunnel secrets, for a lookup.
+    pub(crate) secrets: Arc<dyn DeviceTunnelSecrets>,
 }
 
 impl<S, P> ThroughRelay<S, P>
@@ -175,6 +181,22 @@ where
         let mut reading = Box::pin(next_frame(reader));
         let mut legs = JoinSet::new();
         let mut silent = self.timer.now() + SILENCE;
+        let mut published = self.address.clone();
+        let mut watch_address = true;
+        let current = *published.borrow_and_update();
+        if let Some(origin) = current {
+            if !self
+                .send(
+                    &mut writer,
+                    RelayFrame::Publish {
+                        origin: Box::new(origin),
+                    },
+                )
+                .await
+            {
+                return;
+            }
+        }
         loop {
             tokio::select! {
                 biased;
@@ -198,6 +220,22 @@ where
                             }
                         }
                         Ok(RelayFrame::Incoming { token }) => self.incoming(&mut legs, token),
+                        Ok(RelayFrame::Admit { token, nonce, mac }) => {
+                            let allow = self.secrets.authorize_lookup(&self.key.key(), &nonce, &mac);
+                            let frame = if allow {
+                                RelayFrame::Allow { token }
+                            } else {
+                                RelayFrame::Deny { token }
+                            };
+                            let answered = tokio::select! {
+                                biased;
+                                () = stopped(&mut stop) => return,
+                                answered = self.send(&mut writer, frame) => answered,
+                            };
+                            if !answered {
+                                return;
+                            }
+                        }
                         Ok(other) => {
                             tracing::debug!(frame = ?other, "relay sent an unexpected frame");
                             return;
@@ -208,6 +246,23 @@ where
                         }
                     }
                     reading = Box::pin(next_frame(reader));
+                }
+                changed = published.changed(), if watch_address => {
+                    match changed {
+                        Ok(()) => {
+                            let origin = match *published.borrow_and_update() {
+                                Some(origin) => origin,
+                                None => PublishedOrigin::clear(),
+                            };
+                            let frame = RelayFrame::Publish {
+                                origin: Box::new(origin),
+                            };
+                            if !self.send(&mut writer, frame).await {
+                                return;
+                            }
+                        }
+                        Err(_) => watch_address = false,
+                    }
                 }
                 () = self.timer.sleep_until(silent) => {
                     tracing::info!("relay registration went silent");

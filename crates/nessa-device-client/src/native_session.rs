@@ -1102,6 +1102,12 @@ impl NativeDeviceSession {
             .map(|value| Self { value })
             .map_err(Into::into)
     }
+    /// The relay this phone already uses to look the gateway up by its key.
+    /// A later product dial whose saved tunnel address fails asks the relay
+    /// for the address the gateway has published.
+    pub fn remember_relay(&self, relay: String) -> Result<(), NativeCallError> {
+        self.value.remember_relay(relay).map_err(Into::into)
+    }
     /// Pair using the existing code decoder and physical enrollment worker.
     pub fn enroll(&self, code: String) -> Result<Arc<NativeEnrollmentReceipt>, NativeCallError> {
         // Erase the Rust-owned argument copy. Swift may retain its own input.

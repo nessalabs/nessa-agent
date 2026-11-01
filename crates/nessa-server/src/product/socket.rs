@@ -2166,13 +2166,25 @@ async fn dispatch_authorized(
                 })
                 .await
             {
-                Ok(RevokeCredentialOutcome { revision, .. }) => success(
-                    &frame.id,
-                    &CredentialRevokeResult {
-                        credential_id: params.credential_id,
-                        revision,
-                    },
-                ),
+                Ok(RevokeCredentialOutcome { revision, .. }) => {
+                    if let Some(secrets) = state.tunnel_secrets.as_ref() {
+                        if let Err(error) = secrets.revoke(
+                            &params.credential_id,
+                            crate::tunnel::application::SecretRevocation::CredentialRevoked,
+                            session.context().principal_id().as_str(),
+                        ) {
+                            tracing::warn!(?error, "the device tunnel secret was not revoked");
+                            return failure(&frame.id, "audit_unavailable");
+                        }
+                    }
+                    success(
+                        &frame.id,
+                        &CredentialRevokeResult {
+                            credential_id: params.credential_id,
+                            revision,
+                        },
+                    )
+                }
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }

@@ -9,10 +9,53 @@
 //!
 //! The address carries no trust. Whoever answers there must still complete
 //! the native TLS handshake with the key the reader pinned at pairing.
+use base64::Engine;
 use std::{fmt, net::IpAddr, time::Duration};
 
 /// The one path the ingress upgrades.
 pub const TUNNEL_PATH: &str = "/native";
+/// Header a paired device sends on every tunnel request. A client that
+/// cannot set headers puts the same value in the path instead:
+/// `/native/<secret>`.
+pub const TUNNEL_SECRET_HEADER: &str = "x-nessa-tunnel";
+/// Bytes of a device's tunnel secret.
+pub const TUNNEL_SECRET_BYTES: usize = 32;
+
+/// A paired device's tunnel secret. Debug never prints the bytes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TunnelSecret([u8; TUNNEL_SECRET_BYTES]);
+
+impl TunnelSecret {
+    /// A secret of exactly [`TUNNEL_SECRET_BYTES`] bytes.
+    pub fn new(bytes: [u8; TUNNEL_SECRET_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes to compare or send. Not for logs.
+    pub fn expose(&self) -> &[u8; TUNNEL_SECRET_BYTES] {
+        &self.0
+    }
+
+    /// The header and path value: unpadded URL-safe base64.
+    pub fn encode(&self) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.0)
+    }
+
+    /// The inverse of [`Self::encode`]. Anything else is refused.
+    pub fn decode(text: &str) -> Option<Self> {
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(text)
+            .ok()?;
+        let bytes: [u8; TUNNEL_SECRET_BYTES] = bytes.try_into().ok()?;
+        Some(Self(bytes))
+    }
+}
+
+impl fmt::Debug for TunnelSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TunnelSecret(..)")
+    }
+}
 /// How often each end of a bridge pings the other, so a tunnel's idle limit
 /// (Cloudflare closes a WebSocket silent for 100 s) never ends a quiet session.
 pub const TUNNEL_PING: Duration = Duration::from_secs(20);

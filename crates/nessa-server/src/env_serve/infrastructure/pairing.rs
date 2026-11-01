@@ -48,7 +48,7 @@ const CONNECT: Duration = Duration::from_secs(5);
 
 /// What dialing needs once the owner approved this machine: its key and the
 /// gateway's pin.
-pub(crate) type Approved = (Arc<NativeIdentity>, [u8; 44]);
+pub(crate) type Approved = (Arc<NativeIdentity>, [u8; 44], Option<[u8; 32]>);
 
 /// This machine's pairing with the gateway at one address.
 pub(crate) struct FilePairingEnvironment {
@@ -130,7 +130,7 @@ impl FilePairingEnvironment {
         let saved = pairing.saved().await;
         pairing.shutdown().await;
         match saved? {
-            Saved::Approved((_, pin)) => Ok(Some(pin)),
+            Saved::Approved((_, pin, _)) => Ok(Some(pin)),
             Saved::Nothing => Ok(None),
             Saved::Pending => Err(
                 "this machine's pairing is waiting for its owner's approval: name the peer \
@@ -202,8 +202,11 @@ impl EnvironmentPairing for FilePairingEnvironment {
         let store = self.store.clone();
         // Pending first: a pending record only ever becomes a credential,
         // so a pairing that exists never reads as neither.
-        let (pending, credential) = tokio::task::spawn_blocking(move || {
-            Ok::<_, PrivateStateError>((store.load_pending()?, store.load_credential()?))
+        let (pending, credential, secret) = tokio::task::spawn_blocking(move || {
+            let pending = store.load_pending()?;
+            let credential = store.load_credential()?;
+            let secret = store.load_tunnel_secret()?;
+            Ok::<_, PrivateStateError>((pending, credential, secret))
         })
         .await
         .map_err(|error| error.to_string())?
@@ -213,7 +216,7 @@ impl EnvironmentPairing for FilePairingEnvironment {
                 let (key, pin, _) = credential.into_enrollment().into_parts();
                 let identity = NativeIdentity::restore(key)
                     .map_err(|error| format!("the pairing's key cannot be used: {error:?}"))?;
-                Ok(Saved::Approved((Arc::new(identity), pin)))
+                Ok(Saved::Approved((Arc::new(identity), pin, secret)))
             }
             (None, Some(_)) => Ok(Saved::Pending),
             (None, None) => Ok(Saved::Nothing),

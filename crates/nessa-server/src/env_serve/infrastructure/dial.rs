@@ -63,6 +63,7 @@ pub(crate) async fn dial(
     address: String,
     relay: Option<RelayAddress>,
     tunnel: Option<TunnelAddress>,
+    secret: Option<[u8; 32]>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     clock: Arc<dyn Clock>,
@@ -84,9 +85,10 @@ pub(crate) async fn dial(
                 .map(|gateway| gateway.to_string())
                 .collect()
         };
+        let secret = secret.map(nessa_protocol::tunnel::TunnelSecret::new);
         let routes = Routes {
             relay: relay.as_ref(),
-            tunnel: tunnel.as_ref(),
+            tunnel: tunnel.as_ref().zip(secret.as_ref()),
         };
         if gateways.is_empty() && beyond {
             return open_environment(&address, routes, &identity, pin, clock);
@@ -132,7 +134,7 @@ fn resolved_within(address: &str, wait: Duration) -> Vec<String> {
 #[derive(Clone, Copy)]
 struct Routes<'a> {
     relay: Option<&'a RelayAddress>,
-    tunnel: Option<&'a TunnelAddress>,
+    tunnel: Option<(&'a TunnelAddress, &'a nessa_protocol::tunnel::TunnelSecret)>,
 }
 
 fn open_environment(

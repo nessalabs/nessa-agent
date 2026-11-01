@@ -103,6 +103,8 @@ pub struct PairingRuntimeDependencies {
     pub key_store: Arc<dyn GatewayKeyStore>,
     /// Durable gateway Ed25519 identity restored before this owner opens.
     pub identity: NativeIdentity,
+    /// Tunnel secrets issued when a device becomes active and revoked with it.
+    pub tunnel_secrets: std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>,
 }
 /// One-time protected local result; code is neither cloned nor serializable.
 pub struct CreatedInvitation {
@@ -538,7 +540,39 @@ impl GatewayPairing {
         // it ended a staged one, settle its receiver now (design row A13).
         discard_ended(&mut *self.available.lock().await, &self.dependencies);
         self.settle_if_ended(public.invitation()).await;
-        Ok(status)
+        self.seal_tunnel_secret(status)
+    }
+
+    /// An Active status carries the credential's tunnel secret, issued once.
+    fn seal_tunnel_secret(
+        &self,
+        status: DevicePairingStatus,
+    ) -> Result<DevicePairingStatus, PairingRuntimeError> {
+        let DevicePairingStatus::Active {
+            record,
+            access_epoch,
+            ..
+        } = status
+        else {
+            return Ok(status);
+        };
+        let credential = record.credential().ok_or(PairingRuntimeError::Enrollment(
+            PairingStoreError::Unavailable,
+        ))?;
+        let device = record.claim_binding().map(|(_, key)| *key.bytes()).ok_or(
+            PairingRuntimeError::Enrollment(PairingStoreError::Unavailable),
+        )?;
+        let initiator = record.intent().owner().as_str();
+        let secret = self
+            .dependencies
+            .tunnel_secrets
+            .issue(credential.as_str(), &device, initiator)
+            .map_err(|_| PairingRuntimeError::Enrollment(PairingStoreError::Unavailable))?;
+        Ok(DevicePairingStatus::Active {
+            record,
+            access_epoch,
+            tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new(secret),
+        })
     }
     /// Read-only exact original recovery on the actual pinned TLS worker. No
     /// expiry, settlement, setup-slot ownership or publication occurs here.
@@ -549,7 +583,7 @@ impl GatewayPairing {
         digest: &[u8; 32],
     ) -> Result<(PublicIntent, DevicePairingStatus), PairingRuntimeError> {
         self.verify_channel(channel)?;
-        ReadOwnerPhoneRecovery {
+        let (public, status) = ReadOwnerPhoneRecovery {
             originals: self.dependencies.originals.as_ref(),
             receivers: self.dependencies.receivers.as_ref(),
         }
@@ -557,7 +591,15 @@ impl GatewayPairing {
         .map_err(|error| match error {
             DeviceStatusError::Enrollment(error) => PairingRuntimeError::Enrollment(error),
             DeviceStatusError::Receiver(error) => PairingRuntimeError::Receiver(error),
-        })
+        })?;
+        self.seal_tunnel_secret(status)
+            .map(|status| (public, status))
+    }
+    /// The tunnel secrets this gateway issues.
+    pub(crate) fn tunnel_secrets(
+        &self,
+    ) -> std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets> {
+        self.dependencies.tunnel_secrets.clone()
     }
     /// Current protected owner status; historical Active is not read authority.
     pub async fn owner_status(
@@ -628,6 +670,7 @@ impl GatewayPairing {
         decision: OwnerDecision,
     ) -> Result<PairingRecord, PairingRuntimeError> {
         let session = session.clone();
+        let initiator = session.context().principal_id().as_str().to_owned();
         let cancelled = matches!(decision, OwnerDecision::Cancel);
         let record = self.owner_command(move |owner, handle| {
             let record = handle.block_on(owner.decide(&session, id, decision))?;
@@ -655,6 +698,16 @@ impl GatewayPairing {
         })
         .await?;
         if cancelled {
+            if let Some(credential) = record.credential() {
+                self.dependencies
+                    .tunnel_secrets
+                    .revoke(
+                        credential.as_str(),
+                        crate::tunnel::application::SecretRevocation::Unpaired,
+                        &initiator,
+                    )
+                    .map_err(|_| PairingRuntimeError::Enrollment(PairingStoreError::Unavailable))?;
+            }
             self.record_cancelled_credential().await;
         }
         Ok(record)

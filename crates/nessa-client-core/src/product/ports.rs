@@ -1,5 +1,7 @@
 //! Injected socket/independent stop/wake effects for the product owner.
-use nessa_protocol::tunnel::TunnelAddress;
+use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_protocol::relay::RelayAddress;
+use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::{Arc, Condvar, Mutex};
@@ -80,12 +82,64 @@ impl ProductWake for ThreadProductWake {
 #[derive(Default)]
 pub struct LocalProductConnector {
     tunnel: Option<TunnelAddress>,
+    /// The device's saved tunnel secret, read on each connect.
+    secrets: Option<Arc<dyn ClientPendingStore>>,
+    /// The relay to ask when the saved tunnel address does not connect.
+    /// Set after open, when the phone already knows which relay the gateway uses.
+    relay: Arc<Mutex<Option<RelayAddress>>>,
 }
 impl LocalProductConnector {
     /// A connector that falls back on `tunnel`, the gateway's public address
-    /// as it last named it, when the direct dial does not connect.
-    pub fn reaching(tunnel: Option<TunnelAddress>) -> Self {
-        Self { tunnel }
+    /// as it last named it, when the direct dial does not connect. `secrets`
+    /// supplies the device's tunnel secret. `relay` is shared so the phone
+    /// can name the relay after open.
+    pub fn reaching(
+        tunnel: Option<TunnelAddress>,
+        secrets: Option<Arc<dyn ClientPendingStore>>,
+        relay: Arc<Mutex<Option<RelayAddress>>>,
+    ) -> Self {
+        Self {
+            tunnel,
+            secrets,
+            relay,
+        }
+    }
+
+    /// The slot [`Self::reaching`] stored the relay in.
+    pub fn relay(&self) -> Arc<Mutex<Option<RelayAddress>>> {
+        self.relay.clone()
+    }
+
+    fn secret(&self) -> Option<TunnelSecret> {
+        let bytes = self.secrets.as_ref()?.load_tunnel_secret().ok()??;
+        Some(TunnelSecret::new(bytes))
+    }
+
+    /// The origin the relay now publishes, dialed with this device's secret.
+    /// `None` when this connector has no relay or no secret to ask with.
+    fn published(
+        &self,
+        secret: Option<&TunnelSecret>,
+        timeout: Duration,
+    ) -> Option<IoResult<std::net::TcpStream>> {
+        let secret = *secret?;
+        let relay = self
+            .relay
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()?;
+        let credential = self.secrets.as_ref()?.load_credential().ok()??;
+        let key = nessa_auth::adapters::pairing::relay_key(credential.gateway_pin())?;
+        Some(
+            match crate::tunnel::published_address(&relay, &key, &secret, timeout) {
+                Ok(Some(origin)) => crate::tunnel::dial(&origin, &secret, timeout),
+                Ok(None) => Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "the gateway has no tunnel address",
+                )),
+                Err(error) => Err(error),
+            },
+        )
     }
 }
 struct Socket(TcpStream);
@@ -120,7 +174,14 @@ impl ProductInterrupt for Socket {
 }
 impl ProductConnector for LocalProductConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
-        let socket = crate::retained::dial_native(address, self.tunnel.as_ref(), timeout)?;
+        let secret = self.secret();
+        let tunnel = self.tunnel.as_ref().zip(secret.as_ref());
+        let socket = match crate::retained::dial_native(address, tunnel, timeout) {
+            Ok(socket) => socket,
+            Err(error) => self
+                .published(secret.as_ref(), timeout)
+                .unwrap_or(Err(error))?,
+        };
         let interrupt = Arc::new(Socket(socket.try_clone()?));
         Ok(ConnectedProduct {
             stream: Box::new(Socket(socket)),

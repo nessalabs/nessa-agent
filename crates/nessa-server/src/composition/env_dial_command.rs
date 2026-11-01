@@ -191,7 +191,7 @@ async fn approved_then_served(
         let _ = asked.send(true);
     });
     let approved = approval(address, relay, enroll_code_file, &asking).await;
-    let Some((identity, pin)) = approved? else {
+    let Some((identity, pin, secret)) = approved? else {
         either.abort();
         return Ok(());
     };
@@ -217,6 +217,7 @@ async fn approved_then_served(
             &composed,
             address,
             Beyond { relay, tunnel },
+            secret,
             identity.clone(),
             pin,
             fetch_after,
@@ -239,6 +240,7 @@ async fn approved_then_served(
             fetched = fetch_update(
                 address,
                 Beyond { relay, tunnel },
+                secret,
                 identity.clone(),
                 pin,
                 &protocol,
@@ -335,6 +337,7 @@ async fn serve_dialing(
     composed: &Composed,
     address: &str,
     Beyond { relay, tunnel }: Beyond<'_>,
+    secret: Option<[u8; 32]>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     fetch_after: Option<std::time::Instant>,
@@ -364,6 +367,7 @@ async fn serve_dialing(
                 address.to_owned(),
                 relay.cloned(),
                 tunnel.cloned(),
+                secret,
                 identity,
                 pin,
                 clock(),
@@ -429,6 +433,7 @@ async fn serve_dialing(
 async fn fetch_update(
     address: &str,
     Beyond { relay, tunnel }: Beyond<'_>,
+    secret: Option<[u8; 32]>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     protocol: &str,
@@ -442,6 +447,7 @@ async fn fetch_update(
         address.to_owned(),
         relay.cloned(),
         tunnel.cloned(),
+        secret,
         identity,
         pin,
         clock(),

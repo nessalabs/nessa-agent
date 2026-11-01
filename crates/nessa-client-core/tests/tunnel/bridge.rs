@@ -1,7 +1,7 @@
 //! Design rows T6 (either side of a bridge ending closes the other) and the
 //! round trip both ends of a tunnel rely on.
 use super::{bridge, dial, loopback_pair, websocket_config};
-use nessa_protocol::tunnel::TunnelAddress;
+use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
 use std::{
     io::{Read, Write},
     net::TcpStream,
@@ -31,6 +31,55 @@ async fn edge(serve: fn(TcpStream)) -> TunnelAddress {
     TunnelAddress::try_from(format!("http://127.0.0.1:{port}")).unwrap()
 }
 
+struct HeldSecret([u8; 32]);
+
+impl nessa_auth::application::pairing::ClientPendingStore for HeldSecret {
+    fn load_pending(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::PendingEnrollment>,
+        nessa_auth::application::pairing::PrivateStateError,
+    > {
+        Ok(None)
+    }
+    fn load_credential(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::DeviceCredential>,
+        nessa_auth::application::pairing::PrivateStateError,
+    > {
+        Ok(None)
+    }
+    fn save_credential(
+        &self,
+        _: &nessa_auth::domain::CredentialId,
+        _: &nessa_auth::domain::ResourceId,
+        _: nessa_auth::domain::pairing::PublicIntent,
+    ) -> Result<(), nessa_auth::application::pairing::PrivateStateError> {
+        Ok(())
+    }
+    fn end_enrollment(
+        &self,
+        _: nessa_auth::domain::pairing::PublicIntent,
+    ) -> Result<(), nessa_auth::application::pairing::PrivateStateError> {
+        Ok(())
+    }
+    fn save_pending(
+        &self,
+        _: &nessa_auth::application::pairing::PrivateKeyMaterial,
+        _: &[u8; 44],
+        _: nessa_auth::domain::pairing::PublicIntent,
+        _: Option<nessa_auth::domain::pairing::PublicIntent>,
+    ) -> Result<(), nessa_auth::application::pairing::PrivateStateError> {
+        Ok(())
+    }
+    fn load_tunnel_secret(
+        &self,
+    ) -> Result<Option<[u8; 32]>, nessa_auth::application::pairing::PrivateStateError> {
+        Ok(Some(self.0))
+    }
+}
+
 fn echo(mut socket: TcpStream) {
     let mut buffer = [0u8; 4096];
     loop {
@@ -48,10 +97,12 @@ fn echo(mut socket: TcpStream) {
 #[tokio::test(flavor = "multi_thread")]
 async fn bytes_cross_a_tunnel_both_ways_unchanged() {
     let address = edge(echo).await;
-    let mut socket = tokio::task::spawn_blocking(move || dial(&address, Duration::from_secs(5)))
-        .await
-        .unwrap()
-        .unwrap();
+    let secret = TunnelSecret::new([1; 32]);
+    let mut socket =
+        tokio::task::spawn_blocking(move || dial(&address, &secret, Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -77,7 +128,8 @@ async fn bytes_cross_a_tunnel_both_ways_unchanged() {
 async fn the_far_end_closing_closes_the_reader() {
     let address = edge(drop).await;
     let read = tokio::task::spawn_blocking(move || {
-        let mut socket = dial(&address, Duration::from_secs(5))?;
+        let secret = TunnelSecret::new([1; 32]);
+        let mut socket = dial(&address, &secret, Duration::from_secs(5))?;
         socket.set_read_timeout(Some(Duration::from_secs(5)))?;
         socket.read(&mut [0u8; 16])
     })
@@ -97,8 +149,10 @@ async fn a_tunnel_that_does_not_answer_is_refused_within_its_budget() {
     let port = listener.local_addr().unwrap().port();
     let address = TunnelAddress::try_from(format!("http://127.0.0.1:{port}")).unwrap();
     let started = std::time::Instant::now();
+    let secret = TunnelSecret::new([1; 32]);
     let dialed =
-        tokio::task::spawn_blocking(move || dial(&address, Duration::from_millis(300))).await;
+        tokio::task::spawn_blocking(move || dial(&address, &secret, Duration::from_millis(300)))
+            .await;
     assert!(dialed.unwrap().is_err());
     assert!(started.elapsed() < Duration::from_secs(3));
     drop(listener);
@@ -127,9 +181,13 @@ async fn a_product_connection_falls_back_on_the_gateways_tunnel() {
     // With no tunnel the plain direct dial's own refusal, as before.
     assert_eq!(alone, Some(std::io::ErrorKind::ConnectionRefused));
     let echoed = tokio::task::spawn_blocking(move || {
-        let mut connected = LocalProductConnector::reaching(Some(tunnel))
-            .connect(direct, Duration::from_secs(5))
-            .unwrap();
+        let mut connected = LocalProductConnector::reaching(
+            Some(tunnel),
+            Some(std::sync::Arc::new(HeldSecret([3; 32]))),
+            std::sync::Arc::new(std::sync::Mutex::new(None)),
+        )
+        .connect(direct, Duration::from_secs(5))
+        .unwrap();
         connected
             .stream
             .write_timeout(Duration::from_secs(5))

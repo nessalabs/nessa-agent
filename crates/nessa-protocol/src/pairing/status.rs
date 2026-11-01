@@ -1,4 +1,5 @@
 //! Canonical attempt meaning passed from the application owner to representation.
+use crate::tunnel::TunnelSecret;
 use nessa_auth::domain::pairing::{AttemptOutcome, PairingRecord, TerminalCause};
 
 /// Trusted application projection of an earlier device attempt.
@@ -28,5 +29,8 @@ pub enum DevicePairingStatus {
         record: Box<PairingRecord>,
         /// The paired receiver's current access epoch.
         access_epoch: u64,
+        /// The tunnel secret issued for this credential. The same one on every
+        /// later status of this credential.
+        tunnel_secret: TunnelSecret,
     },
 }

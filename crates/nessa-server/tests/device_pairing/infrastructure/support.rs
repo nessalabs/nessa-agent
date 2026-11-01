@@ -235,6 +235,9 @@ impl Fixture {
                 gateway: resource,
                 key_store: keys.clone(),
                 identity,
+                tunnel_secrets: Arc::new(
+                    nessa_server::tunnel::application::MemoryDeviceSecrets::new(),
+                ),
             })
             .unwrap(),
         );
@@ -304,6 +307,9 @@ impl Fixture {
                 gateway: resource,
                 key_store: keys.clone(),
                 identity,
+                tunnel_secrets: Arc::new(
+                    nessa_server::tunnel::application::MemoryDeviceSecrets::new(),
+                ),
             })
             .unwrap(),
         );

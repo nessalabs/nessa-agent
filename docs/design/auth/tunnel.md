@@ -37,7 +37,8 @@ sequenceDiagram
     participant L as Native listener
     P->>C: wss://name/native (HTTPS to Cloudflare)
     C->>D: the WebSocket, over cloudflared's own connection
-    D->>I: ws://127.0.0.1:port/native
+    D->>I: ws://127.0.0.1:port/native, with the device's tunnel secret
+    I->>I: the secret matches a paired device, or close without a permit
     I->>I: take a tunnel permit, or close
     I->>L: a loopback socket pair, fed in as a tunnel connection
     P->>L: TLS with raw public keys, end to end inside the WebSocket
@@ -72,16 +73,18 @@ every method afterwards (gate 18, "Policy goes through Cedar").
 
 **A tunnel connection takes its own permits.** Each one holds a permit
 from a pool of four, beside the direct, relay, product and environment
-pools, from before the WebSocket upgrade until the connection ends. Anyone
-who has the public address can fill that pool; it never touches the
-direct one, so the internet cannot crowd out the local network.
+pools, from the WebSocket upgrade until the connection ends. The pool
+never touches the direct one, so tunnel traffic cannot crowd out the
+local network.
 
-That is also its limit: a stranger who knows the address can keep four
-handshakes open, renewing them as each deadline (10 s for the upgrade,
-10 s for TLS) ends, and keep a phone out while they do. A named tunnel's
-hostname is public through DNS. Asking for something before the upgrade
-that only paired devices hold, or putting Cloudflare Access in front of a
-named tunnel, would close it; that is follow-up work.
+**A paired device proves it before a permit is taken.** Pairing issues
+each device a secret. The device sends it on every tunnel request, in the
+`x-nessa-tunnel` header, or in the path `/native/<secret>` when its
+WebSocket client cannot set a header. The ingress compares that value
+with the active devices' secrets, in constant time, and rejects anything
+else with no permit taken. Unpairing a device or revoking its credential
+forgets the secret. Anonymous traffic, and a device that was revoked,
+cannot fill the pool.
 
 ## The pieces
 
@@ -89,11 +92,11 @@ named tunnel, would close it; that is follow-up work.
 | --- | --- | --- |
 | Bridge | Joins a WebSocket to one end of a loopback TCP pair, both ways, until either side ends; pings every 20 s so Cloudflare's idle limit never closes a quiet session | `nessa-client-core` `tunnel`, used by both sides |
 | Tunnel leg | Opens `wss://name/native` and returns the loopback end, so everything after it is the same TCP stream a direct dial returns; raced after direct like the relay leg | `nessa-client-core` `tunnel`, `retained::race` |
-| Ingress | Listens on loopback only, takes a tunnel permit, accepts the upgrade on `/native` only, and feeds the bridged socket to the native listener as `Accepted::Tunneled` | `nessa-server` `tunnel` |
+| Ingress | Listens on loopback only, checks the device secret before taking a tunnel permit, accepts the upgrade on `/native` only, and feeds the bridged socket to the native listener as `Accepted::Tunneled` | `nessa-server` `tunnel` |
 | Supervisor | Keeps any helper program running: starts it, waits for it to be ready, starts it again with a backoff, and takes it back across a gateway restart. It knows nothing about Cloudflare | shepherd's service mode and kept processes (`shepherd::ServiceSupervisor`, `KeptProcesses`), composed in `composition::tunnel` |
 | Cloudflare service | The one provider today: a pinned, digest-checked `cloudflared`, what it is run with, and how its metrics say it is ready and at which address. Another way to reach the gateway is another service behind the same supervisor | `nessa-server` `tunnel` |
 | Switch | `pairing.setTunnel` (`credential.manage`), saved in `config.json` `native.tunnel`, audited with the setting before and after (hostname, token by fingerprint), applied by restarting the gateway like `pairing.setLinking`; `pairing.tunnel` reads its state | product, composition |
-| Address | `server.reach` (`server.read`, the owner phone's purpose list in Cedar) gives a paired device the current public address | product |
+| Address | `server.reach` (`server.read`, the owner phone's purpose list in Cedar) gives a paired device the current public address. The gateway also publishes that address on the #266 relay under its key. A paired device reads it there when the address it saved no longer connects | product, relay |
 | Phone dial | The phone keeps the origin `server.reach` last named beside its paired gateway and opens its native session with it (`NativeSession::open`'s `tunnel`). Its product dial goes direct first and through the tunnel after the head start (`dial_native`). Enrollment, status, owner recovery and retained reads dial directly, since the ingress answers only a product or environment opening; so a phone paired by code reaches its chats from anywhere, while one with a signed original, whose product opening recovers first, still needs the local network | `nessa-device-client`, nessa-ios |
 
 Why a loopback pair, not a new stream type: every reader and the gateway
@@ -113,8 +116,9 @@ cannot slip into the pair.
 A quick tunnel is Cloudflare's "for testing" offer: no uptime promise and
 a limit of 200 requests in flight, which one person's devices never reach.
 Settings says plainly that a quick address changes and a named one does
-not. A phone learns a new quick address the next time it reaches the
-gateway; delivering it while the phone is away is follow-up work.
+not. A phone that is away asks the relay, where it already looks the
+gateway up by its key, and uses the address the gateway has published.
+Only a paired device's tunnel secret is told that address.
 
 The named tunnel's token is written to a file only the gateway can read
 and passed with `--token-file`, never on the command line, where other
@@ -196,7 +200,9 @@ users of the machine can see it (see below).
 | T2 | A tunnel connection whose key holds no credential, whatever its first request (`hello`, `begin`, `status`, `openProduct`) | Closed after the TLS handshake, before its first request is read | gateway |
 | T2a | A tunnel connection whose key holds a credential asks for `hello`, `status` or owner recovery | Closed without an answer | gateway |
 | T3 | A tunnel connection whose key holds a credential to serve opens `openEnvironment` | Served as on the local network | stress `tunnel` |
-| T4 | A fifth WebSocket arrives while four tunnel permits are held | Closed before the upgrade; direct readers are admitted as before | gateway |
+| T4 | A fifth WebSocket from a paired device arrives while four tunnel permits are held | Refused before a bridge; direct readers are admitted as before | gateway |
+| T4a | A stranger holds connections open at the public address, with no secret or a revoked one | Refused with no permit taken. A paired device still connects | gateway |
+| T4b | A device is unpaired or its credential is revoked | Its tunnel secret no longer matches. The issue and the revocation are audited | gateway |
 | T5 | The upgrade asks for any path but `/native`, or is not a WebSocket | Refused with 404 before a permit is spent on a bridge | gateway |
 | T6 | Either side of a bridge ends | The other side is closed; nothing kept | client core |
 | T7 | A quiet session | The bridge pings every 20 s, so the tunnel's idle limit does not close it | client core |
@@ -207,6 +213,7 @@ users of the machine can see it (see below).
 | T12 | The downloaded `cloudflared` does not match its pinned size or digest | Nothing is run; the tunnel reads `failed` | gateway |
 | T13 | `pairing.setTunnel` from a credential without `credential.manage` | `forbidden` from Cedar | gateway |
 | T14 | `server.reach` from a paired owner phone | The current public address, or none | gateway |
+| T14a | The quick address changes while a paired phone is away | The phone asks the relay with its tunnel secret and is told the new address. A stranger is not | gateway, client core |
 | T15 | The recorded pid now names another process (reboot, reuse) | Left alone; a new `cloudflared` is started | shepherd (kept attach checks the start token) |
 | T16 | `pairing.tunnel` after a named tunnel is saved | Says a token is saved, never the token; Settings never fills the token field | gateway, desktop |
 | T18 | The saved token cannot be read (loose permissions, not a token) | Read as no token: Settings says to save it again, and a new one is saved over it; the ingress is not held meanwhile | gateway |

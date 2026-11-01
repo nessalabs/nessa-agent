@@ -430,6 +430,7 @@ impl Fixture {
                 let status = DevicePairingStatus::Active {
                     record: Box::new(record),
                     access_epoch: u64::MAX,
+                    tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new([9; 32]),
                 };
                 let bytes = match reply {
                     Reply::Active | Reply::WrongDisclosure => {

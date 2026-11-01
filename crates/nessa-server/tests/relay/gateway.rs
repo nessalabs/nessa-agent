@@ -102,13 +102,18 @@ fn serve(
     let (joined, receiving) = mpsc::channel(4);
     let pool = Arc::new(Semaphore::new(pool));
     let (stop, stopped) = watch::channel(false);
+    let (origin, address) = watch::channel(None);
     let through = ThroughRelay {
         dial,
         key: Arc::new(key),
         admission: Arc::new(Permits(pool.clone())),
         timer: timer.clone(),
         joined,
+        address,
+        secrets: Arc::new(crate::tunnel::application::MemoryDeviceSecrets::new()),
     };
+    // The sender stays so the registration does not see the watch close.
+    std::mem::forget(origin);
     let task = tokio::spawn(through.serve(Backoff::default(), stopped));
     Serving {
         timer,
@@ -500,6 +505,121 @@ async fn a_lasting_registration_starts_the_waits_over() {
     assert_eq!(pause.limit(), first);
     serving.stop.send_replace(true);
     tokio::time::timeout(REAL, serving.task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// An away phone, whose saved tunnel address no longer answers, asks the
+/// relay the gateway is registered on and is told the address it publishes
+/// now. A stranger who does not hold a paired device's secret is not.
+#[tokio::test]
+async fn an_away_phone_is_told_the_new_tunnel_address_through_the_relay() {
+    use crate::relay::gateway::infrastructure::TcpRelayDial;
+    use crate::relay::infrastructure::serve_tcp;
+    use crate::timer::TokioTimer;
+    use crate::tunnel::application::MemoryDeviceSecrets;
+    use nessa_client_core::tunnel::published_address;
+    use nessa_protocol::relay::{PublishedOrigin, RelayAddress};
+    use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let relay_address = RelayAddress::try_from(format!("127.0.0.1:{port}")).unwrap();
+    let timer = Arc::new(TokioTimer::new());
+    let service = Relay::new(
+        timer.clone(),
+        Arc::new(Counting::default()),
+        Arc::new(Ed25519Proofs),
+        RelayLimits::default(),
+    );
+    let (relay_stop, relay_stopped) = tokio::sync::oneshot::channel::<()>();
+    let relay_task = tokio::spawn(serve_tcp(listener, service, timer.clone(), async move {
+        let _ = relay_stopped.await;
+    }));
+    let secrets = Arc::new(MemoryDeviceSecrets::new());
+    let secret_bytes = secrets.issue("phone", &[4; 32], "owner").unwrap();
+    let secret = TunnelSecret::new(secret_bytes);
+    let gateway = identity(4);
+    let first = PublishedOrigin::new("https://old.trycloudflare.com").unwrap();
+    let second = PublishedOrigin::new("https://new.trycloudflare.com").unwrap();
+    let (publish, address) = watch::channel(Some(first));
+    let (joined, _receiving) = mpsc::channel(4);
+    let (stop, stopped) = watch::channel(false);
+    let through = ThroughRelay {
+        dial: Arc::new(TcpRelayDial(relay_address.as_str().to_owned())),
+        key: Arc::new(Key {
+            identity: gateway.clone(),
+            proves: true,
+        }),
+        admission: Arc::new(Permits(Arc::new(Semaphore::new(4)))),
+        timer,
+        joined,
+        address,
+        secrets,
+    };
+    let task = tokio::spawn(through.serve(Backoff::default(), stopped));
+    let key = gateway.public_key();
+    let saved = TunnelAddress::try_from("https://old.trycloudflare.com".to_owned()).unwrap();
+    let mut heard = None;
+    let mut last_error = None;
+    for _ in 0..40 {
+        let (relay_address, key, secret) = (relay_address.clone(), key, secret);
+        match tokio::task::spawn_blocking(move || {
+            published_address(&relay_address, &key, &secret, Duration::from_secs(1))
+        })
+        .await
+        .unwrap()
+        {
+            Ok(origin) => {
+                heard = origin;
+                break;
+            }
+            Err(error) => {
+                last_error = Some(error);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+    assert_eq!(
+        heard.as_ref(),
+        Some(&saved),
+        "the phone is told the published address, last error: {last_error:?}"
+    );
+    publish.send_replace(Some(second));
+    let mut heard = None;
+    for _ in 0..40 {
+        let (relay_address, key, secret) = (relay_address.clone(), key, secret);
+        match tokio::task::spawn_blocking(move || {
+            published_address(&relay_address, &key, &secret, Duration::from_secs(1))
+        })
+        .await
+        .unwrap()
+        {
+            Ok(Some(origin)) if origin.as_str() == "https://new.trycloudflare.com" => {
+                heard = Some(origin);
+                break;
+            }
+            _ => tokio::time::sleep(Duration::from_millis(50)).await,
+        }
+    }
+    let heard = heard.expect("the away phone is told the new address");
+    assert_ne!(heard, saved);
+    let stranger = TunnelSecret::new([0; 32]);
+    let (relay_address, key) = (relay_address.clone(), key);
+    let refused = tokio::task::spawn_blocking(move || {
+        published_address(&relay_address, &key, &stranger, Duration::from_secs(2))
+    })
+    .await
+    .unwrap();
+    assert!(
+        refused.is_err(),
+        "a stranger is not told the address: {refused:?}"
+    );
+    stop.send_replace(true);
+    tokio::time::timeout(REAL, task).await.unwrap().unwrap();
+    drop(relay_stop);
+    tokio::time::timeout(REAL, relay_task)
         .await
         .unwrap()
         .unwrap();

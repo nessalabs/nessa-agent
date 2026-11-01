@@ -13,7 +13,11 @@
 //! side ends, then closes the other. It pings every [`TUNNEL_PING`] so an
 //! edge's idle limit never ends a quiet session.
 use futures_util::{SinkExt, StreamExt};
-use nessa_protocol::tunnel::{TunnelAddress, MAX_TUNNEL_MESSAGE, TUNNEL_CHUNK, TUNNEL_PING};
+use nessa_protocol::relay::{tunnel_lookup_mac, GatewayKey, RelayAddress, RelayFrame};
+use nessa_protocol::tunnel::{
+    TunnelAddress, TunnelSecret, MAX_TUNNEL_MESSAGE, TUNNEL_CHUNK, TUNNEL_PING,
+    TUNNEL_SECRET_HEADER,
+};
 use std::{
     io::{Error, ErrorKind, Result as IoResult},
     net::{Ipv4Addr, SocketAddr},
@@ -28,6 +32,7 @@ use tokio::{
 use tokio_tungstenite::{
     tungstenite::{
         client::IntoClientRequest,
+        http::HeaderValue,
         protocol::{Message, WebSocketConfig},
     },
     WebSocketStream,
@@ -132,11 +137,16 @@ pub async fn loopback_pair(timeout: Duration) -> IoResult<(TcpStream, std::net::
 /// # Errors
 /// The tunnel could not be reached, its TLS (for `https://`) or WebSocket
 /// upgrade failed, or none of it finished within `timeout`.
-pub fn dial(address: &TunnelAddress, timeout: Duration) -> IoResult<std::net::TcpStream> {
+pub fn dial(
+    address: &TunnelAddress,
+    secret: &TunnelSecret,
+    timeout: Duration,
+) -> IoResult<std::net::TcpStream> {
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
     let address = address.clone();
+    let secret = *secret;
     let (sender, opened) = mpsc::channel();
     thread::Builder::new()
         .name("nessa-tunnel".into())
@@ -153,7 +163,7 @@ pub fn dial(address: &TunnelAddress, timeout: Duration) -> IoResult<std::net::Tc
             };
             runtime.block_on(async move {
                 let left = deadline.saturating_duration_since(Instant::now());
-                let joined = tokio::time::timeout(left, open(&address)).await;
+                let joined = tokio::time::timeout(left, open(&address, secret)).await;
                 let (websocket, ours, theirs) = match joined {
                     Ok(Ok(joined)) => joined,
                     Ok(Err(error)) => {
@@ -186,7 +196,7 @@ type Opened = (
 pub(crate) trait Transport: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Transport for T {}
 
-async fn open(address: &TunnelAddress) -> IoResult<Opened> {
+async fn open(address: &TunnelAddress, secret: TunnelSecret) -> IoResult<Opened> {
     let tcp = TcpStream::connect((address.host(), address.port())).await?;
     tcp.set_nodelay(true)?;
     let transport: Box<dyn Transport> = if address.secure() {
@@ -194,10 +204,15 @@ async fn open(address: &TunnelAddress) -> IoResult<Opened> {
     } else {
         Box::new(tcp)
     };
-    let request = address
+    let mut request = address
         .websocket_url()
         .into_client_request()
         .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
+    request.headers_mut().insert(
+        TUNNEL_SECRET_HEADER,
+        HeaderValue::from_str(&secret.encode())
+            .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?,
+    );
     let (websocket, _) =
         tokio_tungstenite::client_async_with_config(request, transport, Some(websocket_config()))
             .await
@@ -227,6 +242,65 @@ async fn tls(
     tokio_rustls::TlsConnector::from(Arc::new(config))
         .connect(name, tcp)
         .await
+}
+
+/// Ask `relay` for the tunnel origin the gateway `gateway` has published.
+/// `secret` proves this is a paired device; the relay learns the mac, not
+/// the secret. `Ok(None)` is a paired device and no origin. A refusal or a
+/// gateway that is not registered is an error, so a saved address is not
+/// replaced with nothing.
+///
+/// # Errors
+/// The relay could not be reached, the device was not allowed to read the
+/// origin, or the answer was not a tunnel origin.
+pub fn published_address(
+    relay: &RelayAddress,
+    gateway: &GatewayKey,
+    secret: &TunnelSecret,
+    timeout: Duration,
+) -> IoResult<Option<TunnelAddress>> {
+    use std::net::ToSocketAddrs;
+    let mut refused = None;
+    let mut stream = None;
+    for address in relay.as_str().to_socket_addrs()? {
+        match std::net::TcpStream::connect_timeout(&address, timeout) {
+            Ok(connected) => {
+                stream = Some(connected);
+                break;
+            }
+            Err(error) => refused = Some(error),
+        }
+    }
+    let mut stream =
+        stream.ok_or_else(|| refused.unwrap_or_else(|| Error::from(ErrorKind::NotFound)))?;
+    stream.set_nodelay(true)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    nessa_protocol::relay::write_frame(&mut stream, &RelayFrame::Lookup { key: *gateway })?;
+    let RelayFrame::Challenge { nonce } = nessa_protocol::relay::read_frame(&mut stream)? else {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "the relay did not ask for a seal",
+        ));
+    };
+    let mac = tunnel_lookup_mac(secret.expose(), gateway, &nonce);
+    nessa_protocol::relay::write_frame(&mut stream, &RelayFrame::Seal { mac })?;
+    match nessa_protocol::relay::read_frame(&mut stream)? {
+        RelayFrame::Located { origin } => match origin.text() {
+            None => Ok(None),
+            Some(text) => TunnelAddress::try_from(text.to_owned())
+                .map(Some)
+                .map_err(|error| Error::new(ErrorKind::InvalidData, error)),
+        },
+        RelayFrame::Unlisted | RelayFrame::Offline => Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "the tunnel address was not published to this device",
+        )),
+        _ => Err(Error::new(
+            ErrorKind::InvalidData,
+            "the relay answered the lookup with something else",
+        )),
+    }
 }
 
 #[cfg(test)]
