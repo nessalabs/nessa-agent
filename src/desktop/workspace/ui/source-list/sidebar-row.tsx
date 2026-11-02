@@ -8,8 +8,10 @@ import { StatusGlyph } from "../chrome/status-glyph"
 
 /**
  * One row of the sidebar: the kit's `SidebarMenuItem`, dense, with an icon, a
- * label, and a count or a running glyph at its end. The sidebar's skin
- * (`source-list.css` › Rows) gives it the window's inks.
+ * label, and a count or a running glyph at its end. The row's actions show
+ * only under the pointer or keyboard focus, in that same cell: the kit swaps
+ * the count or glyph for them. The sidebar's skin (`source-list.css` › Rows)
+ * gives it the window's inks.
  */
 export function SidebarRow({
   icon,
@@ -39,7 +41,7 @@ export function SidebarRow({
   /** The sidebar's current page. Lags `active` while the overview opens. */
   current: boolean
   unread?: boolean
-  /** A count, shown instead of the running glyph. */
+  /** A count, shown instead of the running glyph; actions take its place under the pointer. */
   badge?: number
   badgeTone?: "needs"
   /** What the count means, for a reader who cannot see its colour. */
@@ -47,6 +49,7 @@ export function SidebarRow({
   running?: boolean
   /** What hangs beneath the row: a channel's pinned sessions. */
   submenu?: ReactNode
+  /** Controls at the row's end, shown under the pointer or keyboard focus. */
   actions?: ReactNode
   onClick: () => void
 }) {
@@ -80,16 +83,15 @@ export function SidebarRow({
           >
             {badge}
           </Badge>
+        ) : running ? (
+          <StatusGlyph status="running" decorative />
         ) : undefined
       }
       trailing={
-        actions || (!badge && running) ? (
-          <>
-            {actions && <span className="workspace-row-actions">{actions}</span>}
-            {!badge && running ? <StatusGlyph status="running" decorative /> : undefined}
-          </>
-        ) : undefined
+        actions ? <span className="workspace-row-actions">{actions}</span> : undefined
       }
+      // A coarse pointer has nothing to reveal on, so the kit keeps them shown there.
+      showTrailingOnHover={Boolean(actions)}
       submenu={submenu}
     >
       {label}

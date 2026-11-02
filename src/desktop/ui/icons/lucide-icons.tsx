@@ -1,4 +1,9 @@
 import {
+  AudioLines,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
   AlignLeft,
   Archive,
   ArrowLeft,
@@ -128,6 +133,11 @@ export const lucideIcons: DesktopIconFamily = {
   thinking: lucide(Brain),
   fast: lucide(Zap),
   access: lucide(Shield),
+  voice: lucide(AudioLines),
+  microphone: lucide(Mic),
+  microphoneOff: lucide(MicOff),
+  speaker: lucide(Volume2),
+  speakerOff: lucide(VolumeX),
   enter: lucide(CornerDownLeft),
 
   customize: lucide(Paintbrush),

@@ -24,6 +24,8 @@ mod install;
 mod link;
 mod open_ssh;
 mod peer;
+mod peer_update;
+pub(crate) use peer_update::PeerUpdates;
 mod release;
 mod sftp;
 mod transfer;
@@ -42,3 +44,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_artifacts.rs"]
 mod artifact_tests;
+
+#[cfg(test)]
+pub(crate) use tests::preparation_environment;

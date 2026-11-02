@@ -32,6 +32,7 @@ export type { AttachmentApi } from "./attachment-api.js"
 export type { McpAppsApi } from "./mcp-apps-api.js"
 export type { McpServersApi } from "./mcp-servers-api.js"
 export type { GithubApi } from "./github-api.js"
+export type { VoiceApi } from "./voice-api.js"
 export type { PairingApi } from "./pairing-api.js"
 export type { ConversationApi } from "./conversation-api.js"
 export {

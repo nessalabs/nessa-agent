@@ -151,3 +151,29 @@ is removed, and production admission ownership remains unchanged. Windows must
 qualify the corrected tests in hosted CI; Linux execution is not Windows proof.
 Prior canonical Chromium/WebKit, stress 42/42 and chaos 2/2 results remain evidence
 for their recorded earlier candidates, not automatic qualification of a new head.
+
+## Parent Stop integration: capacity before serialized command storage
+
+At PR981 head692b3e9b, the same cancellation test fails before cancellation:
+its initial eight-open storage barrier times out at ingress.rs813. The current
+submission owner serializes entry to command storage, so withholding the first
+open cannot permit seven more opens. This does not establish a permit leak or
+justify changing the production lock scope; that broader review is separate.
+
+The HTTP slot is transferred to the detached task before its existing current
+authority read. The test can gate that injected reader, outside serialized
+storage, and keep the real policy evaluator and submission owner unchanged.
+
+| Ordering | Required evidence |
+| --- | --- |
+| Eight detached admissions reach the authority-read gate | All eight slots remain held; no command-store open yet |
+| Their eight response futures are cancelled and joined | A ninth request returns typed busy within the unchanged one-second bound; it enters neither the reader nor command store |
+| The authority-read gate is released | All eight commands reach the existing serialized store and finish controlled pre-storage failures within the original fifteen-second bound |
+| Capacity becomes available again | A later request passes the reader and reaches a ninth controlled command failure; no provider execution starts |
+
+The separate single-command cancellation test retains real SQLite persistence,
+completion and exact durable replay. The capacity test still owns all eight
+pending commands; it no longer requires their storage calls to run in parallel.
+No production hook, new admission owner, increased timeout or error exemption is
+introduced. Moving the slot back to the handler must still fail the corrected
+capacity regression.

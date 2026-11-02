@@ -5,13 +5,15 @@ kind: "operation"
 status: "implemented"
 summary: "Nessa shows live output while saving conversation records in small batches."
 parent: "sdk"
-sourceRevision: "6f3747e6b7189965d06368944319dc21ebe2508b"
+sourceRevision: "50bef867f45f9cb99fa27d798210e8e6a1dfe901"
 sources:
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/semantic.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/validation.rs"
+  - "crates/nessa-sdk/src/application/agent_execution/sessions/records.rs"
+  - "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/authorship.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/handoffs.rs"
   - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/carried_history.rs"
@@ -46,7 +48,9 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ReadTail: Reconstruct under writer lease
+    [*] --> FlushRetained: Prepare under writer lease
+    FlushRetained --> ReadTail: Retained changes durably acknowledged
+    FlushRetained --> Refused: Save fails / retain exact decisions
     ReadTail --> Fold: Complete or previously aborted facts
     ReadTail --> AbortTail: Valid incomplete physical fact
     AbortTail --> Fold: Durable exact abort acknowledged
@@ -54,10 +58,24 @@ stateDiagram-v2
     Fold --> Validate: Apply committed semantic decisions
     Validate --> Prepared: Agreement valid
     Validate --> Refused: Contradictory evidence
+    Prepared --> RecordOnly: Cleanup evidence / preserve pending handoff
     Prepared --> Resume: Exact provider identity and context / authorize opening
     Resume --> Attached: Verified supported restoration
     Resume --> Refused: Missing or unsupported context
 ```
+
+Preparation flushes already-retained decisions through their existing save owner
+before reading storage again. A failed flush retains those decisions and refuses
+preparation. Lease-record-only preparation validates and initializes saved evidence
+without opening, restoring or dispatching a provider; it preserves a pending
+handoff and any fresh context already selected for provider preparation.
+
+Saved decline and cancellation decisions keep their actual applied meaning
+separate from storage and audit acknowledgements. Restoration checks agreement
+between those decisions and scheduling evidence. A `resumed_from` relationship
+must match a preceding canonical resumption admission, including the original
+actor, initiation, request and queued mode; an execution-ID prefix alone does
+not establish a successor.
 
 ## Internal completion input
 
@@ -83,7 +101,9 @@ Text and turn bounds still apply, retained accounting includes source identity,
 and frame checks count the serialized origin.
 
 This review covers provenance admission, incremental folding, copied history and
-restoration since the prior checkpoint. The record writer, streaming boundaries
+restoration, retained Stop decisions and canonical successors since checkpoint
+`6f3747e6b7189965d06368944319dc21ebe2508b`. That checkpoint was fetched from
+the same repository's #1194 history for the comparison. The record writer, streaming boundaries
 and provider restoration protocol are unchanged. Public storage regressions
 cover rejection without append and reopening a fork with its source intact;
 provider-switch/fork and prompt regressions cover dispatch and frame accounting.

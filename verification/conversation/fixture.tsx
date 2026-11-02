@@ -1,14 +1,8 @@
-import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
-import type { ConversationView as PublishedConversationView } from "@nessa/client"
 /** Browser inputs are published gateway views; authority is tested in the server projection. */
 import { configureStore } from "@reduxjs/toolkit"
 import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
-import {
-  conversationPermission,
-  conversationView as decodeView,
-} from "../../packages/nessa-client/src/protocol/conversation-validate"
 import { makeStore } from "../../src/store"
 import { createDependencies } from "../../src/composition/dependencies"
 import { scenarioEffects } from "../../src/conversation/adapters/scenario/effects"
@@ -28,7 +22,6 @@ import { createConversationApi } from "../../packages/nessa-client/src/presentat
 import { conversationTabSnapshot } from "../../src/conversation/application/saved-tabs"
 import { followByReading } from "../../src/conversation/testing"
 import { applyView } from "../../src/conversation/application/usecases/apply-view"
-import type { ConversationView } from "../../src/conversation/application/view"
 import {
   conversation,
   type Conversation,
@@ -38,149 +31,17 @@ import { ClockProvider } from "../../src/clock"
 import { ConversationControls } from "../../src/conversation/ui/conversation-controls"
 import { ConversationQuestions } from "../../src/conversation/ui/conversation-questions"
 import { ConversationNotification } from "../../src/conversation/ui/conversation-notification"
+import {
+  decodePanelView,
+  publishedView,
+  publishedQuestionView,
+  questionView,
+  states,
+  view,
+} from "./fixture-state"
 import "../../src/styles.css"
 
 const store = configureStore({ reducer: () => ({}) })
-const states: ConversationTranscriptState[] = [
-  "not_loaded",
-  "partial",
-  "stale",
-  "unknown",
-  "complete_empty",
-  "complete",
-]
-// The review the live owner holds, as `permissionReview` reads it whole.
-const COMMITTED_REVIEW_KEY = "0123456789abcdef0123456789abcdef"
-const committedReview = conversationPermission({
-  executionId: "exact-live-execution",
-  permissionId: "committed-review",
-  toolId: "tool",
-  toolName: "Read",
-  origin: { kind: "harness" },
-  ask: "tool",
-  title: "Read committed source",
-  argumentsJson: '{"path":"src/main.rs"}',
-  options: [{ id: "allow", label: "Allow once", effect: "allow" }],
-})
-function decodePanelView(value: unknown, id: string): ConversationView {
-  return panelView(decodeView(value, id), 1_700_000_000_000)
-}
-function publishedView(
-  state: ConversationTranscriptState,
-  liveAuthority: boolean,
-): PublishedConversationView {
-  const actionable = state === "complete" && liveAuthority
-  return decodeView(
-    {
-      conversationId: "committed-conversation",
-      revision: `${state}:${liveAuthority}`,
-      serverNowMs: 1_700_000_000_000,
-      title: "Committed transcript",
-      approvalMode: "ask",
-      model: "claude-sonnet-5",
-      approvalModes: [
-        { id: "ask", name: "Provider asks", description: "Provider permission review." },
-      ],
-      transcriptState: state,
-      queueComplete: state === "complete" || state === "complete_empty",
-      truncated: false,
-      earlier: false,
-      messages:
-        state === "complete"
-          ? [
-              {
-                executionId: "exact-live-execution",
-                userText: "Read committed source",
-                attachments: [],
-                files: [],
-                status: liveAuthority ? "running" : "unresolved",
-                parts: [],
-              },
-            ]
-          : [],
-      pending: [],
-      artifacts: [],
-      notes: [],
-      unreadable: [],
-      unreadableTruncated: false,
-      handoffs: [],
-      questions: [],
-      tools: [],
-      permissions: actionable
-        ? [{ review: COMMITTED_REVIEW_KEY, origin: "harness", toolName: "Read" }]
-        : [],
-      capabilities: {
-        queue: actionable,
-        steer: actionable,
-        resume: false,
-        permissions: actionable,
-        imageInput: false,
-        agentFeatures: {
-          permissionDenial: "unknown",
-          nativeHookSuppression: "unknown",
-          nativeHooks: "off",
-          compactionReporting: "unsupported_not_implemented",
-          modelSwitchReporting: "unsupported_not_implemented",
-          permissionDeferral: "unsupported_not_implemented",
-          elicitationForwarding: "unknown",
-          preToolPolicy: "unsupported_not_implemented",
-          policyEndTurn: "unsupported",
-          policyCloseSession: "unsupported",
-          incomingElicitation: "unsupported",
-        },
-      },
-      lifecycle: { phase: liveAuthority ? "attached" : "absent" },
-    } satisfies PublishedConversationView,
-    "committed-conversation",
-  )
-}
-function view(
-  state: ConversationTranscriptState,
-  liveAuthority: boolean,
-): ConversationView {
-  const published = publishedView(state, liveAuthority)
-  return panelView(
-    published,
-    1_700_000_000_000,
-    published.permissions.map((entry) => ({
-      state: "loaded",
-      entry,
-      shown: committedReview,
-    })),
-  )
-}
-function publishedQuestionView(limited: boolean): PublishedConversationView {
-  return decodeView(
-    {
-      ...publishedView("complete", true),
-      revision: `questions:${limited}`,
-      truncated: limited,
-      interactionViewError: limited
-        ? "Some pending interactions exceed this display limit. Use Stop to cancel them."
-        : undefined,
-      permissions: [],
-      questions: [
-        {
-          executionId: "exact-live-execution",
-          questionId: "retained-question",
-          message: "Choose the environments",
-          questions: [0, 1, 2].map((index) => ({
-            key: `environment_${index}`,
-            prompt: `Environment ${index}?`,
-            multiSelect: false,
-            freeText: false,
-            required: false,
-            options: [{ value: "staging", label: "Staging" }],
-          })),
-        },
-      ],
-    },
-    "committed-conversation",
-  )
-}
-function questionView(limited: boolean): ConversationView {
-  return panelView(publishedQuestionView(limited), 1_700_000_000_000)
-}
 /** Actual read projection, saved selection and close thunk; the remote port records dispatch. */
 function HistoryTabConsumer() {
   const [result, setResult] = useState<{

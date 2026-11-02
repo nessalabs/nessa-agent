@@ -11,8 +11,12 @@
  *   version 7   the build that added `model_requests` without raising the
  *               version, when it holds rows
  *
- * Each needs `agent_switches` empty, which version 9 added: a file with a
- * switch in it is left as it is, the newest build's.
+ *   version 9   the build before closed threads were kept: no
+ *               `closed_threads`, when it is empty and a switch is kept
+ *
+ * Each needs `closed_threads` empty, which version 10 added: a file with a
+ * closed thread in it is left as it is, the newest build's. Those before 9
+ * also need `agent_switches` empty, which version 9 added.
  *
  * The gateway must be stopped: this writes the file it holds.
  */
@@ -46,11 +50,18 @@ export function asOlderBuild(path) {
   const database = new DatabaseSync(path)
   try {
     const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
+    if (rows("closed_threads") > 0)
+      return database.prepare("PRAGMA user_version").get().user_version
     const switches = rows("agent_switches")
-    if (switches > 0) return database.prepare("PRAGMA user_version").get().user_version
+    database.exec("BEGIN IMMEDIATE")
+    database.exec("DROP TABLE closed_threads")
+    if (switches > 0) {
+      database.exec("PRAGMA user_version = 9")
+      database.exec("COMMIT")
+      return 9
+    }
     const models = rows("model_requests")
     const turns = rows("unfinished_turns")
-    database.exec("BEGIN IMMEDIATE")
     database.exec("DROP TABLE agent_switches")
     if (models === 0) database.exec("DROP TABLE model_requests")
     if (models === 0 && turns === 0) database.exec("DROP TABLE unfinished_turns")

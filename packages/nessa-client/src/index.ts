@@ -242,6 +242,19 @@ export {
   type GithubCode,
   type GithubConnection,
 } from "./generated/product.js"
+export { type VoiceApi } from "./presentation/voice-api.js"
+export {
+  NessaVoiceError,
+  VoiceRefusalCode,
+  type VoiceMethod,
+} from "./application/voice-error.js"
+export {
+  VoiceErrorCode,
+  VoiceToolName,
+  VoiceTransport,
+  type VoiceCall,
+  type VoiceStatus,
+} from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,
@@ -475,6 +488,7 @@ export type {
   WorkspacePane,
   WorkspacePaneItem,
   WorkspacePaneKind,
+  WorkspacePanel,
   WorkspacePublishResult,
   WorkspaceShowing,
   WorkspaceWidget,
@@ -483,7 +497,13 @@ export type {
 
 export { type VaultApi } from "./presentation/vault-api.js"
 export { NessaVaultError } from "./application/vault-error.js"
-export { VaultErrorCode, VaultState, type VaultStatus } from "./generated/product.js"
+export {
+  VaultErrorCode,
+  VaultState,
+  VaultPassphraseChangeState,
+  type VaultStatus,
+  type VaultPassphraseChangeStatus,
+} from "./generated/product.js"
 
 export type { DevicesApi } from "./presentation/devices-api.js"
 export type {

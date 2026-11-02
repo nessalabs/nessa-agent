@@ -26,10 +26,11 @@ import {
   type ConnectionState,
   type WorkspaceApi,
   type WorkspacePaneItem,
+  type WorkspaceWidget,
   type WorkspaceWindow,
 } from "@nessa/client"
 import type { WindowPublisher } from "../../application/ports"
-import type { ShownItem, ShownWindow } from "../../model/shown-window"
+import type { ShownItem, ShownPanel, ShownWindow } from "../../model/shown-window"
 
 /** What publishing asks of the window's gateway client. */
 export interface WindowPublishClient {
@@ -143,6 +144,7 @@ function wire(window: ShownWindow): WorkspaceWindow {
     ...(window.showing.kind === "widget"
       ? { widget: { plugin: window.showing.widget.plugin, id: window.showing.widget.id } }
       : {}),
+    panel: wirePanel(window.panel),
     columns: window.columns.map((column) => ({
       widthPercent: column.widthPercent,
       panes: column.panes.map((pane) => ({
@@ -152,6 +154,18 @@ function wire(window: ShownWindow): WorkspaceWindow {
       })),
     })),
   }
+}
+
+function wirePanel(panel: ShownPanel): WorkspaceWindow["panel"] {
+  return {
+    open: panel.open,
+    tabs: panel.tabs.map(wireWidget),
+    ...(panel.front ? { front: wireWidget(panel.front) } : {}),
+  }
+}
+
+function wireWidget(widget: ShownPanel["tabs"][number]): WorkspaceWidget {
+  return { plugin: widget.plugin, id: widget.id }
 }
 
 function wireItem(item: ShownItem): WorkspacePaneItem {
@@ -165,7 +179,7 @@ function wireItem(item: ShownItem): WorkspacePaneItem {
     case "widget":
       return {
         kind: "widget",
-        widget: { plugin: item.widget.plugin, id: item.widget.id },
+        widget: wireWidget(item.widget),
       }
   }
 }

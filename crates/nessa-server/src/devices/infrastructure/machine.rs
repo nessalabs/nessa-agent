@@ -141,13 +141,19 @@ fn local_disks() -> Vec<MachineDisk> {
         .filter_map(|disk| {
             let (total_bytes, used_bytes) = disk_of(disk.mount_point());
             // A device mounted twice is one disk; so are the volumes of one
-            // APFS container, which each answer the container's size and
-            // what it has free.
-            let shared = if disk.file_system().eq_ignore_ascii_case("apfs") {
-                format!("apfs {total_bytes} {}", total_bytes - used_bytes)
-            } else {
-                format!("device {}", disk.name().to_string_lossy())
-            };
+            // APFS container, which each answer the container's size. The
+            // container is the one its volumes' devices name, never matched
+            // by its figures: two containers can answer the same ones.
+            let shared = disk
+                .file_system()
+                .eq_ignore_ascii_case("apfs")
+                .then(|| mounted_from(disk.mount_point()))
+                .flatten()
+                .and_then(|device| apfs_container(&device).map(str::to_owned))
+                .map_or_else(
+                    || format!("device {}", disk.name().to_string_lossy()),
+                    |container| format!("apfs {container}"),
+                );
             (total_bytes > 0 && seen.insert(shared)).then(|| MachineDisk {
                 mount: MachineReport::bounded(&disk.mount_point().to_string_lossy()),
                 total_bytes: total_bytes.min(MAX_MACHINE_FIGURE),
@@ -160,6 +166,44 @@ fn local_disks() -> Vec<MachineDisk> {
     });
     kept.truncate(MAX_MACHINE_DISKS);
     kept
+}
+
+/// The APFS container a volume's device is in: `disk3` for `/dev/disk3s1`
+/// or `/dev/disk3s1s1` (a snapshot of it), whose synthesized disk is that
+/// container's alone. `None` for a device named otherwise.
+fn apfs_container(device: &str) -> Option<&str> {
+    let name = device.strip_prefix("/dev/").unwrap_or(device);
+    let digits = name.strip_prefix("disk")?;
+    let end = digits
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(digits.len());
+    (end > 0).then(|| &name[..4 + end])
+}
+
+/// The device `mount` is mounted from, as that file system says
+/// (`statfs`): asked of the one mount, as its size is.
+#[cfg(target_os = "macos")]
+fn mounted_from(mount: &std::path::Path) -> Option<String> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(mount.as_os_str().as_bytes()).ok()?;
+    let mut answer = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `path` is a valid C string and `answer` is written in full
+    // when the call succeeds, and read only then.
+    let answer = unsafe {
+        if libc::statfs(path.as_ptr(), answer.as_mut_ptr()) != 0 {
+            return None;
+        }
+        answer.assume_init()
+    };
+    // SAFETY: the field is a NUL-terminated C string the call filled in.
+    let from = unsafe { std::ffi::CStr::from_ptr(answer.f_mntfromname.as_ptr()) };
+    Some(from.to_string_lossy().into_owned())
+}
+
+/// Only macOS keeps APFS volumes, and names their devices so.
+#[cfg(not(target_os = "macos"))]
+fn mounted_from(_: &std::path::Path) -> Option<String> {
+    None
 }
 
 /// The size and use of the disk `path` is on, asked of that one file
@@ -177,6 +221,21 @@ fn disk_of(path: &std::path::Path) -> (u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_apfs_volume_is_known_by_its_container() {
+        assert_eq!(apfs_container("/dev/disk3s1s1"), Some("disk3"));
+        assert_eq!(apfs_container("/dev/disk3s5"), Some("disk3"));
+        assert_eq!(apfs_container("disk12s2"), Some("disk12"));
+        // Another container answering the same figures is another disk.
+        assert_ne!(
+            apfs_container("/dev/disk4s1"),
+            apfs_container("/dev/disk3s1")
+        );
+        assert_eq!(apfs_container("/dev/disk"), None);
+        assert_eq!(apfs_container("map auto_home"), None);
+        assert_eq!(apfs_container("/dev/sda1"), None);
+    }
 
     #[test]
     fn reads_at_once_each_answer_the_machine() {

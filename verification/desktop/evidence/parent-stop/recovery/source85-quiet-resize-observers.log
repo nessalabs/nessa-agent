@@ -1,0 +1,7 @@
+building production into /tmp/nessa-desktop-verify-IC3v9Q…
+previewing production at http://127.0.0.1:43783/desktop.html
+ok    console [chromium columns]
+ok    fit-after-delivery [chromium columns]
+ok    fit-after-delivery [chromium sidebar]
+wrote /tmp/nessa-981-evidence/quiet-resize-observers.json
+resize-observers: 3/3 held

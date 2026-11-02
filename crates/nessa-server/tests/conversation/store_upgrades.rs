@@ -1,7 +1,8 @@
 //! A metadata file an older build wrote is brought forward at open and keeps
 //! its rows: version 6 (before `unfinished_turns`), version 7 with or
 //! without `model_requests`, which #975 added without raising the version,
-//! and version 8 (before `agent_switches`).
+//! version 8 (before `agent_switches`), and version 9 (before
+//! `closed_threads`).
 //! `metadata_v6.sql` is version 6's definition exactly as that build shipped
 //! it (docs/adr/todo/202-versioned-local-datasets.md, "Migrations").
 use super::store::LocalConversationStore;
@@ -128,7 +129,7 @@ async fn a_version_6_file_is_upgraded_and_keeps_its_conversations() {
     assert_eq!(version(&path), 6);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -145,7 +146,7 @@ async fn a_version_7_file_from_before_model_requests_gains_that_table() {
     assert_eq!(version(&path), 7);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -160,12 +161,12 @@ async fn a_version_7_file_that_already_has_model_requests_is_raised_as_it_is() {
         drop(LocalConversationStore::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE agent_switches")
+            .execute_batch("DROP TABLE agent_switches; DROP TABLE closed_threads")
             .unwrap();
         connection.pragma_update(None, "user_version", 7).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     drop(store);
     assert_eq!(shape(&path), current_shape());
 }
@@ -180,12 +181,15 @@ async fn a_version_8_file_gains_the_agent_switch_journal() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches")
+            .execute_batch(
+                "DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches;
+                 DROP TABLE closed_threads",
+            )
             .unwrap();
         connection.pragma_update(None, "user_version", 8).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     assert_eq!(
@@ -196,6 +200,39 @@ async fn a_version_8_file_gains_the_agent_switch_journal() {
     );
     drop(store);
     assert_eq!(shape(&path), current_shape());
+}
+
+/// A version 9 file, from before a thread's close was kept, gains
+/// `closed_threads` and keeps its conversations.
+#[tokio::test]
+async fn a_version_9_file_gains_the_closed_threads() {
+    let (_directory, path) = private_path();
+    older_file(&path, true);
+    drop(LocalConversationStore::open(&path).unwrap());
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("DROP TABLE closed_threads")
+            .unwrap();
+        connection.pragma_update(None, "user_version", 9).unwrap();
+    }
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(version(&path), 10);
+    assert_kept(&store).await;
+    let id = ConversationId::new(CONVERSATION).unwrap();
+    assert!(!ConversationRepository::thread_closed(&store, &id)
+        .await
+        .unwrap());
+    ConversationRepository::close_thread(&store, &id)
+        .await
+        .unwrap();
+    drop(store);
+    assert_eq!(shape(&path), current_shape());
+    // Kept across a restart.
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert!(ConversationRepository::thread_closed(&store, &id)
+        .await
+        .unwrap());
 }
 
 /// A file a step cannot apply to is refused and left at its version: here a

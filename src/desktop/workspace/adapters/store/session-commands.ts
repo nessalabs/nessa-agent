@@ -161,9 +161,15 @@ export function sendMessage({
   text,
   initiator,
   withImages = false,
+  messageId,
 }: {
   sessionId: string
   text: string
+  /**
+   * The message's id, when the caller follows the turn it starts (the turn's
+   * execution id is the message's); otherwise a new one.
+   */
+  messageId?: string
   /** Who sent it, for the source's record: the person at the composer, or an agent. */
   initiator: Initiator
   /**
@@ -191,7 +197,7 @@ export function sendMessage({
     )
       return "not-asked"
     const message: TurnMessage = {
-      id: newId(),
+      id: messageId ?? newId(),
       role: "user",
       at: now(),
       parts: [{ kind: "text", text: content }],

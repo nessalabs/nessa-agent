@@ -32,7 +32,7 @@ pub enum MutationStage {
 pub enum MutationOutcome {
     /// Submit enqueued the original turn once.
     Dispatched,
-    /// Stop removed the named turn before dispatch.
+    /// Stop withdrew queued work or declined the named turn's owed continuation.
     Withdrawn,
     /// Stop delivered cancellation for the named active turn.
     Cancelled,

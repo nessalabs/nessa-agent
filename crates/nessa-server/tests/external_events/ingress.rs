@@ -53,6 +53,7 @@ struct Authority {
     unavailable: AtomicBool,
     clock_reads: AtomicU64,
     panic_read: AtomicBool,
+    admission_gate: Mutex<Option<Arc<AdmissionGate>>>,
 }
 impl CredentialVerifier for Authority {
     fn verify<'a>(
@@ -74,6 +75,12 @@ impl CredentialVerifier for Authority {
 impl AccessReader for Authority {
     fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
         Box::pin(async {
+            let gate = self.admission_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                let mut released = gate.released.subscribe();
+                gate.entered.fetch_add(1, Ordering::SeqCst);
+                released.wait_for(|released| *released).await.unwrap();
+            }
             assert!(
                 !self.panic_read.load(Ordering::SeqCst),
                 "local authority fixture panic"
@@ -157,6 +164,7 @@ async fn authority() -> (Arc<Authority>, AuthenticatedSession) {
         unavailable: AtomicBool::new(false),
         clock_reads: AtomicU64::new(0),
         panic_read: AtomicBool::new(false),
+        admission_gate: Mutex::new(None),
     });
     let session = AuthenticateSession {
         policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
@@ -179,6 +187,10 @@ fn caller(action: &str) -> ConversationCaller {
         surface_id: "test".into(),
         action_id: action.into(),
     }
+}
+struct AdmissionGate {
+    entered: AtomicU64,
+    released: tokio::sync::watch::Sender<bool>,
 }
 struct CommandGate {
     entered: AtomicU64,
@@ -819,11 +831,19 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
     let root = tempfile::tempdir().unwrap();
     let fixture = Fixture::new(root.path(), id()).await;
     let routes = fixture.routes();
+    // Each slot has transferred to its detached owner before this read. The
+    // command store may serialize submissions; capacity does not require eight
+    // simultaneous storage opens.
+    let admission_gate = Arc::new(AdmissionGate {
+        entered: AtomicU64::new(0),
+        released: tokio::sync::watch::channel(false).0,
+    });
+    *fixture.authority.admission_gate.lock().unwrap() = Some(admission_gate.clone());
     let gate = Arc::new(CommandGate {
         entered: AtomicU64::new(0),
         failed: AtomicU64::new(0),
         reject_after_release: true,
-        released: tokio::sync::watch::channel(false).0,
+        released: tokio::sync::watch::channel(true).0,
     });
     *fixture.commands.gate.lock().unwrap() = Some(gate.clone());
     let mut responses = Vec::new();
@@ -837,12 +857,13 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
         }));
     }
     tokio::time::timeout(Duration::from_secs(15), async {
-        while gate.entered.load(Ordering::SeqCst) != 8 {
+        while admission_gate.entered.load(Ordering::SeqCst) != 8 {
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 0);
     for response in &responses {
         response.abort();
     }
@@ -860,8 +881,14 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
         refused.status(),
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     );
-    assert_eq!(gate.entered.load(Ordering::SeqCst), 8);
-    gate.released.send(true).unwrap();
+    let bytes = axum::body::to_bytes(refused.into_body(), 1024)
+        .await
+        .unwrap();
+    let failure: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(failure["error"], "busy");
+    assert_eq!(admission_gate.entered.load(Ordering::SeqCst), 8);
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 0);
+    admission_gate.released.send(true).unwrap();
     tokio::time::timeout(Duration::from_secs(15), async {
         while gate.failed.load(Ordering::SeqCst) != 8 {
             tokio::task::yield_now().await;
@@ -869,6 +896,7 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
     })
     .await
     .expect("released command opens must settle their controlled failure");
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 8);
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let response = routes
@@ -893,6 +921,7 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
     })
     .await
     .expect("settled command failures must release admission capacity");
+    assert_eq!(admission_gate.entered.load(Ordering::SeqCst), 9);
     assert_eq!(gate.entered.load(Ordering::SeqCst), 9);
     assert_eq!(gate.failed.load(Ordering::SeqCst), 9);
     assert!(fixture.provider.executions.lock().unwrap().is_empty());

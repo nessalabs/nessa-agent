@@ -45,12 +45,20 @@ import {
   McpServersProvider,
   NativeHooksProvider,
   PermissionRulesProvider,
+  VoiceKeyProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
+import {
+  scriptedTransport,
+  storeConversations,
+  VoiceController,
+  VoiceProvider,
+  webrtcTransport,
+} from "./voice"
 import {
   bindConversationTitles,
   bindNoticeAccess,
@@ -189,6 +197,19 @@ bindConversationTitles((conversationId) => {
   const title = sessions[conversationId].title.trim()
   return title.length > 0 ? title : null
 })
+// The window's voice call: the gateway mints it and names how to connect,
+// from every transport it may name; the conversation is the store's.
+const voice = dependencies.voice
+  ? new VoiceController({
+      gateway: dependencies.voice,
+      transports: { webrtc: webrtcTransport(), scripted: scriptedTransport() },
+      conversations: storeConversations(store),
+      timers: {
+        setTimeout: (run, ms) => window.setTimeout(run, ms),
+        clearTimeout: (handle) => window.clearTimeout(handle as number),
+      },
+    })
+  : undefined
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
@@ -235,11 +256,15 @@ createRoot(container).render(
                                       gateway={dependencies.github}
                                       avatar={githubAvatar}
                                     >
-                                      <DesktopWindow
-                                        hostKind={host.kind}
-                                        browserSurface={host.kind === "browser"}
-                                        inspectable={import.meta.env.DEV}
-                                      />
+                                      <VoiceKeyProvider gateway={dependencies.voiceKey}>
+                                        <VoiceProvider controller={voice}>
+                                          <DesktopWindow
+                                            hostKind={host.kind}
+                                            browserSurface={host.kind === "browser"}
+                                            inspectable={import.meta.env.DEV}
+                                          />
+                                        </VoiceProvider>
+                                      </VoiceKeyProvider>
                                     </GithubProvider>
                                   </BoatProvider>
                                 </PermissionRulesProvider>

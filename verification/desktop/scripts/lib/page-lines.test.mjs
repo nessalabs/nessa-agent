@@ -355,6 +355,27 @@ test("#647: live mount proof classifies a late abort before close, keeping rejec
   assert.equal(rep.results.length, 2)
 })
 
+test("#473: a live mount served by a gateway on another origin exempts only that origin", async () => {
+  const rep = report("page-lines-gateway-origin", {})
+  bindReporter(rep)
+  const lines = watchLines()
+  const opened = {
+    noteHarmless: (pattern) => lines.noteHarmless(pattern),
+    page: { url: () => "http://127.0.0.1:1438/desktop.html" },
+    close: async () => {},
+  }
+  attachLines(opened, {}, lines)
+  const gateway = "requestfailed: http://127.0.0.1:1500/mcp-resources net::ERR_ABORTED"
+  const own = "requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED"
+  lines.keep(gateway, false)
+  lines.keep(own, false)
+  noteLiveMountResourceAbort(opened, "live", "http://127.0.0.1:1500")
+  rep.add({ name: "apps" })
+  assert.deepEqual(rep.results[0].harmless, [gateway])
+  assert.deepEqual(rep.results[0].failures, [own])
+  await opened.close()
+})
+
 test("#647: an absent live mount proof leaves held and late aborts as failures", async () => {
   for (const state of [undefined, "loading", "failed"]) {
     const rep = report("page-lines-no-live-mount", {})

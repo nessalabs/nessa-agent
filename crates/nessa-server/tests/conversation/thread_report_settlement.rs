@@ -9,6 +9,16 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::executions::ExecutionOutcome;
 use std::sync::Condvar;
 
+async fn settled_reports(store: &LocalThreadReports) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !store.pending().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("settled parent report releases its durable row");
+}
+
 struct HeldAfterHook {
     entered: Arc<tokio::sync::Notify>,
     release: Arc<(Mutex<bool>, Condvar)>,
@@ -209,6 +219,7 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
     service.bind_commands(storage.clone());
+    super::super::parent_stop::bind(&service, &storage, &root, true).await;
     let store = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
     service.bind_thread_reports(store.clone());
     service.bind_agent_tool_audit(Arc::new(
@@ -314,15 +325,28 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
         .await;
     assert_eq!(retried["isError"], false, "{retried}");
     assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
-    assert!(store.pending().await.unwrap().is_empty());
-    // Recreate the durable state of a crash after parent delivery but before row cleanup.
-    assert!(store.save(&before[0]).await.unwrap());
+    assert_eq!(
+        store.pending().await.unwrap().len(),
+        1,
+        "ownership keeps a queued report durable until the parent report turn settles"
+    );
+    drop(release_source);
+    settled_reports(&store).await;
     drop(client);
     drop(grant);
     serving.await.unwrap();
     drop(release_child);
-    drop(release_source);
     retire(service, storage, metadata).await;
+    // Detached report observers retain the service's store handle until they
+    // finish. Seed the crash image only when the test is its sole owner.
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while Arc::strong_count(&store) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all old report observers release the store before crash reconstruction");
+    assert!(store.save(&before[0]).await.unwrap());
     drop(store);
     let provider = Arc::new(ProviderFactory::default());
     let (service, storage, metadata) = fixture(&root, provider);
@@ -331,6 +355,9 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
     service.bind_thread_reports(store.clone());
     assert_eq!(service.resume_thread_reports().await.unwrap(), 1);
     assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
-    assert!(store.pending().await.unwrap().is_empty());
+    // The input was already saved before the restart. Its presence does not
+    // mean the asynchronous replay observer has settled the durable row.
+    settled_reports(&store).await;
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
     retire(service, storage, metadata).await;
 }

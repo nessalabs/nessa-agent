@@ -17,10 +17,11 @@ use crate::application::agent_execution::{
 use crate::domain::agent_execution::{executions::ExecutionId, sessions::SessionId};
 use event_stream::{
     Cursor, EventId, EventReader, EventSink, NewEvent, PageLimits, Payload, SchemaId, SchemaRef,
-    StreamId, StreamKey,
+    StreamId, StreamKey, MAX_IDENTIFIER_BYTES,
 };
+use nessa_local_database::rusqlite::{self, Connection, OpenFlags};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 pub(super) const CONTROL_STREAM_PREFIX: &str = "nessa:commands:";
@@ -63,7 +64,41 @@ pub(super) fn control_stream_id(principal: &str, request: &str) -> String {
     digest.update(request.as_bytes());
     format!("{CONTROL_STREAM_PREFIX}{:x}", digest.finalize())
 }
+impl RecordStorage {
+    fn observed_commands<T: Send + 'static>(
+        &self,
+        principal: String,
+        project: fn(Held) -> Option<T>,
+    ) -> CreationFuture<'_, Vec<T>> {
+        Box::pin(async move {
+            ActionContext::new(&principal, "control", "observe")
+                .map_err(|_| corrupt("invalid command principal"))?;
+            self.runtime().await?;
+            let path = self.command_path();
+            let received = self
+                .owner
+                .read(move || read_commands(path, &principal, project))
+                .await?;
+            received
+                .await
+                .map_err(|_| StorageError::ReadWorkerPanicked)?
+                .map_err(Into::into)
+        })
+    }
+}
 impl CreationStorage for RecordStorage {
+    fn creations(&self, principal: String) -> CreationFuture<'_, Vec<CreationReceipt>> {
+        self.observed_commands(principal, |held| match held {
+            Held::Creation(receipt) => Some(receipt),
+            Held::Mutation(_) => None,
+        })
+    }
+    fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        self.observed_commands(principal, |held| match held {
+            Held::Mutation(receipt) => Some(receipt),
+            Held::Creation(_) => None,
+        })
+    }
     fn open_creation(
         &self,
         principal: String,
@@ -107,6 +142,155 @@ impl CreationStorage for RecordStorage {
                 CreationStorageError::TaskFault(CreationTaskFault::from_join_error(error))
             })?
         })
+    }
+}
+
+const OBSERVED_COMMANDS_SQL: &str = "WITH observed AS (
+             SELECT s.public_id,r.offset,r.event_id,r.schema_id,r.schema_version,r.payload,
+                (SELECT MIN(first.rowid) FROM event_records first
+                 WHERE first.stream_key=s.stream_key) AS admitted,
+                typeof(s.public_id)='text' AND octet_length(s.public_id)<=?2
+                AND typeof(r.offset)='blob' AND length(r.offset)=8
+                AND typeof(r.event_id)='text' AND octet_length(r.event_id) BETWEEN 1 AND ?2
+                AND typeof(r.schema_id)='text' AND octet_length(r.schema_id) BETWEEN 1 AND ?2
+                AND typeof(r.schema_version)='integer'
+                AND typeof(r.payload)='blob' AND octet_length(r.payload)<=?3 AS bounded
+             FROM event_stream_names n
+             JOIN event_streams s ON n.active_stream_key=s.stream_key
+             JOIN event_records r ON r.stream_key=s.stream_key
+             WHERE s.public_id GLOB ?1 AND s.retired=0
+         ) SELECT CASE WHEN bounded THEN public_id END,
+                  CASE WHEN bounded THEN offset END,
+                  CASE WHEN bounded THEN event_id END,
+                  CASE WHEN bounded THEN schema_id END,
+                  CASE WHEN bounded THEN schema_version END,
+                  CASE WHEN bounded THEN payload END
+           FROM observed ORDER BY admitted,CASE WHEN bounded THEN offset END";
+
+// SQLite's existing physical Accepted row supplies the observation order. No
+// index or additional command publication is written by this read. The first
+// row lookup stays within the matched command stream, so unrelated history
+// records do not participate in admission ordering.
+fn read_commands<T>(
+    path: PathBuf,
+    principal: &str,
+    project: fn(Held) -> Option<T>,
+) -> Result<Vec<T>, StorageError> {
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(query_error)?;
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(query_error)?;
+    let mut statement = connection
+        .prepare(OBSERVED_COMMANDS_SQL)
+        .map_err(query_error)?;
+    let mut rows = statement
+        .query(rusqlite::params![
+            format!("{CONTROL_STREAM_PREFIX}*"),
+            i64::try_from(MAX_IDENTIFIER_BYTES).map_err(|_| corrupt("invalid identity bound"))?,
+            i64::try_from(MAX_COMMAND_BYTES.max(MAX_RECORD_BYTES))
+                .map_err(|_| corrupt("invalid payload bound"))?
+        ])
+        .map_err(query_error)?;
+    let mut current = String::new();
+    let mut offset = 0;
+    let mut held = HashMap::new();
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().map_err(query_error)? {
+        // The persistence boundary CASE-gates every external field before the
+        // SQLite driver can allocate it. NULL is typed malformed input, not I/O.
+        let stream: String = row
+            .get::<_, Option<String>>(0)
+            .map_err(query_error)?
+            .ok_or_else(|| corrupt("command observation record exceeds field bounds"))?;
+        if stream != current {
+            collect_commands(&mut held, principal, &mut result, project);
+            current = stream;
+            offset = 0;
+        }
+        let position: Vec<u8> = row.get(1).map_err(query_error)?;
+        let position = u64::from_be_bytes(
+            position
+                .try_into()
+                .map_err(|_| corrupt("invalid command position"))?,
+        );
+        offset += 1;
+        if position != offset || offset > MAX_REQUEST_EVENTS {
+            return Err(corrupt(
+                "command observation lost its prefix or exceeds request bounds",
+            ));
+        }
+        let event = NewEvent {
+            id: EventId::new(row.get::<_, String>(2).map_err(query_error)?)
+                .map_err(|_| corrupt("invalid command event ID"))?,
+            schema: SchemaRef {
+                id: SchemaId::new(row.get::<_, String>(3).map_err(query_error)?)
+                    .map_err(|_| corrupt("invalid command schema"))?,
+                version: row.get(4).map_err(query_error)?,
+            },
+            payload: Payload::copy_from_slice(&row.get::<_, Vec<u8>>(5).map_err(query_error)?),
+        };
+        let (request, owner, next) = match event.schema.id.as_str() {
+            SCHEMA => {
+                let receipt = decode(&event)?;
+                check_creation(&held, &receipt).map_err(replay_error)?;
+                if encode(&receipt)? != event {
+                    return Err(corrupt("creation event identity disagrees"));
+                }
+                (
+                    receipt.binding().actor().request_id().to_owned(),
+                    receipt.binding().actor().principal_id().to_owned(),
+                    Held::Creation(receipt),
+                )
+            }
+            COMMAND_SCHEMA => {
+                let receipt = decode_mutation(&event)?;
+                check_mutation(&held, &receipt).map_err(replay_error)?;
+                if encode_mutation(&receipt)? != event {
+                    return Err(corrupt("command event identity disagrees"));
+                }
+                (
+                    receipt.binding().actor().request_id().to_owned(),
+                    receipt.binding().actor().principal_id().to_owned(),
+                    Held::Mutation(receipt),
+                )
+            }
+            _ => return Err(corrupt("unknown command control schema")),
+        };
+        if current != control_stream_id(&owner, &request) {
+            return Err(corrupt("command observation identity disagrees"));
+        }
+        held.insert(request, next);
+    }
+    collect_commands(&mut held, principal, &mut result, project);
+    Ok(result)
+}
+
+fn collect_commands<T>(
+    held: &mut HashMap<String, Held>,
+    principal: &str,
+    result: &mut Vec<T>,
+    project: fn(Held) -> Option<T>,
+) {
+    for (_, receipt) in held.drain() {
+        let actor = match &receipt {
+            Held::Creation(receipt) => receipt.binding().actor(),
+            Held::Mutation(receipt) => receipt.binding().actor(),
+        };
+        if actor.principal_id() == principal {
+            if let Some(receipt) = project(receipt) {
+                result.push(receipt);
+            }
+        }
+    }
+}
+
+fn query_error(error: rusqlite::Error) -> StorageError {
+    match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            StorageError::Busy
+        }
+        _ => StorageError::Io(error.to_string()),
     }
 }
 impl ControlInner {

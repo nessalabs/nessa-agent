@@ -187,12 +187,18 @@ pub struct ProductRouteState {
     /// The web tunnel this run serves (`pairing.tunnel`, `server.reach`).
     /// `None` when it runs none.
     pub(crate) tunnel: Option<crate::tunnel::application::TunnelView>,
+    /// Paired devices' tunnel secrets. `None` when this gateway does not pair devices.
+    pub(crate) tunnel_secrets:
+        Option<std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>>,
     /// The hub's devices (`devices.list`). `None` answers
     /// `devices_unavailable`.
     pub(crate) devices: Option<Arc<crate::devices::application::Devices>>,
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
+    /// The voice key and calls (`voice.*`). `None` answers
+    /// `voice_not_configured`.
+    pub(crate) voice: Option<Arc<crate::voice::application::VoiceCalls>>,
     /// Shared vault; each socket attaches a distinct non-owning lease.
     pub(crate) vault: Option<Arc<super::VaultRoutes>>,
     #[cfg(unix)]
@@ -335,8 +341,10 @@ impl ProductRouteState {
             pairing: None,
             native_linking: None,
             tunnel: None,
+            tunnel_secrets: None,
             devices: None,
             github: None,
+            voice: None,
             vault: None,
             vault_lease: None,
             #[cfg(unix)]
@@ -463,6 +471,15 @@ impl ProductRouteState {
         self
     }
 
+    /// Register the tunnel secrets issued at pairing.
+    pub(crate) fn with_tunnel_secrets(
+        mut self,
+        secrets: std::sync::Arc<dyn crate::tunnel::application::DeviceTunnelSecrets>,
+    ) -> Self {
+        self.tunnel_secrets = Some(secrets);
+        self
+    }
+
     /// Register the hub's devices, which `devices.list` reads.
     pub(crate) fn with_devices(
         mut self,
@@ -475,6 +492,12 @@ impl ProductRouteState {
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
         self.github = Some(github);
+        self
+    }
+
+    /// Register the voice key and calls the voice methods answer for.
+    pub fn with_voice(mut self, voice: Arc<crate::voice::application::VoiceCalls>) -> Self {
+        self.voice = Some(voice);
         self
     }
 

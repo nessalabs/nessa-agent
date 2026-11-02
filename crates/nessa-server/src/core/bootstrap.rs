@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use super::process_memory::{before, NativeProcessMemory};
 use crate::cli::entrypoint::{parse, Command};
 use crate::composition::CompositionRoot;
 use crate::core::{ending, logging, Launch, RunError};
@@ -10,8 +12,32 @@ pub fn run() -> std::process::ExitCode {
     #[cfg(unix)]
     crate::env_serve::infrastructure::note_umask();
     logging::init();
+    // A refused protection can be retried by the service supervisor. Bound the
+    // existing stderr log before that failure emits its first line.
     #[cfg(unix)]
     bound_log();
+    // This process can run the gateway, a vault passphrase bridge or a direct
+    // protected-data command. Establish one Linux rule before any dispatch,
+    // async runtime or store opens, rather than maintain a separate command list.
+    #[cfg(target_os = "linux")]
+    {
+        match before(&NativeProcessMemory, run_protected) {
+            Ok(status) => status,
+            Err(reason) => {
+                tracing::error!(%reason, "required process memory protections unavailable");
+                std::process::ExitCode::FAILURE
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // No Linux protection result is fabricated on another platform.
+        // Packaged macOS signing and other OS safeguards are independent.
+        run_protected()
+    }
+}
+
+fn run_protected() -> std::process::ExitCode {
     // Before the runtime starts its threads, so every one of them, and every
     // agent started later, has the raised limit.
     #[cfg(unix)]

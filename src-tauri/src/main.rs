@@ -36,6 +36,8 @@ mod vault;
 mod stage_port;
 mod startup;
 mod surface_credential;
+#[cfg(all(test, unix))]
+mod test_executable;
 mod tray;
 mod updater;
 

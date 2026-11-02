@@ -371,15 +371,20 @@ const reviewGone = (stack, review, ms) =>
  */
 async function pointerOnto(page, frame, control) {
   const selector = selectorFor.reviewControl(control)
-  await frame.evaluate((selector) => {
-    const button = document.querySelector(selector)
-    window.__nessaPointerEntered = false
-    const mark = (event) => {
-      if (event.isTrusted && event.target === button) window.__nessaPointerEntered = true
-    }
-    document.addEventListener("pointerover", mark, true)
-    document.addEventListener("pointermove", mark, true)
-  }, selector)
+  const probeId = randomUUID()
+  await frame.evaluate(
+    ({ selector, probeId }) => {
+      const button = document.querySelector(selector)
+      const probe = { id: probeId, entered: false }
+      window.__nessaPointerProbe = probe
+      const mark = (event) => {
+        if (event.isTrusted && event.target === button) probe.entered = true
+      }
+      document.addEventListener("pointerover", mark, true)
+      document.addEventListener("pointermove", mark, true)
+    },
+    { selector, probeId },
+  )
   const until = Date.now() + appReviewUnstartedMs
   let moves = 0
   while (Date.now() < until) {
@@ -392,7 +397,12 @@ async function pointerOnto(page, frame, control) {
       .hover({ timeout: 1_000 })
       .catch(() => {})
     const entered = await frame
-      .evaluate(() => window.__nessaPointerEntered === true)
+      .evaluate(
+        (probeId) =>
+          window.__nessaPointerProbe?.id === probeId &&
+          window.__nessaPointerProbe.entered === true,
+        probeId,
+      )
       .catch(() => false)
     if (entered) return moves
     await sleep(50)
@@ -1082,10 +1092,16 @@ const checks = {
   context: async (page) => {
     const failures = []
     const { app } = await appFrame(page, "inline")
+    const pointerMoves = await pointerOnto(page, app, "context")
+    if (!pointerMoves)
+      return {
+        seen: { pointerMoves, inputStarted: false },
+        failures: ["the inline context control did not receive the pointer"],
+      }
     await app.click(selectorFor.reviewControl("context"))
     const answer = await output(app, "context")
     if (answer !== "ok") failures.push(`the context update was answered "${answer}"`)
-    return { seen: { answer }, failures }
+    return { seen: { pointerMoves, answer }, failures }
   },
 }
 

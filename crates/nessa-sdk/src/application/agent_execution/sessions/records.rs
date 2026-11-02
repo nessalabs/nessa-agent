@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     application::agent_execution::{
-        agents::AgentError,
+        agents::{validate_saved_resumption, AgentError},
         executions::ExecutionUpdate,
         providers::{
             ModelChangeRecord, ProviderIdentity, SessionConfigurationKind,
@@ -248,6 +248,10 @@ pub(crate) fn affected_execution(change: &SessionChange) -> Option<&ExecutionId>
         SessionChange::InputAccepted(record) => Some(&record.request.execution_id),
         SessionChange::ProviderObservation(event) => Some(event.execution_id()),
         SessionChange::SchedulingTransition { execution_id, .. }
+        | SessionChange::DeclinePrepared { execution_id, .. }
+        | SessionChange::DeclineAcknowledged { execution_id }
+        | SessionChange::CancellationPrepared { execution_id, .. }
+        | SessionChange::CancellationAcknowledged { execution_id }
         | SessionChange::ReceiptUpdated { execution_id, .. }
         | SessionChange::StopDecision { execution_id, .. }
         | SessionChange::ProviderReport { execution_id, .. }
@@ -266,6 +270,8 @@ pub(super) enum ChangeUndo {
     Input(ExecutionId),
     Queue(QueueReplayUndo),
     Scheduling(usize),
+    Decline(usize, Option<super::DeclineDecision>),
+    Cancellation(usize, Option<super::CancellationDecision>),
     // Boxed: a tool observation carried inline made this variant larger than
     // the rest of the undo by enough to trip the size lint, once an MCP
     // call's arguments joined the observation.
@@ -540,6 +546,14 @@ impl continuation::Continuation {
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
+                validate_saved_resumption(
+                    record,
+                    record.resumed_from.as_ref().and_then(|source| {
+                        positions
+                            .get(source)
+                            .map(|&index| &snapshot.invocations[index])
+                    }),
+                )?;
                 // The target's observations end at the offset here
                 // (`validate_target_prefix`), as they stood at admission.
                 super::app_sources::validate_saved(
@@ -641,6 +655,26 @@ impl continuation::Continuation {
                     )?;
                 }
                 let record = invocation_at(snapshot, positions, execution_id)?;
+                if record
+                    .decline
+                    .as_ref()
+                    .is_some_and(|decision| decision.event() != event)
+                {
+                    return Err(corrupt("scheduling contradicts the prepared decline"));
+                }
+                if record
+                    .cancellation_delivery
+                    .as_ref()
+                    .is_some_and(|decision| {
+                        !record
+                            .scheduling
+                            .iter()
+                            .any(|edge| edge == decision.event())
+                            && decision.event() != event
+                    })
+                {
+                    return Err(corrupt("scheduling contradicts the prepared cancellation"));
+                }
                 if record.scheduling.is_empty() {
                     super::validation::validate_admission_actor(record, event)?;
                 }
@@ -659,6 +693,90 @@ impl continuation::Continuation {
                 })?;
                 undo.push(ChangeUndo::Scheduling(positions[execution_id]));
                 record.scheduling.push(event.clone());
+            }
+            SessionChange::DeclinePrepared {
+                execution_id,
+                decision,
+            } => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("decline precedes session open"))?;
+                let index = *positions
+                    .get(execution_id)
+                    .ok_or_else(|| corrupt("decline has no accepted input"))?;
+                let record = &mut snapshot.invocations[index];
+                if record.decline.is_some() || decision.acknowledged() {
+                    return Err(corrupt(
+                        "decline preparation is not a first pending decision",
+                    ));
+                }
+                super::validation::validate_decline(record, decision)?;
+                undo.push(ChangeUndo::Decline(index, None));
+                record.decline = Some(decision.clone());
+            }
+            SessionChange::DeclineAcknowledged { execution_id } => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("decline acknowledgement precedes session open"))?;
+                let index = *positions
+                    .get(execution_id)
+                    .ok_or_else(|| corrupt("decline acknowledgement has no input"))?;
+                let record = &mut snapshot.invocations[index];
+                let decision = record
+                    .decline
+                    .as_ref()
+                    .ok_or_else(|| corrupt("decline acknowledgement has no preparation"))?;
+                if decision.acknowledged() || record.scheduling.last() != Some(decision.event()) {
+                    return Err(corrupt(
+                        "decline acknowledgement has no pending applied decision",
+                    ));
+                }
+                let acknowledged = super::DeclineDecision::new(decision.event().clone(), true);
+                undo.push(ChangeUndo::Decline(index, record.decline.clone()));
+                record.decline = Some(acknowledged);
+            }
+            SessionChange::CancellationPrepared {
+                execution_id,
+                decision,
+            } => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("cancellation_delivery precedes session open"))?;
+                let index = *positions
+                    .get(execution_id)
+                    .ok_or_else(|| corrupt("cancellation_delivery has no accepted input"))?;
+                let record = &mut snapshot.invocations[index];
+                if record.cancellation_delivery.is_some() || decision.acknowledged() {
+                    return Err(corrupt(
+                        "cancellation_delivery preparation is not a first pending decision",
+                    ));
+                }
+                super::validation::validate_cancellation_delivery(record, decision)?;
+                undo.push(ChangeUndo::Cancellation(index, None));
+                record.cancellation_delivery = Some(decision.clone());
+            }
+            SessionChange::CancellationAcknowledged { execution_id } => {
+                let snapshot = candidate.as_mut().ok_or_else(|| {
+                    corrupt("cancellation_delivery acknowledgement precedes session open")
+                })?;
+                let index = *positions
+                    .get(execution_id)
+                    .ok_or_else(|| corrupt("cancellation_delivery acknowledgement has no input"))?;
+                let record = &mut snapshot.invocations[index];
+                let decision = record.cancellation_delivery.as_ref().ok_or_else(|| {
+                    corrupt("cancellation_delivery acknowledgement has no preparation")
+                })?;
+                if decision.acknowledged() {
+                    return Err(corrupt(
+                        "cancellation_delivery acknowledgement has no pending applied decision",
+                    ));
+                }
+                let acknowledged = super::CancellationDecision::new(decision.event().clone(), true);
+                undo.push(ChangeUndo::Cancellation(
+                    index,
+                    record.cancellation_delivery.clone(),
+                ));
+                record.cancellation_delivery = Some(acknowledged);
             }
             SessionChange::ProviderObservation(event) => {
                 let snapshot = candidate
@@ -1022,6 +1140,38 @@ impl continuation::Continuation {
                 self.snapshot_bytes = self
                     .snapshot_bytes
                     .saturating_sub(super::retained::queue_entry(&entry));
+            }
+            ChangeUndo::Decline(index, original) => {
+                let record = &mut self
+                    .snapshot
+                    .as_mut()
+                    .expect("decline snapshot")
+                    .invocations[index];
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(record.decline.as_ref().map_or(0, |decision| {
+                        super::retained::scheduling_payload(decision.event())
+                    }))
+                    .saturating_add(original.as_ref().map_or(0, |decision| {
+                        super::retained::scheduling_payload(decision.event())
+                    }));
+                record.decline = original;
+            }
+            ChangeUndo::Cancellation(index, original) => {
+                let record = &mut self
+                    .snapshot
+                    .as_mut()
+                    .expect("cancellation_delivery snapshot")
+                    .invocations[index];
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(record.cancellation_delivery.as_ref().map_or(0, |decision| {
+                        super::retained::scheduling_payload(decision.event())
+                    }))
+                    .saturating_add(original.as_ref().map_or(0, |decision| {
+                        super::retained::scheduling_payload(decision.event())
+                    }));
+                record.cancellation_delivery = original;
             }
             ChangeUndo::Scheduling(index) => {
                 let event = self.snapshot.as_mut().expect("open").invocations[index]

@@ -171,3 +171,18 @@ native session.
 A provider that still carries a replaced fingerprint and could resume the
 saved id (the old pool refusal) now opens a new native session instead of
 refusing. It does not resume the other worker's session.
+
+## Cleanup-only preparation
+
+`prepare_for_lease_record` records cleanup through the existing writer without
+selecting a provider attachment. It preserves the saved provider identity,
+context and queue decisions, and an S6 fresh-context selection already made by
+provider preparation. It cannot clear that selection and thereby authorize
+restoring the old native context. Regression:
+`lease_record_preparation_preserves_a_selected_fresh_context`; retained-write
+and foreign-provider controls remain in
+`evidence_preparation_preserves_retained_refusal_across_failed_save_and_reload`.
+
+The same preparation cannot consume a pending provider switch or clear a selected
+switch's original actor/time. The mixed cleanup/provider ordering and its
+regression are [handoff row H8](conversation-handoffs.md#history-h).

@@ -54,6 +54,7 @@ serde = { version = "1", features = ["derive"] }
 # `env` name is still visible. Decoding the entry as a `Value` first would
 # keep one of the two.
 serde_json = { version = "1", features = ["raw_value"] }
+serde_path_to_error = "0.1.20"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal", "io-util", "io-std", "process"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

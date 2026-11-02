@@ -142,6 +142,24 @@ pub(crate) enum EnvironmentEvent {
         reason: InstallRefusal,
         seen: Option<String>,
     },
+    /// A paired host whose hello named another protocol asked for this
+    /// build, for `platform`, and is sent the build whose SHA-256 is
+    /// `digest`. Whether it keeps and runs it is the host's.
+    UpdateStarted {
+        host: String,
+        platform: String,
+        digest: String,
+    },
+    /// Every byte of that build was sent.
+    UpdateSent { host: String, digest: String },
+    /// A paired host asked for this build and was sent none, or not all of
+    /// it: `seen` as for [`Self::InstallRefused`], or what cut the send short.
+    UpdateRefused {
+        host: String,
+        platform: String,
+        reason: InstallRefusal,
+        seen: Option<String>,
+    },
 }
 
 /// Why this build was not installed on a host.

@@ -64,10 +64,14 @@ different rule, because its VM is billed while it runs:
 An agent may also close its own thread with the `close_thread` tool. Its
 conversation is marked closing and parked as soon as its turn has ended and
 no background command of it runs, watched or not; in a cloud workspace its
-VM rests with it. A message that arrives first clears the mark, since it is
-new work. The tool is refused (`agent_unsupported`) for an agent that cannot
-resume its session, which is never parked. The next message opens it again
-as after any park.
+VM rests with it. The mark is the conversation's, kept in the metadata store
+(`closed_threads`), not the agent's: whatever opens the conversation before
+a new message (a `conversation.read`, a restart's resumption) opens it still
+closed, and that agent is parked again once idle. Only a new message clears
+the mark, since it is new work; a retry of a message the agent already has,
+which may be the very one whose turn closed the thread, is not. The tool is
+refused (`agent_unsupported`) for an agent that cannot resume its session,
+which is never parked. The next message opens it again as after any park.
 
 Parking is the stop that already exists for an agent that stopped itself
 (`AgentEnd::Suspend`): the process stops, anything owed stays owed, and the
@@ -124,6 +128,9 @@ conversation again, instead of being refused as a desktop stop refuses it.
 | In a cloud workspace, a rest waits while an opening holds the VM | The VM stays running | Opens on the running VM | `a_rest_waiting_behind_an_opening_keeps_the_vm_it_opens` |
 | The agent closed its thread (`close_thread`) | Parked once its turn ends, watched or not | Opens again | `an_agent_that_closed_its_thread_is_parked_once_idle` |
 | A message arrives after `close_thread`, before the sweep | Not parked: the message clears the mark | Runs | `a_message_after_close_thread_keeps_the_thread_open` |
+| A read opens a thread its agent closed, after the park | Opened still closed, and parked again once idle, watched or not | Opens again | `a_closed_thread_opened_by_a_read_is_parked_again` |
+| `close_thread` lands while a new message opens the thread again | The two change the close one at a time, so the store and the agent's mark agree | Whichever comes last holds | `a_close_during_a_messages_opening_leaves_store_and_mark_agreeing` |
+| A retry of the message whose turn closed the thread | Not new work: the thread stays closed and is parked | Answered from what the agent has | `a_retry_of_the_message_that_closed_the_thread_keeps_it_closed` |
 | `close_thread` for a thread not open, or an agent that cannot resume | Refused, nothing marked | | `close_thread_is_refused_where_it_would_do_nothing` |
 | A rest while a lease or an opening holds the workspace's connection | The connection and the VM stay | | `a_workspace_connection_is_let_go_only_while_nothing_uses_it` |
 | The gateway starts retiring | The sweep ends; retirement suspends what is left | | `parking_stops_when_the_gateway_retires` |

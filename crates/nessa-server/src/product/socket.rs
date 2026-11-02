@@ -1986,6 +1986,9 @@ async fn dispatch_authorized(
         method if method.starts_with("github.") => {
             super::github::dispatch(state, session, frame).await
         }
+        method if method.starts_with("voice.") => {
+            super::voice::dispatch(state, session, frame).await
+        }
         "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
         "pairing.setTunnel" => super::pairing::set_tunnel(state, session, frame).await,
         "pairing.tunnel" => super::pairing::tunnel(state, frame).await,
@@ -2163,13 +2166,25 @@ async fn dispatch_authorized(
                 })
                 .await
             {
-                Ok(RevokeCredentialOutcome { revision, .. }) => success(
-                    &frame.id,
-                    &CredentialRevokeResult {
-                        credential_id: params.credential_id,
-                        revision,
-                    },
-                ),
+                Ok(RevokeCredentialOutcome { revision, .. }) => {
+                    if let Some(secrets) = state.tunnel_secrets.as_ref() {
+                        if let Err(error) = secrets.revoke(
+                            &params.credential_id,
+                            crate::tunnel::application::SecretRevocation::CredentialRevoked,
+                            session.context().principal_id().as_str(),
+                        ) {
+                            tracing::warn!(?error, "the device tunnel secret was not revoked");
+                            return failure(&frame.id, "audit_unavailable");
+                        }
+                    }
+                    success(
+                        &frame.id,
+                        &CredentialRevokeResult {
+                            credential_id: params.credential_id,
+                            revision,
+                        },
+                    )
+                }
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
@@ -2857,6 +2872,9 @@ mod tests {
     }
     mod vault_tests {
         include!("../../tests/product/socket/vault.rs");
+    }
+    mod voice_tests {
+        include!("../../tests/product/socket/voice.rs");
     }
     pub(super) mod host_fixture {
         include!("../../tests/product/socket/host_fixture.rs");

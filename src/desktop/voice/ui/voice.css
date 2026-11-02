@@ -1,0 +1,143 @@
+/*
+ * The voice call above a conversation's composer: one line in a bubble, and
+ * the orb. The orb's colours are set by `VoiceOrb` from nessa_ui's
+ * `agentCardTones`: brand colours rather than theme tokens, because the orb
+ * is the agent's.
+ */
+.voice-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 8px var(--desktop-gutter) 14px;
+  pointer-events: none;
+}
+
+.voice-dock > * {
+  pointer-events: auto;
+}
+
+.voice-bubble {
+  position: relative;
+  max-width: min(30rem, 100%);
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: var(--desktop-radius-lg);
+  background: color-mix(in oklab, var(--foreground) 7%, var(--background));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
+  line-height: 1.45;
+  text-align: center;
+  overflow-wrap: break-word;
+  /* A long sentence shows its latest words. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.voice-dock[data-phase="speaking"] .voice-bubble {
+  color: var(--foreground);
+}
+
+.voice-notice-dismiss {
+  border: 0;
+  border-radius: var(--desktop-radius-pill);
+  padding: 4px 12px;
+  background: var(--desktop-hover);
+  color: var(--foreground);
+  font-size: var(--desktop-text-footnote);
+}
+
+.voice-orb {
+  --voice-level: 0;
+  position: relative;
+  flex: none;
+  border-radius: 50%;
+  background: radial-gradient(
+    90% 70% at 34% 22%,
+    color-mix(in oklab, var(--orb-lit) 85%, white) 0%,
+    color-mix(in oklab, var(--orb-lit) 60%, var(--orb-planet)) 18%,
+    var(--orb-planet) 48%,
+    var(--orb-deep) 100%
+  );
+  box-shadow:
+    inset 0 1.5px 0 0 color-mix(in oklab, var(--orb-lit) 70%, transparent),
+    inset 0 -10px 22px -8px rgb(0 0 0 / 0.45),
+    0 0 calc(18px + 40px * var(--voice-level)) calc(2px + 10px * var(--voice-level))
+      var(--orb-glow);
+  transform: scale(calc(1 + 0.14 * var(--voice-level)));
+  transition: transform 90ms linear;
+}
+
+/* The light that drifts across while the agent works. */
+.voice-orb-light {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    color-mix(in oklab, var(--orb-lit) 35%, transparent) 60deg,
+    transparent 140deg
+  );
+  mix-blend-mode: screen;
+  opacity: 0;
+  transition: opacity var(--desktop-slow) ease;
+}
+
+.voice-orb[data-phase="working"] .voice-orb-light {
+  opacity: 1;
+  animation: voice-orb-turn 3.2s linear infinite;
+}
+
+.voice-orb[data-phase="listening"],
+.voice-orb[data-phase="connecting"] {
+  animation: voice-orb-breathe 3.6s ease-in-out infinite;
+}
+
+.voice-orb[data-phase="connecting"] {
+  opacity: 0.7;
+}
+
+@keyframes voice-orb-breathe {
+  50% {
+    filter: brightness(1.08);
+    translate: 0 -2px;
+  }
+}
+
+@keyframes voice-orb-turn {
+  to {
+    rotate: 1turn;
+  }
+}
+
+:root[data-motion="reduced"] .voice-orb,
+:root[data-motion="reduced"] .voice-orb-light {
+  animation: none;
+  transition: none;
+}
+
+/* The composer's call controls: speaker, microphone, and the round end. */
+.desktop-voice-toggle[aria-pressed="false"] {
+  color: var(--desktop-muted);
+}
+
+.desktop-voice-end {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-radius-pill);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.desktop-voice-end svg {
+  width: 16px;
+  height: 16px;
+}

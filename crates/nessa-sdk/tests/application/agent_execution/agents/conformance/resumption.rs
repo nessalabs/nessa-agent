@@ -2,9 +2,16 @@
 //! continued by a successor turn; a person's stop stays final.
 use super::*;
 use nessa_sdk::application::agent_execution::{
-    agents::{AttachmentFailureCode, AttachmentPhase, OwedTurn, Resumed},
+    agents::{
+        owed_turn_ids, resumed_turn_id, AttachmentFailureCode, AttachmentPhase, OwedTurn, Resumed,
+    },
     executions::TurnResumption,
 };
+use nessa_sdk::domain::agent_execution::executions::Resumption;
+
+mod canonical_admission;
+mod cleanup_proof_panics;
+mod refused_lease_cleanup;
 
 fn resumer() -> ActionContext {
     ActionContext::new("gateway", "resume_after_restart", "restart").unwrap()
@@ -326,6 +333,84 @@ async fn a_declined_suspended_turn_is_decided_once() {
 }
 
 #[tokio::test]
+async fn a_decline_audits_its_applied_decision_despite_a_failed_terminal_save() {
+    for reject_audit in [false, true] {
+        let saved = cut_off_while_running("decline-save").await;
+        let (agent, backend, storage, _hold) = restore_holding(saved).await;
+        let turn = agent.owed_turns().await.remove(0);
+        // Interrupted and the original decline preparation commit; the final
+        // NotResumed decision is retained but its adapter rejects that write.
+        // The additional preparation protects audit attribution through restart.
+        let failed_write = storage.writes() + 3;
+        storage.0.lock().unwrap().fail_write = Some(failed_write);
+        backend.audit.reject.store(reject_audit, Ordering::SeqCst);
+        let error = bounded(agent.decline_turn(&turn, resumer()))
+            .await
+            .unwrap_err();
+        let storage_error = AgentError::Storage(StorageError::Io("fixture write failed".into()));
+        assert_eq!(
+            error,
+            if reject_audit {
+                AgentError::MultipleOperationFailures {
+                    first_error: Box::new(storage_error),
+                    subsequent_error: Box::new(AgentError::AuditFailure),
+                }
+            } else {
+                storage_error
+            }
+        );
+        assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+        assert_eq!(
+            storage.snapshot().invocations[0]
+                .scheduling
+                .last()
+                .unwrap()
+                .cause,
+            SchedulingCause::Interrupted
+        );
+        assert!(
+            agent.owed_turns().await.is_empty(),
+            "the live decision is retained"
+        );
+        agent
+            .session_manager()
+            .save_retained_lease_records()
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.snapshot().invocations[0]
+                .scheduling
+                .last()
+                .unwrap()
+                .cause,
+            SchedulingCause::NotResumed
+        );
+        assert!(backend.executions.lock().unwrap().is_empty());
+        backend.audit.reject.store(false, Ordering::SeqCst);
+        bounded(agent.close(actor())).await.unwrap();
+        assert_ends_after_restore(&storage).await;
+    }
+}
+
+#[tokio::test]
+async fn a_failed_interrupted_save_does_not_invent_a_decline_decision() {
+    let saved = cut_off_while_running("interrupted-save").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    storage.fail_next();
+    assert!(matches!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::Storage(_))
+    ));
+    assert!(resumptions(&backend).is_empty());
+    assert_eq!(agent.owed_turns().await.len(), 1);
+    bounded(agent.decline_turn(&turn, resumer())).await.unwrap();
+    assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+    bounded(agent.close(actor())).await.unwrap();
+    assert_ends_after_restore(&storage).await;
+}
+
+#[tokio::test]
 async fn a_spent_chain_of_suspended_turns_is_recorded_ended() {
     let mut saved = stopped_storage(Stop::Suspend).await;
     // The original and its three successors are each stopped by a shutdown.
@@ -388,7 +473,7 @@ async fn assert_ends_after_restore(storage: &MemoryStorage) {
 #[tokio::test]
 async fn a_successor_whose_audit_record_fails_still_runs_and_says_so() {
     let saved = cut_off_while_running("unaudited").await;
-    let (agent, backend, _storage, hold) = restore_holding(saved).await;
+    let (agent, backend, storage, hold) = restore_holding(saved).await;
     let turn = agent.owed_turns().await.remove(0);
     backend.audit.reject.store(true, Ordering::SeqCst);
     let Resumed::ContinuedUnaudited { admission, error } =
@@ -397,6 +482,12 @@ async fn a_successor_whose_audit_record_fails_still_runs_and_says_so() {
         panic!("the successor is queued whether or not its record saved")
     };
     assert_eq!(error, AgentError::AuditFailure);
+    let history = storage.snapshot().invocations;
+    assert_eq!(
+        resumed_turn_id(&history, turn.execution_id()),
+        Some(admission.id().clone())
+    );
+    assert!(!owed_turn_ids(&history).contains(turn.execution_id()));
     backend.audit.reject.store(false, Ordering::SeqCst);
     // The host still has the receipt to watch. What the turn then comes to
     // is the agent's own audit rule (the same sink also refused the
@@ -417,6 +508,10 @@ async fn a_successor_whose_audit_record_fails_still_runs_and_says_so() {
 /// Run `failed` until the provider fails it with `error`, with `behind`
 /// queued after it, and wait for both receipts.
 async fn failed_with(error: AgentError) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
+    failed_named(error, "failed").await
+}
+
+async fn failed_named(error: AgentError, id: &str) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
     let (agent, backend, storage) = workflow().await;
     *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
         error.clone(),
@@ -426,7 +521,7 @@ async fn failed_with(error: AgentError) -> (Agent, Arc<WorkflowBackend>, MemoryS
     ));
     let (release, gate) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(gate);
-    let failed = Mode::Queued.start(agent.clone(), request("failed"));
+    let failed = Mode::Queued.start(agent.clone(), request(id));
     bounded(backend.dispatched.notified()).await;
     let behind = agent
         .enqueue(request("behind"), Submitter::owner(actor()))
@@ -565,13 +660,17 @@ async fn a_declined_failed_turn_is_recorded_ended() {
 
 #[tokio::test]
 async fn a_failed_turn_a_later_message_moved_past_is_not_sent_again() {
+    later_person_message("next").await;
+}
+
+async fn later_person_message(next_id: &str) {
     let (agent, _backend, storage) = failed_with(AgentError::Provider {
         code: -32077,
         diagnostic: None,
     })
     .await;
     let next = agent
-        .enqueue(request("next"), Submitter::owner(actor()))
+        .enqueue(request(next_id), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(bounded(next.wait()).await, Ok(ExecutionOutcome::Completed));
@@ -589,6 +688,10 @@ async fn a_failed_turn_a_later_message_moved_past_is_not_sent_again() {
 
 #[tokio::test]
 async fn a_message_sent_while_a_retry_waits_moves_past_the_retry_that_failed() {
+    person_message_while_retry_waits("next").await;
+}
+
+async fn person_message_while_retry_waits(next_id: &str) {
     let error = AgentError::Transport("pipe".into());
     let (agent, backend, _storage) = failed_with(error.clone()).await;
     *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
@@ -611,7 +714,7 @@ async fn a_message_sent_while_a_retry_waits_moves_past_the_retry_that_failed() {
     bounded(backend.dispatched.notified()).await;
     // The person saw the failure and wrote again; it waits behind the retry.
     let next = agent
-        .enqueue(request("next"), Submitter::owner(actor()))
+        .enqueue(request(next_id), Submitter::owner(actor()))
         .await
         .unwrap();
     release.send(()).unwrap();
@@ -622,7 +725,7 @@ async fn a_message_sent_while_a_retry_waits_moves_past_the_retry_that_failed() {
     *backend.execution_fault.lock().unwrap() = None;
     assert_eq!(
         owed_ids(&agent.owed_turns().await),
-        ["next"],
+        [next_id],
         "the retries the person wrote past are not sent again, so the next message is not held behind them"
     );
     bounded(agent.close(actor())).await.unwrap();
@@ -741,4 +844,1296 @@ async fn a_retry_answers_as_the_successor_that_ended_the_chain() {
         "the successor's ending, not the original's"
     );
     bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn continuation_read_waits_for_the_exact_original_successor_and_keeps_person_stop_final() {
+    let saved = cut_off_while_running("report-continuation").await;
+    let original = ExecutionId::new("report-continuation").unwrap();
+    assert!(owed_turn_ids(&saved.snapshot().invocations).contains(&original));
+    assert_eq!(
+        resumed_turn_id(&saved.snapshot().invocations, &original),
+        None
+    );
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::Continued(admission) = agent.resume_turn(&turn, resumer()).await.unwrap() else {
+        panic!("continued")
+    };
+    bounded(backend.dispatched.notified()).await;
+    let snapshot = storage.snapshot();
+    assert_eq!(
+        resumed_turn_id(&snapshot.invocations, &original),
+        Some(admission.id().clone())
+    );
+    let mut unrelated = snapshot.invocations.clone();
+    unrelated[1].actor = ActionContext::new("other", "panel", "forged-successor").unwrap();
+    assert_eq!(resumed_turn_id(&unrelated, &original), None);
+    let mut unrelated = snapshot.invocations;
+    let mut wrong_request = request("unrelated");
+    wrong_request.execution_id = admission.id().clone();
+    unrelated[1].request = wrong_request;
+    assert_eq!(resumed_turn_id(&unrelated, &original), None);
+    bounded(agent.close(actor())).await.unwrap();
+    assert!(!owed_turn_ids(&storage.snapshot().invocations).contains(admission.id()));
+    assert_eq!(
+        resumed_turn_id(&storage.snapshot().invocations, admission.id()),
+        None
+    );
+}
+
+struct HoldBeforeDispatch {
+    entered: Mutex<Option<oneshot::Sender<()>>>,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+impl InvocationHook for HoldBeforeDispatch {
+    fn before_invocation(&self, context: &InvocationContext<'_>) -> Result<(), HookError> {
+        if context.request.execution_id.as_str() == "handoff" {
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                self.release
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+            }
+        }
+        Ok(())
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsettled_selection_includes_dequeued_work_before_active_provider_dispatch() {
+    let (agent, _, _) = workflow().await;
+    let (entered, waiting) = oneshot::channel();
+    let (release, gate) = std::sync::mpsc::channel();
+    agent.add_invocation_hook(Arc::new(HoldBeforeDispatch {
+        entered: Mutex::new(Some(entered)),
+        release: Mutex::new(Some(gate)),
+    }));
+    let admission = agent
+        .enqueue(request("handoff"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    bounded(waiting).await.unwrap();
+    assert!(agent.active_execution_id().is_none());
+    assert!(
+        agent.queued_ids().await.is_empty(),
+        "the runner already dequeued this work"
+    );
+    assert_eq!(
+        agent.unsettled_execution_ids().await,
+        [ExecutionId::new("handoff").unwrap()]
+    );
+    release.send(()).unwrap();
+    bounded(admission.wait()).await.unwrap();
+    assert!(agent.unsettled_execution_ids().await.is_empty());
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_saved_failed_turn_successor_is_still_followed_after_later_person_work() {
+    let (agent, _backend, storage) = failed_with(AgentError::Transport("pipe".into())).await;
+    let owed = agent.owed_turns().await;
+    let Resumed::Continued(successor) = agent.resume_turn(&owed[0], resumer()).await.unwrap()
+    else {
+        panic!("failed work continues")
+    };
+    let successor_id = successor.id().clone();
+    assert_eq!(
+        bounded(successor.wait()).await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    let later = agent
+        .enqueue(request("later-person-work"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    bounded(later.wait()).await.unwrap();
+    assert_eq!(
+        resumed_turn_id(
+            &storage.snapshot().invocations,
+            &ExecutionId::new("failed").unwrap()
+        ),
+        Some(successor_id)
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn historical_continuation_agrees_when_a_person_message_supersedes_a_failed_successor() {
+    let error = AgentError::Transport("pipe".into());
+    let (agent, backend, storage) = failed_with(error.clone()).await;
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        error,
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let (release, gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(gate);
+    let mut successors = Vec::new();
+    for turn in &agent.owed_turns().await {
+        let Resumed::Continued(admission) = agent.resume_turn(turn, resumer()).await.unwrap()
+        else {
+            panic!("owed successor")
+        };
+        successors.push(admission);
+    }
+    bounded(backend.dispatched.notified()).await;
+    let next = agent
+        .enqueue(request("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    let mut ids = Vec::new();
+    for admission in successors {
+        ids.push(admission.id().clone());
+        let _ = bounded(admission.wait()).await;
+    }
+    let _ = bounded(next.wait()).await;
+    *backend.execution_fault.lock().unwrap() = None;
+    let owed = agent.owed_turns().await;
+    let history = storage.snapshot().invocations;
+    for id in ids {
+        assert!(!owed.iter().any(|turn| turn.execution_id() == &id));
+        assert!(!owed_turn_ids(&history).contains(&id));
+        assert_eq!(resumed_turn_id(&history, &id), None);
+    }
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+fn ordinary_resume_shaped_id() -> ExecutionId {
+    Resumption::of(&ExecutionId::new("ordinary").unwrap())
+        .successor()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_failed_ordinary_resume_shaped_id_is_not_a_retry() {
+    let id = ordinary_resume_shaped_id();
+    let (agent, _, _) = failed_named(AgentError::Transport("pipe".into()), id.as_str()).await;
+    assert_eq!(owed_ids(&agent.owed_turns().await), [id.as_str(), "behind"]);
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_completed_ordinary_resume_shaped_id_is_a_person_intervention() {
+    later_person_message(ordinary_resume_shaped_id().as_str()).await;
+}
+
+#[tokio::test]
+async fn an_ordinary_resume_shaped_id_moves_past_a_failed_retry() {
+    person_message_while_retry_waits(ordinary_resume_shaped_id().as_str()).await;
+}
+
+#[tokio::test]
+async fn a_rejected_decline_preparation_retains_first_actor_without_a_terminal_or_audit() {
+    let saved = cut_off_while_running("prepared-decline").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let failed_write = storage.writes() + 2;
+    storage.0.lock().unwrap().fail_write = Some(failed_write);
+    assert!(matches!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::Storage(_))
+    ));
+    assert_eq!(
+        storage.snapshot().invocations[0]
+            .scheduling
+            .last()
+            .unwrap()
+            .cause,
+        SchedulingCause::Interrupted
+    );
+    assert!(
+        resumptions(&backend).is_empty(),
+        "no audit can orphan an unacknowledged preparation"
+    );
+    assert!(
+        agent.owed_turns().await.is_empty(),
+        "the original preparation already owns this decision locally"
+    );
+    let later = ActionContext::new("other", "another_surface", "later-close").unwrap();
+    bounded(agent.decline_turn(&turn, later)).await.unwrap();
+    {
+        let records = backend.audit.records.lock().unwrap();
+        let declined = records
+            .iter()
+            .find_map(|record| match record {
+                ExecutionAuditRecord::TurnResumed(record) => Some(record),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(declined.resumed_by(), &resumer());
+    }
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_empty_owed_list_after_restart_rejoins_the_original_decline_audit() {
+    let saved = cut_off_while_running("restore-decline-audit").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    backend.audit.reject.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::AuditFailure)
+    );
+    let snapshot = storage.snapshot();
+    assert!(!snapshot.invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    assert!(agent.owed_turns().await.is_empty());
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(snapshot);
+    let (restored, new_backend, new_storage, _new_hold) = restore_holding(saved).await;
+    assert!(restored.owed_turns().await.is_empty());
+    bounded(restored.retry_declined_turns()).await.unwrap();
+    let original = backend
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|record| match record {
+            ExecutionAuditRecord::TurnResumed(record) => Some(record.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let replay = new_backend
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|record| match record {
+            ExecutionAuditRecord::TurnResumed(record) => Some(record.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(replay, original);
+    assert!(new_storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    let count = new_backend.audit.records.lock().unwrap().len();
+    bounded(restored.retry_declined_turns()).await.unwrap();
+    assert_eq!(new_backend.audit.records.lock().unwrap().len(), count);
+    backend.audit.reject.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+    bounded(restored.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_decline_audit_ack_save_failure_is_independent_and_retry_does_not_redeliver() {
+    let saved = cut_off_while_running("decline-ack-save").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let failed_write = storage.writes() + 4;
+    storage.0.lock().unwrap().fail_write = Some(failed_write);
+    assert!(matches!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::Storage(_))
+    ));
+    assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+    assert!(!storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    bounded(agent.retry_declined_turns()).await.unwrap();
+    assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn close_joins_prepared_decline_evidence_even_when_no_work_is_owed() {
+    let saved = cut_off_while_running("close-decline-receipt").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    backend.audit.reject_decline.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::AuditFailure)
+    );
+    assert!(agent.owed_turns().await.is_empty());
+    assert_eq!(
+        bounded(agent.close(actor())).await,
+        Err(AgentError::AuditFailure),
+        "other close audits succeed; the retained decline receipt alone prevents acknowledgement"
+    );
+    assert!(!storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    backend.audit.reject_decline.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    assert!(backend.executions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn prepared_cancellation_delivery_waits_for_its_own_history_ack_before_retry() {
+    let saved = cut_off_while_running("cancellation-history-ack").await;
+    let (agent, backend, storage, hold) = restore_holding(saved).await;
+    backend.audit.reject.store(true, Ordering::SeqCst);
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::ContinuedUnaudited { admission, .. } =
+        bounded(agent.resume_turn(&turn, resumer())).await.unwrap()
+    else {
+        panic!("audit rejection must retain the original cancellation receipt")
+    };
+    let _ = hold.send(());
+    let _ = bounded(admission.wait()).await;
+    let before = storage.snapshot();
+    let original = before
+        .invocations
+        .iter()
+        .find(|record| record.cancellation_delivery.is_some())
+        .unwrap();
+    let id = original.request.execution_id.clone();
+    let decision = original.cancellation_delivery.clone().unwrap();
+    assert!(!decision.acknowledged());
+    let restart = MemoryStorage::default();
+    restart.0.lock().unwrap().snapshot = Some(before);
+    backend.audit.reject.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+
+    let (restored, fresh, storage) = workflow_from_storage(restart).await;
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *fresh.audit.pause.lock().unwrap() = Some((entered, held));
+    let delivery = tokio::spawn({
+        let restored = restored.clone();
+        async move { restored.retry_cancelled_receipts().await }
+    });
+    bounded(waiting).await.unwrap();
+    // Preparation is already saved. Fail precisely the write after audit ACK,
+    // before any second retry can flush that first owner's pending receipt.
+    storage.fail_next();
+    release.send(()).unwrap();
+    assert!(matches!(
+        bounded(delivery).await.unwrap(),
+        Err(AgentError::Storage(_))
+    ));
+    let failed = storage.snapshot();
+    assert_eq!(
+        failed
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id == id)
+            .unwrap()
+            .cancellation_delivery
+            .as_ref(),
+        Some(&decision),
+        "successful audit delivery cannot acknowledge its rejected history write"
+    );
+    let deliveries = fresh.audit.records.lock().unwrap().len();
+    bounded(restored.retry_cancelled_receipts()).await.unwrap();
+    assert_eq!(
+        fresh.audit.records.lock().unwrap().len(),
+        deliveries,
+        "the real writer's retry must persist its retained ACK without redelivery"
+    );
+    let acknowledged = storage.snapshot();
+    let receipt = acknowledged
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == id)
+        .unwrap()
+        .cancellation_delivery
+        .as_ref()
+        .unwrap();
+    assert!(receipt.acknowledged());
+    assert_eq!(receipt.event(), decision.event());
+    bounded(restored.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_joins_only_real_ack(
+) {
+    let saved = cut_off_while_running("cancellation-restart").await;
+    let (agent, backend, storage, hold) = restore_holding(saved).await;
+    backend.audit.reject.store(true, Ordering::SeqCst);
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::ContinuedUnaudited { admission, .. } =
+        bounded(agent.resume_turn(&turn, resumer())).await.unwrap()
+    else {
+        panic!("audit rejection must remain visible")
+    };
+    let _ = hold.send(());
+    let _ = bounded(admission.wait()).await;
+    let before = storage.snapshot();
+    let cancellation = before
+        .invocations
+        .iter()
+        .find(|record| record.cancellation_delivery.is_some())
+        .unwrap();
+    let id = cancellation.request.execution_id.clone();
+    let submitted_by = cancellation.actor.clone();
+    let decision = cancellation.cancellation_delivery.clone().unwrap();
+    assert!(!decision.acknowledged());
+    let restart = MemoryStorage::default();
+    restart.0.lock().unwrap().snapshot = Some(before);
+    backend.audit.reject.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+    let (restored, fresh, storage) = workflow_from_storage(restart).await;
+    fresh.audit.reject.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(restored.retry_cancelled_receipts()).await,
+        Err(AgentError::AuditFailure)
+    );
+    let failed = storage.snapshot();
+    assert_eq!(
+        failed
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id == id)
+            .unwrap()
+            .cancellation_delivery
+            .as_ref(),
+        Some(&decision)
+    );
+    let rejected_attempts = fresh
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| matches!(record, ExecutionAuditRecord::QueueSettled(_)))
+        .count();
+    assert_eq!(
+        rejected_attempts, 1,
+        "the prior failed join attempted its original audit exactly once"
+    );
+    fresh.audit.reject.store(false, Ordering::SeqCst);
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *fresh.audit.pause.lock().unwrap() = Some((entered, held));
+    let first = tokio::spawn({
+        let restored = restored.clone();
+        async move { restored.retry_cancelled_receipts().await }
+    });
+    bounded(waiting).await.unwrap();
+    let (started, starting) = oneshot::channel();
+    let second = tokio::spawn({
+        let restored = restored.clone();
+        async move {
+            started.send(()).unwrap();
+            restored.retry_cancelled_receipts().await
+        }
+    });
+    bounded(starting).await.unwrap();
+    assert!(
+        !second.is_finished(),
+        "the second join cannot acknowledge while the first owner awaits audit ACK"
+    );
+    release.send(()).unwrap();
+    bounded(first).await.unwrap().unwrap();
+    bounded(second).await.unwrap().unwrap();
+    assert_eq!(
+        fresh
+            .audit
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| matches!(record, ExecutionAuditRecord::QueueSettled(_)))
+            .count(),
+        rejected_attempts + 1,
+        "competing joins add one successful delivery to the preserved rejected attempt"
+    );
+
+    let delivered = fresh
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::QueueSettled(record) => Some(record.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        delivered[0], delivered[1],
+        "rejection and ACK retain exact identity, submitter, initiator and cause"
+    );
+    assert_eq!(delivered[0].submitted_by(), &submitted_by);
+    assert_eq!(delivered[0].initiated_by(), decision.event().actor.as_ref());
+    assert_eq!(delivered[0].cause(), decision.event().cause);
+    let acknowledged = storage.snapshot();
+    let record = acknowledged
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == id)
+        .unwrap();
+    let receipt = record.cancellation_delivery.as_ref().unwrap();
+    assert!(receipt.acknowledged());
+    assert_eq!(receipt.event(), decision.event());
+    assert_eq!(
+        record
+            .scheduling
+            .iter()
+            .filter(|edge| *edge == decision.event())
+            .count(),
+        1
+    );
+    let calls = fresh.audit.records.lock().unwrap().len();
+    bounded(restored.retry_cancelled_receipts()).await.unwrap();
+    assert_eq!(fresh.audit.records.lock().unwrap().len(), calls);
+    bounded(restored.close(actor())).await.unwrap();
+}
+
+// Test-only additions for disposable exact-85697c4f source copy.
+// Append to tests/application/agent_execution/agents/conformance/resumption.rs.
+#[tokio::test]
+async fn cycle8_same_lease_sdk_proof_is_retired_before_reacquisition() {
+    for mode in [0, 1, 2] {
+        let lose_ack = mode == 1;
+        use nessa_sdk::application::agent_execution::{sessions::LeaseRecord, subagents::*};
+        use nessa_sdk::domain::agent_execution::{leases::*, subagents::*};
+        struct NoFactory;
+        #[async_trait::async_trait]
+        impl ChildFactory for NoFactory {
+            async fn prepare(&self, _: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
+                panic!("no child factory is reached by this root-only test")
+            }
+        }
+        struct Accept;
+        #[async_trait::async_trait]
+        impl OwnershipAudit for Accept {
+            async fn record(&self, _: &OwnershipEvidence) -> Result<(), PortFailure> {
+                Ok(())
+            }
+        }
+        let storage = MemoryStorage::default();
+        let backend = workflow_backend();
+        let agent = Agent::prepare(
+            Arc::new(WorkflowProvider(backend.clone())),
+            storage.manager().await,
+            backend.audit.clone(),
+        )
+        .await
+        .unwrap();
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(Accept),
+            factory: Arc::new(NoFactory),
+            room: Arc::new(LiveCapacity::new(1)),
+        });
+        let root = coordinator
+            .open_root(agent.session_manager().id().clone(), Initiator::Runtime)
+            .await
+            .unwrap();
+        let gate = coordinator.participation(&root).unwrap();
+        let scope = gate.cleanup_scope().unwrap();
+        agent.install_owned_lifetime(gate).unwrap();
+        agent
+            .session_manager()
+            .record_lease(|_| {
+                (
+                    vec![LeaseRecord::Issued {
+                        lease: LeaseId::new("cycle8-same-lease").unwrap(),
+                        revision: LeaseRevision::FIRST,
+                        terms: LeaseTerms {
+                            environment: EnvironmentRef::Here,
+                            work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                            sandbox: SandboxProfile::HarnessDefault,
+                            grants: LeaseGrants::Opening,
+                            deadline: LeaseDeadline::UntilEnded,
+                        },
+                        actor: actor(),
+                    }],
+                    (),
+                )
+            })
+            .await
+            .unwrap()
+            .saved
+            .unwrap();
+        let auth = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        bounded(agent.start_attachment(auth).unwrap().wait())
+            .await
+            .unwrap();
+        bounded(agent.close_report(actor()))
+            .await
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert!(storage
+            .snapshot()
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope));
+        reattach_after_explicit_close(&agent).await;
+        let stale = storage
+            .snapshot()
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope);
+        let _ = bounded(agent.close_report(actor())).await;
+        assert!(
+            !stale,
+            "cycle8: first cleanup ACK still certifies an actual later same-lease attachment"
+        );
+        assert!(
+            storage
+                .snapshot()
+                .lease
+                .as_ref()
+                .unwrap()
+                .sdk_cleanup_acknowledged(&scope),
+            "the actual second cleanup may acknowledge the new acquisition"
+        );
+        if mode == 2 {
+            // Observe the producer's durable fact directly: another gateway
+            // obligation must not mask an SDK proof issued without its audit ACK.
+            reattach_after_explicit_close(&agent).await;
+            *backend.cleanup.lock().unwrap() =
+                nessa_sdk::application::agent_execution::providers::CleanupReport::confirmed(
+                    nessa_sdk::application::agent_execution::providers::CloseOutcome {
+                        forced: false,
+                    },
+                )
+                .with_audit(Err(AgentError::AuditFailure));
+            let report = bounded(agent.close_report(actor())).await.unwrap();
+            assert!(report.cleanup().is_confirmed());
+            assert!(report.cleanup().audit().is_err());
+            assert!(
+                !storage
+                    .snapshot()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "SDK cleanup audit failure cannot publish a durable cleanup ACK"
+            );
+            continue;
+        }
+        if lose_ack {
+            storage.lose_next_ack();
+        } else {
+            storage.fail_next();
+        }
+        let started_before = backend.audit.records.lock().unwrap().iter().filter(|record| {
+        matches!(record, ExecutionAuditRecord::Attachment(record)
+            if record.after() == nessa_sdk::application::agent_execution::executions::AttachmentAuditStage::Starting)
+    }).count();
+        let auth = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        assert!(matches!(
+            bounded(agent.start_attachment(auth).unwrap().wait()).await,
+            Err(AgentError::Storage(_))
+        ));
+        let started_after = backend.audit.records.lock().unwrap().iter().filter(|record| {
+        matches!(record, ExecutionAuditRecord::Attachment(record)
+            if record.after() == nessa_sdk::application::agent_execution::executions::AttachmentAuditStage::Starting)
+    }).count();
+        assert_eq!(
+            started_before, started_after,
+            "rejected proof retirement prevents Started effects"
+        );
+        assert_eq!(storage.snapshot().lease.as_ref().unwrap().sdk_cleanup_acknowledged(&scope), !lose_ack,
+        "committed retirement survives a lost reply; rejected retirement had no acquisition effects");
+        let _ = bounded(agent.close_report(actor())).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn cycle8_overlapping_decline_joins_first_audit_attempt() {
+    let saved = cut_off_while_running("cycle8-decline-overlap").await;
+    let (agent, backend, _storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered, held));
+    let first = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.decline_turn(&turn, resumer()).await }
+    });
+    bounded(waiting).await.unwrap();
+    // This second deterministic sink gate records whether an overlapping retry
+    // starts another sink call while the first exact decision is still held.
+    let (entered_second, mut waiting_second) = oneshot::channel();
+    let (release_second, held_second) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered_second, held_second));
+    let second = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.retry_declined_turns().await }
+    });
+    let duplicated = tokio::select! {
+        biased;
+        entry = &mut waiting_second => { entry.unwrap(); true }
+        () = tokio::time::sleep(Duration::from_secs(1)) => false,
+    };
+    // Release both actual writes before reporting a failed oracle.
+    release.send(()).unwrap();
+    let _ = release_second.send(());
+    bounded(first).await.unwrap().unwrap();
+    bounded(second).await.unwrap().unwrap();
+    let calls = resumptions(&backend).len();
+    let _ = bounded(agent.close(actor())).await;
+    assert!(
+        !duplicated,
+        "cycle8: overlapping decline retry entered a second audit before the first ACK"
+    );
+    assert_eq!(
+        calls, 1,
+        "cycle8: same prepared decline has one joined audit attempt"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cycle9_decline_joiners_share_failure_deadline_then_explicit_retry() {
+    let saved = cut_off_while_running("cycle9-decline-deadline").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered, held));
+    let first = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.decline_turn(&turn, resumer()).await }
+    });
+    bounded(waiting).await.unwrap();
+    tokio::time::advance(Duration::from_secs(25)).await;
+    let mut second = Box::pin(agent.retry_declined_turns());
+    tokio::select! {
+        biased;
+        result = &mut second => panic!("a joined pending audit cannot finish early: {result:?}"),
+        () = tokio::time::sleep(Duration::from_secs(1)) => {}
+    }
+    tokio::time::advance(Duration::from_secs(4)).await;
+    assert!(matches!(
+        bounded(first).await.unwrap(),
+        Err(AgentError::AuditFailure)
+    ));
+    assert!(matches!(
+        bounded(second).await,
+        Err(AgentError::AuditFailure)
+    ));
+    assert_eq!(resumptions(&backend).len(), 1);
+    assert!(!storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    let _ = release.send(());
+    bounded(agent.retry_declined_turns()).await.unwrap();
+    assert_eq!(
+        resumptions(&backend).len(),
+        2,
+        "only later explicit retry starts another attempt"
+    );
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    let _ = bounded(agent.close(actor())).await;
+}
+
+#[tokio::test]
+async fn cycle9_abandoned_authorization_audit_cannot_reuse_prior_sdk_proof() {
+    no_acquisition_evidence_retires_prior_proof(false, RetirementWrite::Acknowledged).await;
+}
+
+#[tokio::test]
+async fn cycle10_authorized_close_audit_cannot_reuse_prior_sdk_proof() {
+    no_acquisition_evidence_retires_prior_proof(true, RetirementWrite::Acknowledged).await;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RetirementWrite {
+    Acknowledged,
+    Rejected,
+    LostAcknowledgement,
+    Held,
+}
+
+#[tokio::test]
+async fn cycle10_retirement_writer_ack_precedes_no_resource_audit() {
+    for close_authorized in [false, true] {
+        for write in [
+            RetirementWrite::Rejected,
+            RetirementWrite::LostAcknowledgement,
+            RetirementWrite::Held,
+        ] {
+            no_acquisition_evidence_retires_prior_proof(close_authorized, write).await;
+        }
+    }
+}
+
+async fn no_acquisition_evidence_retires_prior_proof(
+    close_authorized: bool,
+    write: RetirementWrite,
+) {
+    for reject in [false, true] {
+        use nessa_sdk::application::agent_execution::{sessions::LeaseRecord, subagents::*};
+        use nessa_sdk::domain::agent_execution::{leases::*, subagents::*};
+        struct NoFactory;
+        #[async_trait::async_trait]
+        impl ChildFactory for NoFactory {
+            async fn prepare(&self, _: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
+                panic!("no child factory is reached by this root-only test")
+            }
+        }
+        struct Accept;
+        #[async_trait::async_trait]
+        impl OwnershipAudit for Accept {
+            async fn record(&self, _: &OwnershipEvidence) -> Result<(), PortFailure> {
+                Ok(())
+            }
+        }
+        let storage = MemoryStorage::default();
+        let backend = workflow_backend();
+        let agent = Agent::prepare(
+            Arc::new(WorkflowProvider(backend.clone())),
+            storage.manager().await,
+            backend.audit.clone(),
+        )
+        .await
+        .unwrap();
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(Accept),
+            factory: Arc::new(NoFactory),
+            room: Arc::new(LiveCapacity::new(1)),
+        });
+        let root = coordinator
+            .open_root(agent.session_manager().id().clone(), Initiator::Runtime)
+            .await
+            .unwrap();
+        let gate = coordinator.participation(&root).unwrap();
+        let scope = gate.cleanup_scope().unwrap();
+        agent.install_owned_lifetime(gate).unwrap();
+        agent
+            .session_manager()
+            .record_lease(|_| {
+                (
+                    vec![LeaseRecord::Issued {
+                        lease: LeaseId::new("cycle8-same-lease").unwrap(),
+                        revision: LeaseRevision::FIRST,
+                        terms: LeaseTerms {
+                            environment: EnvironmentRef::Here,
+                            work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                            sandbox: SandboxProfile::HarnessDefault,
+                            grants: LeaseGrants::Opening,
+                            deadline: LeaseDeadline::UntilEnded,
+                        },
+                        actor: actor(),
+                    }],
+                    (),
+                )
+            })
+            .await
+            .unwrap()
+            .saved
+            .unwrap();
+        let auth = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        bounded(agent.start_attachment(auth).unwrap().wait())
+            .await
+            .unwrap();
+        bounded(agent.close_report(actor()))
+            .await
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert!(storage
+            .snapshot()
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope));
+
+        let before_audit = backend.audit.records.lock().unwrap().len();
+        let paused = if write == RetirementWrite::Held {
+            Some(storage.pause_next_save())
+        } else {
+            None
+        };
+        {
+            let mut saved = storage.0.lock().unwrap();
+            let next = saved.writes + 1;
+            match write {
+                RetirementWrite::Rejected => saved.fail_write = Some(next),
+                RetirementWrite::LostAcknowledgement => saved.lose_write_ack = Some(next),
+                _ => {}
+            }
+        }
+        let writer_failed = matches!(
+            write,
+            RetirementWrite::Rejected | RetirementWrite::LostAcknowledgement
+        );
+        backend.audit.reject.store(reject, Ordering::SeqCst);
+        let mut authorization = Some(
+            agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+                .unwrap(),
+        );
+        let closing = if close_authorized {
+            Some(tokio::spawn({
+                let agent = agent.clone();
+                async move { agent.close_report(actor()).await }
+            }))
+        } else {
+            drop(authorization.take());
+            None
+        };
+        if let Some((started, release)) = paused {
+            bounded(started).await.unwrap();
+            assert_eq!(
+                backend.audit.records.lock().unwrap().len(),
+                before_audit,
+                "mandatory attachment audit waits for the actual retirement writer ACK"
+            );
+            assert!(
+                storage
+                    .snapshot()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "an unanswered retirement write has not published a new fact"
+            );
+            assert!(!agent.may_hold_provider_resources());
+            release.send(()).unwrap();
+        }
+        let report = if let Some(closing) = closing {
+            bounded(closing).await.unwrap().unwrap()
+        } else {
+            bounded(async {
+                while agent.attachment_status().phase() == AttachmentPhase::Waiting {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            assert_eq!(
+                agent.attachment_status().phase(),
+                if reject || writer_failed {
+                    AttachmentPhase::Failed(AttachmentFailureCode::Audit)
+                } else {
+                    AttachmentPhase::Absent
+                }
+            );
+            bounded(agent.close_report(actor())).await.unwrap()
+        };
+        assert!(
+            !agent.may_hold_provider_resources(),
+            "authorization alone acquired no provider resources"
+        );
+        if writer_failed {
+            assert_eq!(
+                backend.audit.records.lock().unwrap().len(),
+                before_audit,
+                "a rejected retirement or lost ACK cannot dispatch mandatory audit"
+            );
+            assert!(
+                agent
+                    .session_manager()
+                    .snapshot()
+                    .await
+                    .unwrap()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "the manager publishes only the last acknowledged state before writer retry"
+            );
+            assert_eq!(
+                storage
+                    .snapshot()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                write == RetirementWrite::Rejected,
+                "storage distinguishes rejection from committed retirement with a lost ACK"
+            );
+            bounded(agent.session_manager().save_retained_lease_records())
+                .await
+                .unwrap();
+            assert!(
+                !agent
+                    .session_manager()
+                    .snapshot()
+                    .await
+                    .unwrap()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "the same writer retains and acknowledges retirement on its explicit retry"
+            );
+            assert_eq!(
+                backend.audit.records.lock().unwrap().len(),
+                before_audit,
+                "writer retry alone cannot manufacture mandatory audit delivery"
+            );
+        }
+        drop(authorization);
+        assert!(report.cleanup().is_confirmed());
+        assert_eq!(report.cleanup().audit().is_err(), reject || writer_failed);
+        let result = report.into_result();
+        assert_eq!(
+            result.is_err(),
+            reject || writer_failed,
+            "live close keeps the actual abandonment audit outcome"
+        );
+        let committed = storage.snapshot();
+        let certified = committed
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope);
+        assert_eq!(
+            certified,
+            !(reject || writer_failed),
+            "a failed later SDK attachment audit cannot reuse an earlier cleanup acknowledgement"
+        );
+    }
+}
+
+fn usage_limit_error_for_resumption() -> AgentError {
+    use nessa_sdk::application::agent_execution::agents::{
+        UsageLimit, UsageLimitKind, UsageLimitProvider,
+    };
+    AgentError::UsageLimitReached(UsageLimit::unknown(
+        UsageLimitProvider::Claude,
+        UsageLimitKind::SevenDay,
+        None,
+    ))
+}
+
+#[tokio::test]
+async fn a_canonical_successor_limit_withholds_an_earlier_runner_stopped_tail() {
+    let (agent, backend, storage) = failed_with(AgentError::Deadline).await;
+    let owed = agent.owed_turns().await;
+    // Setup uses failed_with's existing deterministic failed/behind fixture.
+    let failed = owed
+        .iter()
+        .find(|turn| turn.execution_id().as_str() == "failed")
+        .expect("failed_with leaves its retryable source owed")
+        .clone();
+    let behind = owed
+        .iter()
+        .find(|turn| turn.execution_id().as_str() == "behind")
+        .expect("failed_with leaves the stopped queued tail owed")
+        .clone();
+
+    let limit = usage_limit_error_for_resumption();
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        limit.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let continued = bounded(agent.resume_turn(&failed, resumer())).await;
+    let admission = match continued {
+        Ok(Resumed::Continued(admission)) => admission,
+        Ok(Resumed::ContinuedUnaudited { admission, error }) => {
+            let outcome = bounded(admission.wait()).await;
+            let closed = bounded(agent.close(actor())).await;
+            panic!("setup admission was unaudited: {error:?}; {outcome:?}; close={closed:?}");
+        }
+        Ok(Resumed::NotOwed | Resumed::Exhausted) => {
+            let closed = bounded(agent.close(actor())).await;
+            panic!("setup did not canonically continue source; close={closed:?}");
+        }
+        Err(error) => {
+            let closed = bounded(agent.close(actor())).await;
+            panic!("setup continuation failed: {error:?}; close={closed:?}");
+        }
+    };
+    let successor = admission.id().clone();
+    let successor_outcome = bounded(admission.wait()).await;
+    let snapshot = storage.snapshot();
+    let canonical = resumed_turn_id(&snapshot.invocations, failed.execution_id());
+    let live = agent.owed_turns().await;
+    let live_ids: Vec<_> = live
+        .iter()
+        .map(|turn| turn.execution_id().clone())
+        .collect();
+    let saved_ids = owed_turn_ids(&snapshot.invocations);
+    let executions_before_stale = backend.executions.lock().unwrap().clone();
+
+    // Test the stale captured capability too: an empty listing alone is not
+    // proof that settle_owed refuses the earlier RunnerStopped tail.
+    let (stale_not_owed, stale_observation) =
+        match bounded(agent.resume_turn(&behind, resumer())).await {
+            Ok(Resumed::NotOwed) => (true, "NotOwed".to_owned()),
+            Ok(Resumed::Continued(admission)) => {
+                let id = admission.id().clone();
+                let outcome = bounded(admission.wait()).await;
+                (false, format!("Continued({id:?}), outcome={outcome:?}"))
+            }
+            Ok(Resumed::ContinuedUnaudited { admission, error }) => {
+                let id = admission.id().clone();
+                let outcome = bounded(admission.wait()).await;
+                (
+                    false,
+                    format!("ContinuedUnaudited({id:?}, {error:?}), outcome={outcome:?}"),
+                )
+            }
+            Ok(Resumed::Exhausted) => (false, "Exhausted".to_owned()),
+            Err(error) => (false, format!("Err({error:?})")),
+        };
+    let executions_after_stale = backend.executions.lock().unwrap().clone();
+    let resumption_audits = resumptions(&backend);
+    *backend.execution_fault.lock().unwrap() = None;
+    let closed = bounded(agent.close(actor())).await;
+
+    // Distinguishing assertions run after draining any unexpectedly admitted
+    // work and closing the actual Agent. Observations are from before close.
+    assert_eq!(closed, Ok(CloseOutcome { forced: false }));
+    assert_eq!(successor_outcome, Err(limit));
+    assert_eq!(canonical, Some(successor.clone()));
+    let saved_tail = snapshot
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == *behind.execution_id())
+        .unwrap();
+    assert_eq!(
+        saved_tail.scheduling.last().unwrap().cause,
+        SchedulingCause::RunnerStopped
+    );
+    assert!(!behind.dispatched());
+    assert_eq!(
+        executions_before_stale,
+        vec![failed.execution_id().clone(), successor.clone()]
+    );
+    assert!(live_ids.is_empty(), "live owed before close: {live_ids:?}");
+    assert!(
+        saved_ids.is_empty(),
+        "saved owed before close: {saved_ids:?}"
+    );
+    assert!(stale_not_owed, "stale captured tail: {stale_observation}");
+    assert_eq!(executions_after_stale, executions_before_stale);
+    assert_eq!(
+        resumption_audits,
+        vec![TurnResumption::Continued { successor }]
+    );
+}
+
+#[tokio::test]
+async fn a_later_limit_does_not_acknowledge_an_original_pending_decline() {
+    let (agent, backend, storage) = failed_with(AgentError::Deadline).await;
+    let turn = agent
+        .owed_turns()
+        .await
+        .into_iter()
+        .find(|turn| turn.execution_id().as_str() == "failed")
+        .expect("failed_with leaves its original source owed");
+    backend.audit.reject_decline.store(true, Ordering::SeqCst);
+    let first_decline = bounded(agent.decline_turn(&turn, resumer())).await;
+    let original_decision = storage.snapshot().invocations[0].decline.clone();
+
+    let limit = usage_limit_error_for_resumption();
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        limit.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let admitted = agent
+        .enqueue(request("limit-after-decline"), Submitter::owner(actor()))
+        .await;
+    let limited = match admitted {
+        Ok(admission) => bounded(admission.wait()).await,
+        Err(error) => {
+            backend.audit.reject_decline.store(false, Ordering::SeqCst);
+            *backend.execution_fault.lock().unwrap() = None;
+            let closed = bounded(agent.close(actor())).await;
+            panic!("later ordinary input setup failed: {error:?}; close={closed:?}");
+        }
+    };
+    let live_ids: Vec<_> = agent
+        .owed_turns()
+        .await
+        .iter()
+        .map(|turn| turn.execution_id().clone())
+        .collect();
+    let saved_ids = owed_turn_ids(&storage.snapshot().invocations);
+    let still_rejected = bounded(agent.retry_declined_turns()).await;
+    let pending_decision = storage.snapshot().invocations[0].decline.clone();
+    let executions_before_retry = backend.executions.lock().unwrap().clone();
+
+    backend.audit.reject_decline.store(false, Ordering::SeqCst);
+    let recovered = bounded(agent.retry_declined_turns()).await;
+    let acknowledged_decision = storage.snapshot().invocations[0].decline.clone();
+    let executions_after_retry = backend.executions.lock().unwrap().clone();
+    let declines: Vec<_> = backend
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::TurnResumed(record)
+                if record.resumption() == &TurnResumption::Declined =>
+            {
+                Some(record.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    *backend.execution_fault.lock().unwrap() = None;
+    let closed = bounded(agent.close(actor())).await;
+
+    assert_eq!(closed, Ok(CloseOutcome { forced: false }));
+    assert_eq!(first_decline, Err(AgentError::AuditFailure));
+    assert_eq!(limited, Err(limit));
+    assert!(live_ids.is_empty(), "live owed: {live_ids:?}");
+    assert!(saved_ids.is_empty(), "saved owed: {saved_ids:?}");
+    assert_eq!(still_rejected, Err(AgentError::AuditFailure));
+    let original_decision = original_decision.expect("original preparation exists");
+    let pending_decision = pending_decision.expect("later limit cannot erase decline");
+    assert!(!original_decision.acknowledged());
+    assert!(!pending_decision.acknowledged());
+    assert_eq!(pending_decision.event(), original_decision.event());
+    assert_eq!(recovered, Ok(()));
+    let acknowledged_decision = acknowledged_decision.expect("same decision acknowledged");
+    assert!(acknowledged_decision.acknowledged());
+    assert_eq!(acknowledged_decision.event(), original_decision.event());
+    assert_eq!(
+        acknowledged_decision.event().actor.as_ref(),
+        Some(&resumer())
+    );
+    assert_eq!(executions_after_retry, executions_before_retry);
+    assert_eq!(
+        declines.len(),
+        3,
+        "original rejection, rejected retry, acknowledged retry"
+    );
+    assert!(declines.windows(2).all(|pair| pair[0] == pair[1]));
+    assert!(declines
+        .iter()
+        .all(|record| record.resumed_by() == &resumer()));
 }

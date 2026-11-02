@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
+import { panesOf } from "../../../split-panes/model/pane-layout"
 import { percents } from "../../model/shown-window"
-import { roomyGrid, testIndex } from "../../testing"
-import { initialWorkspace } from "../workspace-state"
+import { roomyGrid, shownBy, testIndex } from "../../testing"
+import { initialWorkspace, type WorkspaceState } from "../workspace-state"
+import { closePanelTab, openWidgetInPanel, showPanelTab } from "./chat-panel"
 import { showContent, toggleSessionList, toggleSidebar } from "./navigation"
-import { createDraft, openBeside } from "./panes"
+import { createDraft, focusPane, openBeside } from "./panes"
 import { indexLoaded } from "./updates"
-import { arrangementShown, shownWindow } from "./window"
+import { arrangementShown, panelShown, shownWindow } from "./window"
 
 const loaded = () =>
   indexLoaded(initialWorkspace, { index: testIndex(), draftId: "unused", read: "r" })
@@ -27,6 +29,7 @@ describe("what the window shows", () => {
       sidebar: true,
       sessionList: true,
       showing: { kind: "panes" },
+      panel: { open: false, tabs: [], front: null },
       columns: [
         {
           widthPercent: 50,
@@ -87,6 +90,106 @@ describe("what the window shows", () => {
   it("leaves the state as it was when the same layout is said again", () => {
     const state = inColumns()
     expect(arrangementShown(state, { arrangement: "columns" })).toBe(state)
+  })
+})
+
+const subagents = { plugin: "subagents", id: "chat" }
+const app = { plugin: "mcp:huddle", id: "call-1" }
+const notes = { plugin: "subagents", id: "other" }
+
+const focused = (state: WorkspaceState) =>
+  shownBy(panesOf(state.panes!).find((pane) => pane.key === state.panes!.focused)!)
+
+describe("the focused chat's panel", () => {
+  const withTabs = () =>
+    panelShown(
+      openWidgetInPanel(openWidgetInPanel(inColumns(), { widget: subagents }), {
+        widget: app,
+      }),
+      { open: true },
+    )
+
+  it("is closed with no tabs until the layout says otherwise", () => {
+    const shown = inColumns()
+    expect(shownWindow(shown)?.panel).toEqual({ open: false, tabs: [], front: null })
+    expect(panelShown(shown, { open: false })).toBe(shown)
+  })
+
+  it("lists the focused chat's tabs while the panel is closed", () => {
+    const closed = panelShown(
+      openWidgetInPanel(openWidgetInPanel(inColumns(), { widget: subagents }), {
+        widget: app,
+      }),
+      { open: false },
+    )
+    expect(shownWindow(closed)?.panel).toEqual({
+      open: false,
+      tabs: [subagents, app],
+      front: app,
+    })
+  })
+
+  it("says the panel is open with those tabs, and which one is in front", () => {
+    expect(shownWindow(withTabs())?.panel).toEqual({
+      open: true,
+      tabs: [subagents, app],
+      front: app,
+    })
+    const brought = showPanelTab(withTabs(), { sessionId: "a", widget: subagents })
+    expect(shownWindow(brought)?.panel).toEqual({
+      open: true,
+      tabs: [subagents, app],
+      front: subagents,
+    })
+  })
+
+  it("follows the chat in front and keeps whether the panel is drawn", () => {
+    const beside = openBeside(withTabs(), { sessionId: "b", room: roomyGrid })
+    expect(focused(beside)).toBe("b")
+    expect(shownWindow(beside)?.panel).toEqual({ open: true, tabs: [], front: null })
+    const theirs = openWidgetInPanel(beside, { widget: notes, origin: "b" })
+    expect(shownWindow(theirs)?.panel).toEqual({
+      open: true,
+      tabs: [notes],
+      front: notes,
+    })
+    const back = focusPane(
+      theirs,
+      panesOf(theirs.panes!).find((pane) => shownBy(pane) === "a")!.key,
+    )
+    expect(shownWindow(back)?.panel).toEqual({
+      open: true,
+      tabs: [subagents, app],
+      front: app,
+    })
+  })
+
+  it("keeps the panel open and names no front once the last tab closes", () => {
+    const one = closePanelTab(withTabs(), { sessionId: "a", widget: subagents })
+    expect(shownWindow(one)?.panel).toEqual({ open: true, tabs: [app], front: app })
+    const none = closePanelTab(one, { sessionId: "a", widget: app })
+    expect(shownWindow(none)?.panel).toEqual({ open: true, tabs: [], front: null })
+  })
+
+  it("stays beside the overview and a widget over the panes", () => {
+    const open = withTabs()
+    expect(shownWindow(showContent(open, { content: "agents" }))?.panel.open).toBe(true)
+    expect(
+      shownWindow(showContent(open, { content: { widget: notes } }))?.showing,
+    ).toEqual({ kind: "widget", widget: notes })
+    expect(shownWindow(showContent(open, { content: { widget: notes } }))?.panel).toEqual(
+      shownWindow(open)?.panel,
+    )
+  })
+
+  it("says a draft in front has no tabs", () => {
+    const drafted = createDraft(withTabs(), {
+      draftId: "new",
+      beside: "right",
+      room: roomyGrid,
+    })
+    expect(focused(drafted)).toBe("new")
+    expect(shownWindow(drafted)?.panel).toEqual({ open: true, tabs: [], front: null })
   })
 })
 

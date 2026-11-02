@@ -53,3 +53,59 @@ fn a_deadline_interrupts_the_owned_operation_before_reporting_failure() {
             assert!(cancelled);
         });
 }
+
+#[test]
+fn a_change_deadline_preserves_mutation_uncertainty_and_never_replays() {
+    tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+        let vault = Arc::new(Blocked { cancelled: Mutex::new(false), wake: Condvar::new(), interrupted: AtomicU64::new(0) });
+        let request: Command = serde_json::from_value(serde_json::json!({"operation":"changePassphrase","passphrase":"disposable replacement phrase"})).unwrap();
+        assert_eq!(request.operation(), "changePassphrase");
+        let result = execute(vault.clone(), request, std::time::Duration::ZERO).await;
+        vault.close();
+        assert!(matches!(result, Err(Failure::VaultChangeNotConfirmed)));
+        assert_eq!(vault.interrupted.load(Ordering::SeqCst), 7);
+        assert_eq!(serde_json::to_value(Failure::VaultChangeNotConfirmed).unwrap(), "vault_change_not_confirmed");
+    });
+}
+
+struct Panicked(AtomicU64);
+impl VaultConnection for Panicked {
+    fn next_request(&self) -> u64 {
+        11
+    }
+    fn command(&self, _: Command, _: u64) -> Result<serde_json::Value, Failure> {
+        panic!("synthetic native worker failure")
+    }
+    fn interrupt(&self, id: u64) {
+        self.0.store(id, Ordering::SeqCst);
+    }
+    fn close(&self) {}
+}
+#[test]
+fn a_change_worker_panic_is_not_an_unchanged_or_unavailable_result() {
+    tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+        let request = serde_json::from_value(serde_json::json!({"operation":"changePassphrase","passphrase":"disposable replacement phrase"})).unwrap();
+        let vault = Arc::new(Panicked(AtomicU64::new(0)));
+        assert!(matches!(execute(vault.clone(), request, std::time::Duration::from_secs(2)).await, Err(Failure::VaultChangeNotConfirmed)));
+        assert_eq!(vault.0.load(Ordering::SeqCst), 11);
+    });
+}
+
+struct Busy;
+impl VaultConnection for Busy {
+    fn next_request(&self) -> u64 {
+        13
+    }
+    fn command(&self, _: Command, _: u64) -> Result<serde_json::Value, Failure> {
+        Err(Failure::VaultBusy)
+    }
+    fn interrupt(&self, _: u64) {}
+    fn close(&self) {}
+}
+#[test]
+fn a_known_pre_dispatch_refusal_is_preserved_for_change() {
+    tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+        let request = serde_json::from_value(serde_json::json!({"operation":"changePassphrase","passphrase":"disposable replacement phrase"})).unwrap();
+        assert!(matches!(execute(Arc::new(Busy), request, std::time::Duration::from_secs(2)).await, Err(Failure::VaultBusy)));
+    });
+}

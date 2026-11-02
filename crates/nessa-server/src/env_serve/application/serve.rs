@@ -116,6 +116,7 @@ use super::wire::{write_frame, FrameStream};
 use crate::devices::application::{read_machine, MachineProbe};
 use crate::env_serve::domain::{NotGranted, Peer};
 use crate::timer::{timeout, within, Moment, Timer};
+use nessa_protocol::build_update::{from_gateway, FromGateway};
 use nessa_protocol::lease::{
     decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome,
     FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
@@ -510,15 +511,18 @@ pub(crate) async fn serve<R, W>(
     timings: ServeTimings,
     timer: Arc<dyn Timer>,
     mut drain: watch::Receiver<bool>,
-) where
+) -> ServeEnd
+where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    let mut end = ServeEnd::Ended;
     let Runners {
         harnesses: launcher,
         commands,
     } = runners;
     let (frames, mut writer) = start_writer(output, timer.clone(), serving.machine.clone());
+    let served_protocol = protocol;
     let _ = frames
         .send(FromEnvironment::Hello {
             build: build.into(),
@@ -616,6 +620,17 @@ pub(crate) async fn serve<R, W>(
         match decode::<ToEnvironment>(&body) {
             Ok(frame) => served.handle(frame),
             Err(error) => {
+                // The gateway speaks another protocol, and said which: it
+                // serves nothing on this connection, which it ends.
+                if let Some(FromGateway::VersionRefused { protocol }) = from_gateway(&body) {
+                    tracing::warn!(
+                        gateway = protocol,
+                        this = served_protocol,
+                        "the gateway speaks another lease protocol"
+                    );
+                    end = ServeEnd::VersionRefused { protocol };
+                    break;
+                }
                 tracing::warn!(%error, "an unreadable lease frame was dropped");
                 served.dropped(None, None, "unreadable");
             }
@@ -635,6 +650,17 @@ pub(crate) async fn serve<R, W>(
     {
         writer.abort();
     }
+    end
+}
+
+/// How serving one gateway ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ServeEnd {
+    /// Its stream ended, it went silent, or every lease drained.
+    Ended,
+    /// It speaks `protocol`, another lease protocol than this build's, and
+    /// served nothing (`nessa_protocol::build_update`).
+    VersionRefused { protocol: String },
 }
 
 fn start_writer<W>(

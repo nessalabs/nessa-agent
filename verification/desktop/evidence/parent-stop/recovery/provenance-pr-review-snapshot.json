@@ -1,0 +1,125 @@
+{
+  "pr": "https://github.com/nessalabs/nessa-agent/pull/981",
+  "checkedDate": "2026-10-30",
+  "reviewThreads": 23,
+  "unresolved": 0,
+  "latestDiscussion": "2026-10-22T15:07:22Z",
+  "action": "read only; no comments, resolutions or review submissions",
+  "threads": [
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tjhzx",
+      "path": "crates/nessa-server/src/conversation/application/service/parent_stop.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tjhzz",
+      "path": "crates/nessa-server/src/conversation/application/service/owned_threads.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tjhz2",
+      "path": "crates/nessa-server/src/conversation/application/service/owned_threads.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tkBnX",
+      "path": "crates/nessa-server/src/conversation/application/service/parent_stop.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tkBnZ",
+      "path": "crates/nessa-server/src/conversation/application/service/owned_threads.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tkHSc",
+      "path": "crates/nessa-server/src/conversation/application/service/parent_stop.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tkzcP",
+      "path": "crates/nessa-server/src/conversation/application/service/owned_threads.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tk-xS",
+      "path": "crates/nessa-server/src/conversation/application/service/owned_threads.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tk-xV",
+      "path": "crates/nessa-server/src/conversation/application/service.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tldm8",
+      "path": "crates/nessa-server/src/composition/local_auth.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tlnLA",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tlqji",
+      "path": "crates/nessa-server/src/composition/local_auth.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tn5FT",
+      "path": "crates/nessa-server/src/conversation/application/service/parent_stop.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tpfCu",
+      "path": "crates/nessa-server/src/conversation/application/service/creation.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tp1r3",
+      "path": "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tqUcg",
+      "path": "crates/nessa-server/src/conversation/application/service/thread_report_admission.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tqm5p",
+      "path": "crates/nessa-server/src/conversation/application/service.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tqm5q",
+      "path": "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tw6lz",
+      "path": "crates/nessa-server/src/conversation/application/service/parent_stop.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tyQ8m",
+      "path": "crates/nessa-server/src/conversation/application/service/parent_stop.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6tzraq",
+      "path": "crates/nessa-sdk/src/infrastructure/session_storage/creation.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6uBwlx",
+      "path": "crates/nessa-server/src/conversation/application/service/thread_reports.rs",
+      "resolved": true
+    },
+    {
+      "id": "PRRT_kwDOUJZ7Ns6u78om",
+      "path": "crates/nessa-server/src/conversation/application/service/parent_stop.rs",
+      "resolved": true
+    }
+  ]
+}

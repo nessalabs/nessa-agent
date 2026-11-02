@@ -1,6 +1,6 @@
 //! Controlled orderings for a shared SQLite departure and its receipt.
 use super::*;
-use std::panic::{catch_unwind, panic_any};
+use std::panic::{catch_unwind, panic_any, resume_unwind};
 use std::sync::PoisonError;
 
 #[test]
@@ -18,6 +18,25 @@ fn a_failed_lease_wait_returns_the_durable_departure() {
 }
 
 fn overlapping_drafts(order: DepartureOrder, fail_waiter: bool) {
+    overlapping_drafts_with_preparation(order, fail_waiter, || {}, || {});
+}
+
+#[test]
+fn opening_sender_stores_does_not_spend_the_departure_entry_window() {
+    overlapping_drafts_with_preparation(
+        DepartureOrder::WinnerFirst,
+        true,
+        || thread::sleep(Duration::from_secs(3)),
+        || thread::sleep(Duration::from_secs(3)),
+    );
+}
+
+fn overlapping_drafts_with_preparation(
+    order: DepartureOrder,
+    fail_waiter: bool,
+    prepare: fn(),
+    draft_read: fn(),
+) {
     let dir = directory();
     let path = path_in(&dir);
     person_hold(
@@ -34,16 +53,23 @@ fn overlapping_drafts(order: DepartureOrder, fail_waiter: bool) {
     let entered = Arc::new((Mutex::new(false), Condvar::new()));
     let release = ReleaseSend::new();
     let (done_tx, done_rx) = mpsc::channel();
-    let spawn = || {
-        let path = path.clone();
-        let gate = Arc::clone(&gate);
+    // Opening validates under a writer lock. Prepare both stores before either
+    // concurrent send starts, outside the send-entry observation window.
+    let prepared = || {
+        prepare();
+        let mut store = YieldingLease::open(&path, Arc::clone(&gate));
+        store.draft_read = draft_read;
+        store
+    };
+    let [first_store, second_store] = [prepared(), prepared()];
+    let spawn = |store| {
         let sends = Arc::clone(&sends);
         let entered = Arc::clone(&entered);
         let release = Arc::clone(&release.0);
         let done_tx = done_tx.clone();
         thread::spawn(move || {
             let mut outbox = PhoneOutbox::new(
-                YieldingLease::open(&path, gate),
+                store,
                 PausingSend {
                     sends,
                     entered,
@@ -58,9 +84,21 @@ fn overlapping_drafts(order: DepartureOrder, fail_waiter: bool) {
             done_tx.send((thread::current().id(), result)).unwrap();
         })
     };
-    let first = spawn();
-    let second = spawn();
-    wait_for_flag(&entered);
+    let first = spawn(first_store);
+    let second = spawn(second_store);
+    if let Err(failure) = catch_unwind(|| wait_for_flag(&entered)) {
+        let phase = format!("{:?}", gate.0.lock().unwrap());
+        release.release();
+        let first = first.join();
+        let second = second.join();
+        eprintln!(
+            "{order:?}: entry failed at {phase}; joined={:?}; outcomes={:?}; final={:?}",
+            (first.is_ok(), second.is_ok()),
+            done_rx.try_iter().collect::<Vec<_>>(),
+            gate.0.lock().unwrap()
+        );
+        resume_unwind(failure);
+    }
     let (lock, cv) = &*gate;
     let state = wait_for(cv, lock.lock().unwrap(), |state| state.attempts.len() == 2);
     assert_eq!(state.drafts.len(), 2, "{state:?}");
@@ -275,6 +313,28 @@ fn a_poisoned_sender_release_preserves_the_ordering_failure() {
     assert!(*released.0.lock().unwrap_err().into_inner());
 }
 
+#[test]
+fn an_entry_timeout_does_not_poison_a_later_physical_sender() {
+    let entered = Arc::new((Mutex::new(false), Condvar::new()));
+    let failure = catch_unwind(|| wait_for_flag(&entered));
+    assert!(failure.is_err(), "a missing entry still fails its deadline");
+    assert!(!entered.0.is_poisoned());
+    let sends = Arc::new(AtomicUsize::new(0));
+    let release = ReleaseSend::new();
+    release.release();
+    let mut gateway = PausingSend {
+        sends: Arc::clone(&sends),
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release.0),
+    };
+    assert!(matches!(
+        gateway.send(&text_intent("late", "hello")),
+        SendAnswer::Receipt(Delivery::Queued)
+    ));
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert!(*entered.0.lock().unwrap());
+}
+
 /// Release even when a main-thread assertion fails, so the physical owner can exit.
 struct ReleaseSend(Arc<(Mutex<bool>, Condvar)>);
 impl ReleaseSend {
@@ -301,5 +361,7 @@ fn wait_for_flag(flag: &(Mutex<bool>, Condvar)) {
             !*value
         })
         .unwrap();
-    assert!(*value, "gateway did not enter or release its send");
+    let entered = *value;
+    drop(value);
+    assert!(entered, "gateway did not enter or release its send");
 }

@@ -13,13 +13,14 @@
 use super::socket::{failure, success};
 use crate::conversation::application::WindowSlot;
 use crate::conversation::domain::{
-    PaneContent, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,
-    WindowShowing, WorkspaceWindow,
+    PaneContent, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowPanel,
+    WindowRefusal, WindowShowing, WorkspaceWindow,
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
-    WorkspaceArrangement, WorkspacePaneItem, WorkspacePaneKind, WorkspacePublishParams,
-    WorkspacePublishResult, WorkspaceShowing, WorkspaceWidget, WorkspaceWindow as WireWindow,
+    WorkspaceArrangement, WorkspacePaneItem, WorkspacePaneKind, WorkspacePanel,
+    WorkspacePublishParams, WorkspacePublishResult, WorkspaceShowing, WorkspaceWidget,
+    WorkspaceWindow as WireWindow,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 
@@ -86,8 +87,20 @@ fn window(wire: WireWindow) -> Result<WorkspaceWindow, WindowRefusal> {
         wire.sidebar,
         wire.session_list,
         showing,
+        panel(wire.panel)?,
         columns,
     )
+}
+
+/// The focused chat's panel: its front is one of its tabs, or neither.
+fn panel(wire: WorkspacePanel) -> Result<WindowPanel, WindowRefusal> {
+    let tabs = wire
+        .tabs
+        .into_iter()
+        .map(widget_ref)
+        .collect::<Result<Vec<_>, _>>()?;
+    let front = wire.front.map(widget_ref).transpose()?;
+    WindowPanel::new(wire.open, tabs, front)
 }
 
 /// A pane's item names exactly what its kind says it shows.

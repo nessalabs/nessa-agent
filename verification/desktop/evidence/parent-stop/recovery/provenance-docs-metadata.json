@@ -1,0 +1,18 @@
+[
+  {
+    "page": "docs/state/services/desktop/chat/stop-active-and-queued-work.md",
+    "sourceRevision": "50bef867f45f9cb99fa27d798210e8e6a1dfe901",
+    "sourcePaths": 18,
+    "relativeLinks": "exist",
+    "mermaidBlocks": 1,
+    "visualRendering": "unrun; no local Nessa Docs renderer installed"
+  },
+  {
+    "page": "docs/state/services/sdk/history.md",
+    "sourceRevision": "50bef867f45f9cb99fa27d798210e8e6a1dfe901",
+    "sourcePaths": 18,
+    "relativeLinks": "exist",
+    "mermaidBlocks": 2,
+    "visualRendering": "unrun; no local Nessa Docs renderer installed"
+  }
+]

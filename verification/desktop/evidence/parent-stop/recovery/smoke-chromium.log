@@ -1,0 +1,23 @@
+using the running dev server at http://127.0.0.1:1438/desktop.html
+warmed 1290 modules in 19238 ms
+ok    loads [chromium columns]
+ok    ambient-grain [chromium columns 160]
+ok    draft-unlisted [chromium columns]
+ok    send [chromium columns]
+ok    split [chromium columns]
+ok    settings [chromium columns]
+FAIL  overview [chromium columns]
+        - the keyboard did not land on an overview row after ⌘0
+ok    console [chromium columns]
+ok    console [chromium columns]
+ok    loads [chromium sidebar]
+ok    ambient-grain [chromium sidebar 160]
+ok    draft-unlisted [chromium sidebar]
+ok    send [chromium sidebar]
+ok    split [chromium sidebar]
+ok    settings [chromium sidebar]
+FAIL  overview [chromium sidebar]
+        - the keyboard did not land on an overview row after ⌘0
+ok    console [chromium sidebar]
+wrote /tmp/nessa-981-evidence/smoke-chromium-rerun.json
+smoke: 15/17 held

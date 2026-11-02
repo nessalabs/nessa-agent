@@ -1,0 +1,11 @@
+{
+  "source": "027f430cbbe630c0ebfa62fa800eeabfe9f1eaee",
+  "packages": 8,
+  "passed": 74,
+  "failed": 0,
+  "ignored": 0,
+  "exit": 0,
+  "gate": "cargo test --doc exact eight CI packages",
+  "normalOwnership": true,
+  "adoptedDescendantsReaped": 0
+}

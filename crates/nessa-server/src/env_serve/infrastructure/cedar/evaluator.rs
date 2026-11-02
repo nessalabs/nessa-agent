@@ -92,6 +92,10 @@ impl CedarLeasePolicy {
                 "command.run",
                 Entity::new_no_attrs(uid("NessaEnv::Command", "command")?, HashSet::new()),
             ),
+            LeaseAsk::Update => (
+                "build.update",
+                Entity::new_no_attrs(uid("NessaEnv::Build", "build")?, HashSet::new()),
+            ),
         };
         let principal = peer(facts)?;
         let action = uid("NessaEnv::Action", action)?;

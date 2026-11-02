@@ -33,6 +33,7 @@ import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortc
 import { drawn } from "../../../model/side-column"
 import {
   arrangementShown,
+  panelShown,
   canOpenBeside,
   closeInFront,
   focusPane,
@@ -255,6 +256,14 @@ function useShownArrangement(region: SidebarRegion) {
       dispatch(arrangementShown({ arrangement: null }))
     }
   }, [dispatch, region.arrangement])
+}
+
+/** The layout says whether the right panel is drawn, for the person's agents. */
+function useShownPanel(open: boolean) {
+  const dispatch = useWorkspaceDispatch()
+  useEffect(() => {
+    dispatch(panelShown({ open }))
+  }, [dispatch, open])
 }
 
 function useWorkspaceChrome(region: SidebarRegion) {
@@ -595,6 +604,7 @@ export function useWorkspaceWindow({
   const [theme] = useThemePreference()
   const store = useWorkspaceStore()
   const chrome = useWorkspaceChrome(region)
+  useShownPanel(chrome.panelOpen)
   const dragging = useColumnDrag(region, root, chrome.listOpen, chrome.sidebarWidth)
   const switching = useWorkspaceSwitcher(
     region,

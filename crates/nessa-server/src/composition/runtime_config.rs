@@ -38,6 +38,8 @@ pub(super) struct RuntimeConfig {
     /// Private endpoint/MAC seeds selected by the existing credential.issue principal.
     pub webhooks: Vec<super::webhooks::WebhookConfig>,
     pub registry: LocalStoreConfig,
+    /// Ordinary parent turn Stop policy for this namespace.
+    pub subagents: SubagentsConfig,
     pub session: SessionConfig,
     /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.
     pub limits: LimitsConfig,
@@ -61,6 +63,20 @@ pub(super) struct RuntimeConfig {
     /// (issue #700). Absent or `null` grants neither: the agent sees no such
     /// tools.
     pub environment_tools: Option<EnvironmentToolsConfig>,
+}
+
+/// Namespace configuration; absence preserves recursive child Stop.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct SubagentsConfig {
+    pub stop_children_on_parent_stop: bool,
+}
+impl Default for SubagentsConfig {
+    fn default() -> Self {
+        Self {
+            stop_children_on_parent_stop: true,
+        }
+    }
 }
 
 /// Where the agent may run commands, and which.

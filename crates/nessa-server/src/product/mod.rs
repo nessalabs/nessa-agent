@@ -60,6 +60,7 @@ pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
 mod peers;
+mod voice;
 
 pub use github::GithubRoutes;
 pub use native::{DeviceCredentials, NativeSessions};
