@@ -218,7 +218,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 110,
+          "maxItems": 113,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -4182,6 +4182,63 @@
         }
       },
       "required": ["status"]
+    },
+    "AppsTrustedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The apps the person always allows (apps.trusted): every MCP server whose app was answered \"Always allow this app\", in name order. An app listed here sends messages as the person without a review.",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "x-utf8MaxBytes": 256,
+            "description": "The MCP server whose app it is, by its configured name."
+          }
+        }
+      },
+      "required": ["servers"]
+    },
+    "AppsUntrustParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stop always allowing one app (apps.untrust): its next message is reviewed again.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The MCP server whose app it is, by its configured name."
+        }
+      },
+      "required": ["requestId", "server"]
+    },
+    "AppsUntrustResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What apps.untrust did. applied is false when the app was not always allowed.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "applied": { "type": "boolean" }
+      },
+      "required": ["requestId", "applied"]
     },
     "McpServersRevokeParams": {
       "type": "object",
@@ -8353,6 +8410,45 @@
       "type": "object",
       "additionalProperties": false,
       "description": "The channel channel.create made, or made earlier under the same requestId.",
+      "properties": { "channel": { "$ref": "#/$defs/Channel" } },
+      "required": ["channel"]
+    },
+    "ChannelSetPlacementParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Change where a made channel's agents run (channel.setPlacement). Threads already made keep running where they started; threads made from now on run in threadPlacement. Moving the main agent names a fresh main conversation (coordinatorConversationId) that starts in the new place; the old one stays in the channel as an ordinary thread. The default channel has no run location to change and is refused forbidden, as is a channel the caller may not change.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "The made channel to change."
+        },
+        "coordinatorPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where the channel's main agent runs from now on."
+        },
+        "threadPlacement": {
+          "type": "string",
+          "enum": ["local", "boat"],
+          "description": "Where threads made in the channel from now on run."
+        }
+      },
+      "required": ["requestId", "channelId", "coordinatorPlacement", "threadPlacement"]
+    },
+    "ChannelSetPlacementResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The channel as channel.setPlacement left it.",
       "properties": { "channel": { "$ref": "#/$defs/Channel" } },
       "required": ["channel"]
     },

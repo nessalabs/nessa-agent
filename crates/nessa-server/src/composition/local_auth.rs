@@ -1617,6 +1617,15 @@ async fn conversations(
         DurableAgentToolAudit::new(root.join("audit").join("agent-tools"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     ));
+    // Changes made from Settings (an app no longer always allowed, a
+    // channel moved) are recorded before they are reported.
+    service.bind_settings_audit(Arc::new(
+        crate::conversation::infrastructure::DurableSettingsAudit::new(
+            root.join("audit").join("settings"),
+            clock.clone(),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?,
+    ));
     // Reports an agent's sent turn owes back are kept across a restart.
     let thread_reports_path = root.join("thread-reports.sqlite3");
     service.bind_thread_reports(Arc::new(

@@ -1595,3 +1595,20 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
     flex-direction: column;
   }
 }
+
+/* A remembered rule under its project's row: indented one step, so the
+   project reads as its heading. */
+:is(.settings, .settings-surface) .settings-row.settings-rule-in-project {
+  padding-inline-start: 32px;
+}
+
+:is(.settings, .settings-surface) .settings-rule-search [data-slot="search-field"] {
+  inline-size: min(260px, 50vw);
+}
+
+/* A channel's run location, above its VM auto-stop in its settings. */
+.settings-channel-placement {
+  display: flex;
+  flex-direction: column;
+  margin-block-end: 12px;
+}

@@ -386,6 +386,14 @@ impl Channel {
     pub fn execution(&self) -> ChannelExecution {
         self.execution
     }
+    /// This channel with its agents running where `execution` says: the
+    /// one setting a person changes after the channel is made.
+    pub(crate) fn with_execution(&self, execution: ChannelExecution) -> Self {
+        Self {
+            execution,
+            ..self.clone()
+        }
+    }
     pub fn defaults(&self) -> &ChannelDefaults {
         &self.defaults
     }
@@ -404,10 +412,11 @@ impl Channel {
 
     /// Whether `parts` is what this channel was made with: a retried
     /// creation under the same request id must ask for the same channel.
+    /// Where it runs is left out: the person may have changed it since
+    /// (`with_execution`), and a retry is still the same channel.
     pub fn made_of(&self, parts: &ChannelRequest) -> bool {
         self.name == parts.name
             && self.defaults == parts.defaults
-            && self.execution == parts.execution
             && self.notes == parts.notes
             && self.resources == parts.resources
             && match &parts.folder {
@@ -419,15 +428,16 @@ impl Channel {
     /// What every agent in this channel is told about it, besides working
     /// in its folder: its name, the person's notes, and the files and folders
     /// attached to it. One rule, so every agent hears the same words.
-    pub fn instructions(&self) -> String {
+    /// `remote` is whether this agent runs away from the gateway (Boat, or
+    /// another host): its own placement, fixed when its conversation was
+    /// made, never the channel's current one, which may have moved since.
+    pub fn instructions(&self, remote: bool) -> String {
         let mut text = format!(
             "This conversation is in the person's channel \"{}\". Its folder is {}.",
             self.name.as_str(),
             self.folder.path.as_str()
         );
-        if self.execution.coordinator == WorkspacePlacement::Boat
-            || self.execution.threads == WorkspacePlacement::Boat
-        {
+        if remote {
             text.push_str(" On a remote environment, the channel's local folder and resource paths belong to the gateway, not your VM. Work in your actual environment workspace; access local files only through explicitly approved connections.");
         }
         if !self.notes.is_empty() {

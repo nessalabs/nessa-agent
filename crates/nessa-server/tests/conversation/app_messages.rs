@@ -776,6 +776,75 @@ async fn m7_always_allowing_an_app_sends_its_later_messages_unasked() {
 }
 
 #[tokio::test]
+async fn m7c_an_app_untrusted_from_settings_is_asked_about_again() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held_message(INSTANCE, "first").await;
+    fixture.answer(&review, ALLOW_APP).await;
+    task.await.unwrap().unwrap();
+    fixture.idle().await;
+    assert_eq!(
+        fixture.service.trusted_apps(),
+        Some(vec![SERVER.to_owned()])
+    );
+    let settings = Arc::new(crate::conversation_test_support::RecordingSettingsAudit::default());
+    fixture.service.bind_settings_audit(settings.clone());
+    let person = fixture.caller("revoke");
+    // A revoke that cannot be recorded is refused, and the app stays allowed.
+    settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Err(ConversationError::Audit)
+    ));
+    assert_eq!(
+        fixture.service.trusted_apps(),
+        Some(vec![SERVER.to_owned()])
+    );
+    settings
+        .failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    // Revoked in Settings: the list no longer holds it, and a second revoke
+    // finds nothing to do. Each is on record as the person's.
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Ok(true)
+    ));
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Ok(false)
+    ));
+    assert_eq!(fixture.service.trusted_apps(), Some(Vec::new()));
+    {
+        use crate::conversation::application::SettingsOutcome;
+        let applied = |changed| SettingsOutcome::Applied {
+            changed,
+            coordinator: None,
+        };
+        assert_eq!(
+            settings.outcomes(),
+            [
+                SettingsOutcome::Requested,
+                applied(true),
+                SettingsOutcome::Requested,
+                applied(false),
+            ]
+        );
+        let records = settings.records.lock().unwrap();
+        assert!(records.iter().all(|record| record.caller == person
+            && record.change
+                == crate::conversation::application::SettingsChange::AppUntrust {
+                    server: SERVER.to_owned()
+                }));
+    }
+    // Its next message waits for the person again, offering Always allow.
+    let (task, again) = fixture.held_message(OTHER_INSTANCE, "second").await;
+    assert!(again.options.iter().any(|option| option.id == ALLOW_APP));
+    fixture.answer(&again, DENY).await;
+    assert_eq!(refused(task.await.unwrap()), McpAppError::ApprovalDenied);
+}
+
+#[tokio::test]
 async fn m7b_a_message_whose_review_does_not_fit_is_refused_and_no_review_is_opened() {
     let fixture = Fixture::new().await;
     // Well within the input bound, but every quote is escaped twice in the

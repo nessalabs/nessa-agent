@@ -945,6 +945,9 @@ struct Inner {
     clock: Arc<dyn Clock>,
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
+    /// Records each change made from Settings before it is reported.
+    /// Unbound refuses those changes.
+    settings_audit: OnceLock<Arc<dyn super::SettingsAudit>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
@@ -1499,6 +1502,7 @@ impl ConversationService {
                 environment,
                 clock,
                 agent_tool_audit: OnceLock::new(),
+                settings_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(SourcePermits::new(
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),
@@ -1677,7 +1681,21 @@ impl ConversationService {
                 .filter(|defaults| defaults.agent == agent)
                 .map(|defaults| defaults.model.as_str().to_owned())
         });
-        let place = channel.as_ref().map(AgentPlace::of);
+        // Where it will run, by its channel: its main agent's placement or
+        // its threads'. Recorded below, before the conversation exists.
+        let channel_environment = channel.as_ref().and_then(|channel| {
+            match if id == channel.coordinator_id() {
+                channel.execution().coordinator
+            } else {
+                channel.execution().threads
+            } {
+                crate::conversation::domain::WorkspacePlacement::Local => None,
+                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
+            }
+        });
+        let place = channel
+            .as_ref()
+            .map(|channel| AgentPlace::of(channel, channel_environment.is_some()));
         let configured = match model.as_deref() {
             Some(model) => {
                 service
@@ -1746,16 +1764,6 @@ impl ConversationService {
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
-        let channel_environment = channel.as_ref().and_then(|channel| {
-            match if id == channel.coordinator_id() {
-                channel.execution().coordinator
-            } else {
-                channel.execution().threads
-            } {
-                crate::conversation::domain::WorkspacePlacement::Local => None,
-                crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
-            }
-        });
         service
             .inner
             .environment

@@ -435,7 +435,8 @@ export function Segmented<T extends string>({
   "aria-labelledby": labelledBy,
 }: {
   value: T
-  options: readonly { id: T; label: string }[]
+  /** An option `disabled` is shown but cannot be chosen, such as one not connected yet. */
+  options: readonly { id: T; label: string; disabled?: boolean }[]
   onChange: (next: T) => void
   /** Only outside a row; in one, the row's name is the group's. */
   label?: string
@@ -451,13 +452,17 @@ export function Segmented<T extends string>({
       value={value}
       onValueChange={(next) => {
         const option = options.find((each) => each.id === next)
-        if (option) onChange(option.id)
+        if (option && !option.disabled) onChange(option.id)
       }}
       {...name}
       aria-describedby={description}
     >
       {options.map((option) => (
-        <SegmentedControlOption key={option.id} value={option.id} disabled={!available}>
+        <SegmentedControlOption
+          key={option.id}
+          value={option.id}
+          disabled={!available || option.disabled === true}
+        >
           {option.label}
         </SegmentedControlOption>
       ))}

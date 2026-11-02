@@ -22,11 +22,12 @@
 use super::{ConversationCaller, ConversationError, ConversationService};
 use crate::conversation::application::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    ConversationFuture, RequestShape,
+    ConversationFuture, RequestShape, SettingsAudit, SettingsAuditRecord, SettingsChange,
+    SettingsOutcome,
 };
 use crate::conversation::domain::{
-    Channel, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest, ChannelResources,
-    MAX_CHANNELS_PER_OWNER,
+    Channel, ChannelExecution, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest,
+    ChannelResources, MAX_CHANNELS_PER_OWNER,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
@@ -73,6 +74,18 @@ pub trait ChannelStore: Send + Sync {
     ) -> ConversationFuture<'_, HashMap<ConversationId, ChannelId>>;
     /// Let go of a deleted conversation's placement.
     fn forget(&self, conversation: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Change where the channel's agents run, in one write, and answer the
+    /// channel as it is now; `None` when there is no such channel. When the
+    /// main agent moves and its conversation was made, that conversation is
+    /// retired, staying in the channel as an ordinary thread, and a fresh one
+    /// is named as the channel's main conversation, so the next main-agent
+    /// chat starts in the new place. A main conversation not made yet keeps
+    /// its id. A conversation's own placement never moves.
+    fn set_execution(
+        &self,
+        channel: &ChannelId,
+        execution: ChannelExecution,
+    ) -> ConversationFuture<'_, Option<Channel>>;
 }
 
 /// Why a folder or a file is not one a channel takes.
@@ -133,10 +146,12 @@ pub struct AgentPlace {
 }
 
 impl AgentPlace {
-    pub fn of(channel: &Channel) -> Self {
+    /// Where an agent of `channel` works; `remote` is whether that agent's
+    /// own conversation runs away from the gateway.
+    pub fn of(channel: &Channel, remote: bool) -> Self {
         Self {
             folder: channel.folder().path.as_path().to_path_buf(),
-            instructions: channel.instructions(),
+            instructions: channel.instructions(remote),
         }
     }
 }
@@ -181,6 +196,24 @@ impl ConversationService {
     pub fn bind_channels(&self, store: Arc<dyn ChannelStore>, folders: Arc<dyn ChannelFolders>) {
         let _ = self.inner.channels.store.set(store);
         let _ = self.inner.channels.folders.set(folders);
+    }
+
+    /// Where changes made from Settings are recorded before they are reported.
+    pub fn bind_settings_audit(&self, audit: Arc<dyn SettingsAudit>) {
+        let _ = self.inner.settings_audit.set(audit);
+    }
+
+    /// Commit `record`; unbound, nothing is recorded and the change is refused.
+    pub(super) async fn record_setting(
+        &self,
+        record: SettingsAuditRecord,
+    ) -> Result<(), ConversationError> {
+        let audit = self
+            .inner
+            .settings_audit
+            .get()
+            .ok_or(ConversationError::Audit)?;
+        audit.record(record).await
     }
 
     fn channel_store(&self) -> Option<&Arc<dyn ChannelStore>> {
@@ -415,6 +448,99 @@ impl ConversationService {
             .map(|_| ())
     }
 
+    /// Change where `id`'s agents run: its main agent and the threads made
+    /// in it from now on. Threads already made keep running where they
+    /// started; a moved main agent starts a fresh main conversation in the
+    /// new place, and the old one stays in the channel as a thread.
+    ///
+    /// # Errors
+    /// `Forbidden` when the caller has no such channel or may not change its
+    /// settings (the default channel is never stored, so it has none);
+    /// `Storage` or `Unavailable` when it could not be written.
+    pub async fn set_channel_execution(
+        &self,
+        caller: &ConversationCaller,
+        id: &ChannelId,
+        execution: ChannelExecution,
+    ) -> Result<Channel, ChannelError> {
+        let _admission = self.admit().await.map_err(|_| ChannelError::Unavailable)?;
+        if id.is_default() {
+            return Err(ChannelError::Forbidden);
+        }
+        let store = self.channel_store().ok_or(ChannelError::Forbidden)?;
+        // The main chat's creation reads the channel and records where it
+        // runs under its creation lock; a move taken between those steps
+        // would leave it begun where the channel no longer says, so the move
+        // holds that lock. The main chat is read again under it: erased
+        // meanwhile, a fresh one was named, and that one's lock is taken.
+        let operation = uuid::Uuid::new_v4().to_string();
+        let changed = loop {
+            let found = match self
+                .channel_for_action(caller, id, AccessAction::ChannelSettings)
+                .await
+            {
+                Ok(found) => found,
+                Err(ConversationError::Unavailable) => return Err(ChannelError::Unavailable),
+                Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
+                Err(error) => return Err(error.into()),
+            };
+            if found.execution() == execution {
+                return Ok(found);
+            }
+            let coordinator = found.coordinator_id();
+            let _creation = self.inner.creation.lock(&coordinator).await;
+            let current = store.get(id).await?.ok_or(ChannelError::Forbidden)?;
+            if current.coordinator_id() != coordinator {
+                continue;
+            }
+            if current.execution() == execution {
+                return Ok(current);
+            }
+            // The move is on record, with what it moves from, before it is made.
+            let record = |outcome| SettingsAuditRecord {
+                operation_id: operation.clone(),
+                caller: caller.clone(),
+                change: SettingsChange::ChannelPlacement {
+                    channel: id.clone(),
+                    before: current.execution(),
+                    after: execution,
+                    coordinator: coordinator.clone(),
+                },
+                outcome,
+            };
+            self.record_setting(record(SettingsOutcome::Requested))
+                .await
+                .map_err(|_| ChannelError::Unavailable)?;
+            let moved = match store.set_execution(id, execution).await {
+                Ok(Some(moved)) => moved,
+                failed => {
+                    if self
+                        .record_setting(record(SettingsOutcome::Failed))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!(channel_id = %id, "a failed channel move was not recorded");
+                    }
+                    return Err(failed.map_or_else(ChannelError::from, |_| ChannelError::Forbidden));
+                }
+            };
+            self.record_setting(record(SettingsOutcome::Applied {
+                changed: true,
+                coordinator: Some(moved.coordinator_id()),
+            }))
+            .await
+            .map_err(|_| ChannelError::Unavailable)?;
+            break moved;
+        };
+        tracing::info!(
+            channel_id = %changed.id(),
+            coordinator = changed.execution().coordinator.as_str(),
+            threads = changed.execution().threads.as_str(),
+            "channel run location changed"
+        );
+        Ok(changed)
+    }
+
     async fn channel_for_action(
         &self,
         caller: &ConversationCaller,
@@ -506,7 +632,10 @@ impl ConversationService {
             .get(&channel)
             .await?
             .ok_or(ConversationError::Unavailable)?;
-        let mut place = AgentPlace::of(&found);
+        // Its own placement, fixed at creation, says whether it runs away
+        // from the gateway: the channel's may have moved since.
+        let remote = self.inner.environment.placement(id).await?.is_some();
+        let mut place = AgentPlace::of(&found, remote);
         if *id == found.coordinator_id() {
             place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and its configured worker placement. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");
         }

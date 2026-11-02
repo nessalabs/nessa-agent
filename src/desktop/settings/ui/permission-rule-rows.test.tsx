@@ -8,7 +8,11 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { PermissionRule } from "@nessa/client"
 import type { PermissionRulesGateway } from "../adapters/permission-rules-gateway"
-import { PermissionRuleRows, PermissionRulesProvider } from "./permission-rule-rows"
+import {
+  PermissionRuleRows,
+  PermissionRulesProvider,
+  TrustedAppRows,
+} from "./permission-rule-rows"
 
 let root: Root
 let host: HTMLDivElement
@@ -244,4 +248,151 @@ it("admits one revoke when two clicks precede the disabled render", async () => 
   })
   expect(calls).toBe(1)
   await act(async () => pending.resolve({ ok: false }))
+})
+
+const ruleIn = (id: string, workspace: string, tool: string): PermissionRule => ({
+  ...rule,
+  id,
+  workspace,
+  tool,
+})
+
+it("folds rules by project, each saying how many it holds", async () => {
+  await show({
+    read: async () => ({
+      ok: true,
+      rules: [
+        ruleIn("a", "/work/site", "Bash"),
+        ruleIn("b", "/work/site", "WebSearch"),
+        ruleIn("c", "/home/me/api", "Read"),
+      ],
+    }),
+    revoke: async () => ({ ok: true, applied: true }),
+  })
+  const projects = [...host.querySelectorAll("[data-rule-project]")]
+  expect(projects.map((row) => row.getAttribute("data-rule-project"))).toEqual([
+    "/home/me/api",
+    "/work/site",
+  ])
+  expect(host.textContent).toContain("2 rules · /work/site")
+  expect(host.textContent).toContain("1 rule · /home/me/api")
+  // Folded: no rule shows until its project is opened.
+  expect(host.querySelector("[data-rule]")).toBeNull()
+  const site = host.querySelector<HTMLButtonElement>(
+    '[data-rule-project="/work/site"] button[aria-expanded]',
+  )
+  await act(async () => site?.click())
+  expect(site?.getAttribute("aria-expanded")).toBe("true")
+  expect(
+    [...host.querySelectorAll("[data-rule]")].map((row) => row.getAttribute("data-rule")),
+  ).toEqual(["a", "b"])
+})
+
+it("searches every project once the list is long", async () => {
+  const rules = Array.from({ length: 8 }, (_, index) =>
+    ruleIn(`r${index}`, `/work/p${index % 3}`, index === 5 ? "WebFetch" : `Tool${index}`),
+  )
+  await show({
+    read: async () => ({ ok: true, rules }),
+    revoke: async () => ({ ok: true, applied: true }),
+  })
+  const search = host.querySelector<HTMLInputElement>(
+    "[data-rule-search] input, input[data-rule-search]",
+  )
+  expect(search).not.toBeNull()
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
+    set?.call(search, "webfetch")
+    search?.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  expect(
+    [...host.querySelectorAll("[data-rule]")].map((row) => row.getAttribute("data-rule")),
+  ).toEqual(["r5"])
+  expect(host.querySelectorAll("[data-rule-project]")).toHaveLength(1)
+})
+
+it("lists the apps always allowed and revokes one", async () => {
+  let servers = ["charts", "huddle"]
+  const untrusted: string[] = []
+  await act(async () =>
+    root.render(
+      <PermissionRulesProvider
+        gateway={{
+          read: async () => ({ ok: true, rules: [] }),
+          revoke: async () => ({ ok: true, applied: true }),
+          trustedApps: {
+            read: async () => ({ ok: true, servers }),
+            untrust: async (server) => {
+              untrusted.push(server)
+              servers = servers.filter((each) => each !== server)
+              return { ok: true, applied: true }
+            },
+          },
+        }}
+      >
+        <TrustedAppRows />
+      </PermissionRulesProvider>,
+    ),
+  )
+  expect(host.textContent).toContain("Apps you always allow")
+  expect(
+    [...host.querySelectorAll("[data-trusted-app]")].map((row) =>
+      row.getAttribute("data-trusted-app"),
+    ),
+  ).toEqual(["charts", "huddle"])
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('button[aria-label="Revoke huddle"]')?.click(),
+  )
+  expect(untrusted).toEqual(["huddle"])
+  expect(
+    [...host.querySelectorAll("[data-trusted-app]")].map((row) =>
+      row.getAttribute("data-trusted-app"),
+    ),
+  ).toEqual(["charts"])
+})
+
+it("draws no apps group where the window cannot list apps", async () => {
+  await show({
+    read: async () => ({ ok: true, rules: [] }),
+    revoke: async () => ({ ok: true, applied: true }),
+  })
+  await act(async () => root.render(<TrustedAppRows />))
+  expect(host.textContent).toBe("")
+})
+
+it("drops an apps read that set out before a revoke", async () => {
+  let servers = ["charts", "huddle"]
+  const held = deferred<{ ok: true; servers: string[] }>()
+  let reads = 0
+  await act(async () =>
+    root.render(
+      <PermissionRulesProvider
+        gateway={{
+          read: async () => ({ ok: true, rules: [] }),
+          revoke: async () => ({ ok: true, applied: true }),
+          trustedApps: {
+            // The second read, begun by the window coming back, is held.
+            read: () =>
+              ++reads === 2 ? held.promise : Promise.resolve({ ok: true, servers }),
+            untrust: async (server) => {
+              servers = servers.filter((each) => each !== server)
+              return { ok: true, applied: true }
+            },
+          },
+        }}
+      >
+        <TrustedAppRows />
+      </PermissionRulesProvider>,
+    ),
+  )
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('button[aria-label="Revoke huddle"]')?.click(),
+  )
+  await act(async () => held.resolve({ ok: true, servers: ["charts", "huddle"] }))
+  expect(
+    [...host.querySelectorAll("[data-trusted-app]")].map((row) =>
+      row.getAttribute("data-trusted-app"),
+    ),
+  ).toEqual(["charts"])
 })

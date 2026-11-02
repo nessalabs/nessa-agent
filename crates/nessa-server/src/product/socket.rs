@@ -1966,7 +1966,12 @@ async fn dispatch_authorized(
         "conversation.share" | "conversation.unshare" | "conversation.shares" => {
             super::read_access::dispatch_share(state, session, frame).await
         }
-        "channel.create" | "channel.list" => super::channel::dispatch(state, session, frame).await,
+        "channel.create" | "channel.list" | "channel.setPlacement" => {
+            super::channel::dispatch(state, session, frame).await
+        }
+        "apps.trusted" | "apps.untrust" => {
+            super::trusted_apps::dispatch(state, session, frame).await
+        }
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
