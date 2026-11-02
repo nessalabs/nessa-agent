@@ -5,7 +5,9 @@
 //! for each issue and each revocation, tied by one operation id: an intent,
 //! written before the secret file changes, and a publication, written only
 //! after that change is stored. A retry of a failed publication keeps the
-//! same operation id and does not write a second intent. The unpublished
+//! same operation id and does not write a second intent. A publication that
+//! is already visible is synced again before it counts as finished: the
+//! rename can land while the directory sync is still outstanding. The unpublished
 //! secret sits in `<namespace>/tunnel/pending/`, not in the audit. The
 //! secret itself is not in the audit and not in a log.
 //!
@@ -58,6 +60,9 @@ pub(crate) struct FileDeviceSecrets {
     /// Test hook: the next `count` audit records fail after the file is renamed into place.
     #[cfg(test)]
     fail_audit_syncs: std::sync::atomic::AtomicU32,
+    /// Test hook: this many directory syncs succeed before `fail_audit_syncs` applies.
+    #[cfg(test)]
+    pass_audit_syncs: std::sync::atomic::AtomicU32,
 }
 
 impl FileDeviceSecrets {
@@ -99,6 +104,8 @@ impl FileDeviceSecrets {
             fail_confirmations: std::sync::atomic::AtomicU32::new(0),
             #[cfg(test)]
             fail_audit_syncs: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(test)]
+            pass_audit_syncs: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -119,8 +126,19 @@ impl FileDeviceSecrets {
     /// Fail the next `count` audit writes after the record has been renamed into place.
     #[cfg(test)]
     fn fail_next_audit_syncs(&self, count: u32) {
+        self.pass_audit_syncs
+            .store(0, std::sync::atomic::Ordering::SeqCst);
         self.fail_audit_syncs
             .store(count, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Let `successful` directory syncs finish, then fail the one after them.
+    #[cfg(test)]
+    fn fail_audit_sync_after(&self, successful: u32) {
+        self.pass_audit_syncs
+            .store(successful, std::sync::atomic::Ordering::SeqCst);
+        self.fail_audit_syncs
+            .store(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn lock(&self) -> MutexGuard<'_, ()> {
@@ -233,11 +251,13 @@ impl FileDeviceSecrets {
                 continue;
             }
             let operation_id = value["operationId"].as_str().ok_or(SecretError::Audit)?;
-            if self
-                .audit
-                .join(format!("published-{operation_id}.json"))
-                .exists()
-            {
+            // A visible publication is not finished until its directory sync
+            // has succeeded. The retry of a sync that failed after the rename
+            // comes through here.
+            if self.publication_durable(operation_id)? {
+                // The secret file already holds the effect. Drop the
+                // unpublished copy once the publication itself is durable.
+                self.clear_pending(operation_id)?;
                 continue;
             }
             found = Some(Open::parse(&value)?);
@@ -254,31 +274,50 @@ impl FileDeviceSecrets {
         create_directory(&self.audit).map_err(|_| SecretError::Audit)?;
         let name = format!("{phase}-{}.json", open.operation_id);
         let path = self.audit.join(&name);
-        if path.exists() {
-            return Ok(());
+        if !path.exists() {
+            let value = json!({
+                "kind": "tunnel_device_secret",
+                "recordId": format!("{phase}-{}", open.operation_id),
+                "operationId": open.operation_id,
+                "action": open.action,
+                "credentialId": open.credential_id,
+                "deviceKey": encode_key(&open.device_key),
+                "fingerprint": open.fingerprint,
+                "phase": phase,
+                "cause": open.cause,
+                "before": open.before,
+                "after": after,
+                "initiator": { "kind": "principal", "principalId": open.initiator },
+                "observedAtMs": self.clock.unix_milliseconds(),
+            });
+            let mut file = PrivateTempFile::new_in(&self.audit).map_err(|_| SecretError::Audit)?;
+            serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| SecretError::Audit)?;
+            file.as_file_mut()
+                .write_all(b"\n")
+                .and_then(|_| file.as_file().sync_all())
+                .map_err(|_| SecretError::Audit)?;
+            file.publish(&path).map_err(|_| SecretError::Audit)?;
         }
-        let value = json!({
-            "kind": "tunnel_device_secret",
-            "recordId": format!("{phase}-{}", open.operation_id),
-            "operationId": open.operation_id,
-            "action": open.action,
-            "credentialId": open.credential_id,
-            "deviceKey": encode_key(&open.device_key),
-            "fingerprint": open.fingerprint,
-            "phase": phase,
-            "cause": open.cause,
-            "before": open.before,
-            "after": after,
-            "initiator": { "kind": "principal", "principalId": open.initiator },
-            "observedAtMs": self.clock.unix_milliseconds(),
-        });
-        let mut file = PrivateTempFile::new_in(&self.audit).map_err(|_| SecretError::Audit)?;
-        serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| SecretError::Audit)?;
-        file.as_file_mut()
-            .write_all(b"\n")
-            .and_then(|_| file.as_file().sync_all())
-            .map_err(|_| SecretError::Audit)?;
-        file.publish(&path).map_err(|_| SecretError::Audit)?;
+        // The record is visible, including one a previous attempt renamed
+        // into place. It is durable only after this sync.
+        self.durable_audit()
+    }
+
+    /// The audit directory's durability barrier. Every path that treats a
+    /// record as already published goes through here before success.
+    fn durable_audit(&self) -> Result<(), SecretError> {
+        #[cfg(test)]
+        if self
+            .pass_audit_syncs
+            .try_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |count| count.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return sync_directory(&self.audit).map_err(|_| SecretError::Audit);
+        }
         #[cfg(test)]
         if self
             .fail_audit_syncs
@@ -290,10 +329,26 @@ impl FileDeviceSecrets {
             .is_ok()
         {
             // The rename has landed. A directory sync that fails must not
-            // pretend the record is absent.
+            // pretend the record is absent, and a retry must reach this
+            // barrier again.
             return Err(SecretError::Audit);
         }
         sync_directory(&self.audit).map_err(|_| SecretError::Audit)
+    }
+
+    /// Whether `operation_id` already has a publication, after making that
+    /// directory durable. `Err` when the publication is visible and the sync
+    /// still fails, so the caller does not report the operation finished.
+    fn publication_durable(&self, operation_id: &str) -> Result<bool, SecretError> {
+        if !self
+            .audit
+            .join(format!("published-{operation_id}.json"))
+            .exists()
+        {
+            return Ok(false);
+        }
+        self.durable_audit()?;
+        Ok(true)
     }
 
     fn intend(&self, open: &Open) -> Result<(), SecretError> {
@@ -943,6 +998,64 @@ mod tests {
                 .unwrap_or(0),
             0
         );
+    }
+
+    /// The confirmation rename landed and the directory sync failed. A retry
+    /// that only sees the file would report success and leave that sync
+    /// undone. The barrier runs again, and only then is the issue finished.
+    #[test]
+    fn a_publication_that_lands_is_synced_again_when_the_directory_sync_fails() {
+        let (directory, secrets, _) = store(vec!["device-1".into()]);
+        // The intent's sync succeeds. The confirmation's sync fails after
+        // its rename.
+        secrets.fail_audit_sync_after(1);
+        assert_eq!(
+            secrets.issue("device-1", &[7; 32], "owner"),
+            Err(SecretError::Audit)
+        );
+        let records = audit_records(directory.path());
+        let published: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "published")
+            .collect();
+        assert_eq!(published.len(), 1, "the confirmation rename is visible");
+        assert_eq!(published[0]["after"], "active");
+        let operation = published[0]["operationId"].as_str().unwrap().to_owned();
+        let pending = std::fs::read_dir(pending_dir(directory.path())).unwrap();
+        let pending: Vec<_> = pending.map(|entry| entry.unwrap().path()).collect();
+        let secret: [u8; 32] = std::fs::read(&pending[0]).unwrap().try_into().unwrap();
+        assert!(
+            secrets.accepts(&secret),
+            "the secret file was written before the confirmation sync"
+        );
+        // The retry must hit the barrier. Skipping it would return the secret.
+        secrets.fail_next_audit_syncs(1);
+        assert_eq!(
+            secrets.issue("device-1", &[7; 32], "owner"),
+            Err(SecretError::Audit),
+            "an existing publication is not complete until the directory sync succeeds"
+        );
+        let issued = secrets.issue("device-1", &[7; 32], "owner").unwrap();
+        assert!(secrets.accepts(&issued));
+        assert_eq!(
+            std::fs::read_dir(pending_dir(directory.path()))
+                .map(|entries| entries.count())
+                .unwrap_or(0),
+            0,
+            "the pending secret is deleted once the publication is durable"
+        );
+        let records = audit_records(directory.path());
+        let published: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "published")
+            .collect();
+        assert_eq!(
+            published.len(),
+            1,
+            "the retry does not write a second publication"
+        );
+        assert_eq!(published[0]["operationId"], operation);
+        assert_eq!(published[0]["after"], "active");
     }
 
     fn audit_records(root: &std::path::Path) -> Vec<Value> {
