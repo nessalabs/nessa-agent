@@ -24,10 +24,14 @@
  *                    root or move its header; the transcript owns scrolling.
  *   rail-corner      the toggle holds one bottom-left place in the rail's
  *                    column, rail open or closed; with the rail closed it is
- *                    the footer's mark, right before "nessa Studio".
+ *                    the footer's mark, right before "nessa Studio". Agents
+ *                    keeps those words clear of the toggle. Devices leaves
+ *                    that corner empty, and the toggle does not move.
  *   rail-view-inert  under an item's full view the workspace takes no keys:
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
- *                    to Agents finds it as it was left.
+ *                    to Agents finds it as it was left. The view covers the
+ *                    workspace to the window's edges. The titlebar's free
+ *                    room is the window's drag region, not a workspace card.
  *   quiet-composer   three stacked panes: in a short window a pane you are not
  *                    in has a one-line composer, Stop alone while its turn
  *                    runs; going into one grows its composer out of the
@@ -66,6 +70,12 @@ import { sessionRowForRemoval } from "./lib/session-row-target.mjs"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import {
+  agentsStudioMissingFailure,
+  devicesCornerFailures,
+  railViewCoverFailures,
+  studioUnderToggleFailure,
+} from "./lib/rail-view-contract.mjs"
 import { css, keys, names, selectorFor, storage } from "./lib/selectors.mjs"
 import {
   flatSurfaceFailures,
@@ -140,8 +150,11 @@ Checks, per engine, layout and size:
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
   rail-corner      the bottom-left toggle never moves as the rail or sidebar
-                   toggles; "nessa Studio" stays clear in Agents and a full view
-  rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
+                   toggles; "nessa Studio" stays clear of it in Agents; Devices
+                   leaves that corner empty
+  rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it;
+                   the view covers the workspace, and the titlebar's free room
+                   is the window's drag region
   rail-loading     Devices opens with no loader; still loading at 3 s it shows
                    only the kit's sweeping text, with no panel or border
   titlebar-steady  through a rail toggle the titlebar's controls stay between
@@ -671,12 +684,13 @@ const body = {
           failures.push(
             `${label}: the toggle is at [${at}], not in the mark slot [${slot}]`,
           )
-        if (studio && studio[0] < at[0] + at[2])
-          failures.push(`${label}: "nessa Studio" at x ${studio[0]} is under the toggle`)
+        failures.push(...studioUnderToggleFailure(label, studio, at))
         if (await squareShown(page))
           failures.push(`${label}: Studio's square is drawn beside the toggle`)
-        // An item's full view puts "nessa Studio" where the sidebar's foot does.
+        // Agents keeps the words. Devices turns the corner off (`studio: false`):
+        // its cards run under it, so the words there would cover the cards.
         if (!now.sidebar) continue
+        failures.push(...agentsStudioMissingFailure(label, studio))
         const roomy =
           (await page.locator(css.sideRailToggle).getAttribute("aria-disabled")) !==
           "true"
@@ -688,14 +702,7 @@ const body = {
         const inView = await boxOf(page, css.studio)
         const viewToggle = await boxOf(page, css.sideRailToggle)
         seen.push({ label: `${label}, Devices`, toggle: viewToggle, studio: inView })
-        if (inView?.join() !== studio?.join())
-          failures.push(
-            `${label}: "nessa Studio" is at [${inView}] in a full view, [${studio}] in Agents`,
-          )
-        if (viewToggle?.join() !== toggle.join())
-          failures.push(
-            `${label}, Devices: the toggle is at [${viewToggle}], not [${toggle}]`,
-          )
+        failures.push(...devicesCornerFailures(label, inView, viewToggle, toggle))
         if (!now.rail) await setRail(page, true)
         await page.locator(selectorFor.railItem("agents")).click()
         if (!now.rail) await setRail(page, false)
@@ -1667,11 +1674,35 @@ const body = {
     const under = await state()
     const pluginChrome = await page.evaluate(() => {
       const view = document.querySelector(".rail-view")
+      if (!view) return { view: false }
       const bounds = view.getBoundingClientRect()
-      const hit = document.elementFromPoint(bounds.x + bounds.width / 2, 12)
+      const rail = document.querySelector(".side-rail")?.getBoundingClientRect()
+      const bar = document.querySelector(".workspace-titlebar")?.getBoundingClientRect()
+      const x = bounds.left + bounds.width / 2
+      // y=12 is inside the titlebar. Under a full view that hit is the drag
+      // region, recorded so the verdict can leave it out (`railViewCoverFailures`).
+      const titlebarHit = document.elementFromPoint(x, 12)
+      const contentHit = document.elementFromPoint(x, (bar?.bottom ?? 0) + 8)
+      const workspace = document.querySelector(".workspace")
+      const inside = (element, target) =>
+        element !== null &&
+        target !== null &&
+        (target === element || target.contains(element))
       return {
+        view: true,
         top: bounds.top,
-        coversHeader: view === hit || view.contains(hit),
+        left: bounds.left,
+        right: bounds.right,
+        bottom: bounds.bottom,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+        railRight: rail?.right ?? 0,
+        coversContent: inside(contentHit, view),
+        hitWorkspace: inside(contentHit, workspace),
+        titlebarHit: {
+          inView: inside(titlebarHit, view),
+          drag: titlebarHit?.closest("[data-tauri-drag-region]") !== null,
+        },
         navigation: [...document.querySelectorAll(".workspace-titlebar button")].map(
           (e) => e.getAttribute("aria-controls"),
         ),
@@ -1696,19 +1727,14 @@ const body = {
         failures.push(
           `${toggle.id}: top sidebar toggle does not fold and reopen the rail`,
         )
-    if (
-      pluginChrome.top !== 0 ||
-      !pluginChrome.coversHeader ||
-      pluginChrome.navigation.join() !== "side-rail"
-    )
-      failures.push("plugin view exposes the workspace cards or controls above it")
+    failures.push(...railViewCoverFailures(pluginChrome))
     for (const [name, value] of Object.entries(before)) {
       if (under[name] !== value)
         failures.push(`under Devices, ${name} became ${under[name]} (was ${value})`)
       if (after[name] !== value)
         failures.push(`back in Agents, ${name} is ${after[name]} (was ${value})`)
     }
-    return { before, under, after, failures }
+    return { before, under, after, pluginChrome, failures }
   },
 
   "rail-loading": async ({ page, size }) => {
