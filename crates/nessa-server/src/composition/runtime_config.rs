@@ -55,6 +55,11 @@ pub(super) struct RuntimeConfig {
     /// destination (a `~/.ssh/config` alias or `user@host`). Absent or empty
     /// names none, and no conversation reaches a host (issue #699).
     pub ssh_hosts: Vec<String>,
+    /// The device a new conversation runs on when it names no environment
+    /// and no channel: one of `sshHosts`, or a paired environment's `peer:`
+    /// name. Absent is this machine. Devices writes it
+    /// (`devices.setDefault`); it is read at each creation.
+    pub default_environment: Option<String>,
     /// What `nessa env serve` on this host offers a gateway beyond agents.
     /// Absent offers nothing more. Read only where `env serve` runs: Unix.
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -368,6 +373,7 @@ impl RuntimeConfig {
         config.session()?;
         config.limits()?;
         config.ssh_hosts()?;
+        config.default_environment()?;
         config.command_policy()?;
         config.advertised_address()?;
         Ok(config)
@@ -458,6 +464,21 @@ impl RuntimeConfig {
             hosts.push(destination);
         }
         Ok(hosts)
+    }
+
+    /// The saved default device: a paired environment's `peer:` name or an
+    /// SSH host `sshHosts` names. Anything else refuses the configuration.
+    pub fn default_environment(&self) -> Result<Option<String>, RunError> {
+        let Some(name) = &self.default_environment else {
+            return Ok(None);
+        };
+        let hosts = self.ssh_hosts()?;
+        if PeerEnvironment::parse(name).is_ok() || hosts.iter().any(|host| host.as_str() == name) {
+            return Ok(Some(name.clone()));
+        }
+        Err(refused(format!(
+            "defaultEnvironment: {name:?} is neither in sshHosts nor a paired environment"
+        )))
     }
 
     pub fn session(&self) -> Result<SessionSettings, RunError> {

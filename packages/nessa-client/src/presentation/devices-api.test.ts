@@ -90,3 +90,79 @@ describe("devices.list", () => {
       expect(() => devicesList(value), JSON.stringify(value)).toThrow()
   })
 })
+
+describe("devices SSH hosts and the default device", () => {
+  const answering = (answer: unknown, asked: unknown[] = []) =>
+    createDevicesApi({
+      request: async (method: string, params: unknown) => {
+        asked.push([method, params])
+        return answer
+      },
+    } as never)
+
+  it("reads the configured hosts and the default on the list's first page", () => {
+    expect(
+      devicesList({
+        workers: [],
+        sshHosts: [{ host: "box", hostName: "10.0.0.5", user: "ada", port: 22 }],
+        defaultEnvironment: "box",
+      }),
+    ).toEqual({
+      workers: [],
+      sshHosts: [{ host: "box", hostName: "10.0.0.5", user: "ada", port: 22 }],
+      defaultEnvironment: "box",
+    })
+    for (const bad of [
+      { workers: [], defaultEnvironment: "" },
+      { workers: [], defaultEnvironment: null },
+      { workers: [], sshHosts: [{ host: "box", port: 0 }] },
+      { workers: [], sshHosts: [{ host: "box", alias: "x" }] },
+      { workers: [], sshHosts: Array(17).fill({ host: "box" }) },
+    ])
+      expect(() => devicesList(bad), JSON.stringify(bad)).toThrow(TypeError)
+  })
+
+  it("reads suggestions and connections, a failed one with its refusal", async () => {
+    const asked: unknown[] = []
+    const answer = {
+      suggested: [{ host: "box", user: "ada" }],
+      connecting: [
+        { host: "build", state: "installing" },
+        { host: "old", state: "failed", refusal: "environment_unreachable" },
+      ],
+    }
+    expect(await answering(answer, asked).sshHosts()).toEqual(answer)
+    expect(asked).toEqual([["devices.sshHosts", {}]])
+    for (const connecting of [
+      [{ host: "build", state: "failed" }],
+      [{ host: "build", state: "installing", refusal: "devices_busy" }],
+      [{ host: "build", state: "failed", refusal: "nope" }],
+      [{ host: "build", state: "waiting" }],
+    ])
+      await expect(
+        answering({ suggested: [], connecting }).sshHosts(),
+        JSON.stringify(connecting),
+      ).rejects.toThrow(TypeError)
+  })
+
+  it("connects a host and saves the default", async () => {
+    const asked: unknown[] = []
+    expect(
+      await answering({ connecting: { host: "box", state: "installing" } }, asked).connectSsh(
+        "box",
+      ),
+    ).toEqual({ host: "box", state: "installing" })
+    expect(
+      await answering({ defaultEnvironment: null }, asked).setDefault(null),
+    ).toBeNull()
+    expect(
+      await answering({ defaultEnvironment: "box" }, asked).setDefault("box"),
+    ).toBe("box")
+    expect(asked).toEqual([
+      ["devices.connectSsh", { host: "box" }],
+      ["devices.setDefault", { environment: null }],
+      ["devices.setDefault", { environment: "box" }],
+    ])
+    await expect(answering({}).setDefault(null)).rejects.toThrow(TypeError)
+  })
+})

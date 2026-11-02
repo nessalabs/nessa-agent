@@ -193,6 +193,14 @@ pub struct ProductRouteState {
     /// The hub's devices (`devices.list`). `None` answers
     /// `devices_unavailable`.
     pub(crate) devices: Option<Arc<crate::devices::application::Devices>>,
+    /// Suggesting and connecting SSH hosts and choosing the default device
+    /// (`devices.sshHosts`, `devices.connectSsh`, `devices.setDefault`), and
+    /// the default the catalog names. `None` — not Unix — answers
+    /// `devices_unavailable`.
+    pub(crate) device_setup: Option<Arc<crate::devices::application::DeviceSetup>>,
+    /// Moves each time the default device is saved: the catalog's
+    /// subscribers read it again.
+    pub(crate) default_device: Option<watch::Receiver<Option<String>>>,
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub(crate) github: Option<Arc<super::GithubRoutes>>,
@@ -343,6 +351,8 @@ impl ProductRouteState {
             tunnel: None,
             tunnel_secrets: None,
             devices: None,
+            device_setup: None,
+            default_device: None,
             github: None,
             voice: None,
             vault: None,
@@ -481,6 +491,19 @@ impl ProductRouteState {
     }
 
     /// Register the hub's devices, which `devices.list` reads.
+    /// Set the hub's machines up from Devices, and offer the default device
+    /// `default` holds in the catalog.
+    #[cfg_attr(not(any(unix, test)), allow(dead_code))]
+    pub(crate) fn with_device_setup(
+        mut self,
+        setup: Arc<crate::devices::application::DeviceSetup>,
+        default: watch::Receiver<Option<String>>,
+    ) -> Self {
+        self.device_setup = Some(setup);
+        self.default_device = Some(default);
+        self
+    }
+
     pub(crate) fn with_devices(
         mut self,
         devices: Arc<crate::devices::application::Devices>,
@@ -635,12 +658,21 @@ impl ProductRouteState {
             .as_array()
             .map(|places| places.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
+        // The default device, while it is one of those places.
+        let default = self
+            .default_device
+            .as_ref()
+            .and_then(|default| default.borrow().clone())
+            .filter(|default| places.contains(&default.as_str()));
         let command_hosts = self
             .conversations
             .as_ref()
             .map(|service| service.owner_command_hosts(places))
             .unwrap_or_default();
         catalog["commandHosts"] = Value::from(command_hosts);
+        if let Some(default) = default {
+            catalog["defaultEnvironment"] = Value::from(default);
+        }
         // The stored hooks choice, read now. The composed catalog's own copy
         // is never shown.
         let selection = self
@@ -656,6 +688,14 @@ impl ProductRouteState {
     /// seen as of now; `None` on a gateway that pairs no environments.
     pub(crate) fn agents_catalog_changes(&self) -> Option<watch::Receiver<u64>> {
         let mut changes = self.connected_environments.as_ref()?.changes.clone();
+        changes.mark_unchanged();
+        Some(changes)
+    }
+
+    /// A wake-up each time the default device is saved, seen as of now;
+    /// `None` where Devices cannot set one.
+    pub(crate) fn default_device_changes(&self) -> Option<watch::Receiver<Option<String>>> {
+        let mut changes = self.default_device.clone()?;
         changes.mark_unchanged();
         Some(changes)
     }

@@ -86,16 +86,26 @@ fn stored(record: &LinkingAuditRecord) -> Value {
                     LinkingError::AuditUnavailable => "audit_unavailable",
                     LinkingError::LinkingOff => "linking_off",
                     LinkingError::TunnelIncomplete => "tunnel_incomplete",
+                    LinkingError::HostLimit => "host_limit",
                 },
             }),
         ),
     };
-    let (kind, mode) = match record.subject {
-        LinkingSubject::Linking => ("native_linking", Value::Null),
+    // Each subject's target, kept beside the change: the tunnel's mode, the
+    // SSH host added, or the device chosen (null: this machine).
+    let (kind, target) = match &record.subject {
+        LinkingSubject::Linking => ("native_linking", None),
         LinkingSubject::Tunnel { mode } => (
             "native_tunnel",
-            mode.map_or(Value::Null, |mode| json!(mode.as_str())),
+            Some((
+                "mode",
+                mode.map_or(Value::Null, |mode| json!(mode.as_str())),
+            )),
         ),
+        LinkingSubject::SshHost { host } => ("ssh_host", Some(("host", json!(host)))),
+        LinkingSubject::DefaultDevice { environment } => {
+            ("default_device", Some(("environment", json!(environment))))
+        }
     };
     let mut value = json!({
         "kind": kind,
@@ -112,8 +122,8 @@ fn stored(record: &LinkingAuditRecord) -> Value {
             "credentialId": record.caller.credential_id,
         },
     });
-    if let (LinkingSubject::Tunnel { .. }, Value::Object(fields)) = (record.subject, &mut value) {
-        fields.insert("mode".into(), mode);
+    if let (Some((key, target)), Value::Object(fields)) = (target, &mut value) {
+        fields.insert(key.into(), target);
     }
     value
 }
@@ -131,6 +141,8 @@ impl LinkingAudit for DurableLinkingAudit {
         let subject = match record.subject {
             LinkingSubject::Linking => "native-linking",
             LinkingSubject::Tunnel { .. } => "native-tunnel",
+            LinkingSubject::SshHost { .. } => "ssh-host",
+            LinkingSubject::DefaultDevice { .. } => "default-device",
         };
         let id = format!("{subject}-{}-{phase}", record.operation_id);
         let mut value = stored(record);
@@ -248,6 +260,49 @@ mod tests {
         assert_eq!(outcome["kind"], "native_tunnel");
         assert_eq!(outcome["mode"], "named");
         assert_eq!(outcome["outcome"]["reason"], "tunnel_incomplete");
+    }
+
+    #[test]
+    fn an_ssh_host_and_a_default_device_are_kinds_of_their_own_naming_their_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let audit = DurableLinkingAudit::new(directory.path().join("audit"), Arc::new(Fixed));
+        let caller = LinkingCaller {
+            organization_id: "org".into(),
+            principal_id: "owner".into(),
+            credential_id: "panel".into(),
+        };
+        audit
+            .record(&LinkingAuditRecord {
+                operation_id: "op".into(),
+                caller: caller.clone(),
+                subject: LinkingSubject::SshHost { host: "box".into() },
+                enabled: true,
+                running: false,
+                phase: LinkingAuditPhase::Refused(LinkingError::HostLimit),
+            })
+            .unwrap();
+        audit
+            .record(&LinkingAuditRecord {
+                operation_id: "op2".into(),
+                caller,
+                subject: LinkingSubject::DefaultDevice { environment: None },
+                enabled: false,
+                running: true,
+                phase: LinkingAuditPhase::Requested,
+            })
+            .unwrap();
+        let read = |name: &str| -> Value {
+            serde_json::from_slice(&std::fs::read(directory.path().join("audit").join(name)).unwrap())
+                .unwrap()
+        };
+        let host = read("ssh-host-op-outcome.json");
+        assert_eq!(host["kind"], "ssh_host");
+        assert_eq!(host["host"], "box");
+        assert_eq!(host["outcome"]["reason"], "host_limit");
+        let device = read("default-device-op2-requested.json");
+        assert_eq!(device["kind"], "default_device");
+        assert_eq!(device["environment"], Value::Null);
+        assert!(device.as_object().unwrap().contains_key("environment"));
     }
 
     #[test]

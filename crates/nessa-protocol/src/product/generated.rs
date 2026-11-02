@@ -2077,6 +2077,8 @@ pub struct AgentsSetNativeHooksResult {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentsListResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_environment: Option<String>,
     pub agents: Vec<AgentOption>,
     pub environments: Vec<String>,
     pub command_hosts: Vec<String>,
@@ -2667,12 +2669,63 @@ pub struct DeviceWorker {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DevicesListResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_hosts: Option<Vec<DeviceSshHost>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub: Option<DeviceMachine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listening: Option<String>,
     pub workers: Vec<DeviceWorker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceSshHost {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSshHostsResult {
+    pub suggested: Vec<DeviceSshHost>,
+    pub connecting: Vec<DeviceSshConnect>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceSshConnect {
+    pub host: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesConnectSshParams {
+    pub host: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesConnectSshResult {
+    pub connecting: DeviceSshConnect,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSetDefaultParams {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub environment: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicesSetDefaultResult {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub default_environment: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4158,6 +4211,9 @@ pub mod product_method {
     pub const GITHUB_STATUS: &str = "github.status";
     pub const GITHUB_CONNECT: &str = "github.connect";
     pub const DEVICES_LIST: &str = "devices.list";
+    pub const DEVICES_SSH_HOSTS: &str = "devices.sshHosts";
+    pub const DEVICES_CONNECT_SSH: &str = "devices.connectSsh";
+    pub const DEVICES_SET_DEFAULT: &str = "devices.setDefault";
     pub const GITHUB_CANCEL: &str = "github.cancel";
     pub const GITHUB_DISCONNECT: &str = "github.disconnect";
     pub const PEER_ENROLL: &str = "peer.enroll";
@@ -4387,7 +4443,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 110
+                items.len() <= 113
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4483,6 +4539,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "github.status",
     "github.connect",
     "devices.list",
+    "devices.sshHosts",
+    "devices.connectSsh",
+    "devices.setDefault",
     "github.cancel",
     "github.disconnect",
     "peer.enroll",
@@ -4567,6 +4626,9 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "github.liveEvents"
         | "github.status"
         | "github.connect"
+        | "devices.sshHosts"
+        | "devices.connectSsh"
+        | "devices.setDefault"
         | "github.cancel"
         | "github.disconnect"
         | "peer.enroll"

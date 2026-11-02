@@ -28,14 +28,25 @@
 //! needs linking on, and an ingress this run does not hold is bind-checked.
 //! It restarts when the saved tunnel's identity differs from the one this
 //! run serves.
-use super::runtime_config::{TunnelSection, DEFAULT_NATIVE_LISTEN, SUPERSEDED_NATIVE_LISTEN};
+//!
+//! Devices' setup ([`DeviceSettings`]) edits the same file under the same
+//! lock and audit, each its own subject: `devices.connectSsh` adds a host to
+//! `sshHosts` (at most [`MAX_SSH_HOSTS`]) and restarts when this run does
+//! not serve it, since a run reads its hosts once; `devices.setDefault`
+//! saves `defaultEnvironment`, which the running gateway takes at once, so
+//! it never restarts.
+use super::runtime_config::{
+    TunnelSection, DEFAULT_NATIVE_LISTEN, MAX_SSH_HOSTS, SUPERSEDED_NATIVE_LISTEN,
+};
 use crate::core::self_restart::{RestartEnd, RestartReport, SelfRestart};
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingCaller,
     LinkingChange, LinkingError, LinkingRestart, LinkingSubject, ListenMoved, NativeLinking,
     SavedTunnel, TunnelChange, TunnelReplaced, TunnelRequest, TunnelSnapshot,
 };
+use crate::devices::application::{DeviceSettings, SetupFuture};
 use crate::mcp_servers::application::StoreError;
+use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
 use crate::tunnel::application::{
     CloudflareTunnel, TunnelMode, TunnelProvider, TunnelSetting, TunnelToken,
@@ -65,6 +76,8 @@ pub(super) struct ConfigLinking {
     /// The tunnel this run serves, if any: what a tunnel change is compared
     /// with.
     running_tunnel: watch::Receiver<Option<TunnelSetting>>,
+    /// The SSH hosts this run serves: what an added host is compared with.
+    running_hosts: Vec<SshDestination>,
 }
 
 /// One change.
@@ -72,6 +85,11 @@ pub(super) struct ConfigLinking {
 enum Change {
     Linking(bool),
     Tunnel(TunnelRequest),
+    /// Add an SSH host to `sshHosts` (`devices.connectSsh`).
+    SshHost(SshDestination),
+    /// Save the default device (`devices.setDefault`); `None` is this
+    /// machine. Read at each creation, so it never restarts anything.
+    DefaultDevice(Option<String>),
 }
 
 impl Change {
@@ -79,12 +97,20 @@ impl Change {
         match self {
             Self::Linking(_) => LinkingSubject::Linking,
             Self::Tunnel(request) => LinkingSubject::Tunnel { mode: request.mode },
+            Self::SshHost(host) => LinkingSubject::SshHost {
+                host: host.as_str().to_owned(),
+            },
+            Self::DefaultDevice(environment) => LinkingSubject::DefaultDevice {
+                environment: environment.clone(),
+            },
         }
     }
     fn enabled(&self) -> bool {
         match self {
             Self::Linking(enabled) => *enabled,
             Self::Tunnel(request) => request.enabled,
+            Self::SshHost(_) => true,
+            Self::DefaultDevice(environment) => environment.is_some(),
         }
     }
 }
@@ -103,7 +129,14 @@ impl ConfigLinking {
             restart,
             tunnel_files: None,
             running_tunnel: watch::channel(None).1,
+            running_hosts: Vec::new(),
         }
+    }
+
+    /// Add SSH hosts too: `running` are the ones this run serves.
+    pub(super) fn with_ssh_hosts(mut self, running: Vec<SshDestination>) -> Self {
+        self.running_hosts = running;
+        self
     }
 
     /// Change the tunnel too: its token kept in `files`, compared with
@@ -128,6 +161,9 @@ impl ConfigLinking {
         match change {
             Change::Linking(_) => self.running,
             Change::Tunnel(_) => self.running_tunnel.borrow().is_some(),
+            Change::SshHost(host) => self.running_hosts.contains(host),
+            // Read at each creation: whatever is saved is what runs.
+            Change::DefaultDevice(_) => true,
         }
     }
 
@@ -166,6 +202,10 @@ impl ConfigLinking {
         let saved = match (&lock, change) {
             (Ok(_), Change::Linking(enabled)) => self.save(*enabled).await,
             (Ok(_), Change::Tunnel(request)) => self.save_tunnel(request).await,
+            (Ok(_), Change::SshHost(host)) => self.save_ssh_host(host).await,
+            (Ok(_), Change::DefaultDevice(environment)) => {
+                self.save_default(environment.clone()).await
+            }
             (Err(error), _) => Err(*error),
         };
         let saved = match saved {
@@ -306,6 +346,85 @@ impl ConfigLinking {
             applies,
             written: true,
             moved,
+            mode: None,
+            tunnel: None,
+        })
+    }
+
+    /// Add `host` to `sshHosts`, holding the lock. A host named already is
+    /// left; one past [`MAX_SSH_HOSTS`] is refused. It applies by starting
+    /// again unless this run already serves it.
+    async fn save_ssh_host(&self, host: &SshDestination) -> Result<Saved, LinkingError> {
+        if !self.restart.serving() {
+            return Err(LinkingError::Busy);
+        }
+        let applies = if self.running_hosts.contains(host) {
+            LinkingApply::Unchanged
+        } else {
+            LinkingApply::Restarting
+        };
+        let name = host.as_str().to_owned();
+        self.publish_edit(applies, move |document| {
+            let hosts = document
+                .entry("sshHosts")
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .ok_or(LinkingError::Unavailable)?;
+            if hosts.iter().any(|each| each.as_str() == Some(name.as_str())) {
+                return Ok(false);
+            }
+            if hosts.len() >= MAX_SSH_HOSTS {
+                return Err(LinkingError::HostLimit);
+            }
+            hosts.push(Value::String(name));
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Save `environment` as `defaultEnvironment`, holding the lock; `None`
+    /// removes it. Read at each creation, so nothing restarts.
+    async fn save_default(&self, environment: Option<String>) -> Result<Saved, LinkingError> {
+        self.publish_edit(LinkingApply::Unchanged, move |document| {
+            let before = document.get("defaultEnvironment").cloned();
+            match &environment {
+                Some(name) => {
+                    document.insert("defaultEnvironment".into(), Value::String(name.clone()));
+                }
+                None => {
+                    document.remove("defaultEnvironment");
+                }
+            }
+            Ok(before != document.get("defaultEnvironment").cloned())
+        })
+        .await
+    }
+
+    /// Read `config.json`, apply `edit` (whether it changed the document),
+    /// and publish it when it did, holding the lock.
+    async fn publish_edit(
+        &self,
+        applies: LinkingApply,
+        edit: impl FnOnce(&mut Map<String, Value>) -> Result<bool, LinkingError> + Send + 'static,
+    ) -> Result<Saved, LinkingError> {
+        let config = self.config.clone();
+        let written = tokio::task::spawn_blocking(move || {
+            let mut document = config.document().map_err(refusal)?;
+            if !edit(&mut document)? {
+                return Ok(false);
+            }
+            let published = config.publish(document).map_err(refusal)?;
+            if published == Published::NotDurable {
+                tracing::warn!("config.json saved, but its directory could not be synced");
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(|_| LinkingError::Unavailable)??;
+        Ok(Saved {
+            applies,
+            written,
+            moved: None,
             mode: None,
             tunnel: None,
         })
@@ -496,6 +615,52 @@ impl NativeLinking for ConfigLinking {
 
     fn tunnel(&self) -> Answer<'_, SavedTunnel> {
         Box::pin(self.read_tunnel())
+    }
+}
+
+impl ConfigLinking {
+    /// One change for `caller`, recorded as `operation_id`: requested,
+    /// then saved and applied.
+    async fn apply(
+        &self,
+        operation_id: &str,
+        caller: &LinkingCaller,
+        change: &Change,
+    ) -> Result<LinkingApply, LinkingError> {
+        self.record(operation_id, caller, change, LinkingAuditPhase::Requested)
+            .await?;
+        Ok(self.change(operation_id, caller, change).await?.applies)
+    }
+}
+
+impl DeviceSettings for ConfigLinking {
+    fn add_ssh_host(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<LinkingApply, LinkingError>> {
+        Box::pin(async move {
+            let applies = self
+                .apply(&operation, &caller, &Change::SshHost(host.clone()))
+                .await?;
+            tracing::info!(host = host.as_str(), ?applies, principal = %caller.principal_id, "an SSH host was added from Devices");
+            Ok(applies)
+        })
+    }
+
+    fn set_default(
+        &self,
+        caller: LinkingCaller,
+        environment: Option<String>,
+    ) -> SetupFuture<'_, Result<(), LinkingError>> {
+        Box::pin(async move {
+            let operation = uuid::Uuid::new_v4().to_string();
+            self.apply(&operation, &caller, &Change::DefaultDevice(environment.clone()))
+                .await?;
+            tracing::info!(?environment, principal = %caller.principal_id, "the default device changed from Devices");
+            Ok(())
+        })
     }
 }
 

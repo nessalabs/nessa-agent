@@ -349,6 +349,12 @@ import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
+  REACHABLE as SSH_REACHABLE,
+  UNREACHABLE as SSH_UNREACHABLE,
+  writeFakeSsh,
+  writeSshConfig,
+} from "./lib/stress-ssh-hosts.mjs"
+import {
   pairedCatalogue,
   preparePairedCatalogue,
 } from "./lib/stress-paired-catalogue.mjs"
@@ -4437,8 +4443,11 @@ const steps = {
             .getAttribute("data-kind")) !== "boat"
         )
           failures.push("Boat's tile is not drawn as a boat")
+        // The `ssh` step's suggestions are a section of their own, under it.
         const headings = await page
-          .locator('[data-devices-page="list"] h2:not(#devices-hub-name)')
+          .locator(
+            '[data-devices-page="list"] h2:not(#devices-hub-name):not(#devices-suggestions-title)',
+          )
           .allInnerTexts()
         if (headings.length) failures.push(`Devices splits its list: ${headings}`)
         // Boat is managed on its own page, not sent to Settings.
@@ -4628,6 +4637,189 @@ const steps = {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
+    }
+  },
+
+  async ssh(run, step, failures) {
+    const gateway = run.stack.gateway
+    const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+    const sshConfig = join(gateway.directory, "home", ".ssh", "config")
+    const pid = gateway.server.pid
+    const photograph = (label) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `ssh-${run.engine}-${label}.png`) })
+            .catch(() => {})
+        : Promise.resolve()
+    // The person's SSH configuration, read as Devices is opened.
+    writeSshConfig(join(gateway.directory, "home"))
+    try {
+      const { suggested } = await run.client.devices.sshHosts()
+      const names = suggested.map((each) => each.host)
+      if (JSON.stringify(names) !== JSON.stringify([SSH_REACHABLE, SSH_UNREACHABLE]))
+        failures.push(`the gateway suggests ${JSON.stringify(names)}`)
+      const reachable = suggested.find((each) => each.host === SSH_REACHABLE)
+      if (
+        reachable?.hostName !== "10.0.0.7" ||
+        reachable.user !== "builder" ||
+        reachable.port !== 2222
+      )
+        failures.push(`${SSH_REACHABLE} is suggested as ${JSON.stringify(reachable)}`)
+      if (failures.length) return
+      const conversationId = randomUUID()
+      await run.exclusive(async () => {
+        const page = run.page
+        await setSideRail(page, true, failures)
+        if (failures.length) return
+        await page.locator('[data-rail-item="devices"]').click()
+        const pills = page.locator("[data-devices-suggested]")
+        if (!(await waitFor(async () => (await pills.count()) === 2, 15_000))) {
+          failures.push(
+            `Devices suggests ${JSON.stringify(await pills.allInnerTexts())}, not two machines`,
+          )
+          return
+        }
+        const pill = (host) => page.locator(`[data-devices-suggested="${host}"]`)
+        if (!(await pill(SSH_REACHABLE).innerText()).includes("builder@10.0.0.7"))
+          failures.push(
+            `${SSH_REACHABLE}'s pill reads ${await pill(SSH_REACHABLE).innerText()}`,
+          )
+        // Connect shows on hover; a machine nothing reaches says so and can be tried again.
+        await pill(SSH_UNREACHABLE).hover()
+        await pill(SSH_UNREACHABLE).locator('[data-devices-action="connect"]').click()
+        const failed = await waitFor(
+          async () =>
+            (await pill(SSH_UNREACHABLE).getAttribute("data-state")) === "failed" &&
+            (await pill(SSH_UNREACHABLE).innerText()).includes("Try again"),
+          30_000,
+        )
+        if (!failed)
+          failures.push(
+            `an unreachable machine's pill reads ${await pill(SSH_UNREACHABLE).innerText()}`,
+          )
+        // Its words stand out from its fill, as Add device's do.
+        const ink = await pill(SSH_UNREACHABLE)
+          .locator('[data-devices-action="connect"]')
+          .evaluate((button) => {
+            const style = getComputedStyle(button)
+            return { fill: style.backgroundColor, ink: style.color }
+          })
+        if (ink.fill === ink.ink)
+          failures.push(`Try again is drawn ${ink.ink} on ${ink.fill}`)
+        await photograph("suggested")
+        // Connecting installs this build there, saves it and restarts the
+        // gateway in place; the machine moves from the pills to the list.
+        await run.restartConsole.during(run.opened, async () => {
+          const before = failures.length
+          const old = run.client
+          run.restarts += 1
+          await pill(SSH_REACHABLE).hover()
+          await pill(SSH_REACHABLE).locator('[data-devices-action="connect"]').click()
+          const tile = page.locator(`[data-devices-ssh="${SSH_REACHABLE}"]`)
+          const listed = await waitFor(
+            async () =>
+              (await tile.count()) === 1 && (await pill(SSH_REACHABLE).count()) === 0,
+            180_000,
+          )
+          if (!listed)
+            failures.push(
+              `after Connect, ${SSH_REACHABLE}'s pill reads ${JSON.stringify(await pill(SSH_REACHABLE).allInnerTexts())}`,
+            )
+          else if (!(await tile.innerText()).includes(`SSH · ${SSH_REACHABLE}`))
+            failures.push(`${SSH_REACHABLE}'s tile reads ${await tile.innerText()}`)
+          old.close()
+          run.client = await connectClient(gateway, INSTANCE, "panel")
+          const saved = JSON.parse(readFileSync(config, "utf8")).sshHosts
+          if (!saved?.includes(SSH_REACHABLE))
+            failures.push(`config.json holds sshHosts ${JSON.stringify(saved)}`)
+          if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+            failures.push("the gateway did not start again in the same process")
+          return failures.length === before
+        })
+        if (failures.length) return
+        // The restarted gateway keeps no word of the failed try: the pill
+        // offers Connect again rather than holding an old answer.
+        if (
+          !(await waitFor(
+            async () =>
+              (await pill(SSH_UNREACHABLE).getAttribute("data-state")) === "idle",
+            15_000,
+          ))
+        )
+          failures.push(
+            `after the restart, ${SSH_UNREACHABLE}'s pill reads ${await pill(SSH_UNREACHABLE).innerText()}`,
+          )
+        const offered = await offers(run, (environments) =>
+          environments.includes(SSH_REACHABLE),
+        )
+        if (!offered.includes(SSH_REACHABLE))
+          failures.push(
+            `the gateway offers ${JSON.stringify(offered)}, not ${SSH_REACHABLE}`,
+          )
+        // The star makes it where new chats run, for every client.
+        const holder = page.locator(".devices-tile-holder", {
+          has: page.locator(`[data-devices-ssh="${SSH_REACHABLE}"]`),
+        })
+        await holder.hover()
+        const star = page.locator(`[data-devices-default="${SSH_REACHABLE}"]`)
+        await star.click()
+        if (
+          !(await waitFor(
+            async () => (await star.getAttribute("data-chosen")) !== null,
+            10_000,
+          ))
+        )
+          failures.push(`${SSH_REACHABLE}'s star is not chosen once pressed`)
+        await photograph("default")
+        const chosen = await waitFor(async () => {
+          const { defaultEnvironment } = await run.client.agents.list()
+          return defaultEnvironment === SSH_REACHABLE ? defaultEnvironment : null
+        }, 10_000)
+        if (!chosen) failures.push(`agents.list names no default ${SSH_REACHABLE}`)
+        if ((await run.client.devices.list()).defaultEnvironment !== SSH_REACHABLE)
+          failures.push(`devices.list names no default ${SSH_REACHABLE}`)
+        if (JSON.parse(readFileSync(config, "utf8")).defaultEnvironment !== SSH_REACHABLE)
+          failures.push("config.json keeps no default device")
+        // A chat that names no place runs there.
+        await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+        run.checked.push(conversationId)
+        const text = prompt(run, STRESS.reply, step, " ssh")
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const leased = await waitFor(async () => {
+          const view = await readWithReviews(run.client, conversationId).catch(() => null)
+          return view?.lease?.host === SSH_REACHABLE ? view.lease : null
+        }, 120_000)
+        if (!leased) {
+          const view = await readWithReviews(run.client, conversationId).catch(() => null)
+          failures.push(
+            `a chat with no place has lease ${JSON.stringify(view?.lease)}, not on ${SSH_REACHABLE}`,
+          )
+        }
+        // Back to the hub: its star, and a new chat stays here again.
+        await page.locator('[data-devices-default="hub"]').click()
+        const back = await waitFor(async () => {
+          const { defaultEnvironment } = await run.client.agents.list()
+          return defaultEnvironment === undefined
+        }, 10_000)
+        if (!back) failures.push("the hub's star did not take the default back")
+        await page.locator('[data-rail-item="agents"]').click()
+        await setSideRail(page, false, failures)
+      })
+      if (failures.length) return
+      await settled(
+        run,
+        conversationId,
+        new Set(),
+        prompt(run, STRESS.reply, step, " ssh"),
+        "completed",
+        failures,
+        120,
+      )
+    } finally {
+      rmSync(sshConfig, { force: true })
+      await run.client.devices.setDefault(null).catch(() => {})
     }
   },
 
@@ -8682,6 +8874,10 @@ async function startStack(options) {
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
+  // The `ssh` step's stand-in `ssh`, first on the gateway's PATH.
+  const fakeSsh = selected.some((step) => step.kind === "ssh")
+    ? writeFakeSsh(join(directory, "fake-ssh"))
+    : null
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
@@ -8699,6 +8895,7 @@ async function startStack(options) {
       : {}),
     // The `tunnel` step's cloudflared (debug builds only).
     NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
+    ...(fakeSsh ? { PATH: `${fakeSsh.bin}:${process.env.PATH}` } : {}),
   }
   let stack
   try {
@@ -8733,6 +8930,7 @@ async function startStack(options) {
     })
     const { agents } = await stack.client.agents.list()
     stack.profile = selectStressFixture(profile, agents)
+    stack.fakeSsh = fakeSsh
   } catch (error) {
     await stack?.close()
     await github?.close()

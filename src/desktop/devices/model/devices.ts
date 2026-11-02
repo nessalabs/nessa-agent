@@ -36,6 +36,22 @@ export interface DeviceWorker {
   readonly lastSeenMs?: number
 }
 
+/** An SSH host as the gateway's OpenSSH configuration names it
+ * (`DeviceSshHost`). */
+export interface DeviceSshHost {
+  readonly host: string
+  readonly hostName?: string
+  readonly user?: string
+  readonly port?: number
+}
+
+/** Where one SSH host's setup stands (`DeviceSshConnect`). */
+export interface DeviceSshConnect {
+  readonly host: string
+  readonly state: "installing" | "restarting" | "connected" | "failed"
+  readonly refusal?: string
+}
+
 /** Which drawing a device gets (`DeviceFigure`'s kinds). */
 export type DeviceArt = "desktop" | "laptop" | "server" | "monitor" | "phone" | "cloud"
 
@@ -240,4 +256,53 @@ export function summary(hub: string, workers: readonly WorkerCard[]): string {
   if (total === 0) return `${hub} is your hub. Add a computer to run agents on it too.`
   const devices = `${online} of ${total} ${total === 1 ? "computer" : "computers"} online`
   return `${hub} is your hub. ${devices}, ${agentsWord(agents).toLowerCase()} on them.`
+}
+
+/** An SSH host, as a card: the machine by name, its alias said beneath. */
+export interface SshHostCard {
+  /** The alias, as conversations and the default name it. */
+  readonly host: string
+  /** The machine: where it connects, or the alias when the file says none. */
+  readonly name: string
+  /** "SSH · alias", where a phone's card says what app it is. */
+  readonly kind: string
+  /** "ada@10.0.0.5:2222": who it signs in as, and where. */
+  readonly address: string
+}
+
+export function sshHostCard(host: DeviceSshHost): SshHostCard {
+  const at = host.hostName ?? host.host
+  return {
+    host: host.host,
+    name: host.hostName ?? host.host,
+    kind: `SSH · ${host.host}`,
+    address: `${host.user ? `${host.user}@` : ""}${at}${host.port && host.port !== 22 ? `:${host.port}` : ""}`,
+  }
+}
+
+/** What a setup under way, or ended, says on its pill. */
+export function connectWord(connect: DeviceSshConnect): string {
+  switch (connect.state) {
+    case "installing":
+      return "Installing Nessa"
+    case "restarting":
+      return "Starting again"
+    case "connected":
+      return "Connected"
+    case "failed":
+      switch (connect.refusal) {
+        case "environment_unreachable":
+          return "Couldn't reach it over SSH"
+        case "environment_platform_unsupported":
+          return "Nessa doesn't run on its system"
+        case "environment_version_mismatch":
+          return "It runs another Nessa"
+        case "devices_host_limit":
+          return "16 machines already"
+        case "devices_busy":
+          return "Busy, try again"
+        default:
+          return "Couldn't install Nessa"
+      }
+  }
 }

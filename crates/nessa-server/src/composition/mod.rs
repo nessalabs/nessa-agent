@@ -53,6 +53,8 @@ mod github_tools;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;
+#[cfg(unix)]
+mod device_setup;
 mod local_auth;
 #[cfg(unix)]
 mod managed_adapter;

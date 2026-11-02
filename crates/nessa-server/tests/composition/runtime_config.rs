@@ -1,5 +1,6 @@
 //! `sshHosts` in `config.json`: the hosts a conversation may be created on;
-//! and `environmentTools`: where the agent may run commands, and which.
+//! `defaultEnvironment`: where one that names none runs; and
+//! `environmentTools`: where the agent may run commands, and which.
 use super::{RuntimeConfig, MAX_POLICY_PROGRAMS, MAX_SSH_HOSTS};
 use crate::conversation::domain::CommandPolicy;
 
@@ -38,6 +39,33 @@ fn a_host_that_is_not_a_destination_a_repeat_or_too_many_refuse_the_configuratio
         serde_json::json!({ "sshHosts": many }).to_string(),
     ] {
         assert!(hosts(&json).is_err(), "{json}");
+    }
+}
+
+fn default_device(json: &str) -> Result<Option<String>, String> {
+    let config = RuntimeConfig::parse(json.as_bytes()).map_err(|error| error.to_string())?;
+    Ok(config.default_environment().unwrap())
+}
+
+#[test]
+fn the_default_device_is_a_configured_host_or_a_paired_environment() {
+    assert_eq!(default_device("{}"), Ok(None));
+    assert_eq!(
+        default_device(r#"{"sshHosts":["devbox"],"defaultEnvironment":"devbox"}"#),
+        Ok(Some("devbox".into()))
+    );
+    let peer = format!("peer:{}", "ab".repeat(32));
+    assert_eq!(
+        default_device(&serde_json::json!({ "defaultEnvironment": peer }).to_string()),
+        Ok(Some(peer))
+    );
+    for json in [
+        r#"{"defaultEnvironment":"devbox"}"#,
+        r#"{"defaultEnvironment":"peer:any"}"#,
+        r#"{"defaultEnvironment":"here"}"#,
+        r#"{"defaultEnvironment":7}"#,
+    ] {
+        assert!(default_device(json).is_err(), "{json}");
     }
 }
 

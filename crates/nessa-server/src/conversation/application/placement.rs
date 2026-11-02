@@ -69,6 +69,7 @@ impl WorkspaceRest {
 }
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use tokio::sync::watch;
 
 /// The name that places a conversation on any worker of this gateway's
 /// pool: its paired environments. An SSH destination holds no `:`, and no
@@ -371,6 +372,9 @@ pub(crate) struct Environments {
     fetch_wait: Duration,
     /// Pool leases chosen for a worker and not yet asked there.
     reserved: Arc<Reserved>,
+    /// The default device saved from Devices: where a new conversation that
+    /// names no place runs, while it is offered; `None` is here.
+    default: Option<watch::Receiver<Option<String>>>,
 }
 
 impl From<Arc<dyn Environment>> for Environments {
@@ -388,6 +392,7 @@ impl From<Arc<dyn Environment>> for Environments {
             publish_wait: PUBLISH_CALL_WAIT,
             fetch_wait: FETCH_CALL_WAIT,
             reserved: Arc::default(),
+            default: None,
         }
     }
 }
@@ -418,6 +423,7 @@ impl Environments {
             publish_wait: PUBLISH_CALL_WAIT,
             fetch_wait: FETCH_CALL_WAIT,
             reserved: Arc::default(),
+            default: None,
         }
     }
 
@@ -433,6 +439,34 @@ impl Environments {
         self.peers = Some(peers);
         self.bindings = Some(bindings);
         self
+    }
+
+    /// These environments, whose new conversations that name no place run
+    /// on the device `default` holds while it is offered.
+    #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
+    pub(crate) fn with_default(mut self, default: watch::Receiver<Option<String>>) -> Self {
+        self.default = Some(default);
+        self
+    }
+
+    /// The default device, when a conversation could be placed on it now:
+    /// a configured host, or a paired environment that is connected. A
+    /// paired one that is not leaves a new conversation here rather than
+    /// refused, since nobody named it for that conversation.
+    pub(crate) fn default_place(&self) -> Option<String> {
+        let name = self.default.as_ref()?.borrow().clone()?;
+        self.offers(&name).then_some(name)
+    }
+
+    /// Whether `name` is a host or a connected paired environment.
+    fn offers(&self, name: &str) -> bool {
+        match PeerEnvironment::parse(name) {
+            Ok(peer) => self
+                .peers
+                .as_ref()
+                .is_some_and(|peers| peers.connected().contains(&peer)),
+            Err(_) => self.hosts.contains_key(name),
+        }
     }
 
     /// These environments, with commands granted as `policy` answers: the
@@ -539,13 +573,7 @@ impl Environments {
             let pool = name == POOL;
             let known = name == BOAT && self.boat_connected().await
                 || name == POOL && self.bindings.is_some() && self.pool_serves()
-                || match PeerEnvironment::parse(name) {
-                    Ok(peer) => self
-                        .peers
-                        .as_ref()
-                        .is_some_and(|peers| peers.connected().contains(&peer)),
-                    Err(_) => self.hosts.contains_key(name),
-                };
+                || name != POOL && self.offers(name);
             if !known {
                 // Any computer asked for, with none online: it runs in a
                 // cloud workspace of its own instead, where one can be had,

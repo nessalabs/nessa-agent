@@ -1756,13 +1756,22 @@ impl ConversationService {
                 crate::conversation::domain::WorkspacePlacement::Boat => Some(super::BOAT),
             }
         });
+        // `here` names this machine outright. A conversation the person
+        // starts outside a channel, naming no place, runs on the default
+        // device while it is offered; a child an agent starts, and one in a
+        // channel, keep to where they were asked to run.
+        let default_place = (requested.environment.is_none() && channel.is_none() && !new_only)
+            .then(|| service.inner.environment.default_place())
+            .flatten();
+        let requested_place = match requested.environment.as_deref() {
+            Some(nessa_sdk::domain::agent_execution::leases::EnvironmentRef::HERE) => None,
+            Some(name) => Some(name),
+            None => channel_environment.or(default_place.as_deref()),
+        };
         service
             .inner
             .environment
-            .place(
-                &id,
-                requested.environment.as_deref().or(channel_environment),
-            )
+            .place(&id, requested_place)
             .await?;
         service.place_in_channel(&id, channel.as_ref()).await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
