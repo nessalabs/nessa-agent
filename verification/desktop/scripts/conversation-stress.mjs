@@ -876,7 +876,11 @@ async function aroundTheLights(page, rail, failures) {
         near(now.at.pill.left + now.at.pill.width / 2, now.at.item) &&
         now.at.itemTop > now.at.pill.top &&
         // The corner row (the toggle and "nessa Studio") stands below it.
-        now.at.toggleTop >= now.at.pill.bottom
+        // Down to the corner: no more than the toggle's foot room below it.
+        now.at.windowBottom - now.at.pill.bottom <= 24 &&
+        now.at.toggleBottom < now.at.pill.bottom &&
+        // "nessa Studio" stands clear of the pill's edge.
+        now.at.words >= now.at.pill.left + now.at.pill.width + 8 - 0.5
       : near(now.at.workspace, 0)) &&
     // The toggle is nessa's mark: in the footer's mark slot, right before
     // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
@@ -967,6 +971,7 @@ function railLayout(page) {
           toggle: box(toggle)?.left ?? NaN,
           toggleBottom: box(toggle)?.bottom ?? NaN,
           toggleTop: box(toggle)?.top ?? NaN,
+          words: box(".side-rail-studio .desktop-identity-words")?.left ?? NaN,
           toggleMiddle: box(toggle)
             ? [
                 box(toggle).left + box(toggle).width / 2,
@@ -1016,9 +1021,10 @@ function railLayout(page) {
 
 /**
  * Toggles the rail from the page and follows "nessa Studio" every frame: it
- * stands in the corner beside the toggle, 8px past the toggle's mark, and
- * neither moves, not even for a frame. Settled, the toggle (with the rail
- * closed) stands on Agents' icon column. Returns what it found wrong.
+ * stands in the corner beside the toggle, 8px past the toggle's mark with the
+ * rail closed and 20px with it open (clear of the pill), moving only
+ * between the two. Settled, the toggle (with the rail closed) stands on
+ * Agents' icon column. Returns what it found wrong.
  */
 function footerThroughToggle(page) {
   return page.evaluate(async (toggleSelector) => {
@@ -1043,10 +1049,16 @@ function footerThroughToggle(page) {
       }
       requestAnimationFrame(frame)
     })
-    const off = seen.find((gap) => Math.abs(gap - 8) > 0.5)
+    const off = seen.find((gap) => gap < 7.5 || gap > 20.5)
     if (off !== undefined)
       failures.push(
-        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8px`,
+        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8-20px`,
+      )
+    const want = toggle.getAttribute("aria-expanded") === "true" ? 20 : 8
+    const last = seen.at(-1)
+    if (last !== undefined && Math.abs(last - want) > 0.5)
+      failures.push(
+        `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
       )
     const icon = document.querySelector(".agents-overview-entry svg")
     if (toggle.getAttribute("aria-expanded") === "false" && icon) {
@@ -2042,6 +2054,14 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("the talk board did not open a panel tab")
     return
   }
+  // The front tab is the only panel frame. Opening the pin replaces it, and
+  // a sandbox document still loading is aborted (proxy.html, net::ERR_ABORTED).
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push(
+      "the talk board's panel frame was still loading when the next tab opened",
+    )
+    return
+  }
   await pin.waitForSelector('body[data-pin-state="live"]', { timeout: 20_000 })
   await pin.evaluate(() => document.querySelector('[data-pin="panel"]').click())
   if (!(await waitFor(async () => (await tabs().count()) === 2, 10_000))) {
@@ -2071,8 +2091,16 @@ async function focusedChatPanel(run, conversationId, step, failures) {
   )
   if (!opened) return
   const openPanel = opened.windows[0].panel
+  if (!(await panelAppReady(page, 'body[data-pin-state="live"]'))) {
+    failures.push("the pin's panel frame was still loading when its tab left the front")
+    return
+  }
   const other = page.locator(`${css.chatPanelTabs} [role="tab"][aria-selected="false"]`)
   await other.click()
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push("the talk board's panel frame was still loading when the chat changed")
+    return
+  }
   const front = await windowRead(
     run,
     conversationId,
@@ -2159,6 +2187,12 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("clicking the first chat did not bring it back to the front")
     return
   }
+  // Coming back draws the front tab again. Leave only after its document
+  // has loaded, so a later chat does not abort that sandbox request.
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push("the talk board's panel frame was still loading when the step left it")
+    return
+  }
   await windowRead(run, conversationId, step, " panel back", failures, (said) => {
     const panel = said.windows?.[0]?.panel
     return (
@@ -2194,6 +2228,21 @@ function samePanelTabs(left, right) {
   const a = [...(left?.tabs ?? [])].map(key).sort()
   const b = [...(right?.tabs ?? [])].map(key).sort()
   return a.length === b.length && a.every((each, index) => each === b[index])
+}
+
+/**
+ * The front panel tab's app document has `selector`. That tab is the only
+ * panel frame: the next tab, or another chat, drops it, and a sandbox
+ * document still on the wire is reported `net::ERR_ABORTED`.
+ */
+async function panelAppReady(page, selector) {
+  try {
+    const { app } = await appFrame(page, "panel", 20_000)
+    await app.waitForSelector(selector, { timeout: 20_000 })
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** The inline app whose document has `selector`, or null once `timeout` passes. */
@@ -3305,13 +3354,15 @@ const steps = {
         await run.page.mouse.move(1, 1)
         if (!(await shows(false)))
           failures.push("the actions still show once the pointer leaves")
-        // Both actions are in the control tab order: the engine's backward
-        // chord reaches Choose repositories, and its forward chord returns.
+        // Both actions are native tab stops. WebKit on macOS walks plain Tab
+        // through fields only; Option+Tab (Alt+Tab here) walks every control.
+        // The backward chord reaches Choose repositories, and the forward
+        // chord returns. Focus in the row is what shows the actions.
         const disconnect = row.getByRole("button", { name: names.githubDisconnect })
         const focused = (locator) =>
           locator.evaluate((node) => node === document.activeElement)
         await disconnect.focus()
-        await run.page.keyboard.press(`Shift+${keys.nextControl[run.engine]}`)
+        await run.page.keyboard.press(keys.previousControl[run.engine])
         if (!(await focused(row.locator("[data-github-repositories]"))))
           failures.push(
             "backward control navigation from Disconnect did not reach Choose repositories",
@@ -6104,8 +6155,10 @@ const steps = {
           `${name}'s input ${tool.input} is not ${JSON.stringify(call.arguments)}`,
         )
     }
-    // The pause after each call shows in the times, which are the session's
-    // own clock: the next call starts no sooner.
+    // The pause runs after the previous call's end is queued and before the
+    // next call is queued. Both times are that queue time on the process
+    // timeline, so a late read cannot shrink the gap. The next call starts
+    // no sooner than the pause.
     for (let index = 1; index < tools.length; index += 1) {
       const gap = tools[index].startedAtMs - tools[index - 1].endedAtMs
       if (gap < TRACE_PAUSE_MS - 100)

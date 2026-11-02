@@ -76,6 +76,7 @@ authorization and parent identity.
 | [1185 — Bound native relay audit retention](done/1185-bound-native-relay-audit-retention.md) | A direct gap and a CLI acceptance trim the audit store they write in that transaction. State table: [1185](done/1185-bound-native-relay-audit-retention.md#states) |
 | [1195 — Isolate saved GitHub sign-in](done/1195-isolate-github-sign-in.md) | The GitHub token's only durable copy is the passphrase-sealed vault entry. A plaintext sign-in file is deleted and not imported. An agent command that knows the path does not obtain the token bytes. State table: [1195](done/1195-isolate-github-sign-in.md#states) |
 | [746 — A busy discovery source does not end the watch](done/746-a-busy-source-does-not-end-the-watch.md) | An occupied discovery cache is not a spent step, and the work budget starts when discovery does. Amends the occupied row of 315. State table: [746](done/746-a-busy-source-does-not-end-the-watch.md#states) |
+| [1138 — A second product submission waits its turn](done/1138-queue-product-submissions.md) | The phone's product hand-off waits in arrival order instead of refusing a second send. Reply waits stay side by side. `busy` remains for the session worker and for Ready and events. State table: [1138](done/1138-queue-product-submissions.md#states). nessa-ios still regenerates `Vendor/NessaNative` and drops the 2 ms retry |
 
 ## Todo — implementation priority
 
@@ -106,6 +107,7 @@ this table. None of it changes implementation or approval status.
 | — | [921 — Close product method classification at the gateway](todo/921-close-product-method-classification.md) | Proposed generated `ProductMethod` identity and one exhaustive gateway-owned handler, response-lane, execution-capacity and admission plan. [Source catalogue and migration plan](../design/product-method-classification.md) hold implementation detail; runtime behavior is unchanged |
 | — | [1075 — Usage limit blocks ordinary retry](todo/1075-usage-limit-scheduled-continuation.md) | Proposed: one typed usage-limit error, no ordinary resume while a window is exhausted, and one scheduled continuation through `submit`. The [design note](../design/usage-limit-continuation.md) holds the state table |
 | — | [1150 — A tunnel request proves a paired device before it takes a permit](todo/1150-paired-tunnel-admission.md) | Accepted. The gateway, the relay, and the device client in this repository check a per-device secret before a tunnel permit and publish the current tunnel address on the #266 relay. The iOS app calls `rememberRelay`. State table: [1150](todo/1150-paired-tunnel-admission.md#states) |
+| — | [1186 — Stress checks measure the contract they name](todo/1186-stress-check-contracts.md) | Accepted. WebKit control chords, tool-report queue time, and registering restart reports only after scheduling has settled. State table: [1186](todo/1186-stress-check-contracts.md#states) |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides
