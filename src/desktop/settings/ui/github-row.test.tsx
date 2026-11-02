@@ -178,12 +178,16 @@ it("keeps its actions in reach: one Tab away at rest, out while one is in flight
     disconnect: () => new Promise<GithubOutcome>((resolve) => (answer = resolve)),
   }
   await show(gateway)
-  // At rest the actions wait for the pointer or focus (settings.css), and are
-  // in the tab order, so focus is what brings them out.
+  // At rest the actions wait for the pointer or focus (settings.css). They
+  // stay in the tab order: opacity and pointer-events hide the pointer hit,
+  // not the controls. WebKit still needs Option+Tab to reach them.
   expect(row()?.hasAttribute("data-github-settled")).toBe(true)
   const link = row()?.querySelector<HTMLAnchorElement>("[data-github-repositories]")
+  const actions = row()?.querySelector(".settings-github-actions")
   expect(link?.tabIndex).toBe(0)
   expect(link?.getAttribute("aria-label")).toBe("Choose repositories")
+  expect(actions?.hasAttribute("inert")).toBe(false)
+  expect(actions?.getAttribute("aria-hidden")).toBeNull()
   expect(button("Disconnect")?.disabled).toBe(false)
   await act(async () => button("Disconnect")?.click())
   expect(row()?.hasAttribute("data-github-settled")).toBe(false)

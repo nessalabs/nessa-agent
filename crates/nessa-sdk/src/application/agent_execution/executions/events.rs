@@ -29,6 +29,10 @@ pub struct ExecutionEvent {
     update: ExecutionUpdate,
     native_hooks: Option<bool>,
     observed_at_ms: Option<u64>,
+    /// Set by the session when it queues the report. A later read keeps
+    /// `observed_at_ms`. A time the provider wrote has this clear, and the
+    /// session replaces it.
+    session_arrival: bool,
 }
 impl ExecutionEvent {
     /// Maximum retained UTF-8 allocation of one text or thought chunk (4 MiB).
@@ -185,6 +189,7 @@ impl ExecutionEvent {
             update,
             native_hooks: None,
             observed_at_ms: None,
+            session_arrival: false,
         }
     }
     /// The same observation, stamped with the hooks choice of the process start
@@ -207,6 +212,20 @@ impl ExecutionEvent {
     pub fn with_observed_at_ms(mut self, at_ms: u64) -> Self {
         self.observed_at_ms = Some(at_ms);
         self
+    }
+    /// The same observation, stamped when the session queued it.
+    ///
+    /// `at_ms` is the process timeline at that queue. A later read keeps it.
+    /// This is not a provider's time: [`Self::with_observed_at_ms`] leaves
+    /// the arrival mark clear so the session can replace that time.
+    pub(crate) fn stamped_at_arrival(mut self, at_ms: u64) -> Self {
+        self.observed_at_ms = Some(at_ms);
+        self.session_arrival = true;
+        self
+    }
+    /// Whether the session queued this report and stamped that time.
+    pub(crate) fn session_arrival(&self) -> bool {
+        self.session_arrival
     }
     /// When the session received this observation, in Unix milliseconds.
     /// The session stamps every report as it arrives; `None` is an event

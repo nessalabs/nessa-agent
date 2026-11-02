@@ -24,6 +24,7 @@ import {
   permissionCall,
   promptImages,
   promptText,
+  runSteps,
   scenarioScript,
   turnFor,
 } from "./scripted-scenario.mjs"
@@ -875,6 +876,50 @@ test("a session in full access asks nothing: the permission runs its allow-once 
   assert.equal(done.result.stopReason, "end_turn")
   assert.equal(
     done.notes.some((note) => note.params.update.content?.text === "Allowed."),
+    true,
+  )
+})
+
+test("a pause sleeps only after the gateway has queued the update before it", async () => {
+  const order = []
+  const outcome = await runSteps([{ do: "pause", ms: 400 }], {
+    cancelled: () => false,
+    accepted: async () => {
+      order.push("queued")
+    },
+    untilCancelledOr: async (ms) => {
+      order.push(ms)
+    },
+  })
+  assert.equal(outcome.stopReason, "end_turn")
+  assert.deepEqual(order, ["queued", 400])
+
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          { do: "text", chunks: ["Before."] },
+          { do: "pause", ms: 30 },
+          { do: "text", chunks: ["After."] },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const pending = agent.request("session/prompt", { sessionId, prompt: [] })
+  const accept = await agent.nextRequest()
+  assert.equal(accept.method, "session/accept")
+  const early = await Promise.race([
+    pending.then(() => "done"),
+    new Promise((resolve) => setTimeout(() => resolve("waiting"), 80)),
+  ])
+  assert.equal(early, "waiting")
+  agent.respond(accept.id, {})
+  const done = await pending
+  assert.equal(done.result.stopReason, "end_turn")
+  assert.equal(
+    done.notes.some((note) => note.params.update.content?.text === "After."),
     true,
   )
 })

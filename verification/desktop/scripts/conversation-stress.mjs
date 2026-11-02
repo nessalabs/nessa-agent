@@ -2042,6 +2042,14 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("the talk board did not open a panel tab")
     return
   }
+  // The front tab is the only panel frame. Opening the pin replaces it, and
+  // a sandbox document still loading is aborted (proxy.html, net::ERR_ABORTED).
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push(
+      "the talk board's panel frame was still loading when the next tab opened",
+    )
+    return
+  }
   await pin.waitForSelector('body[data-pin-state="live"]', { timeout: 20_000 })
   await pin.evaluate(() => document.querySelector('[data-pin="panel"]').click())
   if (!(await waitFor(async () => (await tabs().count()) === 2, 10_000))) {
@@ -2071,8 +2079,16 @@ async function focusedChatPanel(run, conversationId, step, failures) {
   )
   if (!opened) return
   const openPanel = opened.windows[0].panel
+  if (!(await panelAppReady(page, 'body[data-pin-state="live"]'))) {
+    failures.push("the pin's panel frame was still loading when its tab left the front")
+    return
+  }
   const other = page.locator(`${css.chatPanelTabs} [role="tab"][aria-selected="false"]`)
   await other.click()
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push("the talk board's panel frame was still loading when the chat changed")
+    return
+  }
   const front = await windowRead(
     run,
     conversationId,
@@ -2159,6 +2175,12 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("clicking the first chat did not bring it back to the front")
     return
   }
+  // Coming back draws the front tab again. Leave only after its document
+  // has loaded, so a later chat does not abort that sandbox request.
+  if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
+    failures.push("the talk board's panel frame was still loading when the step left it")
+    return
+  }
   await windowRead(run, conversationId, step, " panel back", failures, (said) => {
     const panel = said.windows?.[0]?.panel
     return (
@@ -2194,6 +2216,21 @@ function samePanelTabs(left, right) {
   const a = [...(left?.tabs ?? [])].map(key).sort()
   const b = [...(right?.tabs ?? [])].map(key).sort()
   return a.length === b.length && a.every((each, index) => each === b[index])
+}
+
+/**
+ * The front panel tab's app document has `selector`. That tab is the only
+ * panel frame: the next tab, or another chat, drops it, and a sandbox
+ * document still on the wire is reported `net::ERR_ABORTED`.
+ */
+async function panelAppReady(page, selector) {
+  try {
+    const { app } = await appFrame(page, "panel", 20_000)
+    await app.waitForSelector(selector, { timeout: 20_000 })
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** The inline app whose document has `selector`, or null once `timeout` passes. */
@@ -3305,13 +3342,15 @@ const steps = {
         await run.page.mouse.move(1, 1)
         if (!(await shows(false)))
           failures.push("the actions still show once the pointer leaves")
-        // Both actions are in the control tab order: the engine's backward
-        // chord reaches Choose repositories, and its forward chord returns.
+        // Both actions are native tab stops. WebKit on macOS walks plain Tab
+        // through fields only; Option+Tab (Alt+Tab here) walks every control.
+        // The backward chord reaches Choose repositories, and the forward
+        // chord returns. Focus in the row is what shows the actions.
         const disconnect = row.getByRole("button", { name: names.githubDisconnect })
         const focused = (locator) =>
           locator.evaluate((node) => node === document.activeElement)
         await disconnect.focus()
-        await run.page.keyboard.press(`Shift+${keys.nextControl[run.engine]}`)
+        await run.page.keyboard.press(keys.previousControl[run.engine])
         if (!(await focused(row.locator("[data-github-repositories]"))))
           failures.push(
             "backward control navigation from Disconnect did not reach Choose repositories",
@@ -6104,8 +6143,10 @@ const steps = {
           `${name}'s input ${tool.input} is not ${JSON.stringify(call.arguments)}`,
         )
     }
-    // The pause after each call shows in the times, which are the session's
-    // own clock: the next call starts no sooner.
+    // The pause runs after the previous call's end is queued and before the
+    // next call is queued. Both times are that queue time on the process
+    // timeline, so a late read cannot shrink the gap. The next call starts
+    // no sooner than the pause.
     for (let index = 1; index < tools.length; index += 1) {
       const gap = tools[index].startedAtMs - tools[index - 1].endedAtMs
       if (gap < TRACE_PAUSE_MS - 100)

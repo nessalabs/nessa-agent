@@ -2810,3 +2810,30 @@ async fn decline_receipt_flush_does_not_take_unrelated_pending_write_ownership()
         before
     );
 }
+
+/// A report stamped when it was queued keeps that time if the session reads
+/// it later. A time the provider wrote is still replaced by the session clock.
+#[tokio::test]
+async fn a_queued_report_keeps_its_arrival_time_when_the_session_reads_it_later() {
+    let clock: Arc<dyn MessageCommitClock> = Arc::new(FixedMessageClock(std::sync::Mutex::new(
+        std::time::Duration::from_millis(9_000),
+    )));
+    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()), clock)
+        .await
+        .unwrap();
+    let arrived = ExecutionEvent::new(
+        ExecutionId::new("turn").unwrap(),
+        ExecutionUpdate::Message(MessageChunk::text("queued")),
+    )
+    .stamped_at_arrival(1_700_000_000_123);
+    assert_eq!(
+        manager.observed(arrived).observed_at_ms(),
+        Some(1_700_000_000_123)
+    );
+    let provider = ExecutionEvent::new(
+        ExecutionId::new("turn").unwrap(),
+        ExecutionUpdate::Message(MessageChunk::text("provider")),
+    )
+    .with_observed_at_ms(42);
+    assert_eq!(manager.observed(provider).observed_at_ms(), Some(9_000));
+}

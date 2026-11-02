@@ -43,6 +43,7 @@ use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::clock::{within, ClockInstant};
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
+use crate::infrastructure::session_storage::RuntimeMessageCommitClock;
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -76,6 +77,11 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     traces: Arc<LocalTraceStore>,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
     let session_key = request.session_key().map(str::to_owned);
+    // The session manager's clock when it opened this attachment. A direct
+    // open names none and keeps the process timeline.
+    let arrival_clock = request
+        .arrival_clock()
+        .unwrap_or_else(|| Arc::new(RuntimeMessageCommitClock::new()));
     let (session, restore, mut open_control) = request.into_parts();
     // This open's MCP servers, read once and kept for as long as the provider
     // session lives — through every restart of its process — so a harness
@@ -100,7 +106,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     let profile = profile.for_open(&config);
     let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
     let factory = WorkerFactory {
-        event_budget: EventQueueBudget::new(),
+        event_budget: EventQueueBudget::with_clock(arrival_clock),
         operation_capabilities,
         permission_authority: PermissionAuthoritySource::default(),
         process,
