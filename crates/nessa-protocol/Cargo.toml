@@ -8,6 +8,7 @@ description = "What any client of the Nessa gateway needs to speak to it: wire f
 
 [dependencies]
 base64 = "0.22"
+hmac = "0.12"
 nessa-auth = { path = "../nessa-auth" }
 nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }

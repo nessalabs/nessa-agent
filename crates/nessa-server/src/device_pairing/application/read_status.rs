@@ -126,5 +126,7 @@ pub(crate) fn claimed_status(
     Ok(DevicePairingStatus::Active {
         access_epoch,
         record: Box::new(record),
+        // Replaced before the status is encoded. A zero secret is not issued.
+        tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new([0; 32]),
     })
 }
