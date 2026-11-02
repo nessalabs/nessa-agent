@@ -705,9 +705,12 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => break terminal,
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
-                // Another source holds the entry. Waiting here is the unbounded
-                // head scan; the product read counts this wait outside its steps.
-                RecordReadStatus::Occupied => self.terminal_cache.wait_for_release(&|| false),
+                // This stream's entry is checked out. The wait ends when that
+                // entry can be checked out again; another stream does not hold it.
+                // The product read counts the same wait outside its steps.
+                RecordReadStatus::Occupied => self
+                    .terminal_cache
+                    .wait_for_release(&self.stream, &|| false),
             }
         };
         Ok(self.head)
@@ -835,7 +838,9 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => return Ok(terminal == target),
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
-                RecordReadStatus::Occupied => self.terminal_cache.wait_for_release(&|| false),
+                RecordReadStatus::Occupied => self
+                    .terminal_cache
+                    .wait_for_release(&self.stream, &|| false),
             }
         }
     }
@@ -1097,16 +1102,22 @@ impl RecordStorage {
         )?))
     }
 
-    /// Block until a checked-out discovery entry is returned, or `stopped`.
+    /// Block until `identity`'s discovery entry can be checked out, or `stopped`.
     ///
     /// An admitted product read calls this when [`RecordReadStatus::Occupied`]
-    /// says another owner holds the shared cache. The wait is not a discovery
-    /// step and does not validate. A cache with nothing checked out returns
-    /// immediately. `stopped` is the read's own budget flag; the budget task
+    /// says another owner holds that stream's entry. The wait is not a
+    /// discovery step and does not validate. It returns immediately when the
+    /// entry can already be checked out. Another stream's checkout does not
+    /// hold it. `stopped` is the read's own budget flag; the budget task
     /// also calls [`Self::wake_discovery_waiters`] so this returns when the
-    /// budget elapses while an owner is still working.
-    pub fn wait_for_discovery_release(&self, stopped: &dyn Fn() -> bool) {
-        self.terminal_cache.wait_for_release(stopped);
+    /// budget elapses while this stream's owner is still working.
+    pub fn wait_for_discovery_release(
+        &self,
+        identity: &RecordStreamIdentity,
+        stopped: &dyn Fn() -> bool,
+    ) {
+        self.terminal_cache
+            .wait_for_release(&identity.stream, stopped);
     }
 
     /// Wake reads blocked in [`Self::wait_for_discovery_release`].

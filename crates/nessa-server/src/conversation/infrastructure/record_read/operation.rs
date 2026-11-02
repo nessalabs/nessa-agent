@@ -67,7 +67,7 @@ pub(super) fn execute(
             &*stopped,
             &*budget_elapsed,
             || source.bounded_head(&observed),
-            || wait_storage.wait_for_discovery_release(&*wait_budget),
+            || wait_storage.wait_for_discovery_release(&identity, &*wait_budget),
         )
         .map(|head| {
             RecordReadValue::Head(RecordHead {
@@ -83,7 +83,7 @@ pub(super) fn execute(
                 &*stopped,
                 &*budget_elapsed,
                 || source.bounded_page(&page),
-                || wait_storage.wait_for_discovery_release(&*wait_budget),
+                || wait_storage.wait_for_discovery_release(&identity, &*wait_budget),
             )
             .map(RecordReadValue::Page)
         }

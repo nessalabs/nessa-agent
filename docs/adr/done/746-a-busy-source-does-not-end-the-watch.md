@@ -27,8 +27,11 @@ case. A source that never becomes ready must still end.
 
 ## Decision
 
-An occupied checkout is not a discovery step. The read waits until an entry
-is returned or its existing work budget elapses, then calls again. The budget
+An occupied checkout is not a discovery step. The read waits until its own
+stream's entry can be checked out again, or its existing work budget
+elapses, then calls again. Another stream that is still checked out does
+not hold that wait. The unbounded head and page scans use the same wait, so
+they return when their stream's entry is back. The budget
 starts when the worker is about to make its first discovery call, after it
 has a thread and has looked up the stream. A real validation step still
 counts, and four preparing attempts still end a source that stays unready.
@@ -39,7 +42,7 @@ counts, and four preparing attempts still end a source that stays unready.
 | --- | --- | --- | --- |
 | Admitted, cache free | one discovery call | `Preparing` or `Ready` | the call validated one step; progress is kept |
 | Admitted, cache occupied | one discovery call | wait on the same read | no step was spent; nothing was validated |
-| Waiting for the owner | the owner returns the entry | the next call on this read | the wait is not a new attempt |
+| Waiting for this stream's entry | that entry can be checked out again | the next call on this read | another stream still checked out does not keep the wait |
 | Waiting for the owner | the work budget elapses | `source_preparing` | the permit is released; the client retries as it does today |
 | Queued for a worker | the thread has not started | the budget has not started | queue time is not discovery |
 | Discovering | 200 ms of calls, or 128 validating calls | `source_preparing` if not ready | same bounds as 315 |
@@ -49,11 +52,17 @@ counts, and four preparing attempts still end a source that stays unready.
 `time_waiting_for_a_read_worker_is_not_the_discovery_budget` are the rows for
 the occupied wait and the clock. `occupied_answers_do_not_spend_discovery_steps`
 is the step count with the cache replaced by the answer.
+`a_head_for_one_stream_proceeds_while_another_stays_checked_out` and
+`a_read_proceeds_when_its_stream_returns_while_another_stays_checked_out` are
+the row where the other stream stays checked out.
 
 ## Alternatives considered
 
 Counting occupied calls as steps, and starting the clock at queue time, is
-what ended the watch. More preparing attempts, or a longer budget, would let
+what ended the watch. Waiting until every cache entry is idle would keep a
+reader of one stream blocked while another stream is checked out, and the
+unbounded head and page scans would wait for as long as that other stream
+stayed busy. More preparing attempts, or a longer budget, would let
 a stuck source run longer and would still lose to a tight loop of empty
 answers. Treating `source_closed` as fatal is already rejected for the
 desktop and the stress follower; this record does not change the bounded

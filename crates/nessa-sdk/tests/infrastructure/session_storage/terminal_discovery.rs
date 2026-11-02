@@ -534,6 +534,54 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
     storage.shutdown().await.unwrap();
 }
 
+/// Stream A's unbounded head returns when A's entry is back. Stream B staying
+/// checked out must not keep that wait, or the head would wait forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_head_for_one_stream_proceeds_while_another_stays_checked_out() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let runtime = storage.runtime().await.unwrap();
+    let stream_a = runtime
+        .create_stream(&StreamId::new("stream-a").unwrap())
+        .await
+        .unwrap();
+    let stream_b = runtime
+        .create_stream(&StreamId::new("stream-b").unwrap())
+        .await
+        .unwrap();
+    append_save(&storage, &stream_a, 0, 8).await;
+    append_save(&storage, &stream_b, 0, 8).await;
+    let hold_a = storage.terminal_cache.acquire(&stream_a).unwrap();
+    let hold_b = storage.terminal_cache.acquire(&stream_b).unwrap();
+    let storage = Arc::new(storage);
+    let reading = {
+        let storage = Arc::clone(&storage);
+        tokio::spawn(
+            async move { captured_head(&storage, &SessionId::new("stream-a").unwrap()).await },
+        )
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !reading.is_finished(),
+        "the head finished while its own entry was still checked out"
+    );
+    drop(hold_a);
+    let found = tokio::time::timeout(Duration::from_secs(5), reading)
+        .await
+        .expect("the head returned while the other stream stayed checked out")
+        .expect("the head task joined");
+    assert!(found > 0);
+    assert_eq!(
+        head(&storage, &SessionId::new("stream-b").unwrap()).await,
+        RecordReadStatus::Occupied
+    );
+    drop(hold_b);
+    storage.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
     let directory = tempfile::tempdir().unwrap();

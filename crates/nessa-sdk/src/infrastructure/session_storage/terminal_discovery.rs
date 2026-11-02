@@ -224,12 +224,24 @@ impl Drop for Owner {
     }
 }
 impl TerminalCache {
-    /// Block until some checked-out entry is returned, or `stopped` is set.
-    /// A cache with nothing checked out returns at once. The caller then
-    /// tries [`Self::discover`] again; this wait is not a validation step.
-    pub(super) fn wait_for_release(&self, stopped: &dyn Fn() -> bool) {
+    /// Whether [`Self::acquire`] can check out `key` now. Another stream's
+    /// checkout does not matter once this entry, or a free slot for it, is back.
+    fn can_check_out(entries: &VecDeque<Entry>, key: &StreamKey) -> bool {
+        match entries.iter().find(|entry| &entry.key == key) {
+            Some(entry) => entry.state.is_some(),
+            None => {
+                entries.len() < CACHE_ENTRIES || entries.iter().any(|entry| entry.state.is_some())
+            }
+        }
+    }
+
+    /// Block until `key` can be checked out, or `stopped` is set.
+    /// A cache that can already check out `key` returns at once. The caller
+    /// then tries [`Self::discover`] again; this wait is not a validation step.
+    /// Another stream staying checked out does not hold this wait.
+    pub(super) fn wait_for_release(&self, key: &StreamKey, stopped: &dyn Fn() -> bool) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        while entries.iter().any(|entry| entry.state.is_none()) && !stopped() {
+        while !Self::can_check_out(&entries, key) && !stopped() {
             entries = self
                 .released
                 .wait(entries)
