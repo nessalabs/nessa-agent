@@ -5,13 +5,14 @@ use super::{
     notes::{NoteAdmission, NoteRefusal, NoteSelection},
     records::{continuation::Continuation, AppliedUnits},
     steering_position::SteeringPosition,
-    ArtifactRecord, CurrentLease, HandoffId, HandoffIntent, HandoffRecord,
+    ArtifactRecord, CurrentLease, CurrentLeaseState, HandoffId, HandoffIntent, HandoffRecord,
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, LeaseRecord,
     MessageCommitClock, MessageCommitSleep, NoteCandidates, NoteRecord, NoteRequest,
     ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
     SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
     StorageFuture, SubmissionAcknowledgement,
 };
+use crate::application::agent_execution::agents::OwnedCleanupScope;
 use crate::application::agent_execution::{
     agents::AgentError,
     caller_wake::{contain_caller_wake, CallerWaiter},
@@ -56,6 +57,12 @@ pub(crate) struct AttachmentOpenError {
     pub(crate) cause: AgentError,
     pub(crate) source: AttachmentOpenFailureSource,
 }
+
+/// A validated scheduling decision was applied to local evidence; its
+/// persistence acknowledgement is a separate fact.
+pub(crate) struct SchedulingCommit {
+    pub saved: Result<(), StorageError>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttachmentOpenFailureSource {
     Independent,
@@ -95,7 +102,7 @@ pub struct LeaseCommit<T> {
 /// Why lease records were not recorded, or not yet saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeaseRecordError {
-    /// The manager has not loaded the conversation: no Agent has prepared it.
+    /// The manager has not prepared the conversation evidence.
     NotLoaded,
     /// The lease rules refuse a record; nothing was retained.
     Refused(StorageError),
@@ -121,7 +128,7 @@ impl std::error::Error for LeaseRecordError {}
 /// not yet save it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArtifactRecordError {
-    /// The manager has not loaded the conversation: no Agent has prepared it.
+    /// The manager has not prepared the conversation evidence.
     NotLoaded,
     /// The conversation already records
     /// [`ArtifactRecord::MAX_PER_CONVERSATION`] artifacts. Nothing was
@@ -158,7 +165,7 @@ impl std::error::Error for ArtifactRecordError {}
 /// save it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NoteRecordError {
-    /// The manager has not loaded the conversation: no Agent has prepared it.
+    /// The manager has not prepared the conversation evidence.
     NotLoaded,
     /// The principal's request already left another note: another text,
     /// delivery, surface or authority under the same request. Nothing was
@@ -342,6 +349,12 @@ impl Evidence {
 const MESSAGE_COMMIT_DELAY: Duration = Duration::from_millis(100);
 const MESSAGE_COMMIT_BYTES: usize = 16 * 1024;
 const MESSAGE_COMMIT_COUNT: usize = 64;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Preparation {
+    Provider,
+    LeaseRecord,
+}
+
 impl SessionManager {
     /// Acquires exclusive storage access for one local session.
     ///
@@ -409,7 +422,7 @@ impl SessionManager {
     pub fn id(&self) -> &SessionId {
         &self.id
     }
-    /// Last snapshot acknowledged by storage. None until Agent initialization.
+    /// Last snapshot acknowledged by storage. None until evidence preparation.
     /// Failed writes never appear here as committed evidence.
     ///
     /// Waiting for the evidence lock registers the polling task's `Waker`
@@ -620,10 +633,47 @@ impl SessionManager {
         catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
     }
 
+    /// Prepare saved evidence for recording a refused lease before an Agent exists.
+    ///
+    /// Uses the same checked load, continuation validation and initialization
+    /// save as Agent preparation. Existing provider identity, context and queue
+    /// are preserved: no provider is restored, opened or dispatched. `provider`
+    /// supplies the initial identity only for a conversation with no history.
+    /// A later `Agent::prepare` still checks its selected provider normally.
+    ///
+    /// The manager retains its exclusive storage lease. Preparation flushes
+    /// retained decisions through their existing save owner before reloading
+    /// storage; a failed flush leaves those decisions retained and returns an
+    /// error. Mutable access excludes concurrent preparation. Dropping this unattached manager
+    /// releases storage access; no provider resources have been acquired.
+    ///
+    /// # Errors
+    /// Returns an Agent storage error for unreadable or conflicting evidence,
+    /// unresolved initialization, or a failed initialization save.
+    pub async fn prepare_for_lease_record(
+        &mut self,
+        provider: &dyn AgentProvider,
+    ) -> Result<(), AgentError> {
+        self.prepare_evidence(provider, Preparation::LeaseRecord)
+            .await
+            .map(|_| ())
+    }
+
     pub(crate) async fn prepare(
         &mut self,
         provider: &dyn AgentProvider,
     ) -> Result<ProviderContext, AgentError> {
+        self.prepare_evidence(provider, Preparation::Provider).await
+    }
+
+    async fn prepare_evidence(
+        &mut self,
+        provider: &dyn AgentProvider,
+        preparation: Preparation,
+    ) -> Result<ProviderContext, AgentError> {
+        catch_storage_operation(|| Box::pin(self.flush_observed()))
+            .await
+            .map_err(AgentError::Storage)?;
         let saved = catch_storage_operation(|| self.storage_lease.load())
             .await
             .map_err(StorageError::bounded)
@@ -647,9 +697,15 @@ impl SessionManager {
         // fingerprint change where it would be resumed is not saved yet (S6).
         // attach opens a new native session and writes the new fingerprint
         // with that session's id. docs/design/restoration-fingerprint.md.
-        self.open_fresh_context.store(false, Ordering::Relaxed);
-        *self.switching.lock().expect("switch") = None;
-        let intent = self.handoff.get_mut().expect("handoff intent").take();
+        // Lease-only cleanup evidence cannot consume a pending handoff or
+        // cancel the fresh-context attachment selected by provider preparation.
+        let intent = if preparation == Preparation::Provider {
+            self.open_fresh_context.store(false, Ordering::Relaxed);
+            *self.switching.lock().expect("switch") = None;
+            self.handoff.get_mut().expect("handoff intent").take()
+        } else {
+            None
+        };
         // A handoff the host asked for, checked against what the history
         // holds before anything is written (docs/design/conversation-handoffs.md).
         match (&intent, &compacted) {
@@ -667,8 +723,8 @@ impl SessionManager {
             }
             _ => {}
         }
-        let moved = match &compacted {
-            Some(snapshot) if snapshot.provider != identity => {
+        let moved = match (&compacted, preparation) {
+            (Some(snapshot), Preparation::Provider) if snapshot.provider != identity => {
                 if super::handoffs::switches(&snapshot.provider, &identity) {
                     // S1 and S2, unless the host asked for this switch: then
                     // a new native session is opened as in S6, and attach
@@ -697,12 +753,13 @@ impl SessionManager {
             _ => None,
         };
         let created = compacted.is_none();
-        let restore_queue = match &compacted {
-            Some(snapshot) => !super::queue_validation::replay(snapshot)
-                .map_err(AgentError::Storage)?
-                .is_empty(),
-            None => false,
-        };
+        let restore_queue = preparation == Preparation::Provider
+            && match &compacted {
+                Some(snapshot) => !super::queue_validation::replay(snapshot)
+                    .map_err(AgentError::Storage)?
+                    .is_empty(),
+                None => false,
+            };
         let mut observed = Continuation::restore(compacted).map_err(AgentError::Storage)?;
         let mut changes = if created {
             vec![SessionChange::Opened {
@@ -1047,9 +1104,6 @@ impl SessionManager {
     pub(crate) fn attachment(&self) -> Arc<AttachmentLease> {
         self.attachment.clone()
     }
-    pub(crate) fn protective_storage_lease(&self) -> Arc<dyn SessionStorageLease> {
-        self.storage_lease.clone()
-    }
     pub(crate) async fn begin(
         &self,
         request: ExecutionRequest,
@@ -1061,6 +1115,7 @@ impl SessionManager {
             SubmissionMode::Immediate,
             Vec::new(),
             NoteIntake::default(),
+            None,
         )
         .await
     }
@@ -1074,9 +1129,17 @@ impl SessionManager {
         event: InvocationSchedulingEvent,
         submission: SubmissionMode,
         notes: NoteIntake,
+        resumed_from: Option<ExecutionId>,
     ) -> Result<usize, AgentError> {
-        self.begin_record(request, submitter, submission, vec![event], notes)
-            .await
+        self.begin_record(
+            request,
+            submitter,
+            submission,
+            vec![event],
+            notes,
+            resumed_from,
+        )
+        .await
     }
     async fn begin_record(
         &self,
@@ -1085,6 +1148,7 @@ impl SessionManager {
         submission: SubmissionMode,
         scheduling: Vec<InvocationSchedulingEvent>,
         notes: NoteIntake,
+        resumed_from: Option<ExecutionId>,
     ) -> Result<usize, AgentError> {
         let Submitter {
             context: actor,
@@ -1166,6 +1230,9 @@ impl SessionManager {
             let NoteSelection { retired, taken } =
                 super::notes::select(snapshot, &notes.candidates, notes.takes_notes, now_ms);
             let record = InvocationRecord {
+                decline: None,
+                cancellation_delivery: None,
+                resumed_from,
                 target_event_offset,
                 submission,
                 request,
@@ -1246,10 +1313,21 @@ impl SessionManager {
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
     }
-    /// Latest locally observed submission, including evidence awaiting persistence.
+    /// Inspect one observed history under its evidence lock, including saves
+    /// awaiting acknowledgement, without copying the invocation records.
+    pub(crate) async fn read_invocations<T>(
+        &self,
+        inspect: impl FnOnce(&[InvocationRecord]) -> T,
+    ) -> T {
+        let evidence = self.evidence.lock().await;
+        inspect(
+            evidence
+                .observed()
+                .map_or(&[], |snapshot| &snapshot.invocations),
+        )
+    }
     /// Each observed invocation that `pick` keeps, read in saved order under
-    /// the evidence lock without copying the records: `pick` sees each with
-    /// its index and every identity this session has saved.
+    /// the evidence lock with its index and all saved execution identities.
     pub(crate) async fn pick_invocations<T>(
         &self,
         mut pick: impl FnMut(usize, &InvocationRecord, &HashSet<&ExecutionId>) -> Option<T>,
@@ -1480,8 +1558,9 @@ impl SessionManager {
     /// a write that fails leaves them retained for the next save, as every
     /// other fact is: [`LeaseCommit::saved`] says which.
     ///
-    /// Only an attached manager records: before [`Agent::prepare`] has loaded
-    /// the conversation this is [`LeaseRecordError::NotLoaded`].
+    /// Only a prepared manager records: before [`Self::prepare_for_lease_record`] or
+    /// [`Agent::prepare`] has loaded the conversation this is
+    /// [`LeaseRecordError::NotLoaded`].
     ///
     /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
     pub async fn record_lease<T>(
@@ -1578,7 +1657,7 @@ impl SessionManager {
     /// [`ArtifactRecordError::Storage`].
     ///
     /// # Errors
-    /// [`ArtifactRecordError::NotLoaded`] before [`Agent::prepare`] has loaded
+    /// [`ArtifactRecordError::NotLoaded`] before [`Self::prepare_for_lease_record`] or [`Agent::prepare`] has loaded
     /// the conversation; [`ArtifactRecordError::Full`],
     /// [`ArtifactRecordError::NotThisLease`] or
     /// [`ArtifactRecordError::UnknownTurn`] when refused;
@@ -1639,7 +1718,7 @@ impl SessionManager {
     /// retained for the next save: [`NoteRecordError::Storage`].
     ///
     /// # Errors
-    /// [`NoteRecordError::NotLoaded`] before [`Agent::prepare`] has loaded
+    /// [`NoteRecordError::NotLoaded`] before [`Self::prepare_for_lease_record`] or [`Agent::prepare`] has loaded
     /// the conversation; [`NoteRecordError::Conflict`],
     /// [`NoteRecordError::Full`] or [`NoteRecordError::RateLimited`] when
     /// refused; [`NoteRecordError::Storage`] when retained but not saved.
@@ -1728,6 +1807,263 @@ impl SessionManager {
     ) -> Result<(), StorageError> {
         self.record_scheduling_with_queue(index, event, None).await
     }
+    /// Retire earlier SDK proof and join this owner's retained write before
+    /// the replacement attachment can produce external effects.
+    pub(crate) async fn retire_sdk_cleanup(
+        &self,
+        scope: &OwnedCleanupScope,
+    ) -> Result<(), StorageError> {
+        if scope.session() != &self.id {
+            return Err(StorageError::Corrupt(
+                "SDK attachment scope names another session".into(),
+            ));
+        }
+        let mut evidence = self.evidence.lock().await;
+        if let Some(current) = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.lease.as_ref())
+        {
+            if current.sdk_cleanup_acknowledged(scope) {
+                let record = LeaseRecord::SdkCleanupRetired {
+                    lease: current
+                        .held()
+                        .expect("acknowledged held lease")
+                        .id()
+                        .clone(),
+                    lifetime: scope.lifetime().clone(),
+                };
+                evidence.record(vec![SessionChange::Lease(record)])?;
+            }
+        }
+        let pending = evidence.pending.iter().flat_map(SessionSaveUnit::changes).any(|change| {
+            matches!(change, SessionChange::Lease(LeaseRecord::SdkCleanupRetired { lifetime, .. })
+                if lifetime == scope.lifetime())
+        });
+        if pending {
+            catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Actual SDK close producer: join the writer ACK for this lifetime and lease.
+    pub(crate) async fn acknowledge_sdk_cleanup(
+        &self,
+        scope: &OwnedCleanupScope,
+    ) -> Result<(), StorageError> {
+        if scope.session() != &self.id {
+            return Err(StorageError::Corrupt(
+                "SDK close scope names another session".into(),
+            ));
+        }
+        let mut evidence = self.evidence.lock().await;
+        let current = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.lease.as_ref());
+        let Some(current) = current else {
+            return Ok(());
+        };
+        let held = match current.state() {
+            CurrentLeaseState::Held(held) => held,
+            // A refused opening issued no lease to acknowledge. Preserve its
+            // writer obligation without manufacturing resource-release proof.
+            CurrentLeaseState::Refused { .. } => return self.save_observed(&mut evidence).await,
+            CurrentLeaseState::Unreadable { .. } => {
+                return Err(StorageError::Corrupt(
+                    "SDK close has no readable issued lease".into(),
+                ));
+            }
+        };
+        if !current.sdk_cleanup_acknowledged(scope) {
+            let record = LeaseRecord::SdkCleanupAcknowledged {
+                lease: held.id().clone(),
+                lifetime: scope.lifetime().clone(),
+            };
+            evidence.record(vec![SessionChange::Lease(record)])?;
+        }
+        self.save_observed(&mut evidence).await
+    }
+
+    pub(crate) async fn flush_cancellation_receipts(&self) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let pending = evidence
+            .pending
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| {
+                matches!(
+                    change,
+                    SessionChange::CancellationPrepared { .. }
+                        | SessionChange::CancellationAcknowledged { .. }
+                )
+            });
+        if pending {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn flush_decline_receipts(&self) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let pending = evidence
+            .pending
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| {
+                matches!(
+                    change,
+                    SessionChange::DeclinePrepared { .. }
+                        | SessionChange::DeclineAcknowledged { .. }
+                )
+            });
+        if pending {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn prepare_cancellation(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+    ) -> Result<super::CancellationDecision, StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| StorageError::Corrupt("cancellation has no invocation".into()))?;
+        if record.cancellation_delivery.is_none() {
+            let execution_id = record.request.execution_id.clone();
+            let decision = super::CancellationDecision::new(event, false);
+            evidence.record(vec![SessionChange::CancellationPrepared {
+                execution_id,
+                decision,
+            }])?;
+        }
+        // The preparation, unlike the terminal edge, must be acknowledged
+        // before its independently durable audit can be attempted.
+        self.save_observed(&mut evidence).await?;
+        Ok(evidence.observed().unwrap().invocations[index]
+            .cancellation_delivery
+            .clone()
+            .unwrap())
+    }
+
+    pub(crate) async fn acknowledge_cancellation(
+        &self,
+        index: usize,
+        save: bool,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| {
+                StorageError::Corrupt("cancellation acknowledgement has no invocation".into())
+            })?;
+        let decision = record.cancellation_delivery.as_ref().ok_or_else(|| {
+            StorageError::Corrupt("cancellation acknowledgement has no preparation".into())
+        })?;
+        if !decision.acknowledged() {
+            let execution_id = record.request.execution_id.clone();
+            evidence.record(vec![SessionChange::CancellationAcknowledged {
+                execution_id,
+            }])?;
+        }
+        if save {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+    pub(crate) async fn prepare_decline(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+    ) -> Result<super::DeclineDecision, StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| StorageError::Corrupt("decline has no invocation".into()))?;
+        if record.decline.is_none() {
+            let execution_id = record.request.execution_id.clone();
+            let decision = super::DeclineDecision::new(event, false);
+            evidence.record(vec![SessionChange::DeclinePrepared {
+                execution_id,
+                decision,
+            }])?;
+        }
+        // The preparation, unlike the terminal edge, must be acknowledged
+        // before its independently durable audit can be attempted.
+        self.save_observed(&mut evidence).await?;
+        Ok(evidence.observed().unwrap().invocations[index]
+            .decline
+            .clone()
+            .unwrap())
+    }
+
+    pub(crate) async fn apply_decline(
+        &self,
+        index: usize,
+    ) -> Result<SchedulingCommit, StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| StorageError::Corrupt("decline has no invocation".into()))?;
+        let decision = record
+            .decline
+            .as_ref()
+            .ok_or_else(|| StorageError::Corrupt("decline has no preparation".into()))?;
+        if record.scheduling.last() != Some(decision.event()) {
+            let change = SessionChange::SchedulingTransition {
+                execution_id: record.request.execution_id.clone(),
+                event: decision.event().clone(),
+            };
+            evidence.record(vec![change])?;
+        }
+        Ok(SchedulingCommit {
+            saved: self.save_observed(&mut evidence).await,
+        })
+    }
+
+    pub(crate) async fn acknowledge_decline(
+        &self,
+        index: usize,
+        save: bool,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| {
+                StorageError::Corrupt("decline acknowledgement has no invocation".into())
+            })?;
+        let decision = record.decline.as_ref().ok_or_else(|| {
+            StorageError::Corrupt("decline acknowledgement has no preparation".into())
+        })?;
+        if !decision.acknowledged() {
+            let execution_id = record.request.execution_id.clone();
+            evidence.record(vec![SessionChange::DeclineAcknowledged { execution_id }])?;
+        }
+        if save {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn record_scheduling_commit(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+    ) -> Result<SchedulingCommit, StorageError> {
+        self.record_scheduling_with_queue_commit(index, event, None)
+            .await
+    }
     /// Persist a lifecycle edge and its corresponding actual queue removal together.
     pub(crate) async fn record_scheduling_with_queue(
         &self,
@@ -1735,6 +2071,16 @@ impl SessionManager {
         event: InvocationSchedulingEvent,
         mutation: Option<QueueMutation>,
     ) -> Result<(), StorageError> {
+        self.record_scheduling_with_queue_commit(index, event, mutation)
+            .await?
+            .saved
+    }
+    async fn record_scheduling_with_queue_commit(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+        mutation: Option<QueueMutation>,
+    ) -> Result<SchedulingCommit, StorageError> {
         let mut evidence = self.evidence.lock().await;
         let snapshot = evidence
             .observed()
@@ -1766,7 +2112,9 @@ impl SessionManager {
             )));
         }
         evidence.record(changes)?;
-        self.save_observed(&mut evidence).await
+        Ok(SchedulingCommit {
+            saved: self.save_observed(&mut evidence).await,
+        })
     }
     /// Atomically retain a failed queued receipt, its terminal scheduling edge,
     /// and actual queue removal. The completed result is present before the

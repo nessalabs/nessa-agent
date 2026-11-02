@@ -48,7 +48,7 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
-            DurableTrustedApps,
+            DurableOwnershipAudit, DurableTrustedApps,
         },
     },
 };
@@ -104,11 +104,17 @@ use nessa_protocol::{
     agents::AgentId,
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
+#[cfg(unix)]
+use nessa_sdk::application::agent_execution::subagents::{
+    LiveCapacity, OwnershipCoordinator, OwnershipDependencies, OwnershipStore,
+};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 #[cfg(unix)]
 use nessa_sdk::infrastructure::clock::RuntimeClock;
 #[cfg(unix)]
-use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
+use nessa_sdk::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, SqliteOwnershipStore,
+};
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice},
@@ -420,6 +426,9 @@ pub(super) async fn product_state(
                     packaged_agents,
                     record_origin.clone(),
                     ConversationSettings {
+                        stop_children_on_parent_stop: settings
+                            .subagents
+                            .stop_children_on_parent_stop,
                         #[cfg(unix)]
                         workspace_service: workspace_service.clone(),
                         #[cfg(unix)]
@@ -819,6 +828,7 @@ type PairedWorkers = (
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    stop_children_on_parent_stop: bool,
     #[cfg(unix)]
     workspace_service: Arc<Workspaces>,
     #[cfg(unix)]
@@ -1184,6 +1194,7 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
+        stop_children_on_parent_stop,
         workspace_service,
         workspace_audit,
         read_work_budget,
@@ -1650,6 +1661,38 @@ async fn conversations(
             },
         )?,
     ));
+    let ownership_path = root.join("ownership.sqlite3");
+    let ownership_store = Arc::new(
+        SqliteOwnershipStore::open(&ownership_path)
+            .map_err(|error| RunError::Agent(format!("ownership store: {error}")))?,
+    );
+    let ownership = OwnershipCoordinator::new(OwnershipDependencies {
+        store: ownership_store.clone(),
+        audit: Arc::new(
+            DurableOwnershipAudit::new(root.join("audit").join("ownership"), clock.clone())
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        ),
+        factory: service.owned_thread_factory(),
+        room: Arc::new(LiveCapacity::new(live_conversations)),
+    });
+    ownership
+        .resume()
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    service
+        .bind_owned_threads(ownership, stop_children_on_parent_stop)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let ownership_snapshot = OwnershipStore::read(ownership_store.as_ref())
+        .await
+        .map_err(|error| RunError::Agent(format!("ownership read: {error:?}")))?;
+    service
+        .recover_owned_threads(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(format!("owned thread recovery: {error:?}")))?;
+    service
+        .recover_parent_stops(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     conversation_tools.attach(service.clone());
     background_tools.attach(service.clone());
     let background_path = root.join("background-tasks.sqlite3");

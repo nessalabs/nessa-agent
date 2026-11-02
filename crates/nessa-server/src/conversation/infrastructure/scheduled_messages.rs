@@ -61,6 +61,8 @@ pub struct LocalScheduledMessages {
     /// The next submit-retry transaction fails before its audit commits.
     #[cfg(test)]
     fail_defer_audit: AtomicBool,
+    #[cfg(test)]
+    fail_command_evidence: AtomicBool,
 }
 
 impl LocalScheduledMessages {
@@ -79,6 +81,8 @@ impl LocalScheduledMessages {
             fail_decision_audit: AtomicBool::new(false),
             #[cfg(test)]
             fail_defer_audit: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_command_evidence: AtomicBool::new(false),
         })
     }
 
@@ -105,6 +109,12 @@ impl LocalScheduledMessages {
     #[cfg(test)]
     pub fn fail_next_defer_audit(&self) {
         self.fail_defer_audit.store(true, Ordering::SeqCst);
+    }
+
+    /// Fail the next exact provenance read without changing its retained row.
+    #[cfg(test)]
+    pub fn fail_next_command_evidence_read(&self) {
+        self.fail_command_evidence.store(true, Ordering::SeqCst);
     }
 
     /// Initiator of each preference audit, oldest first.
@@ -986,6 +996,38 @@ impl ScheduledMessageStore for LocalScheduledMessages {
     fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>> {
         let conversation = conversation.to_owned();
         self.run(move |connection| load_open(connection, &conversation))
+    }
+
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        #[cfg(test)]
+        if self.fail_command_evidence.swap(false, Ordering::SeqCst) {
+            return Box::pin(async { Err(ConversationError::Metadata) });
+        }
+        let conversation = conversation.to_owned();
+        let execution = execution.to_owned();
+        self.run(move |connection| {
+            let found = connection
+                .query_row(
+                    &format!("SELECT {MESSAGE_COLUMNS} FROM message WHERE conversation = ?1 AND execution_id = ?2"),
+                    params![conversation, execution],
+                    |row| Ok((read_message(row)?, row.get::<_, String>(4)?)),
+                )
+                .optional()
+                .map_err(failed)?;
+            let Some((row, status)) = found else {
+                return Ok(None);
+            };
+            if row.command_evidence.is_none()
+                && matches!(status.as_str(), "submitting" | "delivered" | "unconfirmed")
+            {
+                return Err(ConversationError::Unavailable);
+            }
+            Ok(row.command_evidence)
+        })
     }
 
     fn history_generation(&self, conversation: &str) -> ConversationFuture<'_, u64> {
@@ -2643,6 +2685,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exact_command_evidence_survives_outcome_deletion_and_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("scheduled");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("scheduled.sqlite3");
+        let store = LocalScheduledMessages::open(&path).unwrap();
+        store
+            .set_preference(true, ScheduleActor::system(), 1)
+            .await
+            .unwrap();
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store
+                .command_evidence("conversation", "exec-1")
+                .await
+                .unwrap(),
+            None
+        );
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        let expected =
+            ScheduledCommandEvidence::capture("exec-1", "person", "desktop", "continue").unwrap();
+        assert_eq!(
+            store
+                .command_evidence("conversation", "exec-1")
+                .await
+                .unwrap(),
+            Some(expected.clone())
+        );
+        store
+            .record_outcome("exec-1", ScheduleSettlement::Delivered, "delivered", 11)
+            .await
+            .unwrap();
+        store.erase_conversation("conversation", 12).await.unwrap();
+        drop(store);
+        let reopened = LocalScheduledMessages::open(&path).unwrap();
+        let before = audits(&reopened);
+        assert_eq!(
+            reopened
+                .command_evidence("conversation", "exec-1")
+                .await
+                .unwrap(),
+            Some(expected)
+        );
+        assert_eq!(
+            reopened.command_evidence("other", "exec-1").await.unwrap(),
+            None
+        );
+        assert_eq!(
+            reopened
+                .command_evidence("conversation", "exec-1-lookalike")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            reopened.status("exec-1").await.unwrap().as_deref(),
+            Some("delivered")
+        );
+        assert_eq!(
+            audits(&reopened),
+            before,
+            "provenance reads write no audit or outcome"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_submitted_command_evidence_is_not_absence() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap()
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        store.connection.lock().unwrap().execute(
+            "UPDATE message SET command_principal = NULL, command_surface = NULL, command_fingerprint = NULL WHERE execution_id = 'exec-1'", [],
+        ).unwrap();
+        assert!(matches!(
+            store.command_evidence("conversation", "exec-1").await,
+            Err(ConversationError::Unavailable)
+        ));
+        assert_eq!(
+            store.command_evidence("other", "exec-1").await.unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn malformed_retained_command_evidence_is_not_restored() {
         let store = enabled_store().await;
         store
@@ -2662,6 +2798,10 @@ mod tests {
                 )
                 .unwrap();
             assert!(store.claim_due(10, 4).await.is_err());
+            assert!(store
+                .command_evidence("conversation", "exec-1")
+                .await
+                .is_err());
         }
         assert!(store
             .connection

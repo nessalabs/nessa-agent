@@ -125,6 +125,67 @@ const claudeOpen = {
   _meta: { claudeCode: { options: { model: "claude-test" } } },
 }
 
+test("usage-limit sends the selected harness's exact failure frame", async () => {
+  for (const provider of ["claude", "codex"]) {
+    const agent = start(
+      provider,
+      { turns: [{ steps: [{ do: "usage-limit" }] }] },
+      provider === "codex" ? { CODEX_CONFIG: JSON.stringify({ model: "gpt-test" }) } : {},
+    )
+    await agent.request("initialize", {})
+    const opened = await agent.request("session/new", claudeOpen)
+    assert.equal(opened.error, undefined)
+    const result = await agent.request("session/prompt", {
+      sessionId: opened.result.sessionId,
+      prompt: [],
+    })
+    assert.deepEqual(
+      result.error,
+      provider === "codex"
+        ? {
+            code: -32603,
+            message: "Usage limit exceeded",
+            data: { codexErrorInfo: "usageLimitExceeded" },
+          }
+        : { code: -32603, message: "You've hit your weekly limit" },
+    )
+    assert.equal(result.result, undefined)
+    agent.child.stdin.end()
+    await exited(agent.child)
+  }
+})
+
+test("a generic Claude-looking failure on Codex remains unclassified wire data", async () => {
+  const agent = start(
+    "codex",
+    {
+      turns: [{ steps: [{ do: "fail", message: "You've hit your weekly limit" }] }],
+    },
+    { CODEX_CONFIG: JSON.stringify({ model: "gpt-test" }) },
+  )
+  await agent.request("initialize", {})
+  const opened = await agent.request("session/new", { cwd: here, mcpServers: [mcptest] })
+  assert.equal(opened.error, undefined)
+  const result = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.deepEqual(result.error, {
+    code: -32603,
+    message: "You've hit your weekly limit",
+  })
+  agent.child.stdin.end()
+  await exited(agent.child)
+})
+
+test("usage-limit is terminal and accepts no invented provider fields", () => {
+  for (const steps of [
+    [{ do: "usage-limit" }, { do: "end" }],
+    [{ do: "usage-limit", provider: "claude" }],
+  ])
+    assert.throws(() => parseScenario({ turns: [{ steps }] }))
+})
+
 test("parse rejects a scenario that is not a non-empty turn list", () => {
   for (const value of [
     {},
@@ -954,6 +1015,62 @@ test("a saved call fills the next call's arguments through the real stand-in", a
     .filter((text) => typeof text === "string" && text.startsWith("Saved"))
   assert.equal(said.length, 1)
   assert.doesNotMatch(said[0], /\$\{/)
+})
+
+test("a scenario tool selects its server in both ACP metadata and actual dispatch", async () => {
+  const { runSteps } = await import("./scripted-scenario.mjs")
+  const step = {
+    do: "tool",
+    server: "nessa-agents",
+    tool: "create_thread",
+    arguments: {},
+  }
+  const parsed = parseScenario({ turns: [{ steps: [step] }] })
+  assert.deepEqual(parsed.turns[0].steps, [step])
+  for (const agent of ["claude", "codex"]) {
+    const updates = []
+    let selected
+    const outcome = await runSteps(parsed.turns[0].steps, {
+      agent,
+      cancelled: () => false,
+      openCall: () => undefined,
+      toolId: () => "call",
+      clearCall: () => {},
+      update: (frame) => updates.push(frame),
+      callTool: async (args, server) => {
+        selected = { args, server }
+        return { content: [] }
+      },
+    })
+    assert.equal(outcome.stopReason, "end_turn")
+    assert.equal(selected.server, "nessa-agents")
+    assert.equal(selected.args.name, "create_thread")
+    if (agent === "claude")
+      assert.equal(
+        updates[0]._meta.claudeCode.toolName,
+        "mcp__nessa-agents__create_thread",
+      )
+    else assert.equal(updates[0].rawInput.server, "nessa-agents")
+  }
+  assert.throws(() =>
+    parseScenario({ turns: [{ steps: [{ ...step, server: "bad/server" }] }] }),
+  )
+})
+
+test("the scripted process refuses an absent selected server instead of calling mcptest", async () => {
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          { do: "tool", server: "nessa-agents", tool: "report_rows", arguments: {} },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const result = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.match(result.error.message, /no nessa-agents server/)
 })
 
 test("a tool step with times makes that many calls at once and saves every result", async () => {

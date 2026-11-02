@@ -1,0 +1,26 @@
+"""Task-local init diagnostic: reap only descendants of the supplied test command."""
+import ctypes
+import os
+import sys
+
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), 'PR_SET_CHILD_SUBREAPER')
+root = os.fork()
+if root == 0:
+    os.execvpe(sys.argv[1], sys.argv[1:], os.environ)
+root_status = None
+adopted = []
+while True:
+    try:
+        pid, status = os.waitpid(-1, 0)
+    except ChildProcessError:
+        break
+    if pid == root:
+        root_status = status
+    else:
+        adopted.append(pid)
+print(f'local subreaper: reaped {len(adopted)} adopted descendants; command status {root_status}', flush=True)
+if root_status is None:
+    raise RuntimeError('No command exit status')
+sys.exit(os.waitstatus_to_exitcode(root_status))

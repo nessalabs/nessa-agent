@@ -26,6 +26,7 @@ import {
  *               While it runs, the chat's channel in the sidebar shows a
  *               spinner at its end, which its settings replace only under
  *               the pointer; stopped, the spinner is gone
+ *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
  *   usageLimit  the turn ends in a usage limit; the card shows, the project
  *               preference is turned on and back off, and the turn is not resumed
@@ -319,6 +320,12 @@ import {
   waitFor,
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
+import {
+  closeAcceptance,
+  parkingEvidence,
+  readFailureView,
+  leaseReopenedAfter,
+} from "./lib/stress-close.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import {
   composerControls,
@@ -348,12 +355,30 @@ import {
 import {
   openStressConversation,
   selectedStressConversation,
+  selectStressModel,
+  chatIdentityTexts,
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
+import {
+  observeReviewAnswers,
+  observeAccessRefusals,
+  reviewAnswerAcknowledged,
+} from "./lib/stress-review-answers.mjs"
+import {
+  hasAgentSource,
+  parentRestarted,
+  parentStopCheckpoint,
+} from "./lib/stress-parent-stop.mjs"
 import { KNOBS, describe, knobsFrom, selectedPlan, random } from "./lib/stress-plan.mjs"
 import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
+import {
+  stressProfile,
+  selectStressFixture,
+  requireStressCapabilities,
+  elevatedAccessAfter,
+} from "./lib/stress-profile.mjs"
 
 const INSTANCE = "conversation-stress"
 /** The conversation metadata version this build writes (`schema.sql`'s last line). */
@@ -381,6 +406,8 @@ const meta = {
   defaults: { engine: "chromium", layout: "columns" },
   options: {
     agent: { type: "string", default: "claude" },
+    model: { type: "string" },
+    accessScenario: { type: "string", default: "full" },
     evidence: { type: "string" },
     only: { type: "string" },
     ...Object.fromEntries(Object.keys(KNOBS).map((name) => [name, { type: "string" }])),
@@ -402,8 +429,13 @@ ${Object.entries(KNOBS)
   .join("\n")}
 
 Options:
-  --agent claude|codex  the harness profile the scripted agent speaks (default:
-                        claude; Linux offers full access only on Claude's model)
+  --agent claude|codex  the harness protocol (default: claude)
+  --model <id>          explicit scripted model; defaults to the shared agent fixture
+  --accessScenario full|ask-only
+                        full requires advertised Ask/Auto/Full; ask-only requires
+                        only Ask and verifies Full refusal, never Full success.
+                        Codex examples: --model gpt-6-astra for full;
+                        --model gpt-5.6-terra --accessScenario ask-only on Linux.
   --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/
   --only <kinds>        explicit comma-separated selected-step qualification; keeps
                         all knobs/deadlines and reports selected scope, not a full run`,
@@ -464,6 +496,7 @@ class Run {
   constructor(stack, opened, knobs, restartConsole) {
     this.restartConsole = restartConsole
     this.stack = stack
+    this.acpRecording = stack.acpRecording
     this.opened = opened
     this.page = opened.page
     this.knobs = knobs
@@ -481,6 +514,7 @@ class Run {
     /** Conversations a step deleted: followers let them go, and nothing sweeps them. */
     this.deleted = new Set()
     this.sent = new Map()
+    this.owned = new Set()
     /** Where native linking listens once the `linking` step turns it on. */
     this.nativeAddress = stack.nativeAddress
     /** What config.json names for it: every interface, on the same port. */
@@ -1328,7 +1362,14 @@ async function card(page, ms = 30_000) {
 }
 
 /** Answers the one card shown, by the effect `answer` names, from the review's own options. */
-async function answerCard(run, conversationId, answer, failures, reason) {
+async function answerCard(
+  run,
+  conversationId,
+  answer,
+  failures,
+  reason,
+  { click, review } = {},
+) {
   const cards = await card(run.page)
   if (!cards) {
     failures.push(
@@ -1355,12 +1396,15 @@ async function answerCard(run, conversationId, answer, failures, reason) {
     conversationId,
     0,
     (_turn, current) =>
-      current.permissions.some((each) => !reason || each.title === reason),
+      current.permissions.some(
+        (each) =>
+          (!reason || each.title === reason) && (!review || each.review === review),
+      ),
     10,
   )
-  const permission =
-    view?.permissions?.find((each) => !reason || each.title === reason) ??
-    view?.permissions?.[0]
+  const permission = view?.permissions?.find(
+    (each) => (!reason || each.title === reason) && (!review || each.review === review),
+  )
   // A review the deadline would deny waits long enough to answer from the
   // phone, and the card counts it down in minutes.
   const deadline = permission?.deadline
@@ -1382,19 +1426,50 @@ async function answerCard(run, conversationId, answer, failures, reason) {
     failures.push(`the review offers no ${answer}`)
     return false
   }
-  await asking
-    .first()
-    .getByRole("button", { name: label, exact: true })
-    .click({ timeout: 10_000 })
-  const gone = await waitFor(async () => {
-    const current = await readWithReviews(run.client, conversationId)
-    return !current.permissions.some((each) => each.review === permission.review)
-  }, 30_000)
+  const option = permission.options.find((each) => each.effect === answer)
+  const observation = run.reviewAnswers.begin({
+    conversationId,
+    executionId: permission.executionId,
+    review: permission.review,
+    permissionId: permission.permissionId,
+    optionId: option.id,
+  })
+  let acknowledged = false
+  let gone
+  try {
+    if (click) await click(label)
+    else
+      await asking
+        .first()
+        .getByRole("button", { name: label, exact: true })
+        .click({ timeout: 10_000 })
+    ;[acknowledged, gone] = await Promise.all([
+      waitFor(() => observation.acknowledged(), 30_000),
+      waitFor(async () => {
+        const current = await readWithReviews(run.client, conversationId)
+        return !current.permissions.some((each) => each.review === permission.review)
+      }, 30_000),
+    ])
+  } finally {
+    const evidence = observation.finish()
+    acknowledged = reviewAnswerAcknowledged(evidence, acknowledged)
+    run.reviewAnswerEvidence.push(evidence)
+    if (run.evidence)
+      writeView(
+        run.evidence,
+        `views/${run.engine}-review-answers.json`,
+        run.reviewAnswerEvidence,
+      )
+    if (!acknowledged)
+      failures.push(
+        `the answer to ${JSON.stringify(reason ?? permission.title)} was ${evidence.outcome}`,
+      )
+  }
   if (!gone)
     failures.push(
-      `the answer to ${JSON.stringify(reason ?? permission.title)} was not taken`,
+      `the answered review ${JSON.stringify(reason ?? permission.title)} is still listed`,
     )
-  return true
+  return acknowledged && gone
 }
 
 /** Picks `mode` in the open conversation's access shield. */
@@ -1405,6 +1480,16 @@ async function pickAccess(page, mode) {
     .locator(composerControls.accessMenu)
     .getByRole(...composerControls.accessItem[mode])
     .click({ timeout: 10_000 })
+  // Menu teardown restores focus asynchronously. Finish that interaction
+  // before the next fill focuses a field and inserts its text separately.
+  const restored = await waitFor(
+    () =>
+      dock(page)
+        .locator(composerControls.access)
+        .evaluate((node) => node === document.activeElement),
+    10_000,
+  )
+  if (!restored) throw new Error("the access menu did not restore focus to its control")
 }
 
 /** Waits for the gateway to say the conversation runs at `mode`. */
@@ -2560,6 +2645,161 @@ const steps = {
     await run.exclusive(() => channelRunning(run.page, MAIN_CHANNEL, false, failures))
   },
 
+  async "parent-stop"(run, step, failures) {
+    const text = prompt(run, STRESS.parentStop, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const owned = (turn) => {
+      const said = (turn?.parts ?? []).map((part) => part.text ?? "").join("")
+      const line = said.slice(said.indexOf(SAYS.owned) + SAYS.owned.length)
+      return said.includes(SAYS.owned)
+        ? line.match(/^([0-9a-f-]{36}) ([0-9a-f-]{36})/i)
+        : null
+    }
+    const parent = await untilTurn(
+      run,
+      run.main.id,
+      { text },
+      (turn) => turn.status === "running" && owned(turn),
+    )
+    const childIds = owned(parent.turn)
+    if (!childIds || parent.turn?.status !== "running") {
+      failures.push("the parent did not identify its owned child seed")
+      return
+    }
+    run.owned.add(childIds[1])
+    const seedExecution = childIds[2]
+    const seed = await untilTurn(
+      run,
+      childIds[1],
+      0,
+      (turn) => turn.executionId === seedExecution && turn.status === "completed",
+    )
+    if (
+      !seed.turn ||
+      !hasAgentSource(seed.turn, {
+        conversationId: run.main.id,
+        executionId: parent.turn.executionId,
+      })
+    ) {
+      failures.push("the child seed lost its exact agent origin")
+      return
+    }
+    const childText = prompt(run, STRESS.ownedChild, step)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(childIds[1], childText),
+    )
+    const child = await untilTurn(
+      run,
+      childIds[1],
+      { text: childText },
+      (turn) => turn.status === "running" && owned(turn),
+    )
+    const grandchildIds = owned(child.turn)
+    if (
+      !grandchildIds ||
+      child.turn?.status !== "running" ||
+      child.turn.agent !== undefined
+    ) {
+      failures.push("the child did not identify its running owned execution")
+      return
+    }
+    childIds[2] = child.turn.executionId
+    run.owned.add(grandchildIds[1])
+    const grandchild = await untilTurn(
+      run,
+      grandchildIds[1],
+      0,
+      (turn) =>
+        turn.executionId === grandchildIds[2] &&
+        turn.status === "running" &&
+        (turn.parts ?? []).some((part) => part.text?.includes(SAYS.waiting)),
+    )
+    if (!grandchild.turn || grandchild.turn.status !== "running") {
+      failures.push("the grandchild never reached its running waiting turn")
+      return
+    }
+    if (
+      !hasAgentSource(grandchild.turn, {
+        conversationId: childIds[1],
+        executionId: child.turn.executionId,
+      })
+    ) {
+      failures.push("the grandchild lost its exact child-turn author")
+      return
+    }
+    await expectShown(run.page, SAYS.owned, failures)
+    if (!(await stopShown(run.page))) {
+      failures.push("the parent did not offer Stop while its descendants ran")
+      return
+    }
+    const reportQueued = await waitFor(async () => {
+      const view = await run.client.conversation.read(run.main.id)
+      return view.messages.some(
+        (turn) =>
+          hasAgentSource(turn, {
+            conversationId: childIds[1],
+            executionId: seedExecution,
+          }) && turn.status === "queued",
+      )
+    }, 30_000)
+    if (!reportQueued) {
+      failures.push("the child's completed seed report was not queued before parent Stop")
+      return
+    }
+    const beforeStop = await seenTurns(run, run.main.id)
+    const checkpoint = parentStopCheckpoint(readFileSync(run.acpRecording, "utf8"), text)
+    await dock(run.page)
+      .getByRole(...composerControls.stop)
+      .click({ timeout: 10_000 })
+    const stopped = await settled(run, run.main.id, seen, text, "cancelled", failures)
+    if (stopped.turn?.executionId !== parent.turn.executionId)
+      failures.push("Stop changed the selected parent execution identity")
+    for (const [id, executionId] of [childIds.slice(1), grandchildIds.slice(1)]) {
+      const final = await waitFor(async () => {
+        const view = await run.client.conversation.read(id)
+        const turn = view.messages.find((each) => each.executionId === executionId)
+        return turn && ended(turn) ? turn : null
+      }, 60_000)
+      if (final?.status !== "cancelled")
+        failures.push(
+          `owned execution ${executionId} ended ${final?.status ?? "missing"}`,
+        )
+    }
+    // A terminal status alone can precede queue settlement. Require the full
+    // current views to have no pending work or unanswered review/question.
+    for (const id of [run.main.id, childIds[1], grandchildIds[1]]) {
+      const idle = await waitFor(async () => {
+        const view = await readWithReviews(run.client, id)
+        return (
+          view.queueComplete &&
+          view.messages.every(ended) &&
+          view.pending.length === 0 &&
+          view.permissions.length === 0 &&
+          view.questions.length === 0
+        )
+      }, 60_000)
+      if (!idle) failures.push(`${id} did not settle after recursive Stop`)
+    }
+    if (!(await sendShown(run.page))) failures.push("parent Stop did not return to Send")
+    await expectShown(run.page, "Cancelled", failures)
+    // Child cancellation reports may retry; none may reopen the stopped parent.
+    await sleep(1500)
+    const after = await run.client.conversation.read(run.main.id)
+    if (
+      parentRestarted(
+        checkpoint,
+        readFileSync(run.acpRecording, "utf8"),
+        beforeStop,
+        after.messages,
+      ) ||
+      after.messages.find((turn) => turn.executionId === parent.turn.executionId)
+        ?.status !== "cancelled"
+    )
+      failures.push("a cancellation report restarted the stopped parent")
+    if (!(await sendShown(run.page)))
+      failures.push("a report returned the parent to Stop")
+  },
+
   async fail(run, step, failures) {
     const text = prompt(run, STRESS.fail, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -2573,9 +2813,9 @@ const steps = {
     const settledTurn = await settled(run, run.main.id, seen, text, "failed", failures)
     if (!settledTurn.turn) return
     const limit = settledTurn.turn.usageLimit
-    if (!limit || limit.provider !== "claude" || limit.recovery !== "unknown")
+    if (!limit || limit.provider !== run.stack.agent || limit.recovery !== "unknown")
       failures.push(
-        `the turn is not an unknown Claude usage limit: ${JSON.stringify(limit)}`,
+        `the turn is not an unknown ${run.stack.agent} usage limit: ${JSON.stringify(limit)}`,
       )
     if (settledTurn.turn.error)
       failures.push(`a usage limit kept a diagnostic: ${settledTurn.turn.error}`)
@@ -2641,6 +2881,81 @@ const steps = {
         `the shield shows ${shield}, not ${composerControls.accessValue[step.to]}`,
       )
     run.mode = step.to
+  },
+
+  async "refused-access"(run, step, failures) {
+    let text, seen
+    if (step.during) {
+      text = prompt(run, STRESS.pause, step)
+      seen = await send(run, run.main.id, text, failures)
+      if (!(await stopShown(run.page)))
+        failures.push("Send did not turn into Stop before the refused access choice")
+    }
+    const before = await readWithReviews(run.client, run.main.id)
+    requireStressCapabilities(run.stack.profile, {
+      modelId: before.runtime?.model,
+      approvalModes: before.approvalModes,
+    })
+    const recording = readFileSync(run.stack.acpRecording, "utf8")
+    const observation = run.accessRefusals.begin({
+      conversationId: run.main.id,
+      mode: "full",
+    })
+    let refused = false
+    try {
+      await pickAccess(run.page, "full")
+      if (step.during) await settled(run, run.main.id, seen, text, "completed", failures)
+      refused = await waitFor(() => observation.refused(), 20_000)
+    } finally {
+      const evidence = observation.finish()
+      run.accessRefusalEvidence.push(evidence)
+      if (run.evidence)
+        writeView(
+          run.evidence,
+          `views/${run.engine}-access-refusals.json`,
+          run.accessRefusalEvidence,
+        )
+      if (
+        !refused ||
+        evidence.outcome !== "refused" ||
+        evidence.code !== "approval_mode_unavailable"
+      )
+        failures.push(
+          `Full was not explicitly refused as unavailable: ${evidence.outcome}/${evidence.code}`,
+        )
+    }
+    const notice = await waitFor(
+      async () =>
+        (
+          await dock(run.page)
+            .locator(composerControls.notice)
+            .innerText()
+            .catch(() => "")
+        ).includes("This model doesn’t offer that access."),
+      10_000,
+    )
+    if (!notice) failures.push("the window did not explain the unavailable access choice")
+    const after = await readWithReviews(run.client, run.main.id)
+    if (
+      before.approvalMode !== "ask" ||
+      after.approvalMode !== "ask" ||
+      after.runtime?.model !== before.runtime?.model ||
+      JSON.stringify(after.approvalModeChange) !==
+        JSON.stringify(before.approvalModeChange) ||
+      JSON.stringify(after.messages.map((turn) => turn.executionId)) !==
+        JSON.stringify(before.messages.map((turn) => turn.executionId))
+    )
+      failures.push(
+        "the refused Full choice changed the selection, pending change or admitted turns",
+      )
+    if (
+      (await dock(run.page)
+        .locator(composerControls.access)
+        .getAttribute("data-access-mode")) !== composerControls.accessValue.ask
+    )
+      failures.push("the shield did not retain Ask after the refusal")
+    if (elevatedAccessAfter(recording, readFileSync(run.stack.acpRecording, "utf8")))
+      failures.push("the refused Full choice reached the provider as elevated access")
   },
 
   async restart(run, step, failures) {
@@ -3825,7 +4140,10 @@ const steps = {
     try {
       // Pairing is the owner's: the panel's credential cannot approve.
       owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
-      const launch = scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario })
+      const launch = scriptedLaunch(run.stack.agent, {
+        scenario: run.stack.scenario,
+        model: run.stack.profile.model,
+      })
       for (const label of ["a", "b"])
         workers.push(
           await startWorker({
@@ -4612,7 +4930,17 @@ const steps = {
       failures.push(
         `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
       )
-    await expectShown(run.page, agentReply, failures)
+    const expected = fold(`${SAYS.awaited}${found[1]}: ${found[2]}`)
+    const shown = await waitFor(async () => {
+      const lines = await run.page
+        .locator(`${css.focusedPane} .workspace-message[data-role="agent"] p:visible`)
+        .evaluateAll(chatIdentityTexts)
+      return lines.some((line) => fold(line) === expected)
+    }, 30_000)
+    if (!shown)
+      failures.push(
+        `the window does not show the exact awaited chat identity and reply: ${expected}`,
+      )
     // The reply came back in the call, so no report wakes the conversation.
     // A report would be queued as soon as the thread's turn settled, which
     // was before the call returned.
@@ -4993,6 +5321,10 @@ const steps = {
       await run.page.keyboard.press(keys.newSession)
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
+      // Home has its own selection. Pick the named fixture through the window,
+      // never inherit an unrelated default agent or substitute another model.
+      const model = catalog.models.find((row) => row.modelId === run.stack.profile.model)
+      await selectStressModel(run.page, home.locator(css.modelChip), model.displayName)
       await home.locator(css.field).fill(text)
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
@@ -5003,7 +5335,16 @@ const steps = {
         failures.push("the conversation started in the window was never listed")
       } else {
         run.checked.push(conversationId)
-        await settled(run, conversationId, new Set(), text, "completed", failures)
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.runtime?.model !== run.stack.profile.model)
+          failures.push("the new window conversation did not use the exact fixture model")
         await expectShown(run.page, `${SAYS.echo}${text}`, failures)
       }
       // Answered or not, a send the window took and then failed says so in
@@ -5245,6 +5586,8 @@ const steps = {
 
   async close(run, step, failures) {
     const conversationId = randomUUID()
+    run.failureConversationId = conversationId
+    const parkingOffset = run.stack.gateway.log().length
     const first = prompt(run, STRESS.reply, step, " close")
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
     run.checked.push(conversationId)
@@ -5284,6 +5627,24 @@ const steps = {
       failures,
     )
     if (!closed) return
+    let acceptance
+    try {
+      acceptance = closeAcceptance(
+        readFileSync(run.acpRecording, "utf8"),
+        closing,
+        conversationId,
+      )
+    } catch {
+      acceptance = { state: "invalid-recording", threadId: null, closing: null }
+    }
+    log(`close_thread acceptance ${JSON.stringify({ conversationId, ...acceptance })}`)
+    if (acceptance.state !== "accepted") {
+      failures.push(`close_thread did not accept this thread: ${acceptance.state}`)
+      log(
+        `close_thread parking ${JSON.stringify(parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId))}`,
+      )
+      return
+    }
     await expectShown(run.page, SAYS.closed, failures)
     // The parking sweep looks at least every 15 s. The read that saw the
     // turn settle may have opened it again after a first park; the thread
@@ -5292,6 +5653,9 @@ const steps = {
       const lease = (await followedOnce(run, conversationId)).lease
       return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
     }, 45_000)
+    log(
+      `close_thread parking ${JSON.stringify({ conversationId, ...parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId) })}`,
+    )
     if (!parked) {
       const lease = (await followedOnce(run, conversationId)).lease
       failures.push(
@@ -5313,6 +5677,9 @@ const steps = {
         ? lease
         : null
     }, 45_000)
+    log(
+      `close_thread reopened-read parking ${JSON.stringify({ conversationId, ...parkingEvidence(run.stack.gateway.log(), parkingOffset, conversationId) })}`,
+    )
     if (!again) {
       const lease = (await followedOnce(run, conversationId)).lease
       failures.push(
@@ -5345,7 +5712,7 @@ const steps = {
       failures.push(
         `the message after close_thread left the lease ${reopened?.lease?.state ?? "missing"}`,
       )
-    else if (!(reopened.lease.revision > (closed.lease?.revision ?? 0)))
+    else if (!leaseReopenedAfter(reopened.lease, again))
       failures.push("the message after close_thread ran on the closed agent's lease")
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
@@ -8306,8 +8673,9 @@ async function atRest(run, ids) {
 }
 
 async function startStack(options) {
+  const profile = stressProfile(options)
   const knobs = knobsFrom(options)
-  const selected = selectedPlan(knobs, options.only)
+  const selected = selectedPlan(knobs, options.only, profile.scenario)
   if (selected.some((step) => step.kind === "inputFiles")) phoneFilesVerifier()
   if (selected.some((step) => step.kind === "pairedCatalogue"))
     await preparePairedCatalogue()
@@ -8317,11 +8685,14 @@ async function startStack(options) {
   const nativeAddress = `127.0.0.1:${nativePort}`
   const nativeListen = `0.0.0.0:${nativePort}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
+  // Stop's dispatch assertion also runs without an exported evidence folder.
+  const recordingDirectory = options.evidence ?? join(directory, "recording")
   const scenario = join(directory, "stress.json")
   writeFileSync(
     scenario,
     JSON.stringify(
       stressScenario({
+        agent: profile.agent,
         reviews: knobs.reviews,
         longChunks: LONG_CHUNKS,
         longChunkBytes: LONG_CHUNK_BYTES,
@@ -8333,7 +8704,7 @@ async function startStack(options) {
     mkdirSync(options.evidence, { recursive: true })
     writeFileSync(
       join(options.evidence, "plan.txt"),
-      `${JSON.stringify(knobs)}\n${options.only ? `SELECTED SCOPE: ${options.only}\n` : "FULL PLAN\n"}${describe(selectedPlan(knobs, options.only))}\n`,
+      `${JSON.stringify({ ...knobs, profile })}\n${options.only ? `SELECTED SCOPE: ${options.only}\n` : "FULL PLAN\n"}${describe(selected)}\n`,
     )
   }
   // The `github` step's GitHub, on this machine, which the gateway reads its
@@ -8388,7 +8759,8 @@ async function startStack(options) {
           : undefined,
       as: "panel",
       scenario,
-      evidence: options.evidence,
+      model: profile.model,
+      evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
       // The agent a `handoff` step switches its conversation to.
       others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
@@ -8400,7 +8772,10 @@ async function startStack(options) {
         tunnel: { enabled: false, ingress: `127.0.0.1:${await freePort()}` },
       },
     })
+    const { agents } = await stack.client.agents.list()
+    stack.profile = selectStressFixture(profile, agents)
   } catch (error) {
+    await stack?.close()
     await github?.close()
     await realtime?.close()
     rmSync(directory, { recursive: true, force: true })
@@ -8418,7 +8793,9 @@ async function startStack(options) {
   }
   return panelTarget(stack, () => ({
     knobs,
+    profile: stack.profile,
     agent: options.agent,
+    acpRecording: join(recordingDirectory, "acp.jsonl"),
     nativeAddress,
     nativeListen,
     github,
@@ -8434,16 +8811,22 @@ await main(
   meta,
   async ({ options, rep, target: stack }) => {
     const knobs = stack.knobs
-    const planned = selectedPlan(knobs, options.only)
-    log(`conversation-stress ${JSON.stringify(knobs)}\n${describe(planned)}`)
+    const planned = selectedPlan(knobs, options.only, stack.profile.scenario)
+    log(
+      `conversation-stress ${JSON.stringify({ ...knobs, profile: stack.profile })}\n${describe(planned)}`,
+    )
     const origin = new URL(stack.url).origin
     await withEngines(options, rep, async (engine, browser) => {
       const layout = options.layouts[0]
       let restartConsole
+      let reviewAnswers
+      let accessRefusals
       const opened = await openPage(browser, {
         preparePage: async (page) => {
           await stack.vault.install(page)
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
+          reviewAnswers = observeReviewAnswers(page, stack.endpoint)
+          accessRefusals = observeAccessRefusals(page, stack.endpoint)
         },
         url: `${origin}/desktop.html`,
         layout,
@@ -8461,6 +8844,10 @@ await main(
         ],
       })
       const run = new Run(stack, opened, knobs, restartConsole)
+      run.reviewAnswers = reviewAnswers
+      run.reviewAnswerEvidence = []
+      run.accessRefusals = accessRefusals
+      run.accessRefusalEvidence = []
       run.evidence = options.evidence
       run.engine = engine
       const base = {
@@ -8478,6 +8865,15 @@ await main(
         await settled(run, id, new Set(), first, "completed", setup)
         run.main = { id, title: await titleOf(run, id) }
         await openStressConversation(run.page, run.main.id, run.main.title)
+        const initial = await readWithReviews(run.client, run.main.id)
+        const verifiedProfile = requireStressCapabilities(stack.profile, {
+          modelId: initial.runtime?.model,
+          approvalModes: initial.approvalModes,
+        })
+        if (initial.approvalMode !== "ask")
+          setup.push("the stress fixture did not start in Ask")
+        if (run.evidence)
+          writeView(run.evidence, `views/${engine}-profile.json`, verifiedProfile)
         if (setup.length) {
           rep.add({ name: "setup", ...base, failures: setup })
           return
@@ -8506,6 +8902,7 @@ await main(
             rep.add({ name, ...base, cannotRun: true, error: `not run: ${stopped}` })
             continue
           }
+          run.failureConversationId = null
           const at = Date.now()
           const failures = []
           let error
@@ -8527,9 +8924,7 @@ await main(
           if (!entry.ok) {
             stopped = `${name} did not hold`
             if (options.evidence) {
-              const view = await readWithReviews(run.client, run.main.id).catch(
-                () => null,
-              )
+              const view = await readFailureView(run, readWithReviews).catch(() => null)
               if (view)
                 writeView(
                   options.evidence,
@@ -8556,6 +8951,7 @@ await main(
           ...base,
           failures: await atRest(run, [
             run.main.id,
+            ...run.owned,
             ...run.checked,
             ...done.map((each) => each.conversationId),
           ]),
@@ -8584,6 +8980,8 @@ await main(
           await opened.close()
         } finally {
           restartConsole.dispose()
+          reviewAnswers.dispose()
+          accessRefusals.dispose()
         }
       }
     })

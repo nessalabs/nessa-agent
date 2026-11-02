@@ -1,0 +1,181 @@
+{
+  "source": "027f430cbbe630c0ebfa62fa800eeabfe9f1eaee",
+  "compiledProtocolCalculatedFromSources": "91fd4c70b61e3d05",
+  "orderedSources": 43,
+  "pinnedProtocol": "b6e4f48aa694ce08",
+  "boatAccess": "not attempted; prior denial retained",
+  "sources": [
+    {
+      "path": "crates/nessa-protocol/src/lease.rs",
+      "sha256Normalized": "004470dfe3b0a368056019f23333c7a026f7fdfda1777d91da19181b1c9d2f9f"
+    },
+    {
+      "path": "crates/nessa-protocol/src/pairing/frames.rs",
+      "sha256Normalized": "fe412af3d14fad4fb6b01f4cfc48e416935e8c94547e3b0551dd6aeb8c2351c6"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/mod.rs",
+      "sha256Normalized": "9d7578d67321ce91c5a103c06ac25ad50cc98ee34d0e97419f6963e79c1dceca"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/mod.rs",
+      "sha256Normalized": "6139e55d0d2d092d5ec3825fd0e64326f302c996678e1a597daae851fec075ce"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/serve.rs",
+      "sha256Normalized": "90bda6f21d9c083a2708f26f9a8514af6f0950399acafc030b651fae84ab5011"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/artifacts.rs",
+      "sha256Normalized": "e2054b45ce6a71de808cde52065973a6c607296ee3a7865f62e4980695dd4606"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/fetches.rs",
+      "sha256Normalized": "17c5edf9a772ce9524bb0af028e10faede7eadd4fe6a4467a8f258fd031d763f"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/wire.rs",
+      "sha256Normalized": "b06f1e85a5da0839c0e50cb7ed033f3092a45382ee6215a6282ce9c21426902a"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/redial.rs",
+      "sha256Normalized": "b9db46fc4129dd2e253d7470e1b26bd2b50aa1febefbb69ebcf6f7c263944317"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/approval.rs",
+      "sha256Normalized": "4897744ce36364577cae171f25d6c62d08525ba4ca0b49ab58a1d532a164bc95"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/enrollment.rs",
+      "sha256Normalized": "1ea07493f17712fd6b5d5b79b3217a0ff1707879f7dffcb069e2aa888d406bc2"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/grants.rs",
+      "sha256Normalized": "38615d9f392012ac1624402833c14ab8a6340ca8e70a1bb258e1d53351cb8e8b"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/application/lease_policy.rs",
+      "sha256Normalized": "f83fb68f481a107ea70689eaa76b281a5a00bde1305c7e9f81b02d55b7d965ec"
+    },
+    {
+      "path": "crates/nessa-server/src/timer/mod.rs",
+      "sha256Normalized": "946afc2c0e30874929da98cff23cf82b15a32119ef2c27f624adc0bacabf1b0c"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/domain/mod.rs",
+      "sha256Normalized": "ed0be8a0fa837accaf74c16929349baaa3f7890dc2d7a480e5ba1058d7a7ad35"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/domain/grants.rs",
+      "sha256Normalized": "6d31267a5f9358f1865e66b829a9a0cdb43497ecc320aff69d5d11cec46a215b"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/mod.rs",
+      "sha256Normalized": "0101d8159b12caa1fb1c8286aab66ffadf6fa7973d598409929e5e82ebb8763d"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/commands.rs",
+      "sha256Normalized": "4b3b1134c4992719126cedc00e06333fe30c2dc7c820cf8edabed3cf560f036b"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/launcher.rs",
+      "sha256Normalized": "4e63ebba81acc96735281de0d3c9268a2f5ce26c84a69ad161a45d784f65440a"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/ledger.rs",
+      "sha256Normalized": "a35d60c1bbca9ff39360702c6871fb45431052d68b14472399c385d08a15e2fc"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/lock.rs",
+      "sha256Normalized": "1659825805a6dc0d6a6972f6ab6163aa46e7bd44a400da8541a6700622f9faf9"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/outbox.rs",
+      "sha256Normalized": "c2fc533c9fcab88455401cc01b23b0e016437321fa8f64acb6a897b2ab89997e"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/inbox.rs",
+      "sha256Normalized": "c8a6eadc3b18876e6dd816d7661bda1542f4e98aa6c69e7b2c0aa681b516e8d7"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/dial.rs",
+      "sha256Normalized": "f325cccf16da5be8d706fcecac1a98d09c1a8d52bc343c8ac5cd2423f3bd78b8"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/pairing.rs",
+      "sha256Normalized": "c219507e047895a42bf532cf439e2d7fd310cab130f89811f5b32835cac41baa"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/grant_audit.rs",
+      "sha256Normalized": "0f3c53d631cff12aa5bf193a19ff68d720293c9050f132883b53474d524d0303"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/grants.rs",
+      "sha256Normalized": "a98c000366f66778722f904663b2746f54ede890687726f1898a391ac17daca2"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/cedar/mod.rs",
+      "sha256Normalized": "2f091ae363a21e8ce7bb19373951b605f7b20a77fd3d75628309bc537e15a93c"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/cedar/evaluator.rs",
+      "sha256Normalized": "931dc031ed92eaa00a2f9c2bb9894037ce47af577d6712691a23027e5bc75567"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/cedar/schema.json",
+      "sha256Normalized": "b2cdfee486039e22129e7230a7e836510769a976af440d76468253d2af47beb6"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/infrastructure/cedar/policies.cedar",
+      "sha256Normalized": "6b732a52c9af5a03a89cc14a8fc1092f9fa7c2c1e2899f0c34b16904f45895f3"
+    },
+    {
+      "path": "crates/nessa-server/src/timer/runtime.rs",
+      "sha256Normalized": "8a5a5498e89a38c33d50eb583cb9652dc8a4d895ff80769c42c499129e41d614"
+    },
+    {
+      "path": "crates/nessa-server/src/env_serve/install.rs",
+      "sha256Normalized": "81278ec39446d7b1a73c09c11ac76c79c3aaf73796f7ba14f190cce467c962f6"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/ssh_environment/link.rs",
+      "sha256Normalized": "70397b7fcaa5860603e28163f1230850b388038a74d4507c32d62a42dc5ccbe7"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/ssh_environment/environment.rs",
+      "sha256Normalized": "fe59397769162918042c00572b709f1ecb8b903e472ad88a20516c3530320fc8"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/ssh_environment/transfer.rs",
+      "sha256Normalized": "87e5736be20a5391bead8de166493cdc66fe326b870c3ab90dcfd6c5d1b79b26"
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/infrastructure/ssh_environment/sftp.rs",
+      "sha256Normalized": "a1b97dd3cef8842d93a7e76df15c7fc5cc29116adaf4e91306cc13768b43b920"
+    },
+    {
+      "path": "crates/nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs",
+      "sha256Normalized": "0766c64ad51287ff7748557a4ffdeb1193dbb888e6266430649136f81b8df7ee"
+    },
+    {
+      "path": "crates/nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs",
+      "sha256Normalized": "d271b95bc27d85d8abba335ca47e700d5902092c9cc91e9af73683045f3e94de"
+    },
+    {
+      "path": "crates/nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs",
+      "sha256Normalized": "64c0adde54ea956f0dcc62b0360c422fa7092cce1572906398b2487468dc2387"
+    },
+    {
+      "path": "crates/nessa-sdk/src/infrastructure/harness_process.rs",
+      "sha256Normalized": "ad038a28da38d589c15d53d99fb76805e4b386c6f8adb4eacc437b3ffaa2da40"
+    },
+    {
+      "path": "crates/nessa-sdk/src/infrastructure/process.rs",
+      "sha256Normalized": "de6423fd533565803ab5df93fb40af63559120fd98448341d965110b2a3cbb45"
+    },
+    {
+      "path": "crates/nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+      "sha256Normalized": "0895a9a75f0a53200eed1ab64a745fe0ba93ae58989200994d3f21a1b43da7bf"
+    }
+  ]
+}

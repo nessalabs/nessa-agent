@@ -1,0 +1,9 @@
+source=027f430cbbe630c0ebfa62fa800eeabfe9f1eaee
+command=cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault --all-targets -- -D warnings
+environment=CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1; normal filesystem ownership; standard debug profile
+exit=0
+warning: `nessa-server` (lib) generated 1 warning
+    Checking nessa-device-client v0.1.0 (/workspace/nessa-agent/crates/nessa-device-client)
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6m 35s
+Diagnostic clarification: rustc emitted its long-running const-evaluation progress diagnostic at lease.rs:1048 for LEASE_PROTOCOL_DIGITS. This is the existing fingerprint owner's allowed diagnostic, not an unused import or Clippy lint. No lint policy or guard was changed.

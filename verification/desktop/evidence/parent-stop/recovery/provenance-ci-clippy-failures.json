@@ -1,0 +1,39 @@
+{
+  "head": "f09246860dc2c1e8786937fb461af3e065441380",
+  "run": "https://github.com/nessalabs/nessa-agent/actions/runs/40990262102",
+  "phase": "strict eight-package Clippy",
+  "jobs": [
+    {
+      "jobId": 123850734904,
+      "platform": "Ubuntu",
+      "errors": [
+        "2026-10-30T02:13:51.4076431Z error: unused import: `executions::ExecutionId`",
+        "2026-10-30T02:13:51.4090598Z   --> crates/nessa-server/src/conversation/application/service/parent_stop.rs:29:5",
+        "2026-10-30T02:14:31.9292782Z error: could not compile `nessa-server` (lib) due to 1 previous error; 1 warning emitted",
+        "2026-10-30T02:15:35.6041643Z error: could not compile `nessa-server` (lib test) due to 1 previous error; 1 warning emitted"
+      ]
+    },
+    {
+      "jobId": 123850734913,
+      "platform": "macOS",
+      "errors": [
+        "2026-10-30T02:14:37.8553560Z error: unused import: `executions::ExecutionId`",
+        "2026-10-30T02:14:37.8677290Z   --> crates/nessa-server/src/conversation/application/service/parent_stop.rs:29:5",
+        "2026-10-30T02:15:42.4054490Z error: could not compile `nessa-server` (lib) due to 1 previous error; 1 warning emitted",
+        "2026-10-30T02:16:57.0554420Z error: could not compile `nessa-server` (lib test) due to 1 previous error; 1 warning emitted"
+      ]
+    },
+    {
+      "jobId": 123850734915,
+      "platform": "Windows",
+      "errors": [
+        "2026-10-30T02:15:05.9633180Z error: unused import: `executions::ExecutionId`",
+        "2026-10-30T02:15:05.9739476Z   --> crates\\nessa-server\\src\\conversation\\application\\service\\parent_stop.rs:29:5",
+        "2026-10-30T02:15:32.8422410Z error: could not compile `nessa-server` (lib) due to 1 previous error; 1 warning emitted",
+        "2026-10-30T02:16:13.2982618Z error: could not compile `nessa-server` (lib test) due to 1 previous error; 1 warning emitted"
+      ]
+    }
+  ],
+  "correction": "6d6b01d23ff8b6454b2f8b926c16b40bc909d77c",
+  "requalification": "local all-target Clippy at027f430cb passed; corrected hosted run pending publication"
+}

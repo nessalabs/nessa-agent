@@ -1,0 +1,30 @@
+Source: published93599d357336dad4ae86dba32ed33c28e54c8cb7, before mainf08 and verifier4f3/testfda corrections
+GitHub Actions40981242287: Conversation stress check, completed success
+https://github.com/nessalabs/nessa-agent/actions/runs/40981242287
+Configured default conversation stress uses --inputFiles 0; this is not a rerun of historical raised Claude80/Terra79 cohorts.
+Custom WebKit geometry/native Swift phone remain separate.
+2026-10-30T00:46:32.4355369Z resize-observers: 4/4 held
+2026-10-30T00:47:17.6343121Z mcp-apps-gateway: 16/16 held
+2026-10-30T00:48:07.6720066Z gateway-window: 15/15 held
+2026-10-30T00:48:59.5989708Z scripted-scenarios: 8/8 held
+2026-10-30T00:49:17.0970299Z ok    default [chromium columns]
+2026-10-30T00:49:30.9869651Z ok    default [webkit columns]
+2026-10-30T00:49:47.3162015Z ok    override [chromium columns]
+2026-10-30T00:49:59.2278578Z ok    override [webkit columns]
+2026-10-30T00:50:00.0249491Z parent-stop: 4/4 held
+2026-10-30T00:50:00.0639792Z | resize-observers | pass | pass |
+2026-10-30T00:50:00.0641108Z | mcp-apps-gateway | pass | pass |
+2026-10-30T00:50:00.0641937Z | gateway-window | pass | pass |
+2026-10-30T00:50:00.0642617Z | scripted-scenarios | pass | pass |
+2026-10-30T00:50:00.0643256Z | parent-stop | pass | pass |
+2026-10-30T00:50:00.0648379Z {"verdict":"pass","evidence":"/home/runner/work/nessa-agent/nessa-agent-stress-evidence/scripted","summary":"/home/runner/work/nessa-agent/nessa-agent-stress-evidence/scripted/pr-summary.md"}
+2026-10-30T00:50:56.0747825Z github-live-events: 2/2 held
+2026-10-30T00:51:30.4132992Z usage-limit: 16/16 held
+2026-10-30T00:52:49.9166019Z drag: 8/8 held
+2026-10-30T01:05:45.2343322Z conversation-stress: 57/57 held
+2026-10-30T01:06:02.7165470Z conversation-stress: 4/4 held
+2026-10-30T01:06:36.6485329Z conversation-stress: 12/12 held
+2026-10-30T01:06:57.5601615Z conversation-stress: 4/4 held
+2026-10-30T01:07:32.0648760Z conversation-stress: 4/4 held
+2026-10-30T01:08:35.7366262Z conversation-stress: 4/4 held
+2026-10-30T01:09:45.1591081Z conversation-stress: 4/4 held

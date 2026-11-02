@@ -1,12 +1,16 @@
 //! Source-bound admission shares the real mutation-command fixture and provider.
+use super::super::super::{
+    thread_report_admission::source_chain_is_unstopped, AgentEnd, LeaseEndCause, McpAppInitiator,
+    StopBy,
+};
 use super::*;
 #[cfg(unix)]
 use crate::composition::conversation_tools::ConversationTools;
 use crate::conversation::application::{
-    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture,
+    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture, ReportRegistration,
+    ThreadReport, ThreadReportStore, ThreadTurn,
 };
-#[cfg(unix)]
-use crate::conversation::application::{ReportRegistration, ThreadReport};
+use crate::conversation::infrastructure::LocalThreadReports;
 #[cfg(unix)]
 use crate::mcp_servers::{
     domain::ConfigurationKey,
@@ -15,12 +19,8 @@ use crate::mcp_servers::{
     },
 };
 #[cfg(unix)]
-use nessa_sdk::application::agent_execution::providers;
-#[cfg(unix)]
 use nessa_sdk::{
-    application::agent_execution::executions::{
-        ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
-    },
+    application::agent_execution::executions::SubmissionMode as InvocationSubmissionMode,
     domain::agent_execution::{
         executions::{Initiator, MessageChunk},
         prompts::{MessageSender, NoteAuthor},
@@ -29,9 +29,25 @@ use nessa_sdk::{
     },
     infrastructure::{acp::sessions::StandInGrants, clock::RuntimeClock, mcp::McpServers},
 };
+use nessa_sdk::{
+    application::agent_execution::{
+        agents::{resumed_turn_id, Resumed},
+        commands::{
+            CreationFuture, CreationReceipt, CreationStorage, CreationStorageError,
+            CreationStorageLease, MutationReceipt,
+        },
+        executions::ExecutionUpdate,
+        providers,
+        sessions::StorageError,
+    },
+    domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, Initiation},
+};
 #[cfg(unix)]
 use serde_json::{json, Value};
-use std::sync::{atomic::AtomicBool, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize},
+    Mutex,
+};
 #[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 
@@ -408,7 +424,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     let audit = Arc::new(Audit::default());
     service.bind_agent_tool_audit(audit.clone());
     let source = id();
@@ -1037,7 +1053,7 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     provider.turn_cancel.store(true, Ordering::SeqCst);
     provider.native_steering.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     service.bind_agent_tool_audit(Arc::new(Audit::default()));
     let source = id();
     opened(&service, &provider, &source).await;
@@ -1206,8 +1222,8 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     .expect("the queued turn ran");
     assert_eq!(reports_in(&service, &source, 2).await.len(), 2);
 
-    // A queued turn the thread drops because the turn ahead of it failed
-    // reports as cancelled, though no invocation follows the drop.
+    // Runner failure leaves queued work owed. Its report must wait for the
+    // host's exact Stop decision instead of reporting a premature cancellation.
     *provider.execution_reply.lock().unwrap() = Some(providers::ProviderExecutionReply::Finished(
         providers::ExecutionReport::new(
             Some(Err(AgentError::Unsupported("worker failed".into()))),
@@ -1233,6 +1249,68 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         .unwrap()
         .to_owned();
     drop(release_failing);
+    let live_worker = service
+        .resolve(&worker_id, &caller("inspect-owed"))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !live_worker
+            .agent
+            .owed_turns()
+            .await
+            .iter()
+            .any(|turn| turn.execution_id().as_str() == dropped)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the runner-dropped request remains owed");
+    let report_source = service
+        .resolve(&source, &caller("inspect-pending-report"))
+        .await
+        .unwrap();
+    let pending_history = report_source
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        pending_history
+            .invocations
+            .iter()
+            .filter(|record| record
+                .request
+                .user_message
+                .text_str()
+                .starts_with("[Thread report]"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        service.inner.thread_reports.waiting(),
+        1,
+        "the owed request has not been reported as cancelled"
+    );
+    let declined = client
+        .call(
+            "stop_thread",
+            json!({
+                "threadId":worker,"executionId":dropped,"requestId":"report-decline-owed"
+            }),
+        )
+        .await;
+    assert_eq!(declined["isError"], false, "{declined}");
+    assert!(
+        !live_worker
+            .agent
+            .owed_turns()
+            .await
+            .iter()
+            .any(|turn| turn.execution_id().as_str() == dropped),
+        "{declined}"
+    );
     let reports = reports_in(&service, &source, 3).await;
     assert_eq!(reports.len(), 3, "{reports:?}");
     assert!(reports[2].contains(&dropped), "{}", reports[2]);
@@ -1323,7 +1401,7 @@ async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_re
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     service.bind_agent_tool_audit(Arc::new(Audit::default()));
     let source = id();
     opened(&service, &provider, &source).await;
@@ -1874,3 +1952,463 @@ async fn a_second_registration_of_a_report_at_once_does_not_mark_it_restored() {
 #[cfg(unix)]
 #[path = "thread_report_settlement.rs"]
 mod thread_report_settlement_tests;
+
+/// An admitted tool may return after the person stopped its source. A whole
+/// reply callback for that exact stopped execution must leave the child's
+/// durable report for later person input; it cannot acknowledge a new turn.
+/// This exercises the trusted application callback, not a physical MCP write.
+#[tokio::test]
+async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
+    stopped_source_reply_claim(false).await;
+}
+
+#[tokio::test]
+async fn a_stopped_canonical_successor_retains_the_original_sources_delayed_reply() {
+    stopped_source_reply_claim(true).await;
+}
+
+async fn stopped_source_reply_claim(resume_source: bool) {
+    struct Receipts {
+        storage: Arc<dyn CreationStorage>,
+        fail: AtomicBool,
+        failures: AtomicUsize,
+    }
+    impl CreationStorage for Receipts {
+        fn open_creation(
+            &self,
+            principal: String,
+            request: String,
+            create: bool,
+        ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+            self.storage.open_creation(principal, request, create)
+        }
+        fn creations(&self, principal: String) -> CreationFuture<'_, Vec<CreationReceipt>> {
+            self.storage.creations(principal)
+        }
+        fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+            Box::pin(async move {
+                if self.fail.load(Ordering::SeqCst) {
+                    self.failures.fetch_add(1, Ordering::SeqCst);
+                    return Err(CreationStorageError::Storage(StorageError::Busy));
+                }
+                self.storage.mutations(principal).await
+            })
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let receipts = Arc::new(Receipts {
+        storage: storage.clone(),
+        fail: AtomicBool::new(false),
+        failures: AtomicUsize::new(0),
+    });
+    service.bind_commands(receipts.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
+    service.bind_agent_tool_audit(Arc::new(Audit::default()));
+    let reports = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
+    service.bind_thread_reports(reports.clone());
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let release_parent = hold_turn(&service, &provider, &parent, "source-turn").await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while provider.execution_gate.lock().unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let (caller_connected, stop) = tokio::sync::watch::channel(false);
+    let child = id();
+    let create = service
+        .admit_agent_tool(
+            parent.clone(),
+            "create-call".into(),
+            "create_thread".into(),
+            Some(child.clone()),
+            AgentToolRequest {
+                logical: "create-child".into(),
+                command: "create-child".into(),
+            },
+            stop.clone(),
+        )
+        .await
+        .unwrap();
+    service
+        .create_owned_thread(create, child.clone(), RequestedConversation::default())
+        .await
+        .unwrap();
+    let release_child = hold_turn(&service, &provider, &child, "child-turn").await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while provider.execution_gate.lock().unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let source = service
+        .admit_agent_tool(
+            parent.clone(),
+            "subscribe-call".into(),
+            "subscribe".into(),
+            Some(child.clone()),
+            AgentToolRequest {
+                logical: "subscribe-child".into(),
+                command: "subscribe-child".into(),
+            },
+            stop,
+        )
+        .await
+        .unwrap();
+    assert_eq!(source.execution(), "source-turn");
+    assert_eq!(
+        service
+            .report_thread_turn(
+                child.clone(),
+                "child-turn".into(),
+                ThreadReport {
+                    parent: parent.clone(),
+                    caller: source.caller(),
+                    execution: "claim-report".into(),
+                },
+            )
+            .await,
+        ReportRegistration::Registered
+    );
+    let held = service.await_thread_turn(&child, "child-turn", source.conversation());
+    let release_child = if resume_source {
+        // A whole reply is already available when its delivered callback detaches.
+        // Keep the independent await guard while comparing old and later sources.
+        drop(release_child);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if matches!(
+                    service
+                        .thread_turn_end(&child, &caller("whole-child-reply"), "child-turn")
+                        .await,
+                    ThreadTurn::Ended("completed", _)
+                ) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        None
+    } else {
+        Some(release_child)
+    };
+    let source = Arc::new(source);
+    // The delivered callback already exists independently of its caller. Hold
+    // it before the receipt observation, just as a delayed detached task can be.
+    let (release_callback, callback_gate) = oneshot::channel();
+    let (callback_started, started_callback) = oneshot::channel();
+    let callback = tokio::spawn({
+        let (service, child, source) = (service.clone(), child.clone(), source.clone());
+        let awaited = service.await_thread_turn(&child, "child-turn", source.conversation());
+        async move {
+            callback_started.send(()).unwrap();
+            callback_gate.await.unwrap();
+            service
+                .claim_thread_report(&child, "child-turn", &source)
+                .await;
+            drop(awaited);
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), started_callback)
+        .await
+        .unwrap()
+        .unwrap();
+    let (release_parent, stopped_execution, before_resume) = if resume_source {
+        // Same service and process: suspension owes A, and the SDK admits B.
+        // A made-up resumed-looking identifier cannot establish this relation.
+        let admission = service.inner.thread_admission.lock().await;
+        super::parent_stop::suspend_child_turn(&service, &provider, &parent, release_parent).await;
+        // The existing host owner releases the suspended runner's slot without
+        // declining its owed work. Keep this service and detached callback.
+        let slot = service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(&parent)
+            .cloned()
+            .unwrap();
+        let actor = caller("reopen-suspended-source").actor().unwrap();
+        service
+            .stop_slot(
+                &parent,
+                slot,
+                StopBy {
+                    actor: &actor,
+                    ended_by: &McpAppInitiator::System,
+                    cause: LeaseEndCause::Stopped,
+                    end: AgentEnd::Suspend,
+                },
+                crate::conversation::application::service::ConfirmedClose::ReleaseSlot,
+            )
+            .await
+            .unwrap();
+        let live = service
+            .resolve(&parent, &caller("resume-source"))
+            .await
+            .unwrap();
+        let original = ExecutionId::new(source.execution()).unwrap();
+        let owed = live
+            .agent
+            .owed_turns()
+            .await
+            .into_iter()
+            .find(|turn| turn.execution_id() == &original)
+            .unwrap();
+        let (release, gate) = oneshot::channel();
+        let before_resume = live
+            .agent
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .invocations;
+        *provider.execution_gate.lock().unwrap() = Some(gate);
+        let started = provider.execution_started.notified();
+        let Resumed::Continued(resumed) = live
+            .agent
+            .resume_turn(&owed, caller("canonical-resume").actor().unwrap())
+            .await
+            .unwrap()
+        else {
+            panic!("the suspended original source must actually resume")
+        };
+        tokio::time::timeout(Duration::from_secs(10), started)
+            .await
+            .unwrap();
+        let history = live.agent.session_manager().snapshot().await.unwrap();
+        assert_eq!(
+            resumed_turn_id(&history.invocations, &original),
+            Some(resumed.id().clone())
+        );
+        assert_ne!(resumed.id(), &original);
+        let successor = resumed.id().as_str().to_owned();
+        drop((admission, resumed, live));
+        (release, successor, Some(before_resume))
+    } else {
+        (release_parent, source.execution().to_owned(), None)
+    };
+    service
+        .stop_command(
+            storage.clone(),
+            parent.clone(),
+            caller("human-stop"),
+            stopped_execution.clone(),
+        )
+        .await
+        .unwrap();
+    let finish_cancelled = || {
+        provider
+            .execution_updates
+            .lock()
+            .unwrap()
+            .push(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled));
+        *provider.execution_reply.lock().unwrap() = Some(
+            providers::ProviderExecutionReply::Finished(providers::ExecutionReport::new(
+                Some(Ok(ExecutionOutcome::Cancelled)),
+                None,
+                providers::ProviderSessionState::Usable,
+            )),
+        );
+    };
+    if let Some(release_child) = release_child {
+        finish_cancelled();
+        release_child.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if matches!(
+                    service
+                        .thread_turn_end(&child, &caller("view-child"), "child-turn")
+                        .await,
+                    ThreadTurn::Ended("cancelled", _)
+                ) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    finish_cancelled();
+    release_parent.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                service
+                    .thread_turn_end(&parent, &caller("view-parent"), &stopped_execution)
+                    .await,
+                ThreadTurn::Ended("cancelled", _)
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let stopped = service
+        .stopped_report_executions(&parent, &source.caller())
+        .await
+        .unwrap();
+    assert!(stopped.contains(&stopped_execution));
+    assert_eq!(stopped.contains(source.execution()), !resume_source);
+    let missing_history_denied = !source_chain_is_unstopped(source.execution(), None, &stopped);
+    let stale_history_denied = if let Some(history) = &before_resume {
+        assert!(history
+            .iter()
+            .all(|record| record.request.execution_id.as_str() != stopped_execution));
+        !source_chain_is_unstopped(source.execution(), Some(history), &stopped)
+    } else {
+        true
+    };
+    assert_eq!(reports.pending().await.unwrap().len(), 1);
+
+    // The caller connection still exists. This is the late whole-reply
+    // callback's current application call, after real durable Stop evidence.
+    receipts.fail.store(true, Ordering::SeqCst);
+    service
+        .claim_thread_report(&child, "child-turn", &source)
+        .await;
+    assert!(receipts.failures.load(Ordering::SeqCst) > 0);
+    assert_eq!(reports.pending().await.unwrap().len(), 1);
+    receipts.fail.store(false, Ordering::SeqCst);
+    release_callback.send(()).unwrap();
+    callback.await.unwrap();
+    let after_callback = reports.pending().await.unwrap().len();
+    let reopened = LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap();
+    let after_reopen = reopened.pending().await.unwrap().len();
+    drop(reopened);
+    let parent_live = service
+        .resolve(&parent, &caller("view-parent"))
+        .await
+        .unwrap();
+    assert!(parent_live.agent.owed_turns().await.is_empty());
+    let before_later_source = parent_live
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .invocations;
+    assert!(
+        provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|id| !id.starts_with("thread-report-")),
+        "Stop and the child report did not restart the parent"
+    );
+
+    // A genuine later person input starts a new turn. Keeping the old
+    // await guard excludes report dispatch while comparing both callbacks.
+    let (release_next, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let started = provider.execution_started.notified();
+    service
+        .submit_command(
+            storage.clone(),
+            parent.clone(),
+            caller("later-person"),
+            Initiation::owner(),
+            false,
+            "later-source-turn".into(),
+            SubmittedMessage {
+                text: "continue".into(),
+                ..Default::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        started.await;
+        while provider.execution_gate.lock().unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    service
+        .claim_thread_report(&child, "child-turn", &source)
+        .await;
+    let after_old_source = reports.pending().await.unwrap().len();
+    let fresh = service
+        .admit_agent_tool(
+            parent.clone(),
+            "later-subscribe-call".into(),
+            "subscribe".into(),
+            Some(child.clone()),
+            AgentToolRequest {
+                logical: "later-subscribe".into(),
+                command: "later-subscribe".into(),
+            },
+            caller_connected.subscribe(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fresh.execution(), "later-source-turn");
+    let history = parent_live
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    let missing_source_denied =
+        !source_chain_is_unstopped(fresh.execution(), Some(&before_later_source), &stopped);
+    let fresh_source_allowed =
+        source_chain_is_unstopped(fresh.execution(), Some(&history.invocations), &stopped);
+    let old_source_denied =
+        !source_chain_is_unstopped(source.execution(), Some(&history.invocations), &stopped);
+    service
+        .claim_thread_report(&child, "child-turn", &fresh)
+        .await;
+    assert!(reports.pending().await.unwrap().is_empty());
+    drop(held);
+    drop(release_next);
+    retire(service, storage, metadata).await;
+    assert_eq!(
+        after_callback, 1,
+        "the stopped source chain cannot pay its report"
+    );
+    assert_eq!(
+        after_reopen, 1,
+        "the retained report survives SQLite reopen"
+    );
+    assert_eq!(
+        after_old_source, 1,
+        "later input cannot revive the old callback"
+    );
+    assert!(
+        missing_history_denied,
+        "unavailable source history retains the report"
+    );
+    assert!(
+        stale_history_denied,
+        "a real pre-resume snapshot cannot negate a newer Stop receipt"
+    );
+    assert!(
+        missing_source_denied,
+        "missing source admission retains the report"
+    );
+    assert!(
+        fresh_source_allowed,
+        "the new genuine source is outside the stopped continuation chain"
+    );
+    assert!(
+        old_source_denied,
+        "later input does not erase the original source relationship"
+    );
+    let reopened = LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap();
+    assert!(reopened.pending().await.unwrap().is_empty());
+}

@@ -1,0 +1,15 @@
+head=f09246860dc2c1e8786937fb461af3e065441380
+run=https://github.com/nessalabs/nessa-agent/actions/runs/40990262102/job/123850734865
+conclusion=failure; four legacy fixture reply assumptions
+The admission-order and typed report replay regressions passed. Corrected legacy fixture runtime is pending at this checkpoint.
+2026-10-30T02:26:58.4723757Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::a_person_cannot_reauthor_a_typed_report_by_replaying_its_actor_and_text ... ok
+2026-10-30T02:28:34.5521900Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::owned_stop_export_and_submission_share_one_admission_order ... ok
+2026-10-30T02:29:31.6631613Z [nessa-server nessa_server conversation] assertion `left == right` failed: legacy fixture represents the real child's exact result
+2026-10-30T02:29:31.8787230Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_canonical_successor_with_an_explicit_person_command ... FAILED
+2026-10-30T02:29:35.4652295Z [nessa-server nessa_server conversation] assertion `left == right` failed: legacy fixture represents the real child's exact result
+2026-10-30T02:29:35.6408356Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_later_successor_after_an_intermediate_person_submit ... FAILED
+2026-10-30T02:29:38.5613511Z [nessa-server nessa_server conversation] assertion `left == right` failed: legacy fixture represents the real child's exact result
+2026-10-30T02:29:38.7976896Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_a_report_successor_with_its_own_person_submit ... FAILED
+2026-10-30T02:29:40.5004938Z [nessa-server nessa_server conversation] assertion `left == right` failed: legacy fixture represents the real child's exact result
+2026-10-30T02:29:40.7332162Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::parent_stop_preserves_an_active_later_successor_after_an_intermediate_person_submit ... FAILED
+2026-10-30T02:34:25.9595062Z [nessa-server nessa_server conversation] test result: FAILED. 1394 passed; 4 failed; 6 ignored; 0 measured; 2259 filtered out; finished in 730.80s

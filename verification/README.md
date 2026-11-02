@@ -28,6 +28,28 @@ does not change the environment or settings of another server.
 
 These tests prove cache isolation, not the cause of an earlier browser error.
 
+The conversation stress review-answer observer and its request/ACK ordering
+controls are mapped in [stress review answer evidence](../docs/design/stress-review-answers.md).
+A review disappearing does not confirm an answer, and a control ACK does not
+confirm provider tool completion.
+
+Stress access scenarios name their fixture requirements explicitly. `full`
+(the default) requires the selected model to advertise Ask, Auto and Full;
+its existing success assertions are unchanged. `ask-only` requires only Ask
+and replaces the counted access switches with Full-refusal checks, followed
+by real permission turns that still require a review. It is separate evidence,
+not Full-success evidence for that model. The published gateway catalog and
+initial conversation must both match the exact requested model and scenario;
+an incompatible fixture fails setup without selecting a fallback.
+
+For example, on Linux run `conversation-stress.mjs --agent codex --model
+gpt-6-astra --accessScenario full` for the Full-capable profile, and `--agent
+codex --model gpt-5.6-terra --accessScenario ask-only` for the Ask-only profile.
+Raise the same scenario with `--rounds 66 --reviews 30 --switches 9
+--parentstops 3 --followers 4 --restarts 2`. The evidence keeps the exact
+profile, requirements, review ACKs and typed access refusals. Availability
+comes from the product; these examples do not enable additional presets.
+
 A large-workspace measurement is specified in
 [UI workspace load](../docs/design/ui-workspace-load.md). The seeded page is
 opt-in (`workspace-load.mjs`). Startup, the pane cap, and one long transcript
@@ -115,10 +137,14 @@ verification/
         stress-conversation.test.mjs duplicate titles, delayed selection and missing identities cannot redirect selection
         stress-restart.mjs   scope intentional restart console lines to exact socket evidence and verified recovery (#1024)
         stress-restart.test.mjs temporal, endpoint, occurrence, failed-recovery and cleanup boundaries
+        stress-followers.mjs subscription churn and capacity probes, correlated with exact run-owned deletions
+        stress-followers.test.mjs end/open ordering, cursor resume, real held counts and deletion/capacity controls
         page-lines.mjs      report each collected page event through its step or close owner
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         workspace.test.mjs  a measured drop must change pane order and remove its carried copy (#370)
+        hover-state.mjs     pinned visual control and pointer owner, finite-animation samples and action hits captured before the pointer leaves
+        hover-state.test.mjs strict hover evidence; NESSA_HOVER_BROWSER=bundled (or a local executable path) runs the sibling-action browser regression, also required by the pinned Chromium CI job
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         perf.test.mjs       the frame budget's unrounded decision, and the LoAF sample clock (#369)
@@ -126,10 +152,15 @@ verification/
         apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
         apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         settings.mjs        Settings › MCP servers reached, and its fit measured at a width (responsive.mjs, mcp-servers-gateway.mjs)
+        settings-tabs.mjs   smoke's visible tab strip compared with the Settings catalogue's own visibility and order; settings-tabs.test.mjs rejects missing, reordered and unexpected tabs
         review-notices.mjs  Settings notification permission and accessible Allow-button evidence
         review-notices.test.mjs default/denied/granted/unsupported row contracts, without a browser
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-stack.mjs   a real gateway, the dev server or a production preview before it, and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
+        stress-profile.mjs  explicit stress scenario/model requirements and refusal provider-effect checks; stress-profile.test.mjs covers incompatible fixtures and counted Ask-only work
+        stress-close.mjs    exact close-thread tool acceptance, fresh-target failure views and sanitized bounded parking diagnostics; stress-close.test.mjs covers refusal, identity and evidence redaction
+        acp-recording.mjs   complete JSONL and JSON-RPC envelope validation shared by parent Stop and access-refusal evidence
+        stress-access-refusals.test.mjs exact window Full-request refusal correlation, sharing the review command observer
         scripted-evidence.mjs the scripted command's verdict line and the pull-request summary; page lines are read from the checks' own results
         fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
         gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened and how long that step waits for it (#474), what a text-only turn said
@@ -269,6 +300,34 @@ V5–V9's actual fixture and server lifetime also require production browser
 qualification; helper tests alone do not establish that the built fixture renders.
 No frame budget, RPC deadline or browser readiness wait changes with this routing.
 
+## Stress follower end/open ordering (#1038)
+
+The follower owns desired targets separately from live subscription handles.
+The generated `ConversationSubscriptionEndReason` contract owns recoverability:
+`source_closed` and `lagging` subscribe again, as does the client's
+`disconnected`. A view resumes from its applied frame cursor, events from their
+applied batch cursor, and a list receives a replacement snapshot. End callbacks
+retire ownership even when they report an unexpected failure. Opening identity
+is shared across all three stream kinds; data and end callbacks from a retired
+opening cannot change its successor. `stress-followers.test.mjs` exercises these
+orderings and the existing exact deletion/capacity controls.
+
+| State/event | Ownership and next action |
+| --- | --- |
+| Opening receives its handle | Retain it only while that opening is current |
+| Recoverable end before or after the open answer | Retire the opening and handle, preserve applied data/cursor, request reopening; close a late handle |
+| Unexpected end | Retire identically, retain the failure, and request reopening without erasing that failure |
+| Retired opening delivers data/end | Ignore it; its successor owns application progress |
+| Intentional churn | Retire before awaiting close, then reopen from the applied cursor |
+| Run-owned deletion during events admission | Retire and close any late handle; remove the desired target |
+| Missing or opening list/view/events | Defer capacity probes; desired targets still reserve their room for reopening |
+| An owned stream ends while a probe awaits admission | End that measurement and close probe handles; a later stable round measures capacity |
+| Settlement after churn ends | Reopen list, view and events before comparing final state |
+
+`held()` counts live conversation handles, while desired targets reserve room
+independently. Lists have their separate published allowance. These rules do not
+change server capacity, approval policy, concurrency or deadlines.
+
 ## Output
 
 - **stdout**: one JSON document — `{ check, ok, target, results: [{ name, engine, layout, ok, failures, … }] }`
@@ -288,3 +347,15 @@ Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-co
 
 The app-review fixture contract and ordering evidence are in
 [app review verification](../docs/design/app-review-verification.md).
+
+## Hover evidence
+
+The sampler pins the input, visual control and pointer owner before moving the pointer. A sibling action belongs to the logical row frame; its fill still comes from that frame's original control. The default pointer owner remains the visual control. A detached or reparented input/control cannot borrow another frame's pointer evidence. Membership means the node's nearest configured row is the captured row, not merely its ancestor; input, control, pointer and action classification share this one predicate. Hit classification uses the captured frame and actual pointer in that same snapshot; callers cannot reselect a row.
+
+| Stage | Evidence |
+| --- | --- |
+| Input hovered | Read the pinned control's fill and the owner's actual pointer containment |
+| Finite animations settled | Read input/control membership, fill and the actual pointer hit in the same pinned row while hover is held |
+| Pointer moved away | Record the away state, then remove the listener and dispose the pinned handles |
+
+`NESSA_HOVER_BROWSER=bundled node --test verification/desktop/scripts/lib/hover-state.test.mjs` runs the sibling-action and reparenting regression with Playwright's installed Chromium. An executable path selects an existing local Chromium instead. The existing browser CI job runs this after installing the pinned browsers; ordinary browser-free helper runs explicitly skip that browser case.

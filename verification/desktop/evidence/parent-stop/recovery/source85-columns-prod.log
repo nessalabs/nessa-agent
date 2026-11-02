@@ -1,0 +1,9 @@
+ok    console [chromium columns]
+ok    content-visible [chromium columns]
+ok    reply-held [chromium columns]
+ok    stop-held [chromium columns]
+ok    content-visible [chromium sidebar]
+ok    reply-held [chromium sidebar]
+ok    stop-held [chromium sidebar]
+wrote /tmp/nessa-981-evidence/latest-columns-prod.json
+columns: 7/7 held

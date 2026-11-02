@@ -1,0 +1,16 @@
+{
+  "functionalSource": "50bef867f45f9cb99fa27d798210e8e6a1dfe901",
+  "integratedMain": "f08de87e40f2897df57556ad24adad66a82bf308",
+  "frontendTestSource": "6d6b811a89f2bc5707ee996a3656251797c92e9f",
+  "frontendInputPathsUnchanged": true,
+  "frontendPassed": 5510,
+  "nodePassed": 789,
+  "nodeExistingSkip": 1,
+  "rustCompilationStatus": "passed: exact eight-package build, 38 test binaries; observed CI CARGO_INCREMENTAL=0/jobs1",
+  "priorBareRustAttempts": "compile5errors fixed; concurrent OOM then alone OOM; no runtime pass claimed",
+  "memoryLimitBytes": 17179869184,
+  "oomKillCountAfterAttempts": 5,
+  "incrementalCacheCleanup": "13GiB task-generated target/debug/incremental only; executables/libraries/source/logs retained",
+  "boatAccess": "not attempted; parent-owned prior CONNECT403 remains in force",
+  "rustRuntimeStatus": "pending under task-local normal-init child reaper; all assertions and guard retained"
+}

@@ -1329,3 +1329,287 @@ async fn close_while_a_runner_waits_leaves_it_nothing_to_run_and_both_finish() {
         .expect("close task panicked");
     assert!(outcome.is_ok(), "{outcome:?}");
 }
+
+#[tokio::test]
+async fn report_modes_keep_final_and_suspend_pending_work_semantics() {
+    for suspend in [false, true] {
+        let agent = prepared(
+            Arc::new(InMemoryStorage::new()),
+            Arc::new(SettlementPanickingAudit {
+                panic_once: AtomicBool::new(true),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let invocation = agent.inner.invocation.lock().await;
+        let receipt = agent
+            .enqueue(request("report-pending"), Submitter::owner(actor()))
+            .await
+            .unwrap();
+        let closing = tokio::spawn({
+            let agent = agent.clone();
+            async move {
+                if suspend {
+                    agent.suspend_report(actor()).await
+                } else {
+                    agent.close_report(actor()).await
+                }
+            }
+        });
+        assert_eq!(receipt.wait().await, Err(AgentError::Closed));
+        drop(invocation);
+        let report = closing.await.unwrap().unwrap();
+        assert!(report.cleanup().is_confirmed());
+        assert_eq!(report.scheduling(), &Ok(()));
+        let history = agent.session_manager().snapshot().await.unwrap();
+        assert_eq!(
+            history.invocations[0].scheduling.last().unwrap().cause,
+            if suspend {
+                SchedulingCause::Suspended
+            } else {
+                SchedulingCause::SessionClosed
+            }
+        );
+        assert_eq!(agent.owed_turns().await.len(), usize::from(suspend));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn report_retains_failed_pending_cancellation_separately_from_cleanup() {
+    let (entered, waiting) = oneshot::channel();
+    let audit = Arc::new(FirstSettlementStalls {
+        entered: Mutex::new(Some(entered)),
+        attempts: Mutex::new(Vec::new()),
+        stalls: 1,
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let invocation = agent.inner.invocation.lock().await;
+    let first = agent
+        .enqueue(request("report-first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("report-second"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close_report(actor()).await }
+    });
+    waiting.await.unwrap();
+    drop(invocation);
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
+    let report = closing.await.unwrap().unwrap();
+    assert!(report.cleanup().is_confirmed());
+    assert!(report.scheduling().is_err());
+    let derived = report.clone().with_cleanup(report.cleanup().clone());
+    assert_eq!(derived.scheduling(), report.scheduling());
+    assert!(derived.into_result().is_err());
+    assert!(report.into_result().is_err());
+    assert_eq!(audit.attempts.lock().unwrap().len(), 2);
+    assert!(first.wait().await.is_err());
+    assert_eq!(second.wait().await, Err(AgentError::Closed));
+    let retried = agent.close_report(actor()).await.unwrap();
+    assert!(
+        retried.scheduling().is_ok(),
+        "actual original audit receipt is now acknowledged"
+    );
+    assert_eq!(
+        audit.attempts.lock().unwrap().as_slice(),
+        &[
+            ExecutionId::new("report-first").unwrap(),
+            ExecutionId::new("report-second").unwrap(),
+            ExecutionId::new("report-first").unwrap(),
+        ]
+    );
+    let snapshot = agent.inner.manager.snapshot().await.unwrap();
+    assert!(snapshot.invocations.iter().all(|record| record
+        .cancellation_delivery
+        .as_ref()
+        .unwrap()
+        .acknowledged()));
+    assert!(agent
+        .close_report(actor())
+        .await
+        .unwrap()
+        .scheduling()
+        .is_ok());
+    assert_eq!(
+        audit.attempts.lock().unwrap().len(),
+        3,
+        "acknowledged inputs are not replayed"
+    );
+}
+
+#[tokio::test]
+async fn close_report_bounds_bulk_cancellation_debt_without_releasing_its_facts() {
+    struct FailedCancellations(AtomicUsize);
+    impl ExecutionAudit for FailedCancellations {
+        fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+            Box::pin(async move {
+                if matches!(record, ExecutionAuditRecord::QueueSettled(_)) {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Err(AgentError::AuditFailure)
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+    let count = super::super::error_limits::DiagnosticTreeLimits::DEPTH + 2;
+    let audit = Arc::new(FailedCancellations(AtomicUsize::new(0)));
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let invocation = agent.inner.invocation.lock().await;
+    let mut receipts = Vec::new();
+    for n in 0..count {
+        receipts.push(
+            agent
+                .enqueue(
+                    request(&format!("bounded-cancellation-{n}")),
+                    Submitter::owner(actor()),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close_report(actor()).await }
+    });
+    for receipt in receipts {
+        assert!(
+            matches!(receipt.wait().await, Err(AgentError::MultipleOperationFailures { first_error, subsequent_error }) if *first_error == AgentError::Closed && *subsequent_error == AgentError::AuditFailure)
+        );
+    }
+    drop(invocation);
+    let report = closing.await.unwrap().unwrap();
+    assert!(report.cleanup().is_confirmed());
+    assert_eq!(audit.0.load(Ordering::SeqCst), count);
+    assert!(report
+        .scheduling()
+        .as_ref()
+        .unwrap_err()
+        .validate_retained_size()
+        .is_ok());
+    assert!(report.into_result().is_err());
+}
+
+#[test]
+fn close_report_retry_keeps_each_independent_field_and_new_resources() {
+    use crate::application::agent_execution::providers::{CleanupReport, ResourceCleanup};
+    let first = AgentCloseReport::new(
+        CleanupReport::new(
+            ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain),
+            Err(AgentError::AuditFailure),
+        )
+        .with_operation_failure(Some(AgentError::Transport("original operation".into())))
+        .with_completion_failure(Some(AgentError::Deadline)),
+        Err(AgentError::Storage(StorageError::Busy)),
+    );
+    let retry = AgentCloseReport::new(
+        CleanupReport::new(
+            ResourceCleanup::ReleasePending {
+                physical: CloseOutcome { forced: true },
+                failure: AgentError::Configuration("guard release".into()),
+            },
+            Err(AgentError::Closed),
+        )
+        .with_operation_failure(Some(AgentError::Protocol("later operation".into())))
+        .with_completion_failure(Some(AgentError::Backpressure)),
+        Err(AgentError::InvalidInput("later scheduling".into())),
+    );
+    let joined = first.clone().after_retry(retry.clone());
+    assert_eq!(joined.cleanup().resources(), retry.cleanup().resources());
+    assert_eq!(
+        joined.cleanup().audit(),
+        &Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::Closed)
+        })
+    );
+    assert_eq!(
+        joined.cleanup().completion_failure(),
+        Some(&AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Deadline),
+            subsequent_error: Box::new(AgentError::Backpressure)
+        })
+    );
+    assert_eq!(
+        joined.cleanup().operation_failure(),
+        Some(&AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Transport("original operation".into())),
+            subsequent_error: Box::new(AgentError::Protocol("later operation".into()))
+        })
+    );
+    assert_eq!(
+        joined.scheduling(),
+        &Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Storage(StorageError::Busy)),
+            subsequent_error: Box::new(AgentError::InvalidInput("later scheduling".into()))
+        })
+    );
+    assert!(
+        matches!(first.cleanup().resources(), ResourceCleanup::Unconfirmed(_)),
+        "joining evidence did not mutate the original owner observation"
+    );
+    assert!(joined.into_result().is_err());
+}
+
+#[test]
+fn close_report_retry_keeps_cached_failures_once_and_independent_equal_failures_apart() {
+    use crate::application::agent_execution::providers::CleanupReport;
+    let first = AgentCloseReport::new(
+        CleanupReport::new(
+            crate::application::agent_execution::providers::ResourceCleanup::Confirmed(
+                CloseOutcome { forced: false },
+            ),
+            Err(AgentError::AuditFailure),
+        ),
+        Err(AgentError::AuditFailure),
+    );
+    let joined = first.clone().after_retry(first.clone());
+    assert_eq!(joined, first, "the same cached field is one obligation");
+    assert_eq!(
+        joined.into_result(),
+        Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure)
+        }),
+        "scheduling and cleanup audit are independent even with equal diagnostics"
+    );
+    assert_eq!(
+        AgentError::AuditFailure.with_independent_failure(AgentError::AuditFailure),
+        AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure)
+        }
+    );
+    let bounded = AgentError::Configuration("x".repeat(1024 * 1024 + 16))
+        .with_independent_failure(AgentError::AuditFailure);
+    assert!(bounded.validate_retained_size().is_ok());
+}
+
+#[test]
+fn close_report_decline_and_sdk_evidence_are_independent_and_retry_keeps_both() {
+    use crate::application::agent_execution::providers::CleanupReport;
+    let report = AgentCloseReport::new(
+        CleanupReport::confirmed(CloseOutcome { forced: false }),
+        Ok(()),
+    )
+    .with_decline(Err(AgentError::AuditFailure));
+    assert_eq!(report.scheduling(), &Ok(()));
+    assert_eq!(report.cleanup().audit(), &Ok(()));
+    assert_eq!(report.decline(), &Err(AgentError::AuditFailure));
+    let retry = AgentCloseReport::new(
+        CleanupReport::confirmed(CloseOutcome { forced: false })
+            .with_audit(Err(AgentError::Deadline)),
+        Ok(()),
+    );
+    let joined = report.after_retry(retry);
+    assert_eq!(joined.decline(), &Err(AgentError::AuditFailure));
+    assert_eq!(joined.cleanup().audit(), &Err(AgentError::Deadline));
+    assert!(matches!(
+        joined.into_result(),
+        Err(AgentError::MultipleOperationFailures { .. })
+    ));
+}

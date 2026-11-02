@@ -1,0 +1,303 @@
+{
+  "functionalSource": "027f430cbbe630c0ebfa62fa800eeabfe9f1eaee",
+  "main": "f08de87e40f2897df57556ad24adad66a82bf308",
+  "mainCI": {
+    "run": 40983624431,
+    "passedJobs": 13
+  },
+  "priorPublishedHead": "f09246860dc2c1e8786937fb461af3e065441380",
+  "priorCI": {
+    "run": 40990262102,
+    "passedJobs": 8,
+    "failedJobs": 5,
+    "failures": [
+      "three platform Clippy unused-import failures",
+      "four legacy reply assumptions in Windows conversation partition",
+      "aggregate"
+    ]
+  },
+  "unitIntegration": {
+    "source": "027f430cbbe630c0ebfa62fa800eeabfe9f1eaee",
+    "selection": "eight CI packages,38 binaries,concurrency2",
+    "exit": 1,
+    "binaries": 38,
+    "totals": {
+      "passed": 8493,
+      "failed": 1,
+      "ignored": 41
+    },
+    "results": {
+      "nessa-sdk application": {
+        "passed": 719,
+        "failed": 0,
+        "ignored": 4
+      },
+      "nessa-sdk infrastructure": {
+        "passed": 77,
+        "failed": 0,
+        "ignored": 3
+      },
+      "nessa-sdk domain": {
+        "passed": 274,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server env_serve_binary": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server credential_registry_refusal": {
+        "passed": 13,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server nessa_server": {
+        "passed": 4506,
+        "failed": 1,
+        "ignored": 16
+      },
+      "nessa-sdk nessa_sdk": {
+        "passed": 1586,
+        "failed": 0,
+        "ignored": 16
+      },
+      "nessa-server nessa-backup-verify": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server backup_verifier": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server backup_restore_plan": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server native_enrollment": {
+        "passed": 121,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server nessa": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server mcp_relay": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-server mcp_authorization_benchmark": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 1
+      },
+      "nessa-server nessa-backup-plan": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-device-client nessa_device_client": {
+        "passed": 108,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-vault encrypted_file": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-vault lifecycle": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-vault audit": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-vault nessa_vault": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-client-core nessa_client_core": {
+        "passed": 483,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-protocol phone_wire": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-protocol owner_phone_consent_wire": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-protocol nessa_protocol": {
+        "passed": 198,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth cedar_flow": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth native_transport_failure_order": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth native_transport_key_update": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth origin": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth owner_phone_consent_admission": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth owner_phone_device_proof": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth owner_phone_record": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth pairing_domain": {
+        "passed": 41,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth revocation": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-auth nessa_auth": {
+        "passed": 216,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-local-storage windows_protected_directory": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-local-storage retained_directory": {
+        "passed": 39,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-local-storage windows_replacement": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "nessa-local-storage nessa_local_storage": {
+        "passed": 41,
+        "failed": 0,
+        "ignored": 1
+      }
+    },
+    "soleFailure": "workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol",
+    "environment": "normal ownership; task-local descendant subreaper; standard profiles; CARGO_INCREMENTAL=0;CARGO_BUILD_JOBS=1",
+    "adoptedDescendantsReaped": 23,
+    "buildSeconds": 831.3,
+    "serverRuntimeSeconds": 251.89,
+    "doctests": "run separately after preserved guard stops main runner"
+  },
+  "doctests": {
+    "passed": 74,
+    "failed": 0,
+    "exit": 0
+  },
+  "strictClippy": {
+    "packages": 8,
+    "allTargets": true,
+    "denyWarnings": true,
+    "exit": 0
+  },
+  "sdkRustdoc": {
+    "denyWarnings": true,
+    "exit": 0
+  },
+  "frontend": {
+    "passed": 5510,
+    "failed": 0,
+    "source": "6d6b811a89f2bc5707ee996a3656251797c92e9f",
+    "inputsUnchangedThroughFunctionalSource": true
+  },
+  "helpers": {
+    "passed": 789,
+    "failed": 0,
+    "skipped": 1,
+    "source": "50bef867f45f9cb99fa27d798210e8e6a1dfe901",
+    "inputsUnchangedThroughFunctionalSource": true
+  },
+  "negativeLockOrder": {
+    "temporaryProductionInversion": true,
+    "testExit": 101,
+    "failedInSeconds": 5.12,
+    "assertion": "owned Stop/export/ordinary submission form an admission cycle",
+    "sourceRestoredAndVerified": true,
+    "restoredPositivePassed": true
+  },
+  "browser": {
+    "localEngine": "Chromium 151.0.7922.173 existing executable",
+    "claudeSource": "50bef867f45f9cb99fa27d798210e8e6a1dfe901",
+    "claudeParentStop": "4/4",
+    "claudeFocusedStress": "9/9",
+    "smoke": "17/17",
+    "selectedColumns": "7/7",
+    "codexSource": "027f430cbbe630c0ebfa62fa800eeabfe9f1eaee",
+    "codexParentStop": "4/4",
+    "codexScreenshotCapture": "4/4",
+    "codexFullStress": "cannot run: selected Terra model advertises Ask only",
+    "codexDocumentedAskOnlyFocusedStress": "11/11, including Full refusal and denied Ask permission",
+    "hostedBothPinnedEnginesAndFullBrowserJob": "passed at f09246860; script/frontend inputs and gateway behavior unchanged by later import/unit-fixture corrections"
+  },
+  "documentation": {
+    "renderer": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+    "acceptedPages": 141,
+    "catalogIssues": 0,
+    "changedPageDiagramsRendered": 3,
+    "browserErrors": 0,
+    "checkpointSourcesAndHealthChecked": true,
+    "fitChecked": true,
+    "ownedServerExited": true
+  },
+  "protocol": {
+    "calculated": "91fd4c70b61e3d05",
+    "pin": "b6e4f48aa694ce08",
+    "guardUnchanged": true,
+    "pinUnchanged": true,
+    "boatContacted": false
+  },
+  "newHostedRun": "will start on publication; not passed at this checkpoint",
+  "remaining": [
+    "verified matching shipping worker image and pin",
+    "parent-owned live Boat verification after supported access and existing-account private token-file binding",
+    "custom WebKit geometry remains unrun locally",
+    "native Swift phone qualification remains unrun"
+  ],
+  "mergeReady": false
+}

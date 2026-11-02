@@ -109,7 +109,8 @@ async fn c18_disposal_seals_without_replacing_the_earlier_attachment_cause() {
 }
 
 mod factory_owned_gate {
-    use super::{actor, agent, AgentError, Arc, AtomicUsize, Mutex, Ordering, OwnedLifetime};
+    use super::super::agent_with_backend_for_session;
+    use super::{actor, AgentError, Arc, AtomicUsize, Mutex, Ordering, OwnedLifetime};
     use async_trait::async_trait;
     use nessa_sdk::application::agent_execution::{
         agents::{Agent, AttachmentRequest},
@@ -162,7 +163,7 @@ mod factory_owned_gate {
     #[async_trait]
     impl ChildFactory for Factory {
         async fn prepare(&self, request: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
-            let child = agent().await;
+            let (child, _) = agent_with_backend_for_session(Some(request.session.clone())).await;
             child
                 .install_owned_lifetime(request.owned_lifetime.clone())
                 .unwrap();

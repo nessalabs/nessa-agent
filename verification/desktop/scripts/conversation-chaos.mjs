@@ -103,7 +103,7 @@ const ACTION_MS = 90_000
 /** How long the end may take to settle once nothing new is sent. */
 const SETTLE_MS = 240_000
 /** Turns that only end when stopped. Their successors after a restart quote them. */
-const STOPPED_ONLY = [STRESS.wait, STRESS.cut]
+const STOPPED_ONLY = [STRESS.wait, STRESS.cut, STRESS.parentStop, STRESS.ownedChild]
 const PANIC = /panicked at|thread '.*' panicked/
 
 const log = (line) => process.stderr.write(`${line}\n`)
@@ -727,7 +727,7 @@ async function check(run, { views, quiet }) {
       // thread tool is all its events say (failed, or still pending when the
       // scripted agent gave up on its error before reporting it), and it is
       // counted apart.
-      const threadTool = entry.ask === "watch" || entry.ask === "delegate"
+      const threadTool = ["watch", "delegate", "parentStop"].includes(entry.ask)
       const unread =
         threadTool &&
         !turn &&
