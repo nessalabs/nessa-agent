@@ -176,10 +176,9 @@ reopening a fork with its source intact.
 
 The linked tests were read for their asserted behavior. This documentation review
 does not claim executed tests, native or browser qualification, or visual diagram
-inspection. The `sourceRevision` above is main's prior checkpoint; it will move
-to the merge commit once this page is reviewed against the combined tree.
-Resume/decline atomicity (#1003), shared timers (#762) and metadata admission
-(#934) are in scope now that #981 has merged.
+inspection. Resume admission now re-checks a persisted decline before enqueue.
+The shared monotonic timer lives in `nessa-timer`. Review publication checks the
+metadata admission token after the authority read and before the board check.
 
 ## Further reading
 

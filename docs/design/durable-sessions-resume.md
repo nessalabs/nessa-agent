@@ -1,12 +1,11 @@
 # Durable sessions and resume — implementation plan
 
-Status: #1164 implementation is present in draft PR #1214; qualification is
-ongoing. The three dependent sections remain proposed. Verification is recorded
-separately from the design, and this plan does not claim merge readiness.
-One branch (`codex/durable-sessions-resume`) and one draft PR cover #1164,
-#1003, #762 and #934. The latter three wait for #981 to merge before dependent
-source changes. #1164 is independent. Do not import #981's branch or alter its
-worker, release pin or qualification.
+Status: #981 has merged. This branch implements #1164, #1003, #762 and #934.
+Verification evidence in the tree is the restoration README and one screenshot.
+Full logs stay with CI. The WebKit Show All timeout is #1249 and is not fixed here.
+
+One branch (`codex/durable-sessions-resume`) and one PR cover all four issues.
+#1164 does not import #981's branch or change its worker or release pin.
 
 ## Owners and invariants
 
@@ -104,6 +103,15 @@ the representation is settled.
 
 ## After #981: resumption linearization (#1003)
 
+Implemented. A decline that persists `NotResumed` or its preparation before
+successor admission is the decision: `resume_turn` returns `NotOwed` and does
+not enqueue. Resume yields once after source settlement so a decline already
+waiting on the scheduler can record that decision before admission. Admission
+re-checks the persisted source under the scheduler lock. Holding that lock
+from settlement through admission would hide this race and let resume win it.
+A second ownership graph loses because the scheduler and the saved history
+already decide the turn.
+
 Inspect the merged scheduler and cancellation design again before edits. Keep
 source settlement, owed-turn decision and successor admission under the existing
 decision owner, rather than releasing the scheduler between decision and
@@ -126,6 +134,14 @@ and successor saves. Do not hold an application lock across unrelated provider w
 | R6 | Resume, decline or restore retries after decision | Same decision, bounded retained ownership, no second dispatch. |
 
 ## After #981: shared timer (#762)
+
+Implemented in `nessa-timer`. `within` polls the operation first and polls the
+deadline without the task budget. The server timer module and the SDK runtime
+clock, message-commit waits, and manual test clock use that implementation.
+Putting the port in `nessa-protocol` loses because protocol already depends on
+the SDK. Keeping three copies loses because a deadline fix would have to be
+repeated. Wall-clock credential expiry and the elapsed-only protocol clock stay
+where they are.
 
 Current dependency inspection rules out the issue's original protocol default:
 `nessa-protocol/Cargo.toml` depends on `nessa-sdk`, while the SDK does not depend
@@ -154,6 +170,13 @@ in the CI package selection. Public API moves update callers and Rustdoc togethe
 | T5 | Streaming commit cadence / server redial and approval deadlines | Existing behavior survives the shared implementation with deterministic time. |
 
 ## After #981: metadata admission (#934)
+
+Implemented. Selection keeps the admission token read with the conversation:
+catalogue incarnation, conversation id, and `change_revision`. After the
+authority read, publication checks that token and only then checks the board.
+A second Cedar evaluation loses because policy already ran. An unbounded reread
+loop loses because a stale token costs one bounded pass and then the fresh row
+is selected. A deletion after the frame is admitted can still be delivered.
 
 Proposed stronger contract: selected metadata must coexist with the final
 authority snapshot. Admission is defined at that authority snapshot, conditional
@@ -290,8 +313,17 @@ instances. No real event recipients, production data or new credentials.
    the bounded repository review loop; no GitHub APPROVE or merge.
 
 Durable handoffs distinguish **planned**, **implemented**, **tested**,
-**published** and **waiting**. The draft PR references all four issues; only a
-fully implemented and verified issue may be described as closed. Pending #981
-sections must remain explicit. Board lookup was denied (`Resource not accessible
-by integration`); do not retry without new authorization evidence. This does not
-block source, issue or draft-PR work.
+**published** and **waiting**. Only a fully implemented and verified issue may
+be described as closed.
+
+## Review brief
+
+Review the merged scheduler against #1003: a decline that lands before
+admission must leave no successor, including after restore. Review `nessa-timer`
+against #762: one `within`, one Tokio adapter, one manual timer; wall clocks
+unchanged; the #983 audit deadline test still passes. Review review-notice
+publication against #934: the token is read with the row, checked after
+authority and before the board, and Cedar still runs once. #1164's watermark
+is saved with the native ID; withdrawal during opening still counts; missing
+native history is a typed refusal without replay. Do not treat the WebKit Show
+All timeout (#1249) as a failure of this change.
