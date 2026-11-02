@@ -3,6 +3,8 @@
 #![deny(missing_docs)]
 
 use super::save_batch::RecordRuntime;
+#[cfg(any(test, feature = "test-support"))]
+use super::terminal_discovery::DiscoveryHold;
 use super::{
     record::RecordStorage,
     stream_fact,
@@ -27,10 +29,11 @@ use nessa_sync::replication::{
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc, Arc, Mutex, PoisonError,
     },
     thread,
+    time::Duration,
 };
 use tokio::runtime::Handle;
 
@@ -39,6 +42,12 @@ const SOURCE_QUEUE_CAPACITY: usize = 64;
 const COMMITTED_VIEW_CACHE_ENTRIES: usize = 64;
 const COMMITTED_VIEW_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const COMMITTED_READ_FRAMES: usize = 256;
+/// Backstop for an unbounded head or page whose stream stays checked out.
+/// The wait runs on its own thread, not the runtime's blocking pool: owner
+/// commands such as pairing cancel need that pool, and a one-thread pool
+/// deadlocks if this wait takes it. Past this bound the scan answers
+/// unavailable instead of leaving the thread parked.
+const UNBOUNDED_DISCOVERY_WAIT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -471,6 +480,7 @@ impl NessaRecordSource {
     ///     // Outside Tokio: final drop joins the source worker.
     ///     match source.bounded_head(&scope).map_err(|error| std::io::Error::other(format!("{error:?}")))? {
     ///         RecordReadStatus::Preparing => { /* reauthorize before retrying */ }
+    ///         RecordReadStatus::Occupied => { /* wait for the cache owner, then retry; this was not a step */ }
     ///         RecordReadStatus::Ready(head) => { /* begin a fixed pass at head */ }
     ///     }
     /// }
@@ -702,6 +712,12 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => break terminal,
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
+                // This stream's entry is checked out. Yield the polling thread;
+                // a blocking wait here freezes a runtime whose scheduler core
+                // this scan is driving, and the owner never gets to return.
+                RecordReadStatus::Occupied => {
+                    self.wait_until_this_stream_can_be_checked_out().await?
+                }
             }
         };
         Ok(self.head)
@@ -807,6 +823,7 @@ impl ReaderState {
             .await?
         {
             RecordReadStatus::Preparing => return Ok(RecordReadStatus::Preparing),
+            RecordReadStatus::Occupied => return Ok(RecordReadStatus::Occupied),
             RecordReadStatus::Ready(terminal) if terminal != request.target => {
                 return Err(SourceError::InvalidRequest);
             }
@@ -828,8 +845,49 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => return Ok(terminal == target),
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
+                RecordReadStatus::Occupied => {
+                    self.wait_until_this_stream_can_be_checked_out().await?
+                }
             }
         }
+    }
+
+    /// Wait for this stream's discovery entry off both the scheduler and the
+    /// runtime's blocking pool.
+    ///
+    /// The product read waits on its own worker and stops at its work budget.
+    /// An unbounded head or page is polled by `Handle::block_on`. A condvar on
+    /// that thread holds the scheduler core when the thread has taken it, so
+    /// the owner cannot return the entry. `spawn_blocking` is the pool owner
+    /// commands use (`pairing.cancel` among them); a pool of one thread
+    /// deadlocks if this wait sits on it. This thread is neither of those.
+    async fn wait_until_this_stream_can_be_checked_out(&self) -> Result<(), SourceError> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let cache = Arc::clone(&self.terminal_cache);
+        let stream = self.stream.clone();
+        let stopped = Arc::clone(&stop);
+        let (done, arrived) = tokio::sync::oneshot::channel();
+        thread::Builder::new()
+            .name("nessa-discovery-wait".into())
+            .spawn(move || {
+                cache.wait_for_release(&stream, &|| stopped.load(Ordering::SeqCst));
+                let _ = done.send(());
+            })
+            .map_err(|_| SourceError::Unavailable)?;
+        tokio::pin!(arrived);
+        tokio::select! {
+            biased;
+            finished = &mut arrived => {
+                finished.map_err(|_| SourceError::Unavailable)?;
+            }
+            () = tokio::time::sleep(UNBOUNDED_DISCOVERY_WAIT) => {
+                stop.store(true, Ordering::SeqCst);
+                self.terminal_cache.wake_waiters();
+                let _ = arrived.await;
+                return Err(SourceError::Unavailable);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1087,6 +1145,57 @@ impl RecordStorage {
             handle,
             self.terminal_cache.clone(),
         )?))
+    }
+
+    /// Block until `identity`'s discovery entry can be checked out, or `stopped`.
+    ///
+    /// An admitted product read calls this when [`RecordReadStatus::Occupied`]
+    /// says another owner holds that stream's entry. The wait is not a
+    /// discovery step and does not validate. It returns immediately when the
+    /// entry can already be checked out. Another stream's checkout does not
+    /// hold it. `stopped` is the read's own budget flag; the budget task
+    /// also calls [`Self::wake_discovery_waiters`] so this returns when the
+    /// budget elapses while this stream's owner is still working.
+    pub fn wait_for_discovery_release(
+        &self,
+        identity: &RecordStreamIdentity,
+        stopped: &dyn Fn() -> bool,
+    ) {
+        self.terminal_cache
+            .wait_for_release(&identity.stream, stopped);
+    }
+
+    /// Wake reads blocked in [`Self::wait_for_discovery_release`].
+    pub fn wake_discovery_waiters(&self) {
+        self.terminal_cache.wake_waiters();
+    }
+
+    /// Check out this session's discovery entry and hold it until dropped.
+    ///
+    /// Compiled with the `test-support` feature, and with this crate's own
+    /// tests. A product read of the same stream then answers
+    /// [`RecordReadStatus::Occupied`] and waits instead of spending discovery
+    /// steps. `None` means the session has no stream, or the entry is already
+    /// checked out.
+    ///
+    /// # Errors
+    /// A storage error when the runtime or the stream lookup fails.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn hold_discovery_for_test(
+        &self,
+        id: &SessionId,
+    ) -> Result<Option<DiscoveryHold>, StorageError> {
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let Some(stream) = runtime
+            .find_stream(&stream_id)
+            .await
+            .map_err(super::record::store_error)?
+        else {
+            return Ok(None);
+        };
+        Ok(self.terminal_cache.hold(&stream))
     }
 }
 

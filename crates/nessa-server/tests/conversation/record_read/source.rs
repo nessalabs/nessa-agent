@@ -742,3 +742,164 @@ async fn shutdown_stops_a_multi_step_read_at_the_next_step() {
     assert_eq!(boundaries.load(Ordering::SeqCst), 1);
     storage.shutdown().await.unwrap();
 }
+
+/// An owner already holds the discovery entry. The read must wait for that
+/// owner and then answer the head. Spending the step budget on the occupied
+/// answers ends the read `source_preparing` while the owner is still held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_occupied_discovery_cache_does_not_spend_the_read_steps() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session = SessionId::new(conversation_id.to_string()).unwrap();
+    let tail = small_saves(&root, &session, 1).await;
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    let hold = storage
+        .hold_discovery_for_test(&session)
+        .await
+        .unwrap()
+        .expect("the stream's discovery entry");
+    let mut source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+    );
+    source.work_budget = Duration::from_secs(5);
+    let read = source.read(
+        admitted_reader(conversation_id),
+        RecordReadOperation::Head,
+        RecordReadLease::new(()),
+    );
+    tokio::pin!(read);
+    tokio::select! {
+        biased;
+        result = &mut read => {
+            drop(result);
+            panic!("the read ended while the cache was held");
+        },
+        () = tokio::time::sleep(Duration::from_millis(200)) => {}
+    }
+    drop(hold);
+    let response = tokio::time::timeout(Duration::from_secs(10), read)
+        .await
+        .expect("the read finished after the owner returned")
+        .expect("head");
+    let RecordReadValue::Head(head) = response.value else {
+        panic!("head expected");
+    };
+    assert_eq!(head.head, tail);
+    source.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+}
+
+/// Stream A's read returns when A's entry is back. Stream B staying checked
+/// out must not keep A waiting through its budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_proceeds_when_its_stream_returns_while_another_stays_checked_out() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let conversation_a = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let conversation_b = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session_a = SessionId::new(conversation_a.to_string()).unwrap();
+    let session_b = SessionId::new(conversation_b.to_string()).unwrap();
+    let tail = small_saves(&root, &session_a, 1).await;
+    small_saves(&root, &session_b, 1).await;
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    let hold_a = storage
+        .hold_discovery_for_test(&session_a)
+        .await
+        .unwrap()
+        .expect("stream A's discovery entry");
+    let hold_b = storage
+        .hold_discovery_for_test(&session_b)
+        .await
+        .unwrap()
+        .expect("stream B's discovery entry");
+    let mut source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+    );
+    source.work_budget = Duration::from_secs(5);
+    let source = Arc::new(source);
+    let reading = {
+        let source = source.clone();
+        tokio::spawn(async move {
+            source
+                .read(
+                    admitted_reader(conversation_a),
+                    RecordReadOperation::Head,
+                    RecordReadLease::new(()),
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !reading.is_finished(),
+        "the read finished while its own entry was still checked out"
+    );
+    drop(hold_a);
+    let response = tokio::time::timeout(Duration::from_secs(5), reading)
+        .await
+        .expect("the read returned while the other stream stayed checked out")
+        .expect("the read task joined")
+        .expect("head");
+    let RecordReadValue::Head(head) = response.value else {
+        panic!("head expected");
+    };
+    assert_eq!(head.head, tail);
+    let still_held = storage.hold_discovery_for_test(&session_b).await.unwrap();
+    assert!(still_held.is_none(), "stream B's entry was released too");
+    drop(hold_b);
+    source.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+}
+
+/// The discovery budget starts when discovery does. Waiting for the read's
+/// thread, past the budget, still leaves the whole budget for the calls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn time_waiting_for_a_read_worker_is_not_the_discovery_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session = SessionId::new(conversation_id.to_string()).unwrap();
+    let tail = small_saves(&root, &session, 40).await;
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    let (mut source, gate) = NessaRecordReadSource::held_for_host_shutdown(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+        false,
+    );
+    source.work_budget = Duration::from_millis(200);
+    let source = Arc::new(source);
+    let reading = {
+        let source = source.clone();
+        tokio::spawn(async move {
+            source
+                .read(
+                    admitted_reader(conversation_id),
+                    RecordReadOperation::Head,
+                    RecordReadLease::new(()),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), gate.entered())
+        .await
+        .expect("the worker reached identity lookup");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    gate.release();
+    let response = tokio::time::timeout(Duration::from_secs(10), reading)
+        .await
+        .expect("the read finished after it was released")
+        .expect("the read task joined")
+        .expect("head");
+    let RecordReadValue::Head(head) = response.value else {
+        panic!("head expected");
+    };
+    assert_eq!(head.head, tail);
+    source.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+}
