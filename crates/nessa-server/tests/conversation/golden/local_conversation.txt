@@ -67,6 +67,7 @@ invocations: [
                 observed_at_ms: Some(
                     1792000000000,
                 ),
+                session_arrival: false,
             },
             ExecutionEvent {
                 execution_id: ExecutionId(
@@ -79,6 +80,7 @@ invocations: [
                 observed_at_ms: Some(
                     1792000000000,
                 ),
+                session_arrival: false,
             },
         ],
         scheduling: [
