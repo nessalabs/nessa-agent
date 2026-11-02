@@ -2990,13 +2990,15 @@ const steps = {
         await run.page.mouse.move(1, 1)
         if (!(await shows(false)))
           failures.push("the actions still show once the pointer leaves")
-        // Both actions are in the control tab order: the engine's backward
-        // chord reaches Choose repositories, and its forward chord returns.
+        // Both actions are native tab stops. WebKit on macOS walks plain Tab
+        // through fields only; Option+Tab (Alt+Tab here) walks every control.
+        // The backward chord reaches Choose repositories, and the forward
+        // chord returns. Focus in the row is what shows the actions.
         const disconnect = row.getByRole("button", { name: names.githubDisconnect })
         const focused = (locator) =>
           locator.evaluate((node) => node === document.activeElement)
         await disconnect.focus()
-        await run.page.keyboard.press(`Shift+${keys.nextControl[run.engine]}`)
+        await run.page.keyboard.press(keys.previousControl[run.engine])
         if (!(await focused(row.locator("[data-github-repositories]"))))
           failures.push(
             "backward control navigation from Disconnect did not reach Choose repositories",
@@ -5737,8 +5739,10 @@ const steps = {
           `${name}'s input ${tool.input} is not ${JSON.stringify(call.arguments)}`,
         )
     }
-    // The pause after each call shows in the times, which are the session's
-    // own clock: the next call starts no sooner.
+    // The pause runs after the previous call's end is queued and before the
+    // next call is queued. Both times are that queue time on the process
+    // timeline, so a late read cannot shrink the gap. The next call starts
+    // no sooner than the pause.
     for (let index = 1; index < tools.length; index += 1) {
       const gap = tools[index].startedAtMs - tools[index - 1].endedAtMs
       if (gap < TRACE_PAUSE_MS - 100)

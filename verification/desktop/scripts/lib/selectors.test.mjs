@@ -8,6 +8,27 @@ it("can pass the complete CSS selector table to a browser evaluation", () => {
   assert.ok(Object.values(css).every((value) => typeof value === "string"))
 })
 
+it("walks controls with the engine's platform chord", () => {
+  assert.equal(keys.nextControl.chromium, "Tab")
+  assert.equal(keys.previousControl.chromium, "Shift+Tab")
+  assert.equal(keys.nextControl.webkit, "Alt+Tab")
+  assert.equal(keys.previousControl.webkit, "Alt+Shift+Tab")
+  assert.deepEqual(chordDown(keys.previousControl.webkit), {
+    code: "Tab",
+    altKey: true,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: true,
+  })
+  assert.deepEqual(chordDown(keys.nextControl.webkit), {
+    code: "Tab",
+    altKey: true,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+  })
+})
+
 it("reads the split-beside chord from the Playwright string", () => {
   assert.deepEqual(chordDown(keys.newSessionBeside), {
     code: "KeyN",
