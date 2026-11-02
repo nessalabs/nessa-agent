@@ -56,10 +56,17 @@ receiver/origin and private fixture paths; no credential is printed or passed as
 a command argument. It is not a substitute for running ordinary Rust tests.
 
 Compile the worker probe by replacing `check-paired.swift` with `check-worker.swift`
-and adding the production worker source. Run the resulting executable with the same
-dylib directory. Strict checks use `-swift-version 6 -strict-concurrency=complete
--warnings-as-errors`. The Apple package build is `scripts/build-native-device.sh`;
-that tool creates a fresh local package and does not claim simulator execution.
+and adding every file in `crates/nessa-device-client/swift/`. Run the resulting
+executable with the same dylib directory. Strict checks use `-swift-version 6
+-strict-concurrency=complete -warnings-as-errors`. The Apple package build is
+`scripts/build-native-device.sh`; that tool copies those Swift files into the
+package and does not claim simulator execution.
+
+`check-submit-lane.swift` is the product submit lane without a native library.
+It compiles `NativeWorkerError.swift` and `ProductSubmitLane.swift` only. A held
+hand-off, eight waiters, a cancel in the middle, and shutdown are the cases in
+[ADR 1138](../../docs/adr/done/1138-queue-product-submissions.md). The queue under
+test is concurrent, so a second start cannot hide behind a serial queue.
 
 `check-simulator.swift` is a disposable SwiftUI app linked with the generated
 declarations, worker and release iOS library. Its simulator run reports private

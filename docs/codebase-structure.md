@@ -2640,8 +2640,11 @@ actual private scope locks through physical calls and captures until drain.
 Its original prepare/restore/recovery calls use that same parent admission;
 close capture preserves native-confirmed physical release independently of a
 historical failure. `swift/NativeProductWorker.swift` dispatches the actual product
-child with separately admitted Ready, event and submission lanes. Native tickets
-settle on an independent wait lane; their captures retain native count/byte
+child. Ready and events each admit one waiter and refuse a second as busy.
+`swift/ProductSubmitLane.swift` runs one submission hand-off at a time and keeps
+later submissions waiting in arrival order until that hand-off returns; it does
+not refuse them and it does not wait for the reply. Native tickets
+settle on an independent concurrent wait lane; their captures retain native count/byte
 permits, original UInt64 identity and typed settlement. Synchronous close wakes
 native I/O before physical drain joins those captures. Neither wrapper allocates
 transport IDs, implements request deadlines or copies private device keys.
