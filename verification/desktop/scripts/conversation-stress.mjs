@@ -7154,12 +7154,6 @@ async function readBackToStart(run, phrase, step, failures) {
   const top = () =>
     scroller.evaluate((element) => {
       element.scrollTop = 0
-      // The transcript follows its end on resize while it still believes the
-      // reader is there. Assigning scrollTop leaves that belief in place until
-      // the scroll listener runs, and a resize of the long answer can put the
-      // reader back at the end before that listener runs. Dispatching the
-      // event the listener already uses records the reader at the top first.
-      element.dispatchEvent(new Event("scroll"))
       const first = element.querySelector(".workspace-message")
       first?.setAttribute("data-stress-anchor", "")
       return first?.getBoundingClientRect().bottom ?? null
