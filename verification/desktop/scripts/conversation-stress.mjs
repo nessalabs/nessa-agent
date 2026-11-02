@@ -3034,7 +3034,7 @@ const steps = {
         const old = run.client
         run.restarts += 1
         const drifted = mkdtempSync(join(tmpdir(), "nessa-stress-drift-"))
-        const path = `/opt/homebrew/bin:${process.env.PATH ?? ""}`
+        const path = `/opt/homebrew/bin:${run.stack.gatewayPath}`
         try {
           await run.stack.gateway.restart("SIGTERM", {
             overlay: {
@@ -8907,7 +8907,7 @@ async function startStack(options) {
       : {}),
     // The `tunnel` step's cloudflared (debug builds only).
     NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
-    ...(fakeSsh ? { PATH: `${fakeSsh.bin}:${process.env.PATH}` } : {}),
+    ...(fakeSsh ? { PATH: `${fakeSsh.bin}:${process.env.PATH ?? ""}` } : {}),
   }
   let stack
   try {
@@ -8943,6 +8943,10 @@ async function startStack(options) {
     const { agents } = await stack.client.agents.list()
     stack.profile = selectStressFixture(profile, agents)
     stack.fakeSsh = fakeSsh
+    // The PATH the gateway was started with: a step that changes it adds to
+    // this one, so what another step put there (the `ssh` step's stand-in)
+    // stays for the launches after it.
+    stack.gatewayPath = environment.PATH ?? process.env.PATH ?? ""
   } catch (error) {
     await stack?.close()
     await github?.close()
