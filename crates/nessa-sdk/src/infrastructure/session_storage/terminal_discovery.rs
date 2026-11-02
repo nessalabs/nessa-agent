@@ -3,6 +3,8 @@
 //! Cached entries contain immutable-prefix evidence and framing hash metadata,
 //! never a worker or semantic body. An operation removes its state from the
 //! cache before I/O; its drop guard returns progress on completion or unwind.
+//! A checkout that finds the entry already taken returns
+//! [`RecordReadStatus::Occupied`] and does no validation.
 #![deny(missing_docs)]
 
 use super::save_batch::RecordRuntime;
@@ -17,7 +19,7 @@ use nessa_sync::replication::application::SourceError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
 };
 
 const CACHE_ENTRIES: usize = 16;
@@ -33,11 +35,15 @@ const STEP: PageLimits = PageLimits {
 pub enum RecordReadStatus<T> {
     /// The requested operation completed using validated terminal evidence.
     Ready(T),
-    /// More bounded validation work is needed, or this stream has another
-    /// validation owner. Call again with the same scope for the next step; a
-    /// host may make several calls within one authorized read and
-    /// reauthorizes before a later one.
+    /// This call validated one step and the tail is not ready. Call again
+    /// with the same scope for the next step; a host may make several calls
+    /// within one authorized read and reauthorizes before a later one.
     Preparing,
+    /// Another owner holds this stream's cache entry, or every cache entry
+    /// is checked out. This call did no validation. It is not a discovery
+    /// step: the caller waits until an owner returns an entry or its own
+    /// work budget elapses, then calls again.
+    Occupied,
 }
 
 #[derive(Default)]
@@ -47,6 +53,10 @@ pub(super) struct TerminalCache {
     #[cfg(test)]
     returned_bytes: AtomicUsize,
     entries: Mutex<VecDeque<Entry>>,
+    /// Wakes a read waiting on [`Self::wait_for_release`]. Notified while
+    /// `entries` is held, after an owner returns its entry or a budget
+    /// elapses.
+    released: Condvar,
 }
 struct Entry {
     key: StreamKey,
@@ -208,9 +218,39 @@ impl Drop for Owner {
         // Transfer the original allocation instead of cloning both retained scans.
         entry.state = self.state.take();
         entries.push_back(entry);
+        // Notify while the entry lock is held so a waiter that rechecks
+        // cannot miss the returned state.
+        self.cache.released.notify_all();
     }
 }
 impl TerminalCache {
+    /// Block until some checked-out entry is returned, or `stopped` is set.
+    /// A cache with nothing checked out returns at once. The caller then
+    /// tries [`Self::discover`] again; this wait is not a validation step.
+    pub(super) fn wait_for_release(&self, stopped: &dyn Fn() -> bool) {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        while entries.iter().any(|entry| entry.state.is_none()) && !stopped() {
+            entries = self
+                .released
+                .wait(entries)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+    }
+
+    /// Wake every [`Self::wait_for_release`] waiter. The read's budget task
+    /// calls this when the budget elapses so a waiter observes `stopped`
+    /// without waiting for an owner that is still working.
+    pub(super) fn wake_waiters(&self) {
+        let _entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        self.released.notify_all();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn hold(self: &Arc<Self>, key: &StreamKey) -> Option<DiscoveryHold> {
+        self.acquire(key)
+            .map(|owner| DiscoveryHold { _owner: owner })
+    }
+
     fn acquire(self: &Arc<Self>, key: &StreamKey) -> Option<Owner> {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let state = if let Some(index) = entries.iter().position(|e| &e.key == key) {
@@ -245,7 +285,7 @@ impl TerminalCache {
         query: DiscoveryQuery,
     ) -> Result<RecordReadStatus<u64>, SourceError> {
         let Some(mut owner) = self.acquire(key) else {
-            return Ok(RecordReadStatus::Preparing);
+            return Ok(RecordReadStatus::Occupied);
         };
         let state = owner.state.as_mut().expect("acquired discovery progress");
         // Only this exclusive owner observes physical bounds against retained
@@ -353,6 +393,13 @@ impl TerminalCache {
             Ok(RecordReadStatus::Preparing)
         }
     }
+}
+
+/// One checked-out discovery entry. Dropping it returns the entry to the cache
+/// and wakes a read waiting on that checkout.
+#[cfg(any(test, feature = "test-support"))]
+pub struct DiscoveryHold {
+    _owner: Owner,
 }
 
 #[cfg(test)]

@@ -282,6 +282,7 @@ async fn discovery_finishes_captured_tail_under_new_writes_then_discovers_later_
     loop {
         match head(&storage, &id).await {
             RecordReadStatus::Preparing => {}
+            RecordReadStatus::Occupied => panic!("nothing else holds the discovery cache"),
             RecordReadStatus::Ready(value) => {
                 assert_eq!(value, first);
                 break;
@@ -317,6 +318,7 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
     loop {
         match head(&storage, &id).await {
             RecordReadStatus::Preparing => {}
+            RecordReadStatus::Occupied => panic!("nothing else holds the discovery cache"),
             RecordReadStatus::Ready(value) => {
                 assert_eq!(value, 0);
                 break;
@@ -351,6 +353,7 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
     loop {
         match head(&storage, &id).await {
             RecordReadStatus::Preparing => {}
+            RecordReadStatus::Occupied => panic!("nothing else holds the discovery cache"),
             RecordReadStatus::Ready(value) => {
                 assert_eq!(value, 0, "a Unit seal is not a save completion");
                 break;
@@ -498,7 +501,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
         .unwrap();
     append_save(&storage, &stream, 0, 8).await;
     let owner = storage.terminal_cache.acquire(&stream).unwrap();
-    assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Occupied);
     let mut occupied = vec![owner];
     for index in 1..CACHE_ENTRIES {
         occupied.push(
@@ -517,7 +520,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
         .await
         .unwrap();
     append_save(&storage, &second, 0, 8).await;
-    assert_eq!(head(&storage, &another).await, RecordReadStatus::Preparing);
+    assert_eq!(head(&storage, &another).await, RecordReadStatus::Occupied);
     assert_eq!(
         storage
             .terminal_cache

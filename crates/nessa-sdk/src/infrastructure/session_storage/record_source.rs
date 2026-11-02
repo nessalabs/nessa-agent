@@ -3,6 +3,8 @@
 #![deny(missing_docs)]
 
 use super::save_batch::RecordRuntime;
+#[cfg(any(test, feature = "test-support"))]
+use super::terminal_discovery::DiscoveryHold;
 use super::{
     record::RecordStorage,
     stream_fact,
@@ -471,6 +473,7 @@ impl NessaRecordSource {
     ///     // Outside Tokio: final drop joins the source worker.
     ///     match source.bounded_head(&scope).map_err(|error| std::io::Error::other(format!("{error:?}")))? {
     ///         RecordReadStatus::Preparing => { /* reauthorize before retrying */ }
+    ///         RecordReadStatus::Occupied => { /* wait for the cache owner, then retry; this was not a step */ }
     ///         RecordReadStatus::Ready(head) => { /* begin a fixed pass at head */ }
     ///     }
     /// }
@@ -702,6 +705,9 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => break terminal,
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
+                // Another source holds the entry. Waiting here is the unbounded
+                // head scan; the product read counts this wait outside its steps.
+                RecordReadStatus::Occupied => self.terminal_cache.wait_for_release(&|| false),
             }
         };
         Ok(self.head)
@@ -807,6 +813,7 @@ impl ReaderState {
             .await?
         {
             RecordReadStatus::Preparing => return Ok(RecordReadStatus::Preparing),
+            RecordReadStatus::Occupied => return Ok(RecordReadStatus::Occupied),
             RecordReadStatus::Ready(terminal) if terminal != request.target => {
                 return Err(SourceError::InvalidRequest);
             }
@@ -828,6 +835,7 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => return Ok(terminal == target),
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
+                RecordReadStatus::Occupied => self.terminal_cache.wait_for_release(&|| false),
             }
         }
     }
@@ -1087,6 +1095,51 @@ impl RecordStorage {
             handle,
             self.terminal_cache.clone(),
         )?))
+    }
+
+    /// Block until a checked-out discovery entry is returned, or `stopped`.
+    ///
+    /// An admitted product read calls this when [`RecordReadStatus::Occupied`]
+    /// says another owner holds the shared cache. The wait is not a discovery
+    /// step and does not validate. A cache with nothing checked out returns
+    /// immediately. `stopped` is the read's own budget flag; the budget task
+    /// also calls [`Self::wake_discovery_waiters`] so this returns when the
+    /// budget elapses while an owner is still working.
+    pub fn wait_for_discovery_release(&self, stopped: &dyn Fn() -> bool) {
+        self.terminal_cache.wait_for_release(stopped);
+    }
+
+    /// Wake reads blocked in [`Self::wait_for_discovery_release`].
+    pub fn wake_discovery_waiters(&self) {
+        self.terminal_cache.wake_waiters();
+    }
+
+    /// Check out this session's discovery entry and hold it until dropped.
+    ///
+    /// Compiled with the `test-support` feature, and with this crate's own
+    /// tests. A product read of the same stream then answers
+    /// [`RecordReadStatus::Occupied`] and waits instead of spending discovery
+    /// steps. `None` means the session has no stream, or the entry is already
+    /// checked out.
+    ///
+    /// # Errors
+    /// A storage error when the runtime or the stream lookup fails.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn hold_discovery_for_test(
+        &self,
+        id: &SessionId,
+    ) -> Result<Option<DiscoveryHold>, StorageError> {
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let Some(stream) = runtime
+            .find_stream(&stream_id)
+            .await
+            .map_err(super::record::store_error)?
+        else {
+            return Ok(None);
+        };
+        Ok(self.terminal_cache.hold(&stream))
     }
 }
 
