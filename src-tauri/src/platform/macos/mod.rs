@@ -3,6 +3,7 @@
 
 mod claude_sign_in;
 mod live_resize;
+mod minted;
 mod overlay;
 mod provider_login;
 mod traffic_lights;

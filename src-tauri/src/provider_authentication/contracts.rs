@@ -13,7 +13,9 @@ pub enum LoginFailure {
     UntrustedCaller,
     Unavailable,
     LaunchFailed,
-    /// The sign-in ended, was abandoned or timed out without a token.
+    /// The sign-in ended, was abandoned or timed out without a token. Only
+    /// macOS mints a sign-in, so only it can say so.
+    #[cfg(target_os = "macos")]
     NotCompleted,
 }
 

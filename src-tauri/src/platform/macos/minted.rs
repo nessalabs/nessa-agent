@@ -7,7 +7,7 @@
 const PREFIX: &str = "sk-ant-oat";
 
 /// The last token shown in `screen`, if one is.
-pub(crate) fn token_in(screen: &[u8]) -> Option<String> {
+pub(super) fn token_in(screen: &[u8]) -> Option<String> {
     let text = plain(screen);
     let start = text.rfind(PREFIX)?;
     let token: String = text[start..]
@@ -55,5 +55,5 @@ fn plain(screen: &[u8]) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/provider_authentication/minted.rs"]
+#[path = "../../../tests/platform/macos/minted.rs"]
 mod tests;

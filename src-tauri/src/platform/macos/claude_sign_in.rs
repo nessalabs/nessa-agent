@@ -12,7 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::provider_authentication::{minted::token_in, LoginFailure};
+use super::minted::token_in;
+use crate::provider_authentication::LoginFailure;
 
 /// Columns the token's line is drawn in: wider than any token.
 const COLUMNS: u16 = 400;
