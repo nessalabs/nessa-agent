@@ -206,6 +206,8 @@ pub use review_notice_audit::{
 mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
+mod settings_audit;
+pub use settings_audit::{SettingsAudit, SettingsAuditRecord, SettingsChange, SettingsOutcome};
 mod session_key;
 mod source_permits;
 pub use source_permits::{SourcePermit, SourcePermits};

@@ -945,6 +945,9 @@ struct Inner {
     clock: Arc<dyn Clock>,
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
+    /// Records each change made from Settings before it is reported.
+    /// Unbound refuses those changes.
+    settings_audit: OnceLock<Arc<dyn super::SettingsAudit>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
@@ -1499,6 +1502,7 @@ impl ConversationService {
                 environment,
                 clock,
                 agent_tool_audit: OnceLock::new(),
+                settings_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(SourcePermits::new(
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),

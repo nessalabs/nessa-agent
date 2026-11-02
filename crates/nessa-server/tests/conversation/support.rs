@@ -2813,3 +2813,38 @@ pub(crate) fn unrooted(text: &str) -> &str {
 #[cfg(unix)]
 #[path = "channel_lookup_fixture.rs"]
 pub(crate) mod channel_lookup;
+
+/// Keeps every settings record; refuses each one once `failing` is set.
+#[derive(Default)]
+pub(crate) struct RecordingSettingsAudit {
+    pub(crate) records: Mutex<Vec<crate::conversation::application::SettingsAuditRecord>>,
+    pub(crate) failing: AtomicBool,
+}
+impl RecordingSettingsAudit {
+    pub(crate) fn outcomes(&self) -> Vec<crate::conversation::application::SettingsOutcome> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|record| record.outcome.clone())
+            .collect()
+    }
+}
+impl crate::conversation::application::SettingsAudit for RecordingSettingsAudit {
+    fn record(
+        &self,
+        record: crate::conversation::application::SettingsAuditRecord,
+    ) -> ConversationFuture<'_, ()> {
+        let failing = self.failing.load(std::sync::atomic::Ordering::SeqCst);
+        if !failing {
+            self.records.lock().unwrap().push(record);
+        }
+        Box::pin(async move {
+            if failing {
+                Err(crate::conversation::application::ConversationError::Audit)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}

@@ -22,7 +22,8 @@
 use super::{ConversationCaller, ConversationError, ConversationService};
 use crate::conversation::application::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    ConversationFuture, RequestShape,
+    ConversationFuture, RequestShape, SettingsAudit, SettingsAuditRecord, SettingsChange,
+    SettingsOutcome,
 };
 use crate::conversation::domain::{
     Channel, ChannelExecution, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest,
@@ -195,6 +196,24 @@ impl ConversationService {
     pub fn bind_channels(&self, store: Arc<dyn ChannelStore>, folders: Arc<dyn ChannelFolders>) {
         let _ = self.inner.channels.store.set(store);
         let _ = self.inner.channels.folders.set(folders);
+    }
+
+    /// Where changes made from Settings are recorded before they are reported.
+    pub fn bind_settings_audit(&self, audit: Arc<dyn SettingsAudit>) {
+        let _ = self.inner.settings_audit.set(audit);
+    }
+
+    /// Commit `record`; unbound, nothing is recorded and the change is refused.
+    pub(super) async fn record_setting(
+        &self,
+        record: SettingsAuditRecord,
+    ) -> Result<(), ConversationError> {
+        let audit = self
+            .inner
+            .settings_audit
+            .get()
+            .ok_or(ConversationError::Audit)?;
+        audit.record(record).await
     }
 
     fn channel_store(&self) -> Option<&Arc<dyn ChannelStore>> {
@@ -454,6 +473,7 @@ impl ConversationService {
         // would leave it begun where the channel no longer says, so the move
         // holds that lock. The main chat is read again under it: erased
         // meanwhile, a fresh one was named, and that one's lock is taken.
+        let operation = uuid::Uuid::new_v4().to_string();
         let changed = loop {
             let found = match self
                 .channel_for_action(caller, id, AccessAction::ChannelSettings)
@@ -473,10 +493,44 @@ impl ConversationService {
             if current.coordinator_id() != coordinator {
                 continue;
             }
-            break store
-                .set_execution(id, execution)
-                .await?
-                .ok_or(ChannelError::Forbidden)?;
+            if current.execution() == execution {
+                return Ok(current);
+            }
+            // The move is on record, with what it moves from, before it is made.
+            let record = |outcome| SettingsAuditRecord {
+                operation_id: operation.clone(),
+                caller: caller.clone(),
+                change: SettingsChange::ChannelPlacement {
+                    channel: id.clone(),
+                    before: current.execution(),
+                    after: execution,
+                    coordinator: coordinator.clone(),
+                },
+                outcome,
+            };
+            self.record_setting(record(SettingsOutcome::Requested))
+                .await
+                .map_err(|_| ChannelError::Unavailable)?;
+            let moved = match store.set_execution(id, execution).await {
+                Ok(Some(moved)) => moved,
+                failed => {
+                    if self
+                        .record_setting(record(SettingsOutcome::Failed))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!(channel_id = %id, "a failed channel move was not recorded");
+                    }
+                    return Err(failed.map_or_else(ChannelError::from, |_| ChannelError::Forbidden));
+                }
+            };
+            self.record_setting(record(SettingsOutcome::Applied {
+                changed: true,
+                coordinator: Some(moved.coordinator_id()),
+            }))
+            .await
+            .map_err(|_| ChannelError::Unavailable)?;
+            break moved;
         };
         tracing::info!(
             channel_id = %changed.id(),

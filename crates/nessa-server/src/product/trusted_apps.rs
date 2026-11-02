@@ -13,11 +13,16 @@
 //! it; a paired device's session holds no `credential.manage` grant.
 use super::socket::{failure, success};
 use super::state::ProductRouteState;
+use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{AppsTrustedResult, AppsUntrustParams, AppsUntrustResult};
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde_json::json;
 
-pub(super) fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> OutgoingMessage {
+pub(super) async fn dispatch(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
     let Some(service) = state.conversations.as_ref() else {
         return failure(&frame.id, "conversations_not_configured");
     };
@@ -34,22 +39,16 @@ pub(super) fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> Outgoi
             let Some(params) = untrust_request(frame.params) else {
                 return failure(&frame.id, "invalid_request");
             };
-            match service.untrust_app(&params.server) {
-                None => success(
-                    &frame.id,
-                    &AppsUntrustResult {
-                        request_id: params.request_id,
-                        applied: false,
-                    },
-                ),
-                Some(Ok(applied)) => success(
+            let caller = super::conversation::caller(session, params.request_id.clone());
+            match service.untrust_app(&caller, &params.server).await {
+                Ok(applied) => success(
                     &frame.id,
                     &AppsUntrustResult {
                         request_id: params.request_id,
                         applied,
                     },
                 ),
-                Some(Err(_)) => failure(&frame.id, "temporarily_unavailable"),
+                Err(_) => failure(&frame.id, "temporarily_unavailable"),
             }
         }
         _ => failure(&frame.id, "unknown_method"),

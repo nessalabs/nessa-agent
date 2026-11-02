@@ -786,11 +786,57 @@ async fn m7c_an_app_untrusted_from_settings_is_asked_about_again() {
         fixture.service.trusted_apps(),
         Some(vec![SERVER.to_owned()])
     );
+    let settings = Arc::new(crate::conversation_test_support::RecordingSettingsAudit::default());
+    fixture.service.bind_settings_audit(settings.clone());
+    let person = fixture.caller("revoke");
+    // A revoke that cannot be recorded is refused, and the app stays allowed.
+    settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Err(ConversationError::Audit)
+    ));
+    assert_eq!(
+        fixture.service.trusted_apps(),
+        Some(vec![SERVER.to_owned()])
+    );
+    settings
+        .failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     // Revoked in Settings: the list no longer holds it, and a second revoke
-    // finds nothing to do.
-    assert_eq!(fixture.service.untrust_app(SERVER), Some(Ok(true)));
-    assert_eq!(fixture.service.untrust_app(SERVER), Some(Ok(false)));
+    // finds nothing to do. Each is on record as the person's.
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Ok(true)
+    ));
+    assert!(matches!(
+        fixture.service.untrust_app(&person, SERVER).await,
+        Ok(false)
+    ));
     assert_eq!(fixture.service.trusted_apps(), Some(Vec::new()));
+    {
+        use crate::conversation::application::SettingsOutcome;
+        let applied = |changed| SettingsOutcome::Applied {
+            changed,
+            coordinator: None,
+        };
+        assert_eq!(
+            settings.outcomes(),
+            [
+                SettingsOutcome::Requested,
+                applied(true),
+                SettingsOutcome::Requested,
+                applied(false),
+            ]
+        );
+        let records = settings.records.lock().unwrap();
+        assert!(records.iter().all(|record| record.caller == person
+            && record.change
+                == crate::conversation::application::SettingsChange::AppUntrust {
+                    server: SERVER.to_owned()
+                }));
+    }
     // Its next message waits for the person again, offering Always allow.
     let (task, again) = fixture.held_message(OTHER_INSTANCE, "second").await;
     assert!(again.options.iter().any(|option| option.id == ALLOW_APP));

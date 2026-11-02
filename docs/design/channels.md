@@ -103,6 +103,11 @@ conversations go:
   channel is made; agents placed there before that could not start.
 - Another window learns of a change when it reads the index again; channel
   changes are not streamed.
+- Each move is recorded in `conversations/audit/settings` as the caller's,
+  with both placements and the main conversation before and after: a
+  `requested` record before anything changes (unrecorded, the move is
+  refused) and an `outcome` record after (unrecorded, the move answers a
+  failure even though it was applied).
 
 ```mermaid
 sequenceDiagram

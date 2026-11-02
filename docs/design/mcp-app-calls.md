@@ -30,6 +30,9 @@ the gateway does with it (#348, part b).
   Permissions › Access lists them (`apps.trusted`) and revokes one
   (`apps.untrust`, written before it answers); a revoked app's next message is
   reviewed again. Both need `credential.manage`, as trust is gateway-wide.
+  Each revoke is recorded in `conversations/audit/settings` as the caller's,
+  before it changes anything and once it has; a revoke that cannot be
+  recorded is refused, or answers a failure once applied.
 - **Reviews** (`conversation::application::app_reviews`): gateway-owned,
   shown in the conversation's `permissions` beside the agent's with
   `origin: {kind: "app", server, tool}`, and answered through
