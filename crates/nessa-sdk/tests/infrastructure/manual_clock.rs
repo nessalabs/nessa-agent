@@ -21,19 +21,12 @@ impl Wait {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct ManualClock {
     timer: ManualTimer,
     /// Unix milliseconds at the origin. A test's `dueAtMs` is this plus
     /// [`Clock::now`], so it cannot be the process wall clock.
     unix_origin_ms: u64,
-}
-impl Default for ManualClock {
-    fn default() -> Self {
-        Self {
-            timer: ManualTimer::default(),
-            unix_origin_ms: 0,
-        }
-    }
 }
 impl ManualClock {
     fn mapped(wait: &nessa_timer::manual::Wait) -> Wait {

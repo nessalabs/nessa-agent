@@ -102,13 +102,13 @@ impl<'a> SelectReviewNotice<'a> {
                 membership: current.membership.role(),
             },
             action: AccessAction::ReviewNotice,
-            resource: AccessResource::of(&conversation),
+            resource: AccessResource::of(conversation),
             held: None,
             request: RequestShape::default(),
             target: None,
         });
         let record = Arc::new(ReviewNoticeAuditRecord::new(
-            &conversation,
+            conversation,
             execution_id,
             permission_id,
             recipient,
