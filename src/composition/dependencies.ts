@@ -15,7 +15,14 @@ import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
 import { assignedAgentReadiness, httpAgentReadiness } from "../onboarding/adapters/agents"
-import { loadAssignedGatewayEndpoint, loadChosenAgent, onSetupRecorded } from "../host"
+import {
+  claudeSignInMintAvailable,
+  loadAssignedGatewayEndpoint,
+  loadChosenAgent,
+  mintClaudeSignIn,
+  onSetupRecorded,
+} from "../host"
+import { boatClaudeSignIn } from "../provider-authentication/model/boat-sign-in"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
 import { hasNativeHost } from "../host"
 import { PreparedOperationTable } from "../conversation/adapters/store/prepared-operation-table"
@@ -109,6 +116,17 @@ export function createDependencies(
   // steady wall timeline, so a countdown does not jump with an OS clock change.
   const now = options.now ?? monotonicWallClock()
   return {
+    // Minted by the host, kept by the gateway this panel's session is on.
+    boatClaudeSignIn: boatClaudeSignIn({
+      // Asked of the host when the card is drawn, not when composed.
+      available: () => claudeSignInMintAvailable(),
+      mint: () => mintClaudeSignIn(),
+      save: async (token) => {
+        const client = session.get()
+        if (!client) throw new Error("Not connected to the gateway")
+        return client.boat.saveClaudeSignIn({ token })
+      },
+    }),
     agentInstallations: gatewayAgentInstallations(
       () => session.get()?.agents,
       () => globalThis.crypto.randomUUID(),

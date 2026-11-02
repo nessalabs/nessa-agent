@@ -1,3 +1,4 @@
+import type { BoatClaudeSignIn } from "../../../provider-authentication/model/boat-sign-in"
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
 import type { FailureDiagnostic } from "../model/failure"
@@ -479,6 +480,8 @@ export interface WorkspaceDependencies {
   /** Opens the provider login flow; resolution confirms launch, not sign-in. */
   readonly providerLoginAvailable?: () => Promise<boolean>
   readonly signInToProvider?: (provider: "claude" | "codex") => Promise<void>
+  /** Mints and keeps a Claude sign-in for Boat VMs, where the host can. */
+  readonly boatClaudeSignIn?: BoatClaudeSignIn
   readonly workspace: WorkspaceSource
   readonly now: () => number
   readonly newId: () => string

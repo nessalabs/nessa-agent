@@ -1621,6 +1621,25 @@ describe("provider recovery ownership", () => {
     ).toBe("The turn could not complete all required work.")
   })
 
+  it("offers Authenticate for Claude refused in a Boat VM, and this computer's sign-in elsewhere", async () => {
+    for (const [environment, label] of [
+      ["boat", "Authenticate"],
+      ["here", "Sign in to Claude"],
+      ["ssh", "Sign in to Claude"],
+    ] as const) {
+      await shown(fakeSource(), {
+        ...emptyTranscript("b"),
+        revision: 1,
+        authenticationRefusal: "m1",
+        latestInputId: "m1",
+        agent: "claude",
+        lease: { state: "ended", environment, cause: "closed" },
+        messages: [conversation.messages[0]],
+      })
+      expect(host.querySelector(".provider-sign-in button")?.textContent).toBe(label)
+    }
+  })
+
   it("retires recovery while a newer user-only message is sending or failed", async () => {
     const source = fakeSource()
     source.hold("send")

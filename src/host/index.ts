@@ -52,6 +52,8 @@ export {
   vaultCommand,
   signInToProvider,
   providerLoginAvailable,
+  mintClaudeSignIn,
+  claudeSignInMintAvailable,
   hasNativeHost,
   installUpdate,
   type ChosenAgent,
