@@ -75,10 +75,11 @@ pub trait ChannelStore: Send + Sync {
     fn forget(&self, conversation: &ConversationId) -> ConversationFuture<'_, ()>;
     /// Change where the channel's agents run, in one write, and answer the
     /// channel as it is now; `None` when there is no such channel. When the
-    /// main agent moves, its current conversation is retired, staying in the
-    /// channel as an ordinary thread, and a fresh one is named as the
-    /// channel's main conversation, so the next main-agent chat starts in
-    /// the new place. A conversation's own placement never moves.
+    /// main agent moves and its conversation was made, that conversation is
+    /// retired, staying in the channel as an ordinary thread, and a fresh one
+    /// is named as the channel's main conversation, so the next main-agent
+    /// chat starts in the new place. A main conversation not made yet keeps
+    /// its id. A conversation's own placement never moves.
     fn set_execution(
         &self,
         channel: &ChannelId,
@@ -144,10 +145,12 @@ pub struct AgentPlace {
 }
 
 impl AgentPlace {
-    pub fn of(channel: &Channel) -> Self {
+    /// Where an agent of `channel` works; `remote` is whether that agent's
+    /// own conversation runs away from the gateway.
+    pub fn of(channel: &Channel, remote: bool) -> Self {
         Self {
             folder: channel.folder().path.as_path().to_path_buf(),
-            instructions: channel.instructions(),
+            instructions: channel.instructions(remote),
         }
     }
 }
@@ -562,7 +565,10 @@ impl ConversationService {
             .get(&channel)
             .await?
             .ok_or(ConversationError::Unavailable)?;
-        let mut place = AgentPlace::of(&found);
+        // Its own placement, fixed at creation, says whether it runs away
+        // from the gateway: the channel's may have moved since.
+        let remote = self.inner.environment.placement(id).await?.is_some();
+        let mut place = AgentPlace::of(&found, remote);
         if *id == found.coordinator_id() {
             place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and its configured worker placement. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");
         }

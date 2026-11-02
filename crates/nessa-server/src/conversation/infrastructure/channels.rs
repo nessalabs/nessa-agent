@@ -417,9 +417,21 @@ impl ChannelStore for LocalChannelStore {
             };
             let current = channel(current)?;
             let mut changed = current.with_execution(execution);
-            if current.execution().coordinator != execution.coordinator {
-                // The main conversation already placed stays where it runs;
-                // a fresh one is named for the new place.
+            let main_made = transaction
+                .query_row(
+                    "SELECT 1 FROM channel_conversations WHERE conversation = ?1",
+                    [current.coordinator_id().to_string()],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(failed)?
+                .is_some();
+            if current.execution().coordinator != execution.coordinator && main_made {
+                // The main conversation already made (or begun: a creation
+                // places it in its channel before it exists) stays where it
+                // runs; a fresh one is named for the new place. One never
+                // begun is made where the channel says when it is, so it
+                // keeps its id and every surface holding it still opens it.
                 let next = uuid::Uuid::new_v4().to_string();
                 transaction.execute(
                     "INSERT INTO channel_coordinator_replacements (retired, channel, coordinator, generation, cause) SELECT ?1, ?2, ?3, COALESCE(MAX(generation), 0) + 1, 'coordinator_moved' FROM channel_coordinator_replacements WHERE channel = ?2",

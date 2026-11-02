@@ -1,7 +1,7 @@
 import { useRef, useState } from "react"
 import { Dialog } from "@nessa-ui/react/dialog"
 import { IconButton } from "../../../ui/icon-button"
-import { useBoatGateway } from "../../../settings/ui/boat-row"
+import { useBoatConnection, useBoatGateway } from "../../../settings/ui/boat-row"
 import { BoatRuntimeControl } from "../../../settings/ui/boat-runtime-control"
 import { ItemRow, Segmented } from "../../../settings/ui/settings-controls"
 import { channelFailure, type ChannelPlacement } from "../../application/ports"
@@ -11,10 +11,6 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectChannel } from "../../adapters/store/selectors"
 
 type Place = "local" | "boat"
-const places = [
-  { id: "local", label: "This Mac" },
-  { id: "boat", label: "Boat" },
-] as const
 
 /**
  * Where a made channel's agents run, changed after it was made. Each choice
@@ -27,7 +23,18 @@ function ChannelPlacementControl({ channelId }: { channelId: string }) {
   const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
+  // As when a channel is made, Boat is offered only once it is connected:
+  // agents placed there before that could not start.
+  const boatReady = useBoatConnection().status?.state === "connected"
   if (!channel) return null
+  const places: readonly { id: Place; label: string; disabled?: boolean }[] = [
+    { id: "local", label: "This Mac" },
+    {
+      id: "boat",
+      label: boatReady ? "Boat" : "Boat (not connected)",
+      disabled: !boatReady,
+    },
+  ]
   const placement: ChannelPlacement = {
     coordinatorPlacement: channel.coordinatorPlacement ?? "local",
     threadPlacement: channel.threadPlacement ?? "local",
@@ -69,6 +76,7 @@ function ChannelPlacementControl({ channelId }: { channelId: string }) {
         label="Main agent runs on"
         detail="Moving it starts a fresh main chat there. The current one stays here as a thread."
         data-placement-row="coordinator"
+        unavailable={saving}
         control={
           <Segmented<Place>
             label="Main agent runs on"
@@ -82,6 +90,7 @@ function ChannelPlacementControl({ channelId }: { channelId: string }) {
         label="New threads run on"
         detail="Threads already started keep running where they are."
         data-placement-row="threads"
+        unavailable={saving}
         control={
           <Segmented<Place>
             label="New threads run on"

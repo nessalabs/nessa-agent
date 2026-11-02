@@ -96,7 +96,13 @@ conversations go:
   in the channel, as an ordinary thread with its history. The channel names a
   fresh main conversation (`channel_coordinator_replacements`, cause
   `coordinator_moved`, in the same write as the new placement), and the next
-  main-agent chat starts in the new place.
+  main-agent chat starts in the new place. A main conversation whose creation
+  never began (nothing opened it yet) is not retired: it keeps its id and
+  simply starts in the new place.
+- **Boat** is offered in the dialog only while Boat is connected, as when the
+  channel is made; agents placed there before that could not start.
+- Another window learns of a change when it reads the index again; channel
+  changes are not streamed.
 
 ```mermaid
 sequenceDiagram
@@ -110,7 +116,7 @@ sequenceDiagram
     Gateway->>Service: set_channel_execution(caller, channelId, execution)
     Service->>Service: channel.settings on the channel (Cedar)
     Service->>Store: set_execution(channelId, execution)
-    alt the main agent moved
+    alt the main agent moved and its main conversation was made
         Store->>Store: retire the main conversation (coordinator_moved), name a fresh one
     end
     Store->>Store: UPDATE coordinator_placement, thread_placement (one transaction)

@@ -23,7 +23,7 @@ pub(super) fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> Outgoi
     };
     match frame.method.as_str() {
         "apps.trusted" => {
-            if !frame.params.is_null() && frame.params != json!({}) {
+            if !asks_nothing(&frame.params) {
                 return failure(&frame.id, "invalid_request");
             }
             // A gateway with no MCP servers runs no apps: none is trusted.
@@ -31,12 +31,9 @@ pub(super) fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> Outgoi
             success(&frame.id, &AppsTrustedResult { servers })
         }
         "apps.untrust" => {
-            let Ok(params) = serde_json::from_value::<AppsUntrustParams>(frame.params) else {
+            let Some(params) = untrust_request(frame.params) else {
                 return failure(&frame.id, "invalid_request");
             };
-            if params.server.is_empty() {
-                return failure(&frame.id, "invalid_request");
-            }
             match service.untrust_app(&params.server) {
                 None => success(
                     &frame.id,
@@ -58,3 +55,19 @@ pub(super) fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> Outgoi
         _ => failure(&frame.id, "unknown_method"),
     }
 }
+
+/// `apps.trusted` takes no parameters: null or an empty object.
+fn asks_nothing(params: &serde_json::Value) -> bool {
+    params.is_null() || *params == json!({})
+}
+
+/// An `apps.untrust` that names a server, or nothing.
+fn untrust_request(params: serde_json::Value) -> Option<AppsUntrustParams> {
+    serde_json::from_value::<AppsUntrustParams>(params)
+        .ok()
+        .filter(|params| !params.server.is_empty())
+}
+
+#[cfg(test)]
+#[path = "../../tests/product/trusted_apps.rs"]
+mod tests;

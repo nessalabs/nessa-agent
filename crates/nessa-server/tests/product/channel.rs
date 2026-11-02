@@ -220,3 +220,32 @@ fn each_refusal_has_its_own_code() {
         assert_eq!(code(refused("r", error)), expected);
     }
 }
+
+#[test]
+fn a_placement_change_names_a_channel_and_two_known_places() {
+    let (params, channel, execution) = placement_request(json!({
+        "requestId": "r", "channelId": "ch_aaaaaaaaaa",
+        "coordinatorPlacement": "boat", "threadPlacement": "local"
+    }))
+    .unwrap();
+    assert_eq!(params.request_id, "r");
+    assert_eq!(channel.as_str(), "ch_aaaaaaaaaa");
+    assert_eq!(execution.coordinator, WorkspacePlacement::Boat);
+    assert_eq!(execution.threads, WorkspacePlacement::Local);
+    for refused in [
+        json!({"requestId": "r", "channelId": "nope", "coordinatorPlacement": "boat", "threadPlacement": "boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "moon", "threadPlacement": "boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat"}),
+        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat", "threadPlacement": "Boat"}),
+    ] {
+        assert!(placement_request(refused.clone()).is_none(), "{refused}");
+    }
+}
+
+#[test]
+fn a_placement_change_asks_to_write_to_conversations() {
+    assert_eq!(
+        nessa_protocol::product::generated::action_for_method("channel.setPlacement"),
+        Some("conversation.write")
+    );
+}

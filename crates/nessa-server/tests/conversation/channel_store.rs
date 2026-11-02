@@ -437,7 +437,11 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
     let kept = reopened.get(original.id()).await.unwrap().unwrap();
     assert_eq!(kept.execution(), both);
     assert_eq!(kept.coordinator_id(), moved.coordinator_id());
-    // Moving back names yet another one; no channel answers None.
+    // Once the Boat main chat was made, moving back names yet another one.
+    reopened
+        .place(&moved.coordinator_id(), original.id())
+        .await
+        .unwrap();
     let back = reopened
         .set_execution(original.id(), ChannelExecution::default())
         .await
@@ -445,6 +449,16 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
         .unwrap();
     assert_ne!(back.coordinator_id(), moved.coordinator_id());
     assert_ne!(back.coordinator_id(), first);
+    // A main chat never made keeps its id when the main agent moves.
+    let fresh = made("unused", "quiet", 1);
+    reopened.create(fresh.clone()).await.unwrap();
+    let kept_id = reopened
+        .set_execution(fresh.id(), both)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept_id.coordinator_id(), fresh.coordinator_id());
+    assert_eq!(kept_id.execution(), both);
     let missing = made("absent", "none", 1);
     assert!(reopened
         .set_execution(missing.id(), both)

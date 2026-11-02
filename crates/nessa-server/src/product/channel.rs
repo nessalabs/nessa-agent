@@ -98,27 +98,12 @@ pub(super) async fn dispatch(
             }
         }
         "channel.setPlacement" => {
-            let Ok(params) = serde_json::from_value::<ChannelSetPlacementParams>(frame.params)
-            else {
-                return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
-            };
-            let (Ok(channel), Some(coordinator), Some(threads)) = (
-                ChannelId::new(&params.channel_id),
-                WorkspacePlacement::parse(&params.coordinator_placement),
-                WorkspacePlacement::parse(&params.thread_placement),
-            ) else {
+            let Some((params, channel, execution)) = placement_request(frame.params) else {
                 return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
             };
             let caller = super::conversation::caller(session, params.request_id);
             match service
-                .set_channel_execution(
-                    &caller,
-                    &channel,
-                    ChannelExecution {
-                        coordinator,
-                        threads,
-                    },
-                )
+                .set_channel_execution(&caller, &channel, execution)
                 .await
             {
                 Ok(channel) => success(
@@ -293,6 +278,20 @@ fn refused(request_id: &str, error: ChannelError) -> OutgoingMessage {
     };
     tracing::info!(code = code.as_str(), "channel command refused");
     failure(request_id, code.as_str())
+}
+
+/// A `channel.setPlacement` that names a channel id and two known run
+/// locations, or nothing: anything else is refused before the service.
+fn placement_request(
+    params: serde_json::Value,
+) -> Option<(ChannelSetPlacementParams, ChannelId, ChannelExecution)> {
+    let params = serde_json::from_value::<ChannelSetPlacementParams>(params).ok()?;
+    let channel = ChannelId::new(&params.channel_id).ok()?;
+    let execution = ChannelExecution {
+        coordinator: WorkspacePlacement::parse(&params.coordinator_placement)?,
+        threads: WorkspacePlacement::parse(&params.thread_placement)?,
+    };
+    Some((params, channel, execution))
 }
 
 #[cfg(test)]

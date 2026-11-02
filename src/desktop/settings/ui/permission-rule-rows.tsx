@@ -374,9 +374,14 @@ export function TrustedAppRows() {
   const apps = useContext(PermissionRulesContext)?.trustedApps
   const [phase, setPhase] = useState<AppsPhase>({ kind: "reading" })
   const busy = useRef(false)
+  // Each read of `apps` is one generation: an answer from an earlier one,
+  // or one landing after this group left the page, is dropped.
+  const generation = useRef(0)
   useEffect(() => {
     if (!apps) return
     let current = true
+    const generations = generation
+    generations.current++
     const read = () => {
       if (busy.current) return
       void apps.read().then((outcome) => {
@@ -396,6 +401,7 @@ export function TrustedAppRows() {
     return () => {
       current = false
       busy.current = false
+      generations.current++
       window.removeEventListener("focus", read)
       document.removeEventListener("visibilitychange", onVisible)
     }
@@ -404,18 +410,26 @@ export function TrustedAppRows() {
   const untrust = (server: string) => {
     if (phase.kind !== "ready" || busy.current) return
     busy.current = true
-    setPhase({ kind: "ready", servers: phase.servers, untrusting: server })
-    void apps.untrust(server, crypto.randomUUID()).then(async (outcome) => {
-      const again = await apps.read()
+    const asked = generation.current
+    const before = phase.servers
+    setPhase({ kind: "ready", servers: before, untrusting: server })
+    const settle = (servers: readonly string[], failed: boolean) => {
+      if (generation.current !== asked) return
       busy.current = false
-      setPhase({
-        kind: "ready",
-        servers: again.ok
-          ? again.servers
-          : phase.servers.filter((each) => each !== server || !outcome.ok),
-        failed: !outcome.ok,
+      setPhase({ kind: "ready", servers, failed })
+    }
+    void apps
+      .untrust(server, crypto.randomUUID())
+      .then(async (outcome) => {
+        const again = await apps.read()
+        settle(
+          again.ok
+            ? again.servers
+            : before.filter((each) => each !== server || !outcome.ok),
+          !outcome.ok,
+        )
       })
-    })
+      .catch(() => settle(before, true))
   }
   const entry = setting("trusted-apps")
   return (

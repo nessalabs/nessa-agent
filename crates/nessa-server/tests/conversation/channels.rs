@@ -862,3 +862,45 @@ async fn a_person_keeps_at_most_the_channels_the_rules_allow() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is() {
+    use crate::conversation::application::ChannelError;
+    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    let boat = ChannelExecution {
+        coordinator: WorkspacePlacement::Boat,
+        threads: WorkspacePlacement::Boat,
+    };
+    // The default channel has no run location to change, and neither another
+    // person nor an unknown id learns whether a channel exists.
+    for (who, id) in [
+        ("person", ChannelId::default_channel()),
+        ("other", made.id().clone()),
+        ("person", ChannelId::from_random([9; 10])),
+    ] {
+        assert_eq!(
+            fixture
+                .service
+                .set_channel_execution(&caller(who, "move"), &id, boat)
+                .await,
+            Err(ChannelError::Forbidden),
+            "{who} moved {id:?}"
+        );
+    }
+    // Asking for where it already runs changes nothing, main chat included.
+    let same = fixture
+        .service
+        .set_channel_execution(&caller("person", "move"), made.id(), made.execution())
+        .await
+        .unwrap();
+    assert_eq!(same, made);
+    let moved = fixture
+        .service
+        .set_channel_execution(&caller("person", "move"), made.id(), boat)
+        .await
+        .unwrap();
+    assert_eq!(moved.execution(), boat);
+    assert_eq!(moved.id(), made.id());
+}
