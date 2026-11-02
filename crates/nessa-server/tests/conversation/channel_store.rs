@@ -327,7 +327,7 @@ async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
 
 #[tokio::test]
 async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
-    for version in [1, 2] {
+    for version in [1, 2, 3] {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -335,7 +335,13 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         // Start from the actual old schema, rather than a second handwritten one.
         let current = DEFINITION;
         let old = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
-        let old = if version == 1 {
+        let old = if version == 3 {
+            // Before a main agent could move: only an erasure retired one.
+            current[..current.find("PRAGMA user_version").unwrap()].replace(
+                "cause IN ('coordinator_conversation_erased', 'coordinator_moved')",
+                "cause = 'coordinator_conversation_erased'",
+            )
+        } else if version == 1 {
             old.lines()
                 .filter(|line| {
                     !line.trim_start().starts_with("coordinator_placement")
@@ -385,4 +391,64 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
             main
         );
     }
+}
+
+#[tokio::test]
+async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_the_channel() {
+    use crate::conversation::domain::{ChannelExecution, WorkspacePlacement};
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let original = made("moves", "design", 1);
+    let first = original.coordinator_id();
+    store.create(original.clone()).await.unwrap();
+    store.place(&first, original.id()).await.unwrap();
+    // Only new threads move: the main chat stays the same one.
+    let threads = ChannelExecution {
+        coordinator: WorkspacePlacement::Local,
+        threads: WorkspacePlacement::Boat,
+    };
+    let changed = store
+        .set_execution(original.id(), threads)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.execution(), threads);
+    assert_eq!(changed.coordinator_id(), first);
+    // The main agent moves: a fresh main chat, the old one still in the channel.
+    let both = ChannelExecution {
+        coordinator: WorkspacePlacement::Boat,
+        threads: WorkspacePlacement::Boat,
+    };
+    let moved = store
+        .set_execution(original.id(), both)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(moved.coordinator_id(), first);
+    assert_eq!(
+        store.channel_of(&first).await.unwrap(),
+        Some(original.id().clone())
+    );
+    // Forgetting the old main chat, now a thread, retires nothing more.
+    store.forget(&first).await.unwrap();
+    drop(store);
+    let reopened =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let kept = reopened.get(original.id()).await.unwrap().unwrap();
+    assert_eq!(kept.execution(), both);
+    assert_eq!(kept.coordinator_id(), moved.coordinator_id());
+    // Moving back names yet another one; no channel answers None.
+    let back = reopened
+        .set_execution(original.id(), ChannelExecution::default())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(back.coordinator_id(), moved.coordinator_id());
+    assert_ne!(back.coordinator_id(), first);
+    let missing = made("absent", "none", 1);
+    assert!(reopened
+        .set_execution(missing.id(), both)
+        .await
+        .unwrap()
+        .is_none());
 }

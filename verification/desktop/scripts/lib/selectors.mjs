@@ -607,6 +607,9 @@ export const names = {
   accounts: "Accounts",
   githubConnect: "Connect…",
   githubDisconnect: "Disconnect",
+  /** Settings' category and tab holding remembered rules and the apps always allowed. */
+  privacy: "Privacy & Permissions",
+  accessTab: "Access",
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",

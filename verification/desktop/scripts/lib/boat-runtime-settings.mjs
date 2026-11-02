@@ -148,3 +148,128 @@ export async function channelRuntimeSettings(run, channel, failures) {
       )
   }
 }
+
+/** The channel as the gateway lists it now. */
+async function listedChannel(client, channelId) {
+  const { channels } = await client.channels.list()
+  return channels.find((each) => each.channelId === channelId)
+}
+
+/**
+ * Changes where a made channel runs from its settings dialog, as a person
+ * does, after it has been talked to. New threads move first: the main chat
+ * stays the same one. Then the main agent moves: the channel names a fresh
+ * main chat and the one already talked to stays in the channel as a thread.
+ * Both go back to this machine at the end, which names yet another fresh main
+ * chat, so the channel is left running where it started. Nothing is sent
+ * while it is on Boat: the run has no Boat account.
+ */
+export async function channelPlacementSettings(run, channel, failures) {
+  const { page, client } = run
+  const before = await listedChannel(client, channel.channelId)
+  if (!before) {
+    failures.push(
+      `channel ${channel.channelId} is not listed before its run location changes`,
+    )
+    return
+  }
+  const receipts = { before }
+  // The default channel has no run location to change, and an unknown one
+  // is not the caller's to change.
+  const refused = await client.channels
+    .setPlacement({
+      requestId: `stress-place-unknown-${channel.channelId}`,
+      channelId: "ch_aaaaaaaaaa",
+      coordinatorPlacement: "boat",
+      threadPlacement: "boat",
+    })
+    .then(
+      () => "accepted",
+      (error) => error.code,
+    )
+  if (refused !== "forbidden")
+    failures.push(`changing an unknown channel's run location answered ${refused}`)
+  await page
+    .locator(`${css.sidebar} nav`)
+    .getByText(channel.name, { exact: true })
+    .first()
+    .hover()
+  const gear = page.locator(
+    `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+  )
+  await gear.click()
+  const dialog = page.locator(css.channelSettingsDialog)
+  const control = dialog.locator(`[data-channel-placement="${channel.channelId}"]`)
+  const choose = async (row, label) => {
+    await control
+      .locator(`[data-placement-row="${row}"]`)
+      .getByRole("button", { name: label, exact: true })
+      .click()
+    await waitFor(async () => (await control.getAttribute("aria-busy")) === null, 10_000)
+  }
+  const settled = (want) =>
+    waitFor(async () => {
+      const now = await listedChannel(client, channel.channelId)
+      return now &&
+        now.coordinatorPlacement === want.coordinatorPlacement &&
+        now.threadPlacement === want.threadPlacement
+        ? now
+        : null
+    }, 10_000)
+  try {
+    if (
+      (await control.getAttribute("data-coordinator-placement")) !==
+      before.coordinatorPlacement
+    )
+      failures.push("the channel settings do not show where its main agent runs")
+    await choose("threads", "Boat")
+    const threads = await settled({
+      coordinatorPlacement: before.coordinatorPlacement,
+      threadPlacement: "boat",
+    })
+    receipts.threads = threads
+    if (!threads) failures.push("moving new threads to Boat was not saved")
+    else if (threads.coordinatorConversationId !== before.coordinatorConversationId)
+      failures.push("moving only new threads named a new main chat")
+    await choose("coordinator", "Boat")
+    const moved = await settled({ coordinatorPlacement: "boat", threadPlacement: "boat" })
+    receipts.moved = moved
+    if (!moved) failures.push("moving the main agent to Boat was not saved")
+    else {
+      if (moved.coordinatorConversationId === before.coordinatorConversationId)
+        failures.push(
+          "moving the main agent kept the main chat that runs on this machine",
+        )
+      if ((await control.getAttribute("data-coordinator-placement")) !== "boat")
+        failures.push("the channel settings still show the main agent on this machine")
+      // The main chat already talked to stays in the channel, as a thread.
+      const { conversations } = await client.conversation.list({})
+      const old = conversations.find(
+        (each) => each.conversationId === before.coordinatorConversationId,
+      )
+      if (old && old.channelId !== channel.channelId)
+        failures.push("the old main chat left its channel when the main agent moved")
+    }
+    if (run.evidence)
+      await page.screenshot({
+        path: join(run.evidence, `channel-placement-${channel.channelId}.png`),
+      })
+    await choose("coordinator", "This Mac")
+    await choose("threads", "This Mac")
+    const back = await settled({
+      coordinatorPlacement: "local",
+      threadPlacement: "local",
+    })
+    receipts.back = back
+    if (!back) failures.push("moving the channel back to this machine was not saved")
+    else if (back.coordinatorConversationId === moved?.coordinatorConversationId)
+      failures.push("moving the main agent back kept the Boat main chat")
+    await page.keyboard.press(keys.escape)
+  } finally {
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `channel-placement-${channel.channelId}.json`),
+        JSON.stringify(receipts, null, 2) + "\n",
+      )
+  }
+}

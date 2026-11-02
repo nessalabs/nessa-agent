@@ -413,6 +413,12 @@ impl TrustedApps for Trusted {
         self.0.lock().unwrap().insert(server.to_owned());
         Ok(())
     }
+    fn trusted(&self) -> Vec<String> {
+        self.0.lock().unwrap().iter().cloned().collect()
+    }
+    fn untrust(&self, server: &str) -> Result<bool, TrustNotKept> {
+        Ok(self.0.lock().unwrap().remove(server))
+    }
 }
 
 pub(crate) struct Fixture {

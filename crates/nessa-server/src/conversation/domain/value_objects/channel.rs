@@ -386,6 +386,14 @@ impl Channel {
     pub fn execution(&self) -> ChannelExecution {
         self.execution
     }
+    /// This channel with its agents running where `execution` says: the
+    /// one setting a person changes after the channel is made.
+    pub(crate) fn with_execution(&self, execution: ChannelExecution) -> Self {
+        Self {
+            execution,
+            ..self.clone()
+        }
+    }
     pub fn defaults(&self) -> &ChannelDefaults {
         &self.defaults
     }

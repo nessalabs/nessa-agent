@@ -80,6 +80,44 @@ A thread an agent starts with `create_thread` is in its starting conversation's
 channel, unless it runs on another host. A channel conversation always runs on
 this machine: a channel with an `environment` is refused.
 
+## Changing where a channel runs
+
+A channel says where its main agent runs and where its threads run
+(`ChannelExecution`: this machine or Boat). Both can change after it is made,
+from the channel's settings dialog (`channel.setPlacement`, Cedar
+`channel.settings` on the channel; the default channel has nothing to change
+and is refused `forbidden`). A conversation's own placement is still written
+once, before it exists, and never moves, so a change only says where new
+conversations go:
+
+- **New threads**: every thread made from then on runs in the new place.
+  Threads already made keep running where they started.
+- **Main agent**: its current main conversation stays where it runs and stays
+  in the channel, as an ordinary thread with its history. The channel names a
+  fresh main conversation (`channel_coordinator_replacements`, cause
+  `coordinator_moved`, in the same write as the new placement), and the next
+  main-agent chat starts in the new place.
+
+```mermaid
+sequenceDiagram
+    participant Person
+    participant Dialog as Channel settings
+    participant Gateway as Gateway (product/channel.rs)
+    participant Service as ConversationService
+    participant Store as LocalChannelStore
+    Person->>Dialog: Main agent runs on: Boat
+    Dialog->>Gateway: channel.setPlacement {requestId, channelId, coordinatorPlacement, threadPlacement}
+    Gateway->>Service: set_channel_execution(caller, channelId, execution)
+    Service->>Service: channel.settings on the channel (Cedar)
+    Service->>Store: set_execution(channelId, execution)
+    alt the main agent moved
+        Store->>Store: retire the main conversation (coordinator_moved), name a fresh one
+    end
+    Store->>Store: UPDATE coordinator_placement, thread_placement (one transaction)
+    Gateway-->>Dialog: {channel} with its coordinatorConversationId
+    Dialog-->>Person: the index takes the channel; its next main chat opens on Boat
+```
+
 ## Making one in the desktop window
 
 The sidebar's + opens the "New channel" flow over the session list and the

@@ -4,8 +4,8 @@ use crate::conversation::application::{
     ChannelFolders, ChannelStore, ConversationError, ConversationFuture, FolderRefusal,
 };
 use crate::conversation::domain::{
-    Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
-    ChannelPath, ChannelResources,
+    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelResources,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::{
@@ -26,6 +26,7 @@ const DEFINITION: &str = include_str!("channels.sql");
 const UPGRADES: &[nessa_local_database::Upgrade] = &[
     nessa_local_database::Upgrade::new(1, include_str!("channels-workspaces.sql")),
     nessa_local_database::Upgrade::new(2, include_str!("channels-coordinators.sql")),
+    nessa_local_database::Upgrade::new(3, include_str!("channels-placement-moves.sql")),
 ];
 const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement";
 const COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, \
@@ -396,6 +397,42 @@ impl ChannelStore for LocalChannelStore {
             }
             transaction.commit().map_err(failed)?;
             Ok(())
+        })
+    }
+
+    fn set_execution(
+        &self,
+        id: &ChannelId,
+        execution: ChannelExecution,
+    ) -> ConversationFuture<'_, Option<Channel>> {
+        let id = id.as_str().to_owned();
+        self.run(move |connection| {
+            let transaction = connection.transaction().map_err(failed)?;
+            let Some(current) = transaction
+                .query_row(&format!("SELECT {COLUMNS} FROM channels WHERE channel = ?1"), [&id], stored)
+                .optional()
+                .map_err(failed)?
+            else {
+                return Ok(None);
+            };
+            let current = channel(current)?;
+            let mut changed = current.with_execution(execution);
+            if current.execution().coordinator != execution.coordinator {
+                // The main conversation already placed stays where it runs;
+                // a fresh one is named for the new place.
+                let next = uuid::Uuid::new_v4().to_string();
+                transaction.execute(
+                    "INSERT INTO channel_coordinator_replacements (retired, channel, coordinator, generation, cause) SELECT ?1, ?2, ?3, COALESCE(MAX(generation), 0) + 1, 'coordinator_moved' FROM channel_coordinator_replacements WHERE channel = ?2",
+                    params![current.coordinator_id().to_string(), id, next],
+                ).map_err(failed)?;
+                changed = changed.with_coordinator(ConversationId::new(&next).map_err(|_| ConversationError::Metadata)?);
+            }
+            transaction.execute(
+                "UPDATE channels SET coordinator_placement = ?2, thread_placement = ?3 WHERE channel = ?1",
+                params![id, execution.coordinator.as_str(), execution.threads.as_str()],
+            ).map_err(failed)?;
+            transaction.commit().map_err(failed)?;
+            Ok(Some(changed))
         })
     }
 }

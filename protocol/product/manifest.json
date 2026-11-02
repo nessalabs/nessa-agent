@@ -226,6 +226,14 @@
       "params": "McpServersRevokeParams",
       "grant": "credential.manage"
     },
+    "apps.trusted": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "apps.untrust": {
+      "params": "AppsUntrustParams",
+      "grant": "credential.manage"
+    },
     "phone.endpoint": {
       "params": "PhoneEndpointParams",
       "grant": "server.read"
@@ -356,6 +364,10 @@
     },
     "channel.list": {
       "params": "ChannelListParams",
+      "grant": "conversation.write"
+    },
+    "channel.setPlacement": {
+      "params": "ChannelSetPlacementParams",
       "grant": "conversation.write"
     },
     "conversation.subscribeEvents": {

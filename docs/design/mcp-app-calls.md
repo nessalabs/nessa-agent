@@ -24,6 +24,12 @@ the gateway does with it (#348, part b).
   then a review for a destructive tool, then the call, each step audited
   before its effect is reported. Each call runs on a task of its own, holding
   one of the gateway's 32 slots until that task ends.
+- **Always allow this app** (`conversation::infrastructure::trusted_apps`):
+  a message review's `nessa.remember.allow` keeps the app's server in
+  `trusted-apps.json`, and its later messages go unasked. Settings › Privacy &
+  Permissions › Access lists them (`apps.trusted`) and revokes one
+  (`apps.untrust`, written before it answers); a revoked app's next message is
+  reviewed again. Both need `credential.manage`, as trust is gateway-wide.
 - **Reviews** (`conversation::application::app_reviews`): gateway-owned,
   shown in the conversation's `permissions` beside the agent's with
   `origin: {kind: "app", server, tool}`, and answered through

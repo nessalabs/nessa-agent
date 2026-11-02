@@ -25,14 +25,15 @@ CREATE TABLE channel_conversations (
     conversation TEXT PRIMARY KEY NOT NULL,
     channel TEXT NOT NULL REFERENCES channels (channel)
 ) STRICT;
--- A replacement is recorded only after its predecessor's conversation was erased.
--- The predecessor identifies the committed deletion and its actual initiator.
+-- A replacement is recorded after its predecessor's conversation was erased,
+-- or when the person moved the channel's main agent to another run location;
+-- a moved predecessor stays in the channel as an ordinary thread.
 CREATE TABLE channel_coordinator_replacements (
     retired TEXT PRIMARY KEY NOT NULL,
     channel TEXT NOT NULL REFERENCES channels (channel),
     coordinator TEXT NOT NULL UNIQUE,
     generation INTEGER NOT NULL CHECK (generation > 0),
-    cause TEXT NOT NULL CHECK (cause = 'coordinator_conversation_erased'),
+    cause TEXT NOT NULL CHECK (cause IN ('coordinator_conversation_erased', 'coordinator_moved')),
     UNIQUE (channel, generation)
 ) STRICT;
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;

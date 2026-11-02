@@ -776,6 +776,29 @@ async fn m7_always_allowing_an_app_sends_its_later_messages_unasked() {
 }
 
 #[tokio::test]
+async fn m7c_an_app_untrusted_from_settings_is_asked_about_again() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held_message(INSTANCE, "first").await;
+    fixture.answer(&review, ALLOW_APP).await;
+    task.await.unwrap().unwrap();
+    fixture.idle().await;
+    assert_eq!(
+        fixture.service.trusted_apps(),
+        Some(vec![SERVER.to_owned()])
+    );
+    // Revoked in Settings: the list no longer holds it, and a second revoke
+    // finds nothing to do.
+    assert_eq!(fixture.service.untrust_app(SERVER), Some(Ok(true)));
+    assert_eq!(fixture.service.untrust_app(SERVER), Some(Ok(false)));
+    assert_eq!(fixture.service.trusted_apps(), Some(Vec::new()));
+    // Its next message waits for the person again, offering Always allow.
+    let (task, again) = fixture.held_message(OTHER_INSTANCE, "second").await;
+    assert!(again.options.iter().any(|option| option.id == ALLOW_APP));
+    fixture.answer(&again, DENY).await;
+    assert_eq!(refused(task.await.unwrap()), McpAppError::ApprovalDenied);
+}
+
+#[tokio::test]
 async fn m7b_a_message_whose_review_does_not_fit_is_refused_and_no_review_is_opened() {
     let fixture = Fixture::new().await;
     // Well within the input bound, but every quote is escaped twice in the

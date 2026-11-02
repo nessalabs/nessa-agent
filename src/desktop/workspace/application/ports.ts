@@ -409,6 +409,22 @@ export function sharingFailure(error: unknown): SharingFailure {
  */
 export interface ChannelSource {
   create(draft: ChannelDraft, requestId: string): Promise<Channel>
+  /**
+   * Change where a made channel's agents run. Threads already made keep
+   * running where they started; a moved main agent answers a fresh main
+   * conversation id. Absent where channels cannot be changed.
+   */
+  setPlacement?(
+    channelId: string,
+    placement: ChannelPlacement,
+    requestId: string,
+  ): Promise<Channel>
+}
+
+/** Where a channel's main agent and its new threads run. */
+export interface ChannelPlacement {
+  readonly coordinatorPlacement: "local" | "boat"
+  readonly threadPlacement: "local" | "boat"
 }
 
 /** Why a channel was not made, by kind (`model/channel-draft.ts`), never a sentence. */

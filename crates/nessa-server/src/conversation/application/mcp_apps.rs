@@ -453,6 +453,13 @@ pub trait TrustedApps: Send + Sync {
     /// Remember that the person always allows `server`'s app. `Err` when it
     /// could not be kept; nothing is remembered then.
     fn trust(&self, server: &str) -> Result<(), TrustNotKept>;
+    /// Every app the person always allows, by server, in name order.
+    fn trusted(&self) -> Vec<String>;
+    /// Forget that the person always allows `server`'s app ("Revoke" in
+    /// Settings): its next message is asked about again. `Ok(false)` when it
+    /// was not trusted; `Err` when the change could not be kept, and it is
+    /// still trusted then.
+    fn untrust(&self, server: &str) -> Result<bool, TrustNotKept>;
 }
 
 /// "Always allow this app" could not be written down.

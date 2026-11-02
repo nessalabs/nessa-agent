@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-import { channelRuntimeSettings, openAccounts } from "./lib/boat-runtime-settings.mjs"
+import {
+  channelPlacementSettings,
+  channelRuntimeSettings,
+  openAccounts,
+} from "./lib/boat-runtime-settings.mjs"
 import {
   changeVaultPassphrase,
   unlockRequestedVault,
@@ -218,12 +222,18 @@ import {
  *               folder with the notes in the agent's system prompt (Claude).
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
- *               their folders, and each conversation in its own
+ *               their folders, and each conversation in its own. The first
+ *               then moves its new threads and its main agent to Boat and
+ *               back from its settings dialog: new threads alone keep the
+ *               main chat, a moved main agent names a fresh one and the one
+ *               talked to stays in the channel
  *   huddle      a turn shows the test server's talk board, the host side of
  *               a voice app: its frame is allowed the microphone, it opens in
  *               the chat's panel as one tab however often it asks (its card a
  *               row), its first message is reviewed and answered Always allow
- *               this app, and its next message is sent with no review
+ *               this app, and its next message is sent with no review;
+ *               then Revoke under Settings › Access › Apps you always allow
+ *               takes the trust back, out of the gateway's file too
  *   menu        the pane's ⋯ menu opens with every row leading with its
  *               icon at the menu recipe's row height; in the overview's
  *               filter the chosen scope and span each show their check
@@ -4907,6 +4917,8 @@ const steps = {
           notes,
           dropped.map(({ path }) => path),
         )
+        // Talked to, its run location changes from its settings.
+        await channelPlacementSettings(run, made, failures)
       }
       // Made in a folder chosen in the host's picker.
       const there = await makeChannel(run, failures, {
@@ -8025,8 +8037,8 @@ function appTrusted(run, server) {
  * opens in the chat's panel as one tab however often it asks, its card
  * becoming a row; its first message is reviewed, offering Always allow this
  * app, and once that is chosen its next message goes unasked. Trust is kept
- * gateway-wide by server, so a later repetition finds it already trusted and
- * checks that its first message goes unasked too.
+ * gateway-wide by server; each repetition ends by revoking it from Settings,
+ * so a later repetition is asked about again.
  */
 async function talkBoard(run, step, conversationId, failures, shot) {
   const page = run.page
@@ -8102,7 +8114,11 @@ async function talkBoard(run, step, conversationId, failures, shot) {
   const trustedBefore = appTrusted(run, TEST_APP_SERVER)
   await ask(firstText)
   if (trustedBefore) {
-    // An earlier repetition chose Always allow: nothing is asked now.
+    // Every repetition revokes its Always allow from Settings at its end
+    // (`untrustFromSettings`), so this one should be asked again.
+    failures.push(
+      "the talk board was still trusted after an earlier repetition revoked it",
+    )
     const firstSaid = await sent(30_000)
     if (firstSaid !== "ok")
       failures.push(
@@ -8160,6 +8176,42 @@ async function talkBoard(run, step, conversationId, failures, shot) {
     if (!(await waitFor(async () => !(await panelShown()), 3_000)))
       failures.push("⌥⌘B did not close the right panel after the talk board")
   }
+  // Undone from Settings: the app leaves the list and the gateway's file, so
+  // the next repetition finds it asked about again.
+  await untrustFromSettings(run, TEST_APP_SERVER, failures, shot)
+}
+
+/**
+ * Revokes "Always allow this app" where a person does: Settings › Privacy &
+ * Permissions › Access, the app's row under Apps you always allow. Leaves
+ * Settings, back in the workspace.
+ */
+async function untrustFromSettings(run, server, failures, shot) {
+  const page = run.page
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.privacy }).click()
+  const tab = page.locator(css.settingsTab, { hasText: names.accessTab })
+  if (await tab.count()) await tab.click()
+  const row = page.locator(`[data-trusted-app="${server}"]`)
+  const listed = await row
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!listed) {
+    failures.push(`${server} is not listed under Apps you always allow`)
+  } else {
+    await shot("trusted-apps")
+    await row.getByRole("button", { name: `Revoke ${server}` }).click()
+    if (!(await waitFor(async () => (await row.count()) === 0, 10_000)))
+      failures.push(`${server} is still listed after Revoke`)
+    if (!(await waitFor(async () => !appTrusted(run, server), 5_000)))
+      failures.push(`${server} is still in trusted-apps.json after Revoke`)
+    const kept = await run.client.apps.trusted().catch(() => null)
+    if (!kept || kept.includes(server))
+      failures.push(`apps.trusted still answers ${JSON.stringify(kept)} after Revoke`)
+  }
+  await page.getByRole("button", { name: names.leaveSettings }).first().click()
+  await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
 }
 
 /** What must hold once everything has run, in every conversation the run made. */

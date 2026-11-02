@@ -476,6 +476,23 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ opening: string; channel: Channel; draftId: string }>,
     ) => channelCreation.channelMade(state, payload),
+    // A channel's settings changed: the index keeps its section and the rest
+    // of what the window knows of it, and takes where its agents run now.
+    channelPlaced: (state, { payload }: Payload<{ channel: Channel }>) => ({
+      ...state,
+      channels: state.channels.map((each) =>
+        each.id === payload.channel.id
+          ? {
+              ...each,
+              coordinatorPlacement: payload.channel.coordinatorPlacement,
+              threadPlacement: payload.channel.threadPlacement,
+              ...(payload.channel.coordinatorConversationId
+                ? { coordinatorConversationId: payload.channel.coordinatorConversationId }
+                : {}),
+            }
+          : each,
+      ),
+    }),
   },
 })
 

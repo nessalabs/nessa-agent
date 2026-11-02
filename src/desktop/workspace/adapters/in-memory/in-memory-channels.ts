@@ -58,5 +58,21 @@ export function inMemoryChannels({
       made.set(requestId, channel)
       return Promise.resolve(channel)
     },
+    setPlacement(channelId, placement) {
+      for (const [requestId, channel] of made) {
+        if (channel.id !== channelId) continue
+        const moved = channel.coordinatorPlacement !== placement.coordinatorPlacement
+        const changed: Channel = {
+          ...channel,
+          ...placement,
+          ...(moved
+            ? { coordinatorConversationId: `${channel.coordinatorConversationId}-moved` }
+            : {}),
+        }
+        made.set(requestId, changed)
+        return Promise.resolve(changed)
+      }
+      return Promise.reject(new ChannelCreationError("forbidden"))
+    },
   }
 }

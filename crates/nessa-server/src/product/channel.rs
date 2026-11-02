@@ -6,20 +6,24 @@
 //!   ──▶ ConversationService::create_channel ──▶ { channel } | its ChannelErrorCode
 //! channel.list ──▶ ConversationService::list_channels
 //!   ──▶ the default channel first, then the stored ones ──▶ cut to one frame
+//! channel.setPlacement ──▶ ConversationService::set_channel_execution
+//!   (channel.settings on the channel; the default one is forbidden)
+//!   ──▶ { channel }, naming a fresh main conversation when the main agent moved
 //! ```
 use super::socket::{failure, success};
 use super::state::ProductRouteState;
 use crate::conversation::application::{ChannelError, ChannelListing, FolderRefusal};
 use crate::conversation::domain::{
-    Channel, ChannelDefaults, ChannelId, ChannelName, ChannelNotes, ChannelPath, ChannelRequest,
-    ChannelResources,
+    Channel, ChannelDefaults, ChannelExecution, ChannelId, ChannelName, ChannelNotes, ChannelPath,
+    ChannelRequest, ChannelResources, WorkspacePlacement,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::product::generated::{
     ApprovalMode, Channel as WireChannel, ChannelCreateParams, ChannelCreateResult,
-    ChannelErrorCode, ChannelListParams, ChannelListResult,
+    ChannelErrorCode, ChannelListParams, ChannelListResult, ChannelSetPlacementParams,
+    ChannelSetPlacementResult,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use std::path::PathBuf;
@@ -89,6 +93,39 @@ pub(super) async fn dispatch(
                 Ok(listing) => success(
                     &frame.id,
                     &fitted(listed(listing, after.as_ref()), &frame.id),
+                ),
+                Err(error) => refused(&frame.id, error),
+            }
+        }
+        "channel.setPlacement" => {
+            let Ok(params) = serde_json::from_value::<ChannelSetPlacementParams>(frame.params)
+            else {
+                return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
+            };
+            let (Ok(channel), Some(coordinator), Some(threads)) = (
+                ChannelId::new(&params.channel_id),
+                WorkspacePlacement::parse(&params.coordinator_placement),
+                WorkspacePlacement::parse(&params.thread_placement),
+            ) else {
+                return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
+            };
+            let caller = super::conversation::caller(session, params.request_id);
+            match service
+                .set_channel_execution(
+                    &caller,
+                    &channel,
+                    ChannelExecution {
+                        coordinator,
+                        threads,
+                    },
+                )
+                .await
+            {
+                Ok(channel) => success(
+                    &frame.id,
+                    &ChannelSetPlacementResult {
+                        channel: wire_channel(&channel),
+                    },
                 ),
                 Err(error) => refused(&frame.id, error),
             }

@@ -80,6 +80,37 @@ impl TrustedApps for DurableTrustedApps {
         }
         let mut next = servers.clone();
         next.insert(server.to_owned());
+        self.write(&next)?;
+        *servers = next;
+        Ok(())
+    }
+
+    fn trusted(&self) -> Vec<String> {
+        self.servers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    fn untrust(&self, server: &str) -> Result<bool, TrustNotKept> {
+        let mut servers = self.servers.lock().unwrap_or_else(PoisonError::into_inner);
+        if !servers.contains(server) {
+            return Ok(false);
+        }
+        let mut next = servers.clone();
+        next.remove(server);
+        self.write(&next)?;
+        *servers = next;
+        Ok(true)
+    }
+}
+
+impl DurableTrustedApps {
+    /// Write `next` over the file, synced, before the caller changes the set
+    /// in memory: a choice is never reported kept, or forgotten, before it is.
+    fn write(&self, next: &BTreeSet<String>) -> Result<(), TrustNotKept> {
         let bytes = serde_json::to_vec(&serde_json::json!({ "servers": next }))
             .map_err(|_| TrustNotKept)?;
         let directory = self.file.parent().ok_or(TrustNotKept)?;
@@ -90,10 +121,9 @@ impl TrustedApps for DurableTrustedApps {
             sync_directory(directory)
         });
         if let Err(cause) = written {
-            tracing::error!(%cause, "an app's trust was not kept");
+            tracing::error!(%cause, "an app's trust change was not kept");
             return Err(TrustNotKept);
         }
-        *servers = next;
         Ok(())
     }
 }
@@ -121,6 +151,21 @@ mod tests {
         let again = DurableTrustedApps::new(root);
         assert!(again.trusts("huddle"));
         assert!(!again.trusts("charts"));
+    }
+
+    #[test]
+    fn an_untrusted_app_is_asked_about_again_after_a_restart() {
+        let (_parent, root) = private_root();
+        let apps = DurableTrustedApps::new(root.clone());
+        apps.trust("huddle").unwrap();
+        apps.trust("charts").unwrap();
+        assert_eq!(apps.trusted(), ["charts", "huddle"]);
+        assert_eq!(apps.untrust("huddle"), Ok(true));
+        assert_eq!(apps.untrust("huddle"), Ok(false));
+        assert!(!apps.trusts("huddle"));
+        let again = DurableTrustedApps::new(root);
+        assert!(!again.trusts("huddle"));
+        assert_eq!(again.trusted(), ["charts"]);
     }
 
     #[test]

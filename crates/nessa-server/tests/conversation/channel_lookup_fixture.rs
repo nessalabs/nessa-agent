@@ -43,4 +43,11 @@ impl ChannelStore for ChannelLookup {
     fn forget(&self, _: &ConversationId) -> ConversationFuture<'_, ()> {
         panic!("lookup fixture cannot delete")
     }
+    fn set_execution(
+        &self,
+        _: &ChannelId,
+        _: crate::conversation::domain::ChannelExecution,
+    ) -> ConversationFuture<'_, Option<Channel>> {
+        panic!("lookup fixture cannot write")
+    }
 }

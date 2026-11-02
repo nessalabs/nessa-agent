@@ -25,8 +25,8 @@ use crate::conversation::application::{
     ConversationFuture, RequestShape,
 };
 use crate::conversation::domain::{
-    Channel, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest, ChannelResources,
-    MAX_CHANNELS_PER_OWNER,
+    Channel, ChannelExecution, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest,
+    ChannelResources, MAX_CHANNELS_PER_OWNER,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
@@ -73,6 +73,17 @@ pub trait ChannelStore: Send + Sync {
     ) -> ConversationFuture<'_, HashMap<ConversationId, ChannelId>>;
     /// Let go of a deleted conversation's placement.
     fn forget(&self, conversation: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Change where the channel's agents run, in one write, and answer the
+    /// channel as it is now; `None` when there is no such channel. When the
+    /// main agent moves, its current conversation is retired, staying in the
+    /// channel as an ordinary thread, and a fresh one is named as the
+    /// channel's main conversation, so the next main-agent chat starts in
+    /// the new place. A conversation's own placement never moves.
+    fn set_execution(
+        &self,
+        channel: &ChannelId,
+        execution: ChannelExecution,
+    ) -> ConversationFuture<'_, Option<Channel>>;
 }
 
 /// Why a folder or a file is not one a channel takes.
@@ -413,6 +424,51 @@ impl ConversationService {
         self.channel_for_action(caller, id, AccessAction::ChannelSettings)
             .await
             .map(|_| ())
+    }
+
+    /// Change where `id`'s agents run: its main agent and the threads made
+    /// in it from now on. Threads already made keep running where they
+    /// started; a moved main agent starts a fresh main conversation in the
+    /// new place, and the old one stays in the channel as a thread.
+    ///
+    /// # Errors
+    /// `Forbidden` when the caller has no such channel or may not change its
+    /// settings (the default channel is never stored, so it has none);
+    /// `Storage` or `Unavailable` when it could not be written.
+    pub async fn set_channel_execution(
+        &self,
+        caller: &ConversationCaller,
+        id: &ChannelId,
+        execution: ChannelExecution,
+    ) -> Result<Channel, ChannelError> {
+        let _admission = self.admit().await.map_err(|_| ChannelError::Unavailable)?;
+        if id.is_default() {
+            return Err(ChannelError::Forbidden);
+        }
+        let found = match self
+            .channel_for_action(caller, id, AccessAction::ChannelSettings)
+            .await
+        {
+            Ok(found) => found,
+            Err(ConversationError::Unavailable) => return Err(ChannelError::Unavailable),
+            Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
+            Err(error) => return Err(error.into()),
+        };
+        if found.execution() == execution {
+            return Ok(found);
+        }
+        let store = self.channel_store().ok_or(ChannelError::NotConfigured)?;
+        let changed = store
+            .set_execution(id, execution)
+            .await?
+            .ok_or(ChannelError::Forbidden)?;
+        tracing::info!(
+            channel_id = %changed.id(),
+            coordinator = changed.execution().coordinator.as_str(),
+            threads = changed.execution().threads.as_str(),
+            "channel run location changed"
+        );
+        Ok(changed)
     }
 
     async fn channel_for_action(

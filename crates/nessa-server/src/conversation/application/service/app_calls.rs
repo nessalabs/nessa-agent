@@ -135,6 +135,27 @@ impl fmt::Debug for McpAppResource {
 }
 
 impl ConversationService {
+    /// The apps the person always allows ("Always allow this app"), by
+    /// server; `None` when this gateway runs no MCP apps.
+    pub fn trusted_apps(&self) -> Option<Vec<String>> {
+        self.inner
+            .mcp_apps
+            .as_ref()
+            .map(|ports| ports.trusted.trusted())
+    }
+
+    /// Stop always allowing `server`'s app: its next message is asked about
+    /// again. `None` when this gateway runs no MCP apps; `Some(Ok(false))`
+    /// when it was not trusted.
+    pub fn untrust_app(&self, server: &str) -> Option<Result<bool, super::super::TrustNotKept>> {
+        let ports = self.inner.mcp_apps.as_ref()?;
+        let outcome = ports.trusted.untrust(server);
+        if matches!(outcome, Ok(true)) {
+            tracing::info!(server, "the person no longer always allows this app");
+        }
+        Some(outcome)
+    }
+
     /// Call `call.tool` on the app's own server, as the conversation's own
     /// session: the server's `CallToolResult`, re-encoded. A destructive
     /// tool waits for the person's answer to a review first.
