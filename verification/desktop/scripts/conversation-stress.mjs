@@ -30,6 +30,9 @@ import {
  *   fail        the turn fails; the next message is sent in the same conversation
  *   usageLimit  the turn ends in a usage limit; the card shows, the project
  *               preference is turned on and back off, and the turn is not resumed
+ *   signIn      the agent refuses the turn for sign-in; the card offers the
+ *               sign-in for where the run was (Authenticate for a Boat VM,
+ *               this computer's otherwise), and the next message retires it
  *   switch      the access shield picks another mode, sometimes mid-turn,
  *               where the change waits for the turn to end
  *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
@@ -2442,6 +2445,12 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${echoed}`, failures)
     if ((await run.page.locator(css.sendFailure).count()) > 0)
       failures.push("the composer shows a send failure")
+    // The message after a sign-in refusal supersedes it (ADR 501).
+    if (
+      step.after === "signIn" &&
+      (await run.page.locator(".provider-sign-in").count()) > 0
+    )
+      failures.push("the sign-in card stayed after the next message")
   },
 
   async permission(run, step, failures) {
@@ -2806,6 +2815,36 @@ const steps = {
       }, 15_000))
     )
       failures.push("the gateway did not turn usage-limit continuation off")
+  },
+
+  async signIn(run, step, failures) {
+    const text = prompt(run, STRESS.signIn, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const settledTurn = await settled(run, run.main.id, seen, text, "failed", failures)
+    if (!settledTurn.turn) return
+    if (settledTurn.turn.authenticationRequired !== true)
+      failures.push("the gateway did not publish the refusal as authentication required")
+    if (settledTurn.turn.error)
+      failures.push(`a sign-in refusal kept a diagnostic: ${settledTurn.turn.error}`)
+    const view = await run.client.conversation.read(run.main.id)
+    const environment = view.lease?.environment
+    const name = run.stack.agent === "codex" ? "Codex" : "Claude"
+    // ADR 501: Claude refused in a Boat VM mints a sign-in for Boat; any other
+    // run is offered this computer's own sign-in.
+    const label =
+      run.stack.agent === "claude" && environment === "boat"
+        ? "Authenticate"
+        : `Sign in to ${name}`
+    await expectShown(run.page, "Your login expired", failures)
+    const button = run.page.locator(".provider-sign-in button")
+    const said = await button
+      .first()
+      .textContent({ timeout: 10_000 })
+      .catch(() => null)
+    if (said !== label)
+      failures.push(
+        `the sign-in card offers "${said}" for a run in ${environment ?? "no lease"}, not "${label}"`,
+      )
   },
 
   async switch(run, step, failures) {

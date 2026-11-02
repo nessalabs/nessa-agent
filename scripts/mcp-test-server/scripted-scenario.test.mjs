@@ -154,6 +154,29 @@ test("usage-limit sends the selected harness's exact failure frame", async () =>
   }
 })
 
+test("auth-required refuses the prompt with ACP's Authentication required", async () => {
+  const agent = start("claude", { turns: [{ steps: [{ do: "auth-required" }] }] })
+  await agent.request("initialize", {})
+  const opened = await agent.request("session/new", claudeOpen)
+  assert.equal(opened.error, undefined)
+  const result = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.deepEqual(result.error, { code: -32000, message: "Authentication required" })
+  assert.equal(result.result, undefined)
+  agent.child.stdin.end()
+  await exited(agent.child)
+})
+
+test("auth-required is terminal and takes no fields", () => {
+  for (const steps of [
+    [{ do: "auth-required" }, { do: "end" }],
+    [{ do: "auth-required", code: 1 }],
+  ])
+    assert.throws(() => parseScenario({ turns: [{ steps }] }))
+})
+
 test("a generic Claude-looking failure on Codex remains unclassified wire data", async () => {
   const agent = start(
     "codex",

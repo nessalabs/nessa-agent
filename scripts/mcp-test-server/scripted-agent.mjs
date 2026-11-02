@@ -76,6 +76,7 @@ import {
   runSteps,
   turnFor,
   parseScenario,
+  ScriptedAuthenticationRequired,
   ScriptedUsageLimitError,
 } from "./scripted-scenario.mjs"
 import { SERVER } from "./local-gateway.mjs"
@@ -593,7 +594,7 @@ createInterface({ input: process.stdin })
     } catch (error) {
       failure(
         message.id,
-        -32603,
+        error instanceof ScriptedAuthenticationRequired ? error.code : -32603,
         error.message,
         error instanceof ScriptedUsageLimitError ? error.data : undefined,
       )
