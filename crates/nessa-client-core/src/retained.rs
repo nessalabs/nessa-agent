@@ -424,9 +424,9 @@ pub fn dial_native(
 /// Connect to the gateway at `address` (`host:port`, each address it
 /// resolves to tried in turn) within `timeout`, the same way a retained read
 /// does: direct, then, with a `relay`, through that relay for the gateway
-/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"),
-/// and with a `tunnel`, through the gateway's web tunnel
-/// (`docs/design/auth/tunnel.md`); with both, those two at once. What
+/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay").
+/// A `tunnel` is not dialed here. The web tunnel admits only a request that
+/// carries a paired device's secret, and a product session sends that. What
 /// connects is a plain stream; the caller's pinned TLS decides whether the
 /// gateway is the one it paired with. A paired environment dials its
 /// gateway with it.
@@ -439,7 +439,7 @@ pub fn dial_native(
 pub fn dial_gateway(
     address: &str,
     relay: Option<(&RelayAddress, &[u8; 44])>,
-    tunnel: Option<(&TunnelAddress, &TunnelSecret)>,
+    tunnel: Option<&TunnelAddress>,
     timeout: Duration,
 ) -> IoResult<TcpStream> {
     let deadline = Instant::now()
@@ -471,23 +471,12 @@ pub fn dial_gateway(
         }
         None => None,
     };
-    let tunnel = tunnel.map(|(tunnel, secret)| (tunnel.clone(), *secret));
-    let beyond: Box<dyn FnOnce(Duration) -> IoResult<TcpStream> + Send> = match (route, tunnel) {
-        (None, None) => return connect_any(address, deadline),
-        (Some(route), None) => Box::new(move |left| relay_leg(&route, left)),
-        (None, Some((tunnel, secret))) => {
-            Box::new(move |left| crate::tunnel::dial(&tunnel, &secret, left))
-        }
-        // Both are beyond the local network: neither is preferred.
-        (Some(route), Some((tunnel, secret))) => Box::new(move |left| {
-            race(
-                move |left| relay_leg(&route, left),
-                move |left| crate::tunnel::dial(&tunnel, &secret, left),
-                left,
-                Duration::ZERO,
-                &|| false,
-            )
-        }),
+    // The tunnel admits a paired device's secret. This dial does not carry
+    // one, so the address is not a route. A product session dials it.
+    let _ = tunnel;
+    let beyond: Box<dyn FnOnce(Duration) -> IoResult<TcpStream> + Send> = match route {
+        None => return connect_any(address, deadline),
+        Some(route) => Box::new(move |left| relay_leg(&route, left)),
     };
     let address = address.to_owned();
     race(

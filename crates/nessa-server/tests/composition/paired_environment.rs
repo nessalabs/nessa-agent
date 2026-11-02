@@ -27,19 +27,8 @@ use crate::env_serve::application::{
 };
 use crate::env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
 use crate::env_serve::infrastructure::{
-    dial as dial_with_secret, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec,
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec,
 };
-
-async fn dial(
-    address: String,
-    relay: Option<nessa_protocol::relay::RelayAddress>,
-    tunnel: Option<nessa_protocol::tunnel::TunnelAddress>,
-    identity: std::sync::Arc<nessa_auth::adapters::pairing::NativeIdentity>,
-    pin: [u8; 44],
-    clock: std::sync::Arc<dyn nessa_protocol::clock::Clock>,
-) -> std::io::Result<crate::device_pairing::infrastructure::TlsStream> {
-    dial_with_secret(address, relay, tunnel, None, identity, pin, clock).await
-}
 use crate::product::{ProductDependencies, ProductRouteState};
 use crate::timer::{manual::ManualTimer, TokioTimer};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -816,7 +805,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let claimed = a.commands.status(&a.session, id).await.unwrap();
     let (_, key) = claimed.claim_binding().unwrap();
     a.commands.approve(&a.session, id, key).await.unwrap();
-    let (identity, pin, _) =
+    let (identity, pin) =
         tokio::time::timeout(WAIT, approval(&pairing, poll, &TokioTimer::new(), running))
             .await
             .unwrap()
@@ -1066,7 +1055,7 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     let poll = Duration::from_millis(50);
     // The gateway may not have registered yet: the relay's `Offline` is
     // asked again, as any unanswered status is.
-    let (identity, pin, _) =
+    let (identity, pin) =
         tokio::time::timeout(WAIT, approval(&pairing, poll, &TokioTimer::new(), running))
             .await
             .expect("approved through the relay")
@@ -2402,7 +2391,7 @@ async fn k2_a_code_file_enrolls_once_then_dials() {
     a.commands.approve(&a.session, id, key).await.unwrap();
     let pairing = FilePairingEnvironment::open(&environment, &address, clock()).unwrap();
     let (_, running) = watch::channel(false);
-    let (_, pin, _) = tokio::time::timeout(
+    let (_, pin) = tokio::time::timeout(
         WAIT,
         approval(
             &pairing,
