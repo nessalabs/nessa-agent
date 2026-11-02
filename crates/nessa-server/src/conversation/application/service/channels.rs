@@ -461,6 +461,10 @@ impl ConversationService {
             return Ok(found);
         }
         let store = self.channel_store().ok_or(ChannelError::NotConfigured)?;
+        // The main chat's creation reads the channel and records where it
+        // runs under this lock; a move taken between those steps would leave
+        // it begun where the channel no longer says, so the move waits.
+        let _creation = self.inner.creation.lock(&found.coordinator_id()).await;
         let changed = store
             .set_execution(id, execution)
             .await?

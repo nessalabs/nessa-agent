@@ -18,7 +18,7 @@ type Place = "local" | "boat"
  * started; moving the main agent starts a fresh main chat there, and the old
  * one stays in the channel as a thread, so the row says so.
  */
-function ChannelPlacementControl({ channelId }: { channelId: string }) {
+export function ChannelPlacementControl({ channelId }: { channelId: string }) {
   const dispatch = useWorkspaceDispatch()
   const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
   const [saving, setSaving] = useState(false)
