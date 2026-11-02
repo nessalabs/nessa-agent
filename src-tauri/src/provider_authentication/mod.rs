@@ -8,10 +8,13 @@
 //! bundled window --> commands --> contracts::ProviderLogin --> platform launcher
 //! ```
 //! Arrows are calls. Commands acknowledge only opening login; credentials and
-//! the authentication result remain with the provider CLI. Named feature tests
+//! the authentication result remain with the provider CLI. The one exception
+//! is a Claude sign-in minted for Boat VMs (`minted`, ADR 501): its token is
+//! answered to the window for the gateway's vault, and kept nowhere here. Named feature tests
 //! in `src-tauri/tests/provider_authentication` verify command admission; platform tests verify launcher behavior.
 
 pub(crate) mod commands;
 mod contracts;
+pub(crate) mod minted;
 
 pub use contracts::{LoginFailure, Provider, ProviderLogin};

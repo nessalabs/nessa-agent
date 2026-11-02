@@ -1,6 +1,7 @@
 //! macOS host: accessory app, native frost, WKWebView pin, AppKit live resize,
 //! the desktop window's traffic lights.
 
+mod claude_sign_in;
 mod live_resize;
 mod overlay;
 mod provider_login;

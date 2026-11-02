@@ -125,6 +125,8 @@ fn main() {
             agent_credentials::infrastructure::save_agent_api_key,
             provider_authentication::commands::sign_in_to_provider,
             provider_authentication::commands::provider_login_available,
+            provider_authentication::commands::mint_claude_sign_in,
+            provider_authentication::commands::claude_sign_in_mint_available,
             gateway::infrastructure::gateway_startup,
             gateway::infrastructure::retry_gateway_startup,
             gateway::infrastructure::runtime_copy,
