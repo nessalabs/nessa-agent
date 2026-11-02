@@ -200,6 +200,65 @@ async fn strangers_holding_connections_cannot_keep_a_paired_device_out() {
     serving.stop().await;
 }
 
+/// Connections that never finish the upgrade stay within the pre-auth
+/// slots. The ones past that are closed, and none of them takes a tunnel permit.
+#[tokio::test]
+async fn incomplete_upgrades_stay_within_the_preauth_slots() {
+    let mut serving = serve(4).await;
+    let mut held = Vec::new();
+    for _ in 0..(super::PREAUTH_CAPACITY + 8) {
+        let stream = tokio::net::TcpStream::connect(serving.address)
+            .await
+            .unwrap();
+        held.push(stream);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let (open, closed) = loop {
+        let mut open = 0;
+        let mut closed = 0;
+        for stream in &held {
+            let mut buf = [0u8; 8];
+            match stream.try_read(&mut buf) {
+                Ok(0) => closed += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => open += 1,
+                Ok(_) => open += 1,
+                Err(_) => closed += 1,
+            }
+        }
+        if closed >= 8 && open <= super::PREAUTH_CAPACITY {
+            break (open, closed);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "incomplete upgrades were not bounded: {open} open, {closed} closed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert!(
+        open <= super::PREAUTH_CAPACITY,
+        "{open} incomplete upgrades stayed open"
+    );
+    assert!(closed >= 8, "the extras were not closed: {closed}");
+    assert_eq!(
+        serving.pool.available_permits(),
+        4,
+        "an unfinished upgrade takes no tunnel permit"
+    );
+    drop(held);
+    let (_socket, _) = tokio::time::timeout(
+        REAL,
+        tokio_tungstenite::connect_async(request(serving.address, Some(&serving.paired))),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(tokio::time::timeout(REAL, serving.joined.recv())
+        .await
+        .unwrap()
+        .is_some());
+    serving.stop().await;
+}
+
 #[tokio::test]
 async fn a_revoked_device_is_rejected_and_takes_no_permit() {
     let mut serving = serve(4).await;

@@ -28,7 +28,7 @@ use std::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, watch},
+    sync::{mpsc, watch, Semaphore},
     task::JoinSet,
 };
 use tokio_tungstenite::tungstenite::{
@@ -38,6 +38,10 @@ use tokio_tungstenite::tungstenite::{
 
 /// How long a connection has to finish its WebSocket upgrade.
 const UPGRADE_DEADLINE: Duration = Duration::from_secs(10);
+/// Sockets that have not yet presented a secret. Separate from the tunnel
+/// permit pool: a stranger who never finishes the upgrade cannot pile up
+/// tasks, and a matched secret still takes a tunnel permit only after it matches.
+const PREAUTH_CAPACITY: usize = 4;
 /// How long making the loopback pair may take.
 const PAIR_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -94,6 +98,7 @@ impl<P: Send + 'static> TunnelIngress<P> {
     /// never ends the gateway.
     pub(crate) async fn serve(self, mut stop: watch::Receiver<bool>) {
         let mut bridges = JoinSet::new();
+        let preauth = Arc::new(Semaphore::new(PREAUTH_CAPACITY));
         loop {
             let accepted = tokio::select! {
                 biased;
@@ -113,12 +118,18 @@ impl<P: Send + 'static> TunnelIngress<P> {
                     continue;
                 }
             };
-            // The secret is checked before a permit is taken, so a stranger
-            // who holds the handshake open never occupies the pool (row T4).
+            // A socket that has not presented a secret holds a pre-auth slot,
+            // not a tunnel permit. With none free the socket is closed and no
+            // task is spawned. The secret is still checked before a permit.
+            let Ok(slot) = preauth.clone().try_acquire_owned() else {
+                drop(stream);
+                continue;
+            };
             let admission = self.admission.clone();
             let secrets = self.secrets.clone();
             let joined = self.joined.clone();
             bridges.spawn(async move {
+                let _slot = slot;
                 if let Err(error) = take(stream, admission, secrets, joined).await {
                     tracing::debug!(%error, "tunnel connection refused");
                 }

@@ -52,6 +52,9 @@ pub(crate) struct FileDeviceSecrets {
     /// Test hook: the next `count` secret-file writes fail before the file changes.
     #[cfg(test)]
     fail_publications: std::sync::atomic::AtomicU32,
+    /// Test hook: the next `count` publication audits fail after the file write.
+    #[cfg(test)]
+    fail_confirmations: std::sync::atomic::AtomicU32,
 }
 
 impl FileDeviceSecrets {
@@ -89,6 +92,8 @@ impl FileDeviceSecrets {
             gate: Mutex::new(()),
             #[cfg(test)]
             fail_publications: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(test)]
+            fail_confirmations: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -96,6 +101,13 @@ impl FileDeviceSecrets {
     #[cfg(test)]
     fn fail_next_publications(&self, count: u32) {
         self.fail_publications
+            .store(count, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Fail the next `count` publication audits, after the secret file is written.
+    #[cfg(test)]
+    fn fail_next_confirmations(&self, count: u32) {
+        self.fail_confirmations
             .store(count, std::sync::atomic::Ordering::SeqCst);
     }
 
@@ -263,6 +275,18 @@ impl FileDeviceSecrets {
     }
 
     fn confirm(&self, open: &Open, after: &str) -> Result<(), SecretError> {
+        #[cfg(test)]
+        if self
+            .fail_confirmations
+            .try_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |count| count.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(SecretError::Audit);
+        }
         self.write_record(open, "published", Some(after))
     }
 
@@ -417,6 +441,11 @@ impl DeviceTunnelSecrets for FileDeviceSecrets {
             .iter()
             .position(|row| row.credential_id == credential_id)
         else {
+            // The file write already removed the row, and the publication
+            // audit did not land. Confirm that same revocation.
+            if let Some(open) = self.open_operation(credential_id, ACTION_REVOKE)? {
+                self.confirm(&open, "revoked")?;
+            }
             // The secret was never stored. Close an open issue so a retry
             // cannot publish it after this revocation.
             if let Some(open) = self.open_operation(credential_id, ACTION_ISSUE)? {
@@ -739,6 +768,49 @@ mod tests {
         assert_eq!(revoke_published[0]["before"], "active");
         assert_eq!(revoke_published[0]["after"], "revoked");
         assert_ne!(revoke_operation, operation);
+    }
+
+    #[test]
+    fn a_revoke_whose_confirmation_failed_is_confirmed_on_retry() {
+        let (directory, secrets, _) = store(vec!["device-1".into()]);
+        let secret = secrets.issue("device-1", &[7; 32], "owner").unwrap();
+        secrets.fail_next_confirmations(1);
+        assert_eq!(
+            secrets.revoke("device-1", SecretRevocation::Unpaired, "owner"),
+            Err(SecretError::Audit)
+        );
+        assert!(
+            !secrets.accepts(&secret),
+            "the secret file already lost the row"
+        );
+        let records = audit_records(directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "revoke" && record["phase"] == "intent")
+            .collect();
+        assert_eq!(intents.len(), 1);
+        assert!(records
+            .iter()
+            .all(|record| record["action"] != "revoke" || record["phase"] != "published"));
+        let operation = intents[0]["operationId"].as_str().unwrap().to_owned();
+        secrets
+            .revoke("device-1", SecretRevocation::Unpaired, "owner")
+            .unwrap();
+        assert!(!secrets.accepts(&secret));
+        let records = audit_records(directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "revoke" && record["phase"] == "intent")
+            .collect();
+        let published: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "revoke" && record["phase"] == "published")
+            .collect();
+        assert_eq!(intents.len(), 1, "the retry does not write a second intent");
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0]["operationId"], operation);
+        assert_eq!(published[0]["before"], "active");
+        assert_eq!(published[0]["after"], "revoked");
     }
 
     fn audit_records(root: &std::path::Path) -> Vec<Value> {

@@ -84,7 +84,9 @@ WebSocket client cannot set a header. The ingress compares that value
 with the active devices' secrets, in constant time, and rejects anything
 else with no permit taken. Unpairing a device or revoking its credential
 forgets the secret. Anonymous traffic, and a device that was revoked,
-cannot fill the pool.
+cannot fill the pool. A socket that has not finished its upgrade holds one
+of four pre-authentication slots, not a tunnel permit. Past that, the
+socket is closed and no task is started.
 
 ## The pieces
 
