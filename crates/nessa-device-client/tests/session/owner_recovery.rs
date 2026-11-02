@@ -145,6 +145,12 @@ impl ClientPendingStore for Store {
         }
         self.actual.end_enrollment(expected)
     }
+    fn save_tunnel_secret(&self, secret: &[u8; 32]) -> Result<(), PrivateStateError> {
+        self.actual.save_tunnel_secret(secret)
+    }
+    fn load_tunnel_secret(&self) -> Result<Option<[u8; 32]>, PrivateStateError> {
+        self.actual.load_tunnel_secret()
+    }
 }
 impl OwnerPhoneOriginalStore for Store {
     fn reserve_original(
@@ -669,6 +675,11 @@ fn actual_pinned_recovery_has_no_adoption_then_each_fresh_status_reconciles_orig
             .credential()
             .as_str(),
         "issued"
+    );
+    assert_eq!(
+        fixture.state.actual.load_tunnel_secret().unwrap(),
+        Some([9; 32]),
+        "owner-phone settlement keeps the tunnel secret"
     );
 }
 
