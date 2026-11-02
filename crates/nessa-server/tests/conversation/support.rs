@@ -246,6 +246,10 @@ pub(crate) struct MemoryRepository {
     pub(crate) refuse_settling: AtomicBool,
     /// Refuse to keep what a deletion read of its history.
     pub(crate) refuse_keeping_the_read: AtomicBool,
+    /// Catalogue incarnation captured with each admission snapshot.
+    pub(crate) catalogue_incarnation: Mutex<String>,
+    /// Monotonic row revision. A first tombstone advances it.
+    pub(crate) change_revisions: Mutex<HashMap<ConversationId, u64>>,
 }
 
 pub(crate) struct AcceptingModeAudit;
@@ -854,11 +858,42 @@ impl ConversationRepository for MemoryRepository {
         })
     }
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
+        let snapshot = self.load_admission_snapshot(id);
+        Box::pin(async move {
+            snapshot
+                .await
+                .map(|found| found.map(|snapshot| snapshot.into_conversation()))
+        })
+    }
+    fn load_admission_snapshot(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<
+        '_,
+        Option<crate::conversation::application::ConversationAdmissionSnapshot>,
+    > {
+        use crate::conversation::application::{
+            ConversationAdmissionSnapshot, ConversationAdmissionToken,
+        };
         let value = self.records.lock().unwrap().get(id).cloned();
         let value = self.mode_loaded_reply.lock().unwrap().take().or(value);
+        let incarnation = self.catalogue_incarnation.lock().unwrap().clone();
+        let change_revision = self
+            .change_revisions
+            .lock()
+            .unwrap()
+            .get(id)
+            .copied()
+            .unwrap_or(0);
+        let id = id.clone();
         let value = match self.metadata_load_failure.lock().unwrap().take() {
             Some(error) => Err(error),
-            None => Ok(value),
+            None => Ok(value.map(|conversation| {
+                ConversationAdmissionSnapshot::new(
+                    conversation,
+                    ConversationAdmissionToken::new(incarnation, id, change_revision),
+                )
+            })),
         };
         let gate = self.metadata_load_gate.lock().unwrap().take();
         Box::pin(async move {
@@ -949,12 +984,20 @@ impl ConversationRepository for MemoryRepository {
                 Err(ConversationError::Metadata)
             }
             // Only persists what the domain says the deletion becomes.
-            Some(conversation) => conversation
-                .deleted(deletion)
-                .map_err(|_| ConversationError::Metadata)
-                .inspect(|deleted| {
-                    records.insert(id.clone(), deleted.clone());
-                }),
+            Some(conversation) => {
+                let first_tombstone = conversation.deletion().is_none();
+                conversation
+                    .deleted(deletion)
+                    .map_err(|_| ConversationError::Metadata)
+                    .inspect(|deleted| {
+                        records.insert(id.clone(), deleted.clone());
+                        if first_tombstone {
+                            let mut revisions = self.change_revisions.lock().unwrap();
+                            let next = revisions.get(id).copied().unwrap_or(0).saturating_add(1);
+                            revisions.insert(id.clone(), next);
+                        }
+                    })
+            }
         };
         Box::pin(async move { result })
     }
