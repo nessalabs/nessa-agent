@@ -14,7 +14,7 @@ use crate::{
         domain::Failure as WorkspaceFailure,
         infrastructure::{
             worker_image, BoatProvider, ConfigBoatRuntimeSettings, FileAssignments,
-            RuntimeSettingsAudit, VaultSettings,
+            RuntimeSettingsAudit, VaultClaudeSignIns, VaultSettings,
         },
     },
 };
@@ -295,6 +295,8 @@ pub(super) async fn product_state(
     #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(unix)]
+    let claude_sign_ins = Arc::new(VaultClaudeSignIns(vault.vault.clone()));
+    #[cfg(unix)]
     let workspace_service = Arc::new(
         Workspaces::new(
             Arc::new(VaultSettings(vault.vault.clone())),
@@ -310,10 +312,12 @@ pub(super) async fn product_state(
                     libc::geteuid()
                 }),
                 relay_program: std::env::current_exe().map_err(setup_error)?,
+                claude_sign_ins: claude_sign_ins.clone(),
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
+            claude_sign_ins,
         )
         .with_image(worker_image()),
     );

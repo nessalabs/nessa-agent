@@ -8,7 +8,7 @@ use crate::{
     mcp_servers::domain::{relay_arguments, MANAGED_SERVER_NAME, RELAY_SUBCOMMAND},
     workspaces::{
         application::{ServedCopy, WorkspaceStream},
-        domain::Failure,
+        domain::{ClaudeSignIn, Failure},
     },
 };
 use base64::Engine;
@@ -21,8 +21,10 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use workspace_sdk::boat_client::Api;
+use zeroize::Zeroizing;
 
 pub(super) struct SshAccess {
     // Drop the process before removing its private files.
@@ -50,13 +52,21 @@ const VM_SERVE_ENVIRONMENT: &str =
     "env -u NESSA_INSTANCE NESSA_STAGE=prod NESSA_DATA_DIR=/home/user/.nessa";
 
 impl SshAccess {
-    pub(super) fn serve(self: &Arc<Self>, copy: &ServedCopy) -> io::Result<WorkspaceStream> {
+    /// `sign_in` goes to the VM as the first line of the serve's input, which
+    /// its shell reads before `env serve` starts: never in a command line,
+    /// never on a disk.
+    pub(super) async fn serve(
+        self: &Arc<Self>,
+        copy: &ServedCopy,
+        sign_in: Option<&ClaudeSignIn>,
+    ) -> io::Result<WorkspaceStream> {
         // One copy, chosen before it starts: when it ends, the connection
         // does.
         let program = match copy {
             ServedCopy::Image => format!("{VM_SERVE_ENVIRONMENT} {VM_NESSA} env serve"),
             ServedCopy::Installed(command) => format!("{VM_SERVE_ENVIRONMENT} {command}"),
         };
+        let program = serve_script(&program);
         let mut command = ssh(&self.directory, self.endpoint);
         command
             .args(["-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"])
@@ -71,12 +81,12 @@ impl SshAccess {
                 .take()
                 .ok_or_else(|| io::Error::other("missing environment stdout"))?,
         );
-        let input = Box::new(
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| io::Error::other("missing environment stdin"))?,
-        );
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("missing environment stdin"))?;
+        stdin.write_all(&sign_in_line(sign_in)).await?;
+        let input = Box::new(stdin);
         Ok(WorkspaceStream {
             input,
             output,
@@ -270,6 +280,25 @@ impl SshAccess {
 }
 /// `script` run by `sh`, whatever the VM account's login shell is, as the
 /// installer's own commands are.
+/// `program`, started once the shell has read the sign-in line: exported as
+/// `CLAUDE_CODE_OAUTH_TOKEN` only when the line holds one. `read` takes no
+/// byte past that line, so what follows is `env serve`'s own input.
+fn serve_script(program: &str) -> String {
+    posix(&format!(
+        "IFS= read -r t || exit 1; \
+         if [ -n \"$t\" ]; then CLAUDE_CODE_OAUTH_TOKEN=$t; export CLAUDE_CODE_OAUTH_TOKEN; fi; \
+         unset t; exec {program}"
+    ))
+}
+/// The line [`serve_script`] reads: the token, or nothing.
+fn sign_in_line(sign_in: Option<&ClaudeSignIn>) -> Zeroizing<Vec<u8>> {
+    let token = sign_in.map_or(&[][..], ClaudeSignIn::as_bytes);
+    // Sized once, so no reallocation leaves a copy behind unerased.
+    let mut line = Zeroizing::new(Vec::with_capacity(token.len() + 1));
+    line.extend_from_slice(token);
+    line.push(b'\n');
+    line
+}
 fn posix(script: &str) -> String {
     format!("sh -c '{}'", script.replace('\'', "'\\''"))
 }
@@ -420,6 +449,47 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&said.stdout), "a  b\nc\n");
+    }
+
+    /// What `program` saw as its token and its input, when the serve script
+    /// was given `input`, as the VM's login shell would run it.
+    fn served(input: &[u8]) -> String {
+        use std::io::Write;
+        let program =
+            posix(r#"printf "%s|%s|" "${CLAUDE_CODE_OAUTH_TOKEN-unset}" "${t-gone}"; cat"#);
+        let mut child = std::process::Command::new("bash")
+            .args(["-c", &serve_script(&program)])
+            .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    }
+
+    #[test]
+    fn a_saved_sign_in_is_the_serves_token_and_none_of_its_input() {
+        let sign_in = ClaudeSignIn::new("sk-ant-oat01-fixture_A-1".into()).unwrap();
+        let mut input = sign_in_line(Some(&sign_in)).to_vec();
+        input.extend_from_slice(b"lease frame one\nlease frame two\n");
+        assert_eq!(
+            served(&input),
+            "sk-ant-oat01-fixture_A-1|gone|lease frame one\nlease frame two\n"
+        );
+    }
+
+    #[test]
+    fn with_no_sign_in_the_serve_has_no_token_and_all_its_input() {
+        let mut input = sign_in_line(None).to_vec();
+        assert_eq!(input, b"\n");
+        input.extend_from_slice(b"lease frame\n");
+        assert_eq!(served(&input), "unset|gone|lease frame\n");
+    }
+
+    #[test]
+    fn a_serve_given_no_line_at_all_does_not_start() {
+        assert_eq!(served(b""), "");
     }
 
     fn stand_in(server: &str) -> Vec<String> {

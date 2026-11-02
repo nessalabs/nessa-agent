@@ -410,6 +410,10 @@
       "params": "BoatSaveParams",
       "grant": "credential.manage"
     },
+    "boat.saveClaudeSignIn": {
+      "params": "BoatClaudeSignInParams",
+      "grant": "credential.manage"
+    },
     "boat.disconnect": {
       "params": null,
       "grant": "credential.manage"
