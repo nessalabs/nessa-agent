@@ -46,7 +46,7 @@ enum Leg {
 /// deadline, but the relay's host name lookup is bounded only by the
 /// system resolver. A `timeout` no longer than `head_start` starts the relay
 /// only after a refused direct dial.
-pub(super) fn race<T: Send + 'static>(
+pub(crate) fn race<T: Send + 'static>(
     direct: impl FnOnce(Duration) -> IoResult<T> + Send + 'static,
     relay: impl FnOnce(Duration) -> IoResult<T> + Send + 'static,
     timeout: Duration,

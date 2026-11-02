@@ -116,15 +116,23 @@ relay.
 The relay speaks a tiny framed preamble on each TCP connection, then
 either keeps the connection as a serve connection or joins it to another
 and stops framing. Frames are a version byte, a type byte, a length byte
-and a body whose length each type fixes; no frame is larger than 67 bytes,
-and a connection
-that sends anything else, or nothing for the preamble deadline, is closed.
+and a body. The join frames have a fixed length and are at most 67 bytes.
+A published tunnel origin is an Ed25519 signature (64 bytes) by the
+gateway's key and then the origin text, at most 255 bytes together. The
+text alone is at most 191 bytes. Empty clears it. A connection that sends
+anything else, or nothing for the preamble deadline, is closed.
 
 | First frame | Who sends it | What follows |
 | --- | --- | --- |
 | `Serve{K}` | A gateway | `Challenge{n}`, 32 fresh random bytes; the gateway answers `Proof{sig}`, an Ed25519 signature by K over the proof message below. A good proof gets `Registered` and the connection becomes K's serve connection: the relay sends `Incoming{t}` and `Ping`, the gateway answers `Pong`. A bad proof is closed |
 | `Connect{K}` | A reader | `Offline` and close when K has no serve connection. Otherwise the relay picks t, 16 fresh random bytes, sends `Incoming{t}` to K and waits for K's `Accept`; when it comes both sides get `Joined` and the bytes after it are the reader's and the gateway's own. No `Accept` before the join deadline is `NoAnswer`, never `Offline` |
 | `Accept{K, t}` | A gateway | Joined to the waiting reader whose t it names; an unknown t is closed. t is sent only on K's proved serve connection, and is single use |
+| `Publish{origin}` | A gateway, on its serve connection | The relay remembers this tunnel origin for K, replacing the previous one. The body is K's signature over the origin, then the origin text. Empty clears it |
+| `Lookup{K}` | A reader | The relay answers `Offline` when K is not registered. Otherwise it challenges the reader |
+| `Seal{mac}` | A reader | HMAC of the reader's tunnel secret over the challenge. The relay forwards it; it never sees the secret |
+| `Admit` / `Allow` / `Deny` | Relay and gateway, on the serve connection | The gateway accepts the mac only for a paired device's current secret |
+| `Located{origin}` | The relay, after `Allow` | The origin K last published, signature and all, or empty when it has none. The phone checks the signature against K before it dials |
+| `Unlisted` | The relay | The gateway refused, or the lookup was not asked. The origin is not sent |
 
 **The proof message** is the bytes `nessa-relay-serve-v1`, a zero byte,
 K (32 bytes) and n (32 bytes), in that order. K's key is also the key its
@@ -143,6 +151,12 @@ anything: without it, anyone who knows K could register as K and take its
 readers' connections. They could read nothing, but they could make the
 gateway look asleep and learn who connects to it. The proof makes both
 take K's private key.
+
+**The origin message** is the bytes `nessa-tunnel-origin-v1`, a zero byte,
+K (32 bytes) and the origin text, in that order. The gateway signs it when
+it publishes. The phone verifies that signature with the key it pinned
+before it sends its tunnel secret to the origin. The relay stores the
+bytes and does not check them.
 
 A second proved `Serve{K}` replaces the first, whose connection is closed:
 the newest connection is the live one, as with a paired environment that

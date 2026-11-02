@@ -618,7 +618,10 @@ pub(super) async fn product_state(
     )));
     let native = match native {
         Some((prepared, commands, peers)) => {
-            product = product.with_pairing(Arc::new(commands)).with_peers(peers);
+            product = product
+                .with_pairing(Arc::new(commands))
+                .with_peers(peers)
+                .with_tunnel_secrets(prepared.tunnel_secrets());
             let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,

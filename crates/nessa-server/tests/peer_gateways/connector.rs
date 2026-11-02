@@ -141,7 +141,7 @@ async fn a_relay_that_refuses_first_leaves_a_slow_direct_connect_to_connect() {
 #[tokio::test]
 async fn both_failing_is_the_relays_refusal() {
     for answer in [RelayFrame::Offline, RelayFrame::NoAnswer] {
-        let (address, serving) = scripted_relay(answer, b"").await;
+        let (address, serving) = scripted_relay(answer.clone(), b"").await;
         let refused = raced(
             async { Err(io::ErrorKind::TimedOut.into()) },
             Some(TcpPeerConnector.relay(&address, KEY)),

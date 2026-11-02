@@ -44,6 +44,27 @@ impl LocalCredentialStore {
             Ok(keys)
         })
     }
+
+    /// Every active device credential id for `audience`. The tunnel secret
+    /// store admits a secret only while its credential is in this list.
+    pub fn active_device_credential_ids(
+        &self,
+        audience: &AudienceId,
+    ) -> Result<Vec<CredentialId>, AccessError> {
+        self.with_published_registry(|registry| {
+            let mut ids = Vec::new();
+            for credential in &registry.credentials {
+                if bound_key(registry, credential, audience).is_err() {
+                    continue;
+                }
+                ids.push(
+                    CredentialId::new(credential.metadata.id.as_str())
+                        .map_err(|_| AccessError::Unavailable)?,
+                );
+            }
+            Ok(ids)
+        })
+    }
 }
 impl DeviceCredentialVerifier<'_> {
     /// Whether the key this connection proved holds some active (unrevoked)

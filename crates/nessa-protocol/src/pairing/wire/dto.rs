@@ -167,6 +167,8 @@ pub(super) enum WireStatus<'a> {
         receiver: Cow<'a, str>,
         #[serde(rename = "accessEpoch")]
         access_epoch: u64,
+        #[serde(rename = "tunnelSecret")]
+        tunnel_secret: Cow<'a, str>,
     },
     Terminal {
         consent: WireConsent<'a>,
@@ -214,6 +216,7 @@ impl WireStatus<'_> {
                 credential,
                 receiver,
                 access_epoch,
+                tunnel_secret,
             } => NativePairingStatus::Active {
                 consent: consent.into_domain()?,
                 credential: CredentialId::new(credential.into_owned())
@@ -221,6 +224,8 @@ impl WireStatus<'_> {
                 receiver: ResourceId::new(receiver.into_owned())
                     .map_err(|_| NativeWireError::Invalid)?,
                 access_epoch,
+                tunnel_secret: crate::tunnel::TunnelSecret::decode(&tunnel_secret)
+                    .ok_or(NativeWireError::Invalid)?,
             },
             Self::Terminal { consent, cause } => NativePairingStatus::Terminal {
                 consent: consent.into_domain()?,

@@ -21,8 +21,10 @@
 //! cannot read.
 use super::super::wire::{next_frame, read_frame, write_frame};
 use crate::timer::{within, Timer};
+use crate::tunnel::application::DeviceTunnelSecrets;
 use nessa_protocol::relay::{
-    GatewayKey, JoinToken, RelayFrame, JOIN_DEADLINE, PING_INTERVAL, PREAMBLE_DEADLINE,
+    GatewayKey, JoinToken, PublishedOrigin, RelayFrame, JOIN_DEADLINE, PING_INTERVAL,
+    PREAMBLE_DEADLINE,
 };
 use std::{future::Future, io, pin::Pin, sync::Arc, time::Duration};
 use tokio::{
@@ -73,6 +75,10 @@ pub(crate) trait RelayKey: Send + Sync {
     /// The key's relay proof over `challenge`, or `None` when it cannot be
     /// made.
     fn prove(&self, challenge: &[u8; 32]) -> Option<[u8; 64]>;
+    /// The key's signature over a tunnel origin it is publishing, or `None`
+    /// when it cannot be made. The phone checks this before it sends its
+    /// tunnel secret to that origin.
+    fn sign_origin(&self, origin: &[u8]) -> Option<[u8; 64]>;
 }
 
 /// The listener's relay permits, a pool of their own so relayed readers
@@ -98,6 +104,10 @@ pub(crate) struct ThroughRelay<S, P> {
     pub(crate) timer: Arc<dyn Timer>,
     /// Where joined readers go: the listener's side.
     pub(crate) joined: mpsc::Sender<Relayed<S, P>>,
+    /// The tunnel origin to publish. `None` clears it.
+    pub(crate) address: watch::Receiver<Option<PublishedOrigin>>,
+    /// Paired devices' tunnel secrets, for a lookup.
+    pub(crate) secrets: Arc<dyn DeviceTunnelSecrets>,
 }
 
 impl<S, P> ThroughRelay<S, P>
@@ -175,6 +185,14 @@ where
         let mut reading = Box::pin(next_frame(reader));
         let mut legs = JoinSet::new();
         let mut silent = self.timer.now() + SILENCE;
+        let mut published = self.address.clone();
+        let mut watch_address = true;
+        let current = *published.borrow_and_update();
+        if let Some(origin) = current {
+            if !self.publish(&mut writer, origin).await {
+                return;
+            }
+        }
         loop {
             tokio::select! {
                 biased;
@@ -198,6 +216,22 @@ where
                             }
                         }
                         Ok(RelayFrame::Incoming { token }) => self.incoming(&mut legs, token),
+                        Ok(RelayFrame::Admit { token, nonce, mac }) => {
+                            let allow = self.secrets.authorize_lookup(&self.key.key(), &nonce, &mac);
+                            let frame = if allow {
+                                RelayFrame::Allow { token }
+                            } else {
+                                RelayFrame::Deny { token }
+                            };
+                            let answered = tokio::select! {
+                                biased;
+                                () = stopped(&mut stop) => return,
+                                answered = self.send(&mut writer, frame) => answered,
+                            };
+                            if !answered {
+                                return;
+                            }
+                        }
                         Ok(other) => {
                             tracing::debug!(frame = ?other, "relay sent an unexpected frame");
                             return;
@@ -208,6 +242,20 @@ where
                         }
                     }
                     reading = Box::pin(next_frame(reader));
+                }
+                changed = published.changed(), if watch_address => {
+                    match changed {
+                        Ok(()) => {
+                            let origin = match *published.borrow_and_update() {
+                                Some(origin) => origin,
+                                None => PublishedOrigin::clear(),
+                            };
+                            if !self.publish(&mut writer, origin).await {
+                                return;
+                            }
+                        }
+                        Err(_) => watch_address = false,
+                    }
                 }
                 () = self.timer.sleep_until(silent) => {
                     tracing::info!("relay registration went silent");
@@ -247,6 +295,34 @@ where
                 Err(_) => tracing::debug!("relay accept timed out"),
             }
         });
+    }
+
+    /// Publish `origin`, signed by this gateway's key. An empty origin clears
+    /// the one the relay holds. A key that cannot sign sends nothing: an
+    /// unsigned origin would be an address a phone cannot trust.
+    async fn publish(
+        &self,
+        stream: &mut (impl AsyncWrite + Unpin),
+        origin: PublishedOrigin,
+    ) -> bool {
+        let Some(frame) = self.signed_publish(origin) else {
+            tracing::error!("the gateway key cannot sign its tunnel origin");
+            return true;
+        };
+        self.send(stream, frame).await
+    }
+
+    fn signed_publish(&self, origin: PublishedOrigin) -> Option<RelayFrame> {
+        if origin.as_bytes().is_empty() {
+            return Some(RelayFrame::Publish {
+                origin: Box::new(PublishedOrigin::clear()),
+            });
+        }
+        let text = origin.text()?;
+        let signature = self.key.sign_origin(text.as_bytes())?;
+        Some(RelayFrame::Publish {
+            origin: Box::new(PublishedOrigin::signed(&signature, text)?),
+        })
     }
 
     /// Write one frame on the registration, bounded by the ping interval.

@@ -187,6 +187,175 @@ impl TunnelSetting {
     }
 }
 
+/// Why a device tunnel secret was revoked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecretRevocation {
+    /// The device was unpaired (`pairing.cancel` of an active enrollment).
+    Unpaired,
+    /// Its credential was revoked (`credential.revoke`).
+    CredentialRevoked,
+}
+
+/// A tunnel secret could not be issued or revoked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecretError {
+    /// The audit record was not stored. The secret was not handed out, or
+    /// on revoke the credential is already ended and a retry records the audit.
+    Audit,
+    /// The secret file could not be read or written.
+    Storage,
+}
+
+/// The paired devices' tunnel secrets. Issuing and revoking are audited.
+/// `accepts` and `authorize_lookup` consider only secrets whose credentials
+/// are still active.
+pub trait DeviceTunnelSecrets: Send + Sync {
+    /// The secret for `credential_id`, creating it on the first call.
+    /// A later call returns the same secret and writes no second audit.
+    fn issue(
+        &self,
+        credential_id: &str,
+        device_key: &[u8; 32],
+        initiator: &str,
+    ) -> Result<[u8; 32], SecretError>;
+
+    /// Forget `credential_id`'s secret and record the revocation.
+    /// A credential that was never issued is already done.
+    fn revoke(
+        &self,
+        credential_id: &str,
+        cause: SecretRevocation,
+        initiator: &str,
+    ) -> Result<(), SecretError>;
+
+    /// Whether `presented` is an active paired device's secret.
+    /// The compare does not stop at the first match.
+    fn accepts(&self, presented: &[u8]) -> bool;
+
+    /// Whether `mac` is `tunnel_lookup_mac` for an active secret, `gateway` and `nonce`.
+    fn authorize_lookup(
+        &self,
+        gateway: &nessa_protocol::relay::GatewayKey,
+        nonce: &[u8; 32],
+        mac: &[u8; 32],
+    ) -> bool;
+}
+
+/// Secrets kept in memory. Pairing tests use it; the gateway uses the file store.
+#[derive(Default)]
+pub struct MemoryDeviceSecrets {
+    rows: std::sync::Mutex<Vec<MemorySecret>>,
+}
+
+struct MemorySecret {
+    credential_id: String,
+    secret: [u8; 32],
+}
+
+impl MemoryDeviceSecrets {
+    /// Nothing issued.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl DeviceTunnelSecrets for MemoryDeviceSecrets {
+    fn issue(
+        &self,
+        credential_id: &str,
+        _device_key: &[u8; 32],
+        _initiator: &str,
+    ) -> Result<[u8; 32], SecretError> {
+        let mut rows = self.rows.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(row) = rows.iter().find(|row| row.credential_id == credential_id) {
+            return Ok(row.secret);
+        }
+        let mut secret = [0; 32];
+        getrandom::fill(&mut secret).map_err(|_| SecretError::Storage)?;
+        rows.push(MemorySecret {
+            credential_id: credential_id.to_owned(),
+            secret,
+        });
+        Ok(secret)
+    }
+
+    fn revoke(
+        &self,
+        credential_id: &str,
+        _cause: SecretRevocation,
+        _initiator: &str,
+    ) -> Result<(), SecretError> {
+        let mut rows = self.rows.lock().unwrap_or_else(|error| error.into_inner());
+        rows.retain(|row| row.credential_id != credential_id);
+        Ok(())
+    }
+
+    fn accepts(&self, presented: &[u8]) -> bool {
+        let rows = self.rows.lock().unwrap_or_else(|error| error.into_inner());
+        any_match(
+            presented,
+            &rows.iter().map(|row| row.secret).collect::<Vec<_>>(),
+        )
+    }
+
+    fn authorize_lookup(
+        &self,
+        gateway: &nessa_protocol::relay::GatewayKey,
+        nonce: &[u8; 32],
+        mac: &[u8; 32],
+    ) -> bool {
+        let rows = self.rows.lock().unwrap_or_else(|error| error.into_inner());
+        any_mac(
+            &rows.iter().map(|row| row.secret).collect::<Vec<_>>(),
+            gateway,
+            nonce,
+            mac,
+        )
+    }
+}
+
+/// True when `presented` equals some secret. Every secret is compared, and
+/// a wrong length matches none. An empty list still runs one compare.
+pub(crate) fn any_match(presented: &[u8], secrets: &[[u8; 32]]) -> bool {
+    use subtle::{Choice, ConstantTimeEq};
+    let mut candidate = [0; 32];
+    let length_ok = Choice::from(u8::from(presented.len() == 32));
+    if presented.len() == 32 {
+        candidate.copy_from_slice(presented);
+    }
+    let mut matched = Choice::from(0);
+    if secrets.is_empty() {
+        let _ = candidate.ct_eq(&[0; 32]);
+        return false;
+    }
+    for secret in secrets {
+        matched |= candidate.ct_eq(secret);
+    }
+    bool::from(matched & length_ok)
+}
+
+/// True when `mac` is the lookup mac of some secret. Every secret is checked.
+pub(crate) fn any_mac(
+    secrets: &[[u8; 32]],
+    gateway: &nessa_protocol::relay::GatewayKey,
+    nonce: &[u8; 32],
+    mac: &[u8; 32],
+) -> bool {
+    use nessa_protocol::relay::tunnel_lookup_mac;
+    use subtle::{Choice, ConstantTimeEq};
+    let dummy = [0; 32];
+    let list: &[[u8; 32]] = if secrets.is_empty() {
+        std::slice::from_ref(&dummy)
+    } else {
+        secrets
+    };
+    let mut matched = Choice::from(0);
+    for secret in list {
+        matched |= mac.ct_eq(&tunnel_lookup_mac(secret, gateway, nonce));
+    }
+    bool::from(matched & Choice::from(u8::from(!secrets.is_empty())))
+}
+
 /// The running tunnel as the product reads it: its live status.
 #[derive(Clone)]
 pub(crate) struct TunnelView {

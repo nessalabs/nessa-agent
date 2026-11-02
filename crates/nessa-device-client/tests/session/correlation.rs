@@ -56,6 +56,7 @@ fn receipt_public_correlation_preserves_all_fields_for_every_phase_and_class() {
                 credential: CredentialId::new("issued").unwrap(),
                 receiver: ResourceId::new("receiver").unwrap(),
                 access_epoch: u64::MAX,
+                tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new([9; 32]),
             },
             NativePairingStatus::Terminal {
                 consent: consent(public),

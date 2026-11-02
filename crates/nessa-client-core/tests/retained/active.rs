@@ -54,6 +54,7 @@ fn active() -> NativePairingStatus {
         credential: CredentialId::new("credential").unwrap(),
         receiver: ResourceId::new("receiver").unwrap(),
         access_epoch: 13,
+        tunnel_secret: nessa_protocol::tunnel::TunnelSecret::new([9; 32]),
     }
 }
 #[test]
