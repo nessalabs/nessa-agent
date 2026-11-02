@@ -3766,6 +3766,7 @@ dependencies = [
  "nessa-local-database",
  "nessa-local-storage",
  "nessa-sync",
+ "nessa-timer",
  "percent-encoding",
  "rusqlite",
  "serde",
@@ -3814,6 +3815,7 @@ dependencies = [
  "nessa-protocol",
  "nessa-sdk",
  "nessa-sync",
+ "nessa-timer",
  "nessa-vault",
  "rcgen",
  "regex",
@@ -3851,6 +3853,13 @@ version = "0.1.0"
 source = "git+https://github.com/nessalabs/sync-engine?rev=f2a05ef24fcff66df9d55e508539cec718e2d805#f2a05ef24fcff66df9d55e508539cec718e2d805"
 dependencies = [
  "sha2",
+]
+
+[[package]]
+name = "nessa-timer"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]

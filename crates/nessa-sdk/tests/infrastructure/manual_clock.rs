@@ -1,12 +1,10 @@
 //! A [`Clock`] that moves only when a test moves it.
 //!
-//! A deadline started on it passes only when the test advances the clock to
-//! it, so a test says exactly when the agent's time runs out, and nothing it
-//! checks can be cut short by a slow machine. Waiting on a real process is
-//! still bounded in real time by the test itself.
+//! Waiting is the shared manual timer. This type only adds the wall-time
+//! mapping a permission deadline needs.
 use super::{Clock, ClockInstant, ClockSleep};
-use std::{sync::Mutex, time::Duration};
-use tokio::sync::watch;
+use nessa_timer::{ManualTimer, Moment, Timer};
+use std::time::Duration;
 
 /// One wait started on a [`ManualClock`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,25 +22,26 @@ impl Wait {
 }
 
 pub(crate) struct ManualClock {
-    now: watch::Sender<ClockInstant>,
+    timer: ManualTimer,
     /// Unix milliseconds at the origin. A test's `dueAtMs` is this plus
     /// [`Clock::now`], so it cannot be the process wall clock.
     unix_origin_ms: u64,
-    /// Every wait started, in order.
-    waits: Mutex<Vec<Wait>>,
-    started: watch::Sender<usize>,
 }
 impl Default for ManualClock {
     fn default() -> Self {
         Self {
-            now: watch::channel(ClockInstant::from_origin(Duration::ZERO)).0,
+            timer: ManualTimer::default(),
             unix_origin_ms: 0,
-            waits: Mutex::default(),
-            started: watch::channel(0).0,
         }
     }
 }
 impl ManualClock {
+    fn mapped(wait: &nessa_timer::manual::Wait) -> Wait {
+        Wait {
+            started: ClockInstant::from_origin(wait.started.since_origin()),
+            deadline: ClockInstant::from_origin(wait.deadline.since_origin()),
+        }
+    }
     /// A clock whose wall time starts at `unix_origin_ms`.
     pub fn at_unix_ms(unix_origin_ms: u64) -> Self {
         Self {
@@ -53,27 +52,26 @@ impl ManualClock {
     /// Move the clock `by` forward, ending every wait whose deadline that
     /// reaches.
     pub fn advance(&self, by: Duration) {
-        self.now.send_modify(|now| *now = *now + by);
+        self.timer.advance(by);
     }
     /// Move the clock forward to `moment`; never back.
     pub fn advance_to(&self, moment: ClockInstant) {
-        self.now.send_modify(|now| *now = (*now).max(moment));
+        self.timer
+            .advance_to(Moment::from_origin(moment.since_origin()));
     }
     /// Every wait started so far, in order.
     pub fn waits(&self) -> Vec<Wait> {
-        self.waits.lock().unwrap().clone()
+        self.timer.waits().iter().map(Self::mapped).collect()
     }
     /// Once a wait matching `wanted` has started, move the clock to its
     /// deadline, and answer that wait.
     pub async fn run_out(&self, wanted: impl Fn(&Wait) -> bool) -> Wait {
-        let mut started = self.started.subscribe();
-        loop {
-            if let Some(wait) = self.waits().into_iter().find(|wait| wanted(wait)) {
-                self.advance_to(wait.deadline);
-                return wait;
-            }
-            started.changed().await.unwrap();
-        }
+        let wait = self
+            .timer
+            .started(|_, wait| wanted(&Self::mapped(wait)))
+            .await;
+        self.timer.advance_to(wait.deadline);
+        Self::mapped(&wait)
     }
     /// `operation`, with every wait matching `passes` run out as soon as it
     /// starts: time passes for the waits a test is not about — a stop's
@@ -83,19 +81,25 @@ impl ManualClock {
         passes: impl Fn(&Wait) -> bool,
         operation: impl std::future::Future<Output = T>,
     ) -> T {
-        let mut started = self.started.subscribe();
+        let timer = &self.timer;
         let passing = async {
+            let mut seen = 0usize;
             loop {
-                let waits = self.waits();
+                let waits = timer.waits();
+                if waits.len() != seen {
+                    seen = waits.len();
+                }
                 if let Some(latest) = waits
                     .iter()
-                    .filter(|wait| passes(wait))
+                    .filter(|wait| passes(&Self::mapped(wait)))
                     .map(|wait| wait.deadline)
                     .max()
                 {
-                    self.advance_to(latest);
+                    timer.advance_to(latest);
                 }
-                started.changed().await.unwrap();
+                if timer.waits().len() == seen {
+                    timer.started(|index, _| index + 1 > seen).await;
+                }
             }
         };
         tokio::select! { biased;
@@ -106,24 +110,14 @@ impl ManualClock {
 }
 impl Clock for ManualClock {
     fn now(&self) -> ClockInstant {
-        *self.now.borrow()
+        ClockInstant::from_origin(self.timer.now().since_origin())
     }
     fn unix_ms_at(&self, at: ClockInstant) -> u64 {
         let elapsed = u64::try_from(at.since_origin().as_millis()).unwrap_or(u64::MAX);
         self.unix_origin_ms.saturating_add(elapsed)
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
-        let mut now = self.now.subscribe();
-        self.waits.lock().unwrap().push(Wait {
-            started: *now.borrow(),
-            deadline,
-        });
-        self.started.send_modify(|started| *started += 1);
-        Box::pin(async move {
-            // A clock nobody holds any more never moves again.
-            if now.wait_for(|now| *now >= deadline).await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        })
+        self.timer
+            .sleep_until(Moment::from_origin(deadline.since_origin()))
     }
 }

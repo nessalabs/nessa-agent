@@ -35,6 +35,7 @@ nessa-protocol = { path = "../nessa-protocol" }
 # H of ADR 252). Without the example's command line.
 nessa-client-core = { path = "../nessa-client-core", default-features = false }
 nessa-sdk = { path = "../nessa-sdk" }
+nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }
 nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
@@ -144,6 +145,7 @@ nessa-device-client = { path = "../nessa-device-client" }
 # Plants an unmarked session record. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
+nessa-timer = { path = "../nessa-timer", features = ["test-support"] }
 tokio = { version = "1", features = ["test-util", "io-util"] }
 # Only to build the pixels a substitute system decoder hands back. The image
 # library this workspace already compiles; nothing new is built.

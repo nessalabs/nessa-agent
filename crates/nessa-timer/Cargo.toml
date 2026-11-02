@@ -1,0 +1,15 @@
+[package]
+name = "nessa-timer"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+description = "One monotonic timer for deadlines in the SDK and the server."
+
+[features]
+default = ["runtime"]
+runtime = []
+test-support = []
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
