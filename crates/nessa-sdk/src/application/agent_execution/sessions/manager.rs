@@ -823,11 +823,10 @@ impl SessionManager {
                 })
         };
         let opening = catch_unwind(AssertUnwindSafe(|| {
-            provider.open(ProviderOpenRequest::new(
-                self.id.clone(),
-                restore.clone(),
-                control,
-            ))
+            provider.open(
+                ProviderOpenRequest::new(self.id.clone(), restore.clone(), control)
+                    .with_arrival_clock(self.message_commit_clock.clone()),
+            )
         }));
         let mut opening = match opening {
             Ok(opening) => opening,

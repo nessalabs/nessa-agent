@@ -47,11 +47,12 @@ Playwright) and Option+Shift+Tab. Chromium keeps Tab and Shift+Tab. The
 product does not add a key handler, and it does not take the actions out of
 the tab order to hide them.
 
-A provider report is stamped when the session queues it, with
-`process_unix_ms`, and a later read keeps that time. A time the provider
-wrote on the event is still replaced. The scripted pause waits until the
-gateway has queued every update already written, and only then sleeps. The
-gap the trace check reads is that sleep, on one monotonic timeline.
+A provider report is stamped when the session queues it, from the session's
+injected message-commit clock, and a later read keeps that time. The runtime
+clock reads the process timeline. A time the provider wrote on the event is
+still replaced. The scripted pause waits until the gateway has queued every
+update already written, and only then sleeps. The gap the trace check reads
+is that sleep, on one monotonic timeline.
 
 `finish_turn` returns when the invocation's scheduling stage is Settled or
 Cancelled. The after-hook has returned by then. Reports saved after that
@@ -74,7 +75,7 @@ count does not include it. The settlement look itself is unchanged.
 | --- | --- |
 | WebKit's backward control chord is Option+Shift+Tab, and the forward chord is Option+Tab. Chromium's are Shift+Tab and Tab. The GitHub step presses those chords and asserts the focused element. | `keys.previousControl` and `keys.nextControl`. `selectors.test.mjs` reads the WebKit chords. The GitHub step presses them. |
 | Hiding the GitHub actions from the pointer does not remove them from the tab order. | The connected row keeps tab index 0 on Choose repositories, an enabled Disconnect, and no `inert` on the actions. `github-row.test.tsx` reads that. |
-| A report's saved time is the queue time. A read delayed past that queue does not rewrite it. A provider-supplied time is not that time. | `EventSender::try_send` stamps `process_unix_ms` and marks the event. `SessionManager::observed` keeps a marked time and replaces any other. The queue test reads the stamp before a consumer runs. The manager test reads a marked time back unchanged and a provider time replaced. |
+| A report's saved time is the queue time. A read delayed past that queue does not rewrite it. A provider-supplied time is not that time. | `EventSender::try_send` stamps the open's injected clock and marks the event. Session opens pass the session manager's clock. `RuntimeMessageCommitClock` reads `process_unix_ms`. `SessionManager::observed` keeps a marked time and replaces any other. The queue test moves a substituted clock after the send and reads the earlier time back, including from `observed`. The manager test reads a marked time back unchanged and a provider time replaced. |
 | The scripted pause sleeps only after the gateway has taken the updates written before it. | `runSteps` awaits `accepted` before the timer. The agent sends `session/accept` and treats the reply, including the unsupported-method error, as that take. The scenario test leaves the request unanswered and the turn does not finish its pause. |
 | A report registered once the turn's scheduling has settled is not delivered by that turn's after-hook. | `finish_turn` waits for Settled or Cancelled, which the runner records after the hook returns. The restart test reads two pending rows after that, including after yielding. |
 
@@ -142,9 +143,10 @@ record. Out of scope: restart console classification, vault unlock in the
 stress setup, and any `codex/*` or `claude/*` branch.
 
 Try to break the guarantees. Press plain Tab on the WebKit chord table and
-confirm the test rejects it. Queue an event, delay the consumer, and
-confirm the saved time is the queue time; put a provider time on an
-unmarked event and confirm the session clock replaces it. Leave
+confirm the test rejects it. Queue an event on a substituted clock, move
+that clock, and confirm the saved time is still the enqueue time; put a
+provider time on an unmarked event and confirm the session clock replaces
+it. Leave
 `session/accept` unanswered and confirm a 30 ms pause does not finish.
 Register the two restart reports before the scheduling stage settles, if
 you can open that window, and confirm the finished turn's report is in the

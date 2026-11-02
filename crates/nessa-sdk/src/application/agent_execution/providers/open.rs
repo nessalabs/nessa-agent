@@ -3,6 +3,7 @@
 use super::{CleanupFuture, CleanupReport, OpenedProviderSession, SessionCloseRequest};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
+use crate::application::agent_execution::sessions::MessageCommitClock;
 use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
 use std::{error::Error, fmt, future::Future, pin::Pin, sync::Arc};
 use tokio::sync::watch;
@@ -12,10 +13,15 @@ use tokio::sync::watch;
 /// The SDK retains and polls the open future until it completes. A stop request
 /// asks the provider to finish through its existing cleanup owner; it never
 /// transfers resource ownership to this value or permits abandoning the future.
+///
+/// When a session manager opens the attachment, the request carries that
+/// session's clock and the queue stamps a report from it. An open that names
+/// no clock uses the runtime process timeline.
 pub struct ProviderOpenRequest {
     session: Option<SessionId>,
     restore: Option<ExecutionSessionId>,
     control: ProviderOpenControl,
+    arrival_clock: Option<Arc<dyn MessageCommitClock>>,
 }
 impl ProviderOpenRequest {
     pub(crate) fn new(
@@ -31,7 +37,19 @@ impl ProviderOpenRequest {
             session: Some(session),
             restore,
             control,
+            arrival_clock: None,
         }
+    }
+
+    /// Stamp this open's queued reports from `clock`, the session's own clock.
+    pub(crate) fn with_arrival_clock(mut self, clock: Arc<dyn MessageCommitClock>) -> Self {
+        self.arrival_clock = Some(clock);
+        self
+    }
+
+    /// The session clock for queue stamps, when this open names one.
+    pub(crate) fn arrival_clock(&self) -> Option<Arc<dyn MessageCommitClock>> {
+        self.arrival_clock.clone()
     }
 
     /// Construct a direct adapter request without lifecycle startup control.
@@ -48,6 +66,7 @@ impl ProviderOpenRequest {
             session: None,
             restore,
             control: ProviderOpenControl::new(receiver),
+            arrival_clock: None,
         }
     }
 
