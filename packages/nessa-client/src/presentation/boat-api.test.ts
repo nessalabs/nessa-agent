@@ -7,10 +7,12 @@ describe("Boat connection", () => {
     const request = vi.fn(async () => connected)
     const boat = createBoatApi({ request })
     await boat.save({ token: "fixture-token" })
+    await boat.saveClaudeSignIn({ token: "sk-ant-oat01-fixture" })
     await boat.status()
     await boat.disconnect()
     expect(request.mock.calls).toEqual([
       ["boat.save", { token: "fixture-token" }],
+      ["boat.saveClaudeSignIn", { token: "sk-ant-oat01-fixture" }],
       ["boat.status", {}],
       ["boat.disconnect", {}],
     ])

@@ -713,6 +713,20 @@ export const signInToProvider =
     await dependencies.signInToProvider(provider)
   }
 
+/** Mint a Claude sign-in for Boat VMs and have the gateway keep it. Rejects
+ * with the stage that failed (`BoatSignInFailure`). */
+export const signInForBoat =
+  (): WorkspaceCommand<Promise<void>> => async (_dispatch, _getState, dependencies) => {
+    if (!dependencies.boatClaudeSignIn)
+      throw new Error("Boat sign-in is unavailable on this host.")
+    await dependencies.boatClaudeSignIn.signIn()
+  }
+
+/** Whether a Boat sign-in can be offered, without starting one. */
+export const boatSignInAvailable =
+  (): WorkspaceCommand<Promise<boolean>> => async (_dispatch, _getState, dependencies) =>
+    (await dependencies.boatClaudeSignIn?.available()) ?? false
+
 /** Read the injected host's login capability without attempting a launch. */
 export const providerLoginAvailable =
   (): WorkspaceCommand<Promise<boolean>> => async (_dispatch, _getState, dependencies) =>

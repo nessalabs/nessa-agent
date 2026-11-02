@@ -41,6 +41,9 @@ sources:
   - src/desktop/settings/ui/boat-row.tsx
   - src/desktop/settings/ui/boat-runtime-control.tsx
   - src/desktop/workspace/ui/channel-settings/channel-settings.tsx
+  - crates/nessa-server/src/workspaces/infrastructure/runtime.rs
+  - src/provider-authentication/model/boat-sign-in.ts
+  - src-tauri/src/platform/macos/claude_sign_in.rs
 diagramLinks: {}
 ---
 
@@ -100,6 +103,19 @@ second resource. An observer disappearing does not cancel the allocation task's
 receipt publication. Closing or deleting chat history preserves workspace files
 and VM identity. Users manage VM stop/delete in Boat. No automatic stop is the
 initial Nessa default; alpha has no idle parking or active TTL renewal.
+
+## Claude sign-in in Boat VMs
+
+Boat gives a VM made from the pinned image share code none of the owner's
+logins, so Claude in it is refused until a sign-in is supplied (ADR 501, #1246).
+**Authenticate** on the refusal card has the desktop host run `claude
+setup-token` in the background and hands its token to `boat.saveClaudeSignIn`.
+The gateway keeps it in the vault entry `boat.claude-sign-in`, beside the
+connection, and `boat.disconnect` clears both. Every serve of a Boat VM reads
+it afresh and writes it as the first line of `env serve`'s standard input,
+which the VM's shell exports as `CLAUDE_CODE_OAUTH_TOKEN` before `env serve`
+starts; an empty line, sent when none is saved or the vault cannot be read,
+sets nothing. A serve already running keeps what it started with.
 
 ## VM lifetime settings
 

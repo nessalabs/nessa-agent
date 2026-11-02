@@ -26,6 +26,10 @@ import { TranscriptNotes } from "./transcript-note"
 import { UnreadableOverflowLine, UnreadableParts } from "./unreadable-part"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
+import {
+  signInAction,
+  type BoatClaudeSignIn,
+} from "../../provider-authentication/model/boat-sign-in"
 import { UsageLimitCard } from "./usage-limit-card"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
@@ -53,6 +57,7 @@ export function Transcript({
   onOpenPaste,
   onProviderSignIn,
   canSignInToProvider,
+  boatSignIn,
   onUsageLimitAutoContinue,
 }: {
   conversation: Conversation
@@ -65,6 +70,7 @@ export function Transcript({
   onOpenPaste: (text: string) => void
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
+  boatSignIn?: BoatClaudeSignIn
   /** Turns this gateway's usage-limit continuation preference on or off. */
   onUsageLimitAutoContinue?: (enabled: boolean) => Promise<void>
 }) {
@@ -238,11 +244,21 @@ export function Transcript({
                     localInputs,
                   ) ? (
                     <React.Fragment key={`${row.key}:auth`}>
-                      <ProviderSignInCard
-                        provider={provider}
-                        onSignIn={onProviderSignIn}
-                        canSignIn={canSignInToProvider}
-                      />
+                      {signInAction(provider, conversation.remote?.lease?.environment) ===
+                      "boat" ? (
+                        <ProviderSignInCard
+                          provider={provider}
+                          action="boat"
+                          onSignIn={boatSignIn?.signIn}
+                          canSignIn={boatSignIn?.available}
+                        />
+                      ) : (
+                        <ProviderSignInCard
+                          provider={provider}
+                          onSignIn={onProviderSignIn}
+                          canSignIn={canSignInToProvider}
+                        />
+                      )}
                       {recovery?.requiredWorkFailed === true ? (
                         <TurnStatus status={row.status} />
                       ) : null}

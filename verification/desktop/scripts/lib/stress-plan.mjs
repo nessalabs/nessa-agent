@@ -49,6 +49,10 @@ export const KNOBS = {
     what: "parent turns stopped in the window with running owned child and grandchild",
   },
   fails: { default: 1, what: "turns that fail, each followed by another message" },
+  signIns: {
+    default: 1,
+    what: "turns the agent refuses for sign-in, each showing the sign-in card for where it ran and followed by another message",
+  },
   usageLimits: {
     default: 1,
     what: "turns a usage limit ends, each showing the card and followed by another message",
@@ -270,6 +274,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.parentstops, () => ({ kind: "parent-stop" }))
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
+  add(knobs.signIns, () => ({ kind: "signIn" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.backgroundTasks, () => ({ kind: "background" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
@@ -363,7 +368,7 @@ export function plan(knobs, accessScenario = "full") {
     } else {
       out.push(step)
     }
-    if (step.kind === "fail" || step.kind === "usageLimit")
+    if (step.kind === "fail" || step.kind === "usageLimit" || step.kind === "signIn")
       out.push({ kind: "reply", after: step.kind })
     // Whether the agent asks is how a switch is seen to have reached it.
     if (step.kind === "switch")

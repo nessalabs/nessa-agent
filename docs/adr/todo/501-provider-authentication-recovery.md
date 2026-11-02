@@ -90,6 +90,53 @@ outside Nessa's launcher.
 | ACP delete refused authentication | Listing names session or fails | Original typed authentication refusal retained | Public deletion contract |
 | Failed turn restored | Provider report retained | Same typed recovery fact | Projection restoration test |
 
+## Claude in a Boat workspace (#1246)
+
+A Boat VM is made from Nessa's image share code, and Boat gives a VM made
+from a share code or a saved snapshot none of the owner's own logins
+(`holdsCreatorLogins` is false and no token is in its environment, unlike a
+plain sandbox in the same environment). Running `claude auth login` on the
+Mac signs in only the Mac, so it cannot fix a refusal from a Boat VM.
+
+When the refused turn's lease ran in a Boat VM, the card's action is
+**Authenticate**. It does not open Terminal. The desktop host runs
+`claude setup-token` in the background under a pseudo-terminal. The CLI opens the
+default browser at Claude's sign-in, waits for the browser's local callback, and
+prints a long-lived inference token. The host reads that token from the
+CLI's output and hands it to the window, which saves it with
+`boat.saveClaudeSignIn`. The gateway keeps it in the vault entry
+`boat.claude-sign-in` beside the Boat connection. It is never written to
+browser storage, a file, or a log.
+
+Every serve of a Boat VM reads the saved token and sends it to
+`nessa env serve` as the first line of the serve's standard input. An empty
+line means that no token is saved. The VM's shell reads that line before
+`env serve` starts, and exports `CLAUDE_CODE_OAUTH_TOKEN` only when the line
+is non-empty. The token is never in a command line or on the VM's disk.
+`env serve` already gives that variable to every Claude launch
+(`composition::agent::launch_environment`). The gateway's own local Claude credential is still never
+sent to another machine. Only the token minted for Boat goes to Boat.
+
+The action does not resend the failed message. Once the token is saved, the
+card says so, and the person's next message is served with it. A serve that
+is already running keeps the environment it started with.
+
+| State | Event | Result | Evidence |
+| --- | --- | --- | --- |
+| Latest turn refused, lease in a Boat VM, Claude | Card rendered | **Authenticate**, not Terminal sign-in | Desktop transcript regression, stress step |
+| Latest turn refused, lease local, SSH or peer | Card rendered | Existing **Sign in to Claude** launch | Existing transcript regressions |
+| Authenticate available | Click | Host mints in the background; button disabled while it waits | Card test, browser script |
+| Minting | Second click | No second mint | Card in-flight guard |
+| Minting | CLI prints a token and exits 0 | Window saves it; card shows the signed-in note | Host parser test, card test, stress step |
+| Minting | CLI exits without a token, is missing, or 10 minutes pass | Child killed; "Could not sign in. Try again."; nothing saved | Host minting tests |
+| Token minted | Save refused (vault locked, invalid token) | "Could not save the sign-in." and the button is available again; nothing kept | Card test, product dispatch test |
+| Save arguments | Token outside the token alphabet, wrong prefix or too long | `invalid_request`; nothing stored | `ClaudeSignIn` tests |
+| Token saved | Next serve of any Boat VM | First stdin line is the token; `env serve` runs with the variable | SSH serve test |
+| No token saved | Serve | Empty first line; no variable | SSH serve test |
+| Vault locked or entry unreadable | Serve | Served with an empty line; warning logged; the agent's refusal shows the card again | Runtime test |
+| Token later revoked or expired | Next refusal | Card again; Authenticate replaces the entry | Save-overwrites test |
+| `boat.disconnect` | — | Boat connection and the Claude token both cleared | Product dispatch test |
+
 ## Remaining limitation
 
 The diagnosed Claude OAuth refresh failure was delivered as generic ACP internal

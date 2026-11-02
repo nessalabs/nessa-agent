@@ -24,6 +24,7 @@
  * | waiting | an answer that is not a selection or a cancellation | the turn fails |
  * | running | fail | the turn fails; chunks and calls already sent stay sent |
  * | running | usage-limit | the selected harness's terminal usage-limit RPC error; no successful completion |
+ * | running | auth-required | ACP's `-32000` Authentication required, as a signed-out harness answers; no successful completion |
  * | running | pause | waits `ms`, or until `session/cancel`, then the next step |
  * | running | wait-cancel | waiting for `session/cancel` |
  * | waiting for cancel | `session/cancel` | stop `cancelled` |
@@ -84,6 +85,7 @@ const KINDS = [
   "pause",
   "fail",
   "usage-limit",
+  "auth-required",
   "wait-cancel",
   "end",
 ]
@@ -97,6 +99,7 @@ const FIELDS = {
   pause: ["do", "ms"],
   fail: ["do", "message"],
   "usage-limit": ["do"],
+  "auth-required": ["do"],
   "wait-cancel": ["do"],
   end: ["do"],
 }
@@ -161,7 +164,7 @@ function parseSteps(steps, branch) {
   if (!Array.isArray(steps) || steps.length === 0) throw new Error("a step list is empty")
   const parsed = steps.map((step) => parseStep(step, branch))
   const terminal = parsed.findIndex((step) =>
-    ["fail", "usage-limit", "wait-cancel", "end"].includes(step.do),
+    ["fail", "usage-limit", "auth-required", "wait-cancel", "end"].includes(step.do),
   )
   if (terminal !== -1 && terminal !== parsed.length - 1)
     throw new Error(`steps follow ${parsed[terminal].do}, which ends the turn`)
@@ -171,7 +174,7 @@ function parseSteps(steps, branch) {
 function parseStep(step, branch) {
   if (!plain(step) || typeof step.do !== "string" || !KINDS.includes(step.do))
     throw new Error(
-      "a step's do is text, permission, version-review, tool, fail, usage-limit, wait-cancel, or end",
+      "a step's do is text, permission, version-review, tool, fail, usage-limit, auth-required, wait-cancel, or end",
     )
   if (branch && !BRANCH_KINDS.includes(step.do))
     throw new Error(`a permission answer cannot ${step.do}`)
@@ -458,6 +461,14 @@ export async function runSteps(steps, ctx) {
   return { stopReason: "end_turn" }
 }
 
+/** ACP protocol 1's reserved refusal, which a signed-out harness answers a prompt with. */
+export class ScriptedAuthenticationRequired extends Error {
+  code = -32000
+  constructor() {
+    super("Authentication required")
+  }
+}
+
 /** The pinned harness's terminal limit frame; generic failures keep no such data. */
 export class ScriptedUsageLimitError extends Error {
   constructor(agent) {
@@ -509,6 +520,8 @@ async function runStep(step, ctx) {
       return { fail: step.message }
     case "usage-limit":
       throw new ScriptedUsageLimitError(ctx.agent)
+    case "auth-required":
+      throw new ScriptedAuthenticationRequired()
     case "wait-cancel":
       await ctx.untilCancelled()
       return { stopReason: "cancelled" }

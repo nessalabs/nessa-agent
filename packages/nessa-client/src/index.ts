@@ -525,6 +525,7 @@ export {
   BoatRuntimeSelection,
   vmLifetimeSeconds,
   type BoatSaveParams,
+  type BoatClaudeSignInParams,
 } from "./generated/product.js"
 
 export { NessaBoatError } from "./presentation/boat-api.js"
