@@ -2790,13 +2790,21 @@ async fn decline_receipt_flush_does_not_take_unrelated_pending_write_ownership()
         .unwrap()
         .provider_context
         .clone();
+    // Clearing this context is refused: its watermark is below the live
+    // invocation, so the context has admitted work. The unrelated pending
+    // write is a different native id at the same boundary, which publication
+    // allows and decline flushing must not save.
+    let after = ProviderContext::recorded_after(
+        ExecutionSessionId::new("unrelated-pending-context").unwrap(),
+        before.admission_watermark().unwrap(),
+    );
     manager
         .evidence
         .lock()
         .await
         .record(vec![SessionChange::ProviderContext {
             before: before.clone(),
-            after: ProviderContext::Absent,
+            after,
         }])
         .unwrap();
     lease.fail_save.store(true, Ordering::SeqCst);
