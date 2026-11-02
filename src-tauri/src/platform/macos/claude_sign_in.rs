@@ -30,8 +30,12 @@ pub(super) fn mint(timeout: Duration) -> Result<String, LoginFailure> {
 /// Run `command` on a fresh terminal and answer the token it shows.
 pub(super) fn mint_with(command: &mut Command, timeout: Duration) -> Result<String, LoginFailure> {
     let (controller, terminal) = terminal().map_err(|_| LoginFailure::LaunchFailed)?;
-    let input = terminal.try_clone().map_err(|_| LoginFailure::LaunchFailed)?;
-    let output = terminal.try_clone().map_err(|_| LoginFailure::LaunchFailed)?;
+    let input = terminal
+        .try_clone()
+        .map_err(|_| LoginFailure::LaunchFailed)?;
+    let output = terminal
+        .try_clone()
+        .map_err(|_| LoginFailure::LaunchFailed)?;
     // SAFETY: setsid and TIOCSCTTY are async-signal-safe and touch only the
     // child, which takes the terminal on its stdin as its controlling one.
     let mut child = unsafe {
@@ -53,7 +57,10 @@ pub(super) fn mint_with(command: &mut Command, timeout: Duration) -> Result<Stri
         _ => LoginFailure::LaunchFailed,
     })?;
     // Only the child holds the terminal now: its end is the controller's.
-    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let result = read_token(controller, timeout);
     let _ = child.kill();
     let _ = child.wait();
@@ -136,7 +143,12 @@ fn terminal() -> std::io::Result<(OwnedFd, OwnedFd)> {
         return Err(std::io::Error::last_os_error());
     }
     // SAFETY: both were just opened and are owned by nothing else.
-    let owned = unsafe { (OwnedFd::from_raw_fd(controller), OwnedFd::from_raw_fd(terminal)) };
+    let owned = unsafe {
+        (
+            OwnedFd::from_raw_fd(controller),
+            OwnedFd::from_raw_fd(terminal),
+        )
+    };
     Ok(owned)
 }
 

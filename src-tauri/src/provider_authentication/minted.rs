@@ -37,7 +37,8 @@ fn plain(screen: &[u8]) -> String {
                     // OSC: up to BEL or ESC \.
                     Some(']') => {
                         while let Some(c) = chars.next() {
-                            if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some())
+                            {
                                 break;
                             }
                         }

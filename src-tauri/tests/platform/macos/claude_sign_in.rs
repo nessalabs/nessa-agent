@@ -34,7 +34,10 @@ fn a_cli_left_waiting_after_its_token_is_not_waited_for() {
 #[test]
 fn a_cli_that_ends_or_times_out_without_a_token_completes_nothing() {
     assert_eq!(
-        mint_with(&mut script("echo cancelled; exit 1"), Duration::from_secs(10)),
+        mint_with(
+            &mut script("echo cancelled; exit 1"),
+            Duration::from_secs(10)
+        ),
         Err(LoginFailure::NotCompleted)
     );
     let started = Instant::now();
@@ -48,7 +51,10 @@ fn a_cli_that_ends_or_times_out_without_a_token_completes_nothing() {
 #[test]
 fn a_missing_program_is_unavailable() {
     assert_eq!(
-        mint_with(&mut Command::new("/nonexistent/claude"), Duration::from_secs(1)),
+        mint_with(
+            &mut Command::new("/nonexistent/claude"),
+            Duration::from_secs(1)
+        ),
         Err(LoginFailure::Unavailable)
     );
 }

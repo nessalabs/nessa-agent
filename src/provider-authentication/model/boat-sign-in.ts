@@ -25,7 +25,10 @@ export class BoatSignInFailure extends Error {
     readonly stage: "minted" | "saved",
     options?: { cause?: unknown },
   ) {
-    super(stage === "minted" ? "Claude sign-in did not complete" : "Sign-in not saved", options)
+    super(
+      stage === "minted" ? "Claude sign-in did not complete" : "Sign-in not saved",
+      options,
+    )
     this.name = "BoatSignInFailure"
   }
 }
