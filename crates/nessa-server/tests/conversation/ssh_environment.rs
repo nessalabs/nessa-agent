@@ -4414,3 +4414,87 @@ async fn a_workspace_connection_is_let_go_only_while_nothing_uses_it() {
     );
     again.hold.end(LeaseEndCause::Closed).await;
 }
+
+/// A Claude sign-in saved after a workspace connected reaches the next lease
+/// (ADR 501): a connection served before the change is replaced once nothing
+/// uses it, and kept while a lease is on it.
+#[tokio::test]
+async fn a_sign_in_change_replaces_the_workspace_connection_once_nothing_uses_it() {
+    struct Cut(Arc<Connector>);
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.cut();
+        }
+    }
+    struct Through(Arc<Connector>, Arc<std::sync::atomic::AtomicU64>);
+    impl super::connector::WorkspaceConnector for Through {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                let mut connection =
+                    LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
+                        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+                connection.keep = Box::new((connection.keep, Cut(self.0.clone())));
+                Ok(connection)
+            })
+        }
+        fn serve_changes(&self) -> u64 {
+            self.1.load(Ordering::SeqCst)
+        }
+    }
+    let connector = Connector::new(Reach::Serving);
+    let changes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let environment = SshEnvironment::workspace(
+        Arc::new(Through(connector.clone(), changes.clone())),
+        Arc::new(Audit::default()),
+    );
+    let refused = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    refused.hold.end(LeaseEndCause::Closed).await;
+    drop(refused);
+    // Unchanged, the connection is kept for the next lease.
+    let kept = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+    // Changed while a lease is on it: that serve goes on serving.
+    changes.fetch_add(1, Ordering::SeqCst);
+    let beside = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        1,
+        "a connection in use is not replaced"
+    );
+    for opened in [kept, beside] {
+        opened.hold.end(LeaseEndCause::Closed).await;
+    }
+    // Nothing uses it now: the next lease is served again.
+    let resent = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        2,
+        "the next lease after the change is served again"
+    );
+    let after = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 2);
+    for opened in [resent, after] {
+        opened.hold.end(LeaseEndCause::Closed).await;
+    }
+}

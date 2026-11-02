@@ -1221,6 +1221,11 @@ async fn a_claude_sign_in_is_kept_only_in_the_token_alphabet() {
         );
     }
     assert!(sign_ins.saved.lock().unwrap().is_none());
+    assert_eq!(
+        service.claude_sign_in_changes(),
+        0,
+        "a refused sign-in changes no serve"
+    );
     service
         .save_claude_sign_in("sk-ant-oat01-first_A-1".into())
         .await
@@ -1232,7 +1237,7 @@ async fn a_claude_sign_in_is_kept_only_in_the_token_alphabet() {
     assert_eq!(
         sign_ins.saved.lock().unwrap().as_ref().unwrap().as_bytes(),
         b"sk-ant-oat01-second"
-    );
+    );    assert_eq!(service.claude_sign_in_changes(), 2);
 }
 
 #[tokio::test]
@@ -1252,5 +1257,6 @@ async fn disconnecting_boat_forgets_its_claude_sign_in() {
         .unwrap();
     service.disconnect().await.unwrap();
     assert!(sign_ins.saved.lock().unwrap().is_none());
+    assert_eq!(service.claude_sign_in_changes(), 2);
     assert!(sign_ins.cleared.load(std::sync::atomic::Ordering::SeqCst));
 }

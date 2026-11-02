@@ -157,6 +157,9 @@ impl RemoteShell for VmShell<'_> {
     }
 }
 impl WorkspaceConnector for Connector {
+    fn serve_changes(&self) -> u64 {
+        self.service.claude_sign_in_changes()
+    }
     fn connect(
         &self,
         provision: bool,

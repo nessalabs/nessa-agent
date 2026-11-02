@@ -159,4 +159,10 @@ pub(crate) trait WorkspaceConnector: Send + Sync {
         '_,
         Result<LeaseConnection, nessa_sdk::domain::agent_execution::leases::LeaseRefusal>,
     >;
+    /// How many times what a new serve of the workspace starts with has
+    /// changed (a Claude sign-in saved or forgotten, ADR 501). A connection
+    /// served before the latest change is replaced once nothing uses it.
+    fn serve_changes(&self) -> u64 {
+        0
+    }
 }

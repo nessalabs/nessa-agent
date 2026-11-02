@@ -197,6 +197,9 @@ pub(crate) struct Workspaces {
     pub(crate) settings: Arc<dyn Settings>,
     pub(crate) runtime_settings: Arc<dyn RuntimeSettings>,
     pub(crate) claude_sign_ins: Arc<dyn ClaudeSignIns>,
+    /// Counts each save or clear of the Claude sign-in, so a connection
+    /// served before it can be told apart (`serve_changes`).
+    claude_sign_in_changes: Arc<std::sync::atomic::AtomicU64>,
     provider: Arc<dyn Provider>,
     assignments: Arc<dyn Assignments>,
     recovery: Arc<dyn RecoveryAudit>,
@@ -218,6 +221,7 @@ impl Workspaces {
             settings,
             runtime_settings,
             claude_sign_ins,
+            claude_sign_in_changes: Arc::default(),
             image: None,
             provider,
             assignments,
@@ -242,12 +246,24 @@ impl Workspaces {
     /// Keep `token`, which `claude setup-token` minted, for every later
     /// serve of a Boat VM.
     pub(crate) async fn save_claude_sign_in(&self, token: String) -> Result<(), Failure> {
-        self.claude_sign_ins.save(ClaudeSignIn::new(token)?).await
+        self.claude_sign_ins.save(ClaudeSignIn::new(token)?).await?;
+        self.claude_sign_in_changed();
+        Ok(())
     }
     /// Forget the Boat connection and the Claude sign-in made for it.
     pub(crate) async fn disconnect(&self) -> Result<(), Failure> {
         self.claude_sign_ins.clear().await?;
+        self.claude_sign_in_changed();
         self.settings.clear().await
+    }
+    /// How many times the Claude sign-in has been saved or cleared here.
+    pub(crate) fn claude_sign_in_changes(&self) -> u64 {
+        self.claude_sign_in_changes
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn claude_sign_in_changed(&self) {
+        self.claude_sign_in_changes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     pub(crate) async fn save(&self, connection: BoatConnection) -> Result<(), Failure> {
         let generation = self.settings.generation()?;
