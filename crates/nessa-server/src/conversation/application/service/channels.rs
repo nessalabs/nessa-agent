@@ -448,27 +448,36 @@ impl ConversationService {
         if id.is_default() {
             return Err(ChannelError::Forbidden);
         }
-        let found = match self
-            .channel_for_action(caller, id, AccessAction::ChannelSettings)
-            .await
-        {
-            Ok(found) => found,
-            Err(ConversationError::Unavailable) => return Err(ChannelError::Unavailable),
-            Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
-            Err(error) => return Err(error.into()),
-        };
-        if found.execution() == execution {
-            return Ok(found);
-        }
-        let store = self.channel_store().ok_or(ChannelError::NotConfigured)?;
+        let store = self.channel_store().ok_or(ChannelError::Forbidden)?;
         // The main chat's creation reads the channel and records where it
-        // runs under this lock; a move taken between those steps would leave
-        // it begun where the channel no longer says, so the move waits.
-        let _creation = self.inner.creation.lock(&found.coordinator_id()).await;
-        let changed = store
-            .set_execution(id, execution)
-            .await?
-            .ok_or(ChannelError::Forbidden)?;
+        // runs under its creation lock; a move taken between those steps
+        // would leave it begun where the channel no longer says, so the move
+        // holds that lock. The main chat is read again under it: erased
+        // meanwhile, a fresh one was named, and that one's lock is taken.
+        let changed = loop {
+            let found = match self
+                .channel_for_action(caller, id, AccessAction::ChannelSettings)
+                .await
+            {
+                Ok(found) => found,
+                Err(ConversationError::Unavailable) => return Err(ChannelError::Unavailable),
+                Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
+                Err(error) => return Err(error.into()),
+            };
+            if found.execution() == execution {
+                return Ok(found);
+            }
+            let coordinator = found.coordinator_id();
+            let _creation = self.inner.creation.lock(&coordinator).await;
+            let current = store.get(id).await?.ok_or(ChannelError::Forbidden)?;
+            if current.coordinator_id() != coordinator {
+                continue;
+            }
+            break store
+                .set_execution(id, execution)
+                .await?
+                .ok_or(ChannelError::Forbidden)?;
+        };
         tracing::info!(
             channel_id = %changed.id(),
             coordinator = changed.execution().coordinator.as_str(),

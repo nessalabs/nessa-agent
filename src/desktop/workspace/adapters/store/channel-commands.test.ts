@@ -508,6 +508,8 @@ describe("moving", () => {
         placement: { coordinatorPlacement: "boat", threadPlacement: "boat" },
       }),
     )
+    // The index read again after the move keeps the fresh main chat.
+    await settle()
     expect(read()?.coordinatorPlacement).toBe("boat")
     expect(read()?.coordinatorConversationId).not.toBe(first)
   })

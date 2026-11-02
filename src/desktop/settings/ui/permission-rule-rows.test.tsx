@@ -359,3 +359,40 @@ it("draws no apps group where the window cannot list apps", async () => {
   await act(async () => root.render(<TrustedAppRows />))
   expect(host.textContent).toBe("")
 })
+
+it("drops an apps read that set out before a revoke", async () => {
+  let servers = ["charts", "huddle"]
+  const held = deferred<{ ok: true; servers: string[] }>()
+  let reads = 0
+  await act(async () =>
+    root.render(
+      <PermissionRulesProvider
+        gateway={{
+          read: async () => ({ ok: true, rules: [] }),
+          revoke: async () => ({ ok: true, applied: true }),
+          trustedApps: {
+            // The second read, begun by the window coming back, is held.
+            read: () =>
+              ++reads === 2 ? held.promise : Promise.resolve({ ok: true, servers }),
+            untrust: async (server) => {
+              servers = servers.filter((each) => each !== server)
+              return { ok: true, applied: true }
+            },
+          },
+        }}
+      >
+        <TrustedAppRows />
+      </PermissionRulesProvider>,
+    ),
+  )
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('button[aria-label="Revoke huddle"]')?.click(),
+  )
+  await act(async () => held.resolve({ ok: true, servers: ["charts", "huddle"] }))
+  expect(
+    [...host.querySelectorAll("[data-trusted-app]")].map((row) =>
+      row.getAttribute("data-trusted-app"),
+    ),
+  ).toEqual(["charts"])
+})
