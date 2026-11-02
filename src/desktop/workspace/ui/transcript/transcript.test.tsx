@@ -1924,6 +1924,12 @@ it("pins after observed layout, respects scrolling away, and rejects late delive
     height = 900
     await act(async () => deliver?.([], {} as ResizeObserver))
     expect(scroller.scrollTop).toBe(900)
+    // The scroll position moves before its listener. Growth in that gap stays
+    // where the reader went.
+    scroller.scrollTop = 0
+    height = 1100
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(0)
     await act(async () => root.unmount())
     removed = true
     scroller.scrollTop = 10

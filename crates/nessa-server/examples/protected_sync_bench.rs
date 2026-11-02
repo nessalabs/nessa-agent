@@ -1065,8 +1065,10 @@ fn seed(
         let lease = storage.open(id.clone()).await.unwrap();
         let provider = ProviderIdentity::new("claude", "claude-sonnet-5", "workspace").unwrap();
         // Provider observations are owned by a recorded provider session.
-        let context =
-            ProviderContext::Recorded(ExecutionSessionId::new("bench-provider-session").unwrap());
+        let context = ProviderContext::recorded_after(
+            ExecutionSessionId::new("bench-provider-session").unwrap(),
+            0,
+        );
         let mut snapshot = SessionSnapshot {
             model_change: None,
             current_configuration: None,

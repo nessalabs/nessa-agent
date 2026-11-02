@@ -152,8 +152,10 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
     let confirmed = producer.confirmed().unwrap();
     assert_eq!(confirmed.snapshot, snapshot);
     assert_eq!(confirmed.binding, *receipt.next());
-    let requested = ProviderContext::Recorded(ExecutionSessionId::new("requested").unwrap());
-    let different = ProviderContext::Recorded(ExecutionSessionId::new("contradictory").unwrap());
+    let requested =
+        ProviderContext::recorded_after(ExecutionSessionId::new("requested").unwrap(), 0);
+    let different =
+        ProviderContext::recorded_after(ExecutionSessionId::new("contradictory").unwrap(), 0);
     assert!(matches!(
         lease
             .save_changes(

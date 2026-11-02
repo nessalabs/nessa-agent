@@ -670,6 +670,9 @@ impl Agent {
             return Ok(Resumed::NotOwed);
         };
         saved.map_err(AgentError::Storage)?;
+        // The source settlement dropped the scheduler. A decline already waiting
+        // on it must be able to record NotResumed before successor admission.
+        tokio::task::yield_now().await;
         let audit = |resumption| {
             ExecutionAuditRecord::TurnResumed(TurnResumptionRecord::new(
                 self.inner.manager.id().clone(),
@@ -687,7 +690,7 @@ impl Agent {
             return Ok(Resumed::Exhausted);
         };
         let request = successor_request(&record, cause, successor.clone())?;
-        let admission = self
+        let Some(admission) = self
             .accept_work(
                 request,
                 submitter_mode(Submitter::new(
@@ -698,7 +701,10 @@ impl Agent {
                 NoteCandidates::default(),
                 Some(turn.execution_id.clone()),
             )
-            .await?;
+            .await?
+        else {
+            return Ok(Resumed::NotOwed);
+        };
         Ok(
             match self
                 .record_resumption_audit(audit(TurnResumption::Continued { successor }))

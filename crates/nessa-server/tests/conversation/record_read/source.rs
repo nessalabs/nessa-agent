@@ -351,8 +351,9 @@ async fn small_saves(directory: &std::path::Path, session: &SessionId, saves: us
         .next()
         .clone();
     for index in 0..saves {
-        let context = ProviderContext::Recorded(
+        let context = ProviderContext::recorded_after(
             ExecutionSessionId::new(format!("provider-session-{index}")).unwrap(),
+            0,
         );
         binding = writer
             .save_changes(

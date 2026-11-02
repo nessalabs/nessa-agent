@@ -296,6 +296,10 @@ pub(super) struct Event<T = String> {
     /// events saved before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) at_ms: Option<u64>,
+    /// The session stamped `at_ms` when it queued the report. Absent means a
+    /// provider time, which the session may replace.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) session_arrival: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -597,6 +601,7 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
             execution_id: event.execution_id().as_str().into(),
             native_hooks: event.native_hooks(),
             at_ms: event.observed_at_ms(),
+            session_arrival: event.session_arrival(),
             update: match event.update() {
                 ExecutionUpdate::Finished(outcome) => Update::Finished((*outcome).into()),
                 ExecutionUpdate::Message(chunk) => match chunk.kind() {
@@ -975,7 +980,11 @@ impl Event {
             Some(allowed) => event.with_native_hooks(allowed),
             None => event,
         };
+        if self.session_arrival && self.at_ms.is_none() {
+            return Err(corrupt("an arrival stamp needs the queue time"));
+        }
         Ok(match self.at_ms {
+            Some(at_ms) if self.session_arrival => event.stamped_at_arrival(at_ms),
             Some(at_ms) => event.with_observed_at_ms(at_ms),
             None => event,
         })
@@ -1101,7 +1110,15 @@ mod borrowed_event_tests {
             .unwrap()
             .contains(r#""at_ms":1700000000123"#));
         assert_eq!(decoded.observed_at_ms(), Some(1_700_000_000_123));
+        assert!(!decoded.session_arrival());
         assert_eq!(decoded, event);
+        let arrived = tool_event().stamped_at_arrival(1_700_000_000_123);
+        let (bytes, decoded) = round_trip(&arrived);
+        let saved = String::from_utf8(bytes).unwrap();
+        assert!(saved.contains(r#""at_ms":1700000000123"#));
+        assert!(saved.contains(r#""session_arrival":true"#));
+        assert!(decoded.session_arrival());
+        assert_eq!(decoded, arrived);
         let (bytes, decoded) = round_trip(&tool_event());
         assert!(!String::from_utf8(bytes).unwrap().contains("at_ms"));
         assert_eq!(decoded.observed_at_ms(), None);

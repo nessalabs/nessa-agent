@@ -210,6 +210,9 @@ while True:
                 continue
             assert saved.exists(), "cannot restore missing session"
             state = json.loads(saved.read_text())
+            if mode == "uninvoked-context" and msg["params"]["sessionId"] != state["id"]:
+                send({"id": msg["id"], "error": {"code": -32002, "message": "Resource not found"}})
+                continue
             assert msg["params"]["sessionId"] == state["id"]
             session = state["id"]
             history = state["history"]
@@ -227,6 +230,9 @@ while True:
                 result(msg["id"], {"sessionId": "different-session", **configs()})
                 continue
         else:
+            if mode == "uninvoked-context" and (root / "hold-new-context").exists():
+                record("new-context-waiting", session)
+                stdin_lines.wait_for_file("release-new-context")
             if mode in ("new-session-stall", "slow-launch-session-stall"):
                 record("new-session-wait", session)
                 time.sleep(20)
@@ -374,6 +380,10 @@ while True:
             assert msg["params"]["prompt"][0]["text"] in ("first user message", "second user message")
         pending = msg["id"]
         record("prompt-observed", json.dumps(msg["params"]["prompt"]))
+        if mode == "uninvoked-context":
+            count_path = root / "prompt-count"
+            count = int(count_path.read_text()) if count_path.exists() else 0
+            record("prompt-count", str(count + 1))
         user_text = prompt_text(msg["params"]["prompt"])
         prior_history = history[:]
         history.append(user_text)

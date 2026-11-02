@@ -893,7 +893,8 @@ impl Agent {
             tokio::spawn(async move {
                 agent
                     .accept_work(input, submitter, kind, candidates, None)
-                    .await
+                    .await?
+                    .ok_or(AgentError::SubmissionConflict)
             }),
         )
         .await
@@ -907,7 +908,7 @@ impl Agent {
         kind: InvocationKind,
         candidates: NoteCandidates,
         resumed_from: Option<ExecutionId>,
-    ) -> Result<QueueAdmission, AgentError> {
+    ) -> Result<Option<QueueAdmission>, AgentError> {
         let mut scheduler = self.inner.scheduler.lock().await;
         let mode = match kind {
             InvocationKind::Queued => SubmissionMode::Queued,
@@ -936,9 +937,32 @@ impl Agent {
         .await
         {
             return match recovered? {
-                SteeringDelivery::Queued(receipt) => Ok(receipt),
+                SteeringDelivery::Queued(receipt) => Ok(Some(receipt)),
                 SteeringDelivery::Injected { .. } => Err(AgentError::SubmissionConflict),
             };
+        }
+        // A decline that won after source settlement and before this admission
+        // is already persisted. The scheduler lock is the same one decline
+        // holds while it prepares that decision, so this check and the
+        // successor save cannot both succeed.
+        if let Some(source) = &resumed_from {
+            let decided = self
+                .inner
+                .manager
+                .read_invocations(|history| {
+                    history.iter().any(|record| {
+                        &record.request.execution_id == source
+                            && (record.decline.is_some()
+                                || record
+                                    .scheduling
+                                    .iter()
+                                    .any(|edge| edge.cause == SchedulingCause::NotResumed))
+                    })
+                })
+                .await;
+            if decided {
+                return Ok(None);
+            }
         }
         validate_configured_input(&self.capabilities(), &input)?;
         let work = self.inner.lifecycle.accept_waiting_work()?;
@@ -1038,7 +1062,7 @@ impl Agent {
         }
         if acknowledged {
             self.start_runner(&mut scheduler);
-            return Ok(admission);
+            return Ok(Some(admission));
         }
         let attempt = self.start_shutdown(SessionCloseRequest::ExecutionFailed);
         if let Err(error) = self
@@ -1061,7 +1085,7 @@ impl Agent {
         tokio::spawn(async move {
             let _ = agent.inner.lifecycle.complete_stop(&attempt).await;
         });
-        Ok(admission)
+        Ok(Some(admission))
     }
 
     fn accept_pending(
