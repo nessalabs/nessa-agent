@@ -28,7 +28,7 @@ use std::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, watch, Semaphore},
+    sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
 };
 use tokio_tungstenite::tungstenite::{
@@ -129,8 +129,7 @@ impl<P: Send + 'static> TunnelIngress<P> {
             let secrets = self.secrets.clone();
             let joined = self.joined.clone();
             bridges.spawn(async move {
-                let _slot = slot;
-                if let Err(error) = take(stream, admission, secrets, joined).await {
+                if let Err(error) = take(stream, admission, secrets, joined, slot).await {
                     tracing::debug!(%error, "tunnel connection refused");
                 }
             });
@@ -146,6 +145,7 @@ async fn take<P: Send>(
     admission: Arc<dyn TunnelAdmission<P>>,
     secrets: Arc<dyn DeviceTunnelSecrets>,
     joined: mpsc::Sender<Tunneled<P>>,
+    slot: OwnedSemaphorePermit,
 ) -> io::Result<()> {
     stream.set_nodelay(true)?;
     // Filled only after the secret matches, and before the upgrade response
@@ -168,6 +168,9 @@ async fn take<P: Send>(
         .unwrap_or_else(|error| error.into_inner())
         .take()
         .ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied))?;
+    // Authentication and the upgrade are done. The tunnel permit bounds the
+    // open session; this slot is only for a handshake that has not finished.
+    drop(slot);
     let (ours, theirs) = loopback_pair(PAIR_DEADLINE).await?;
     joined
         .send(Tunneled {

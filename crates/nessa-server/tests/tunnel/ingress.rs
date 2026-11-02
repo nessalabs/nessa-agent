@@ -327,3 +327,46 @@ async fn with_no_tunnel_the_listening_socket_alone_is_waited_on() {
     );
     assert!(!accept.open);
 }
+
+/// Open sessions release the pre-auth slot when the upgrade finishes.
+/// More than four of them stay up, and a later handshake is still admitted.
+#[tokio::test]
+async fn open_sessions_leave_a_preauth_slot_for_the_next_handshake() {
+    let permits = super::PREAUTH_CAPACITY + 2;
+    let mut serving = serve(permits).await;
+    let mut open = Vec::new();
+    for _ in 0..(super::PREAUTH_CAPACITY + 1) {
+        let socket = tokio::time::timeout(
+            REAL,
+            tokio_tungstenite::connect_async(request(serving.address, Some(&serving.paired))),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let tunneled = tokio::time::timeout(REAL, serving.joined.recv())
+            .await
+            .unwrap()
+            .expect("an authenticated session");
+        open.push((socket, tunneled));
+    }
+    let later = tokio::time::timeout(
+        REAL,
+        tokio_tungstenite::connect_async(request(serving.address, Some(&serving.paired))),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let admitted = tokio::time::timeout(REAL, serving.joined.recv())
+        .await
+        .unwrap()
+        .expect("a handshake while more than four sessions are open");
+    assert_eq!(
+        serving.pool.available_permits(),
+        0,
+        "each open session holds a tunnel permit, not a pre-auth slot"
+    );
+    drop(open);
+    drop(later);
+    drop(admitted);
+    serving.stop().await;
+}

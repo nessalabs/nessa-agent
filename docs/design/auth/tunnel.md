@@ -86,7 +86,9 @@ else with no permit taken. Unpairing a device or revoking its credential
 forgets the secret. Anonymous traffic, and a device that was revoked,
 cannot fill the pool. A socket that has not finished its upgrade holds one
 of four pre-authentication slots, not a tunnel permit. Past that, the
-socket is closed and no task is started.
+socket is closed and no task is started. The slot is released once the
+upgrade finishes, so sessions that are already open leave room for the
+next handshake. The tunnel permit is what an open session holds.
 
 ## The pieces
 
