@@ -517,7 +517,8 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
             else resolve()
           }
           timer = setTimeout(
-            () => finish(new Error("the gateway did not queue the update before the pause")),
+            () =>
+              finish(new Error("the gateway did not queue the update before the pause")),
             10_000,
           )
           state.waiters.push(finish)
