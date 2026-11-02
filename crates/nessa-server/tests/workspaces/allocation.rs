@@ -1237,7 +1237,8 @@ async fn a_claude_sign_in_is_kept_only_in_the_token_alphabet() {
     assert_eq!(
         sign_ins.saved.lock().unwrap().as_ref().unwrap().as_bytes(),
         b"sk-ant-oat01-second"
-    );    assert_eq!(service.claude_sign_in_changes(), 2);
+    );
+    assert_eq!(service.claude_sign_in_changes(), 2);
 }
 
 #[tokio::test]
