@@ -74,6 +74,58 @@ The supplied Library image resolved, but the supported materialization helper
 reported a download failure. No readable image was available in this executor,
 so it did not supply evidence or scope for the diagrams.
 
+## State verification refresh (2026-11-02)
+
+The implementation review used main at
+`77a6b620af4d94b234294f6d273fd74b3dfb44c7`, confirmed against remote main
+before publication. The verification tooling review additionally used
+`722095a8cd973890701e0fd83890d6af548000f8`, which adds the repository commands
+and models. That is the checkpoint of the new verification guide; it is not a
+claim that these commands existed in the earlier main snapshot.
+
+The refresh reviewed the resource-ticket store, route/audit boundary and linked
+regressions, and the SDK stop finalization, evidence join, reopening guard and
+cleanup-audit regressions. Their two owning pages now carry the implementation
+checkpoint and linked finite TLC models. The source controls remain the runtime
+authority. The models abstract a single ticket and one cleanup/reopening cycle;
+their owning pages name what they omit.
+
+Product parent Stop has landed since the October audit. The gateway's
+`parent_stop.rs` and confirmed-recovery regression were inspected to reconcile
+the stale unmerged warning in the SDK close flow and the SDK index. The existing
+[product Stop page](services/desktop/chat/stop-active-and-queued-work.md#owned-descendants)
+remains the owner of its selection and recovery details. The SDK runtime page
+received that scoped correction; its remaining process-cleanup evidence and
+older checkpoint were not recertified.
+
+Executed locally with Node 24.22.1 on macOS and the Nessa Docs checkout identified
+below:
+
+| Check | Observed result |
+| --- | --- |
+| Entire state catalog, through the canonical renderer loader | 142 accepted pages, zero issues |
+| TLC 1.7.4, resource ticket | 8 distinct states, five invariants held, zero broken or unchecked |
+| TLC 1.7.4, cleanup reopening | 18 distinct states, five invariants held, zero broken or unchecked |
+| Repository command tests, with real TLC controls enabled | Three tests passed; no skips |
+| Negative controls | Reusable consumed ticket breaks `AtMostOnce`; reopening after failed audit breaks `ReopenRequiresAudit`; both commands exit 1 |
+| Unavailable and failed controls | Empty checker cache exits 2 without installing; invalid model exits 2 and preserves the prior saved result; missing linked files fail catalog validation |
+| Browser inspection | Chrome 156.0.8078.74 opened both model charts and the verification guide; both rule badges and diagrams rendered, no page errors |
+
+The saved `modelCheck` records were produced by the canonical service and writer,
+not authored as passing claims. Subsequent read-only runs reproduced both
+passes. These results check the design models, not the implementation. The
+renderer used main after its TLC addition,
+`29cff2787b05038e4b7893f026cc7fb1731e3664`; the command imports its built
+server modules rather than maintaining a second parser or TLC runner.
+
+The new [verification guide](services/tooling/verification.md) inventories the
+current manifest and links the owning browser checklist, provider capture and
+Boat runbooks. No product Rust suites, scripted conversation suite, stress,
+chaos, performance, native-host acceptance, real-provider checks or billable
+Boat tests were run in this documentation/tooling refresh. Those remain separate
+qualification gates. No other lifecycle page received a new behavior checkpoint;
+older pages and historical risk reports keep their prior scope.
+
 ## Choose a user flow
 
 | What the person does | Follow this map | Boundaries to inspect for bugs |

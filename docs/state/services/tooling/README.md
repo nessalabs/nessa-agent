@@ -10,6 +10,7 @@ sources:
   - scripts/desktop/release-assets.mjs
 diagramLinks:
   Owner0: "tooling-runtime"
+  Verification: "tooling-verification"
 ---
 
 # Build and release tooling
@@ -25,8 +26,10 @@ These boxes open related pages. They are parts of the system, rather than mutual
 ```mermaid
 flowchart TB
     Owner0["Runtime and release assembly"]
+    Verification["Verification commands and model evidence"]
 ```
 
 ## Browse this area
 
 - [Runtime and release assembly](tooling-runtime.md)
+- [Verification commands and model evidence](verification.md)

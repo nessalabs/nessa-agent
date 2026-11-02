@@ -212,3 +212,12 @@ The isolated integration joins main `084b79aeedf157286810512c524aede59887f17b` w
 ## Main tool-trace integration
 
 Main `d029d1cf126585e5e2b0146d92d37e7585ad67ab` was subsequently merged non-destructively into runtime checkpoint `110dacd432341d4801c39c554f774f52b82b89b0`. Its protocol/client/transcript changes and UI pin `8cc1dee2409ac6334377effcd2cf0ca998e5a62f` are preserved, together with both custom selector exports. [Current integration qualification](../reviews/user-flow-integration-1087.md) separates the fresh checks from earlier reviewed checkpoints. No unrelated state-page checkpoint is advanced for this mainline update.
+
+## State verification refresh (2026-11-02)
+
+The [verification guide](services/tooling/verification.md) now links the current
+catalog, TLC, scripted conversation, stress/chaos, browser and opt-in provider
+entry points. The [refresh evidence](provenance.md#state-verification-refresh-2026-11-02)
+records catalog and finite-model results, plus the bounded parent-Stop correction.
+It does not replace the historical product acceptance evidence above or claim
+that the other runtime suites were rerun.

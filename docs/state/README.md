@@ -140,8 +140,10 @@ ID under Sources and provenance. Pages without it have no recorded checkpoint;
 the system root does not make its children current. The [checkpoint contract](authoring.md#source-review-checkpoint)
 explains how to maintain it and compare it with a failing checkout.
 
-The [latest bounded audit](provenance.md#mainline-lifecycle-refresh-2026-10-23)
-records its source and scope. Its reviewed behavior pages carry that source
+The [latest verification refresh](provenance.md#state-verification-refresh-2026-11-02)
+records its source, checked lifecycle pages and exclusions. The earlier
+[mainline audit](provenance.md#mainline-lifecycle-refresh-2026-10-23) retains its
+historical scope. Its reviewed behavior pages carry that source
 revision; unrelated historical pages remain unmarked. A checkpoint records a
 source review, not a runtime test result.
 
@@ -161,6 +163,7 @@ Start with the [user journey inventory](user-flow-coverage.md) to follow goals i
 - [Repository sweep](inventory.md): what was inspected and where state is owned.
 - [Gaps and improvements](gaps.md): evidence-backed limits and next work.
 - [Authoring and maintenance](authoring.md): document contract and statechart notation.
+- [Verification commands](services/tooling/verification.md): catalog, TLC, browser and provider evidence.
 - [Risk evidence](risks.md): existing reproductions, corrections and exclusions.
 - [Flow-map provenance](provenance.md): historical baselines, contributing PRs and original inspection limits.
 

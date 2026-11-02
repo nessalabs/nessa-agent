@@ -64,7 +64,7 @@ Ownership snapshots use [bounded physical SQLite work](../storage/README.md#phys
 owned by each store instance. Snapshot revision authority remains with the
 coordinator; this adapter lifetime is separate from submission scheduling.
 
-Turn Stop is a separate [captured-turn command](runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#turn-cancellation-and-ownership). The ownership graph below describes SDK lifetime closure; it does not establish a product parent-Stop cascade.
+Turn Stop is a separate [captured-turn command](runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#turn-cancellation-and-ownership). The ownership graph below describes SDK lifetime closure. The separate [product parent Stop](../desktop/chat/stop-active-and-queued-work.md#owned-descendants) now captures unfinished owned descendant turns by default without closing their lifetimes.
 
 ## Parent and child close settlement
 
