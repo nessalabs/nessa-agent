@@ -55,6 +55,9 @@ pub(crate) struct FileDeviceSecrets {
     /// Test hook: the next `count` publication audits fail after the file write.
     #[cfg(test)]
     fail_confirmations: std::sync::atomic::AtomicU32,
+    /// Test hook: the next `count` audit records fail after the file is renamed into place.
+    #[cfg(test)]
+    fail_audit_syncs: std::sync::atomic::AtomicU32,
 }
 
 impl FileDeviceSecrets {
@@ -94,6 +97,8 @@ impl FileDeviceSecrets {
             fail_publications: std::sync::atomic::AtomicU32::new(0),
             #[cfg(test)]
             fail_confirmations: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(test)]
+            fail_audit_syncs: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -108,6 +113,13 @@ impl FileDeviceSecrets {
     #[cfg(test)]
     fn fail_next_confirmations(&self, count: u32) {
         self.fail_confirmations
+            .store(count, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Fail the next `count` audit writes after the record has been renamed into place.
+    #[cfg(test)]
+    fn fail_next_audit_syncs(&self, count: u32) {
+        self.fail_audit_syncs
             .store(count, std::sync::atomic::Ordering::SeqCst);
     }
 
@@ -267,6 +279,20 @@ impl FileDeviceSecrets {
             .and_then(|_| file.as_file().sync_all())
             .map_err(|_| SecretError::Audit)?;
         file.publish(&path).map_err(|_| SecretError::Audit)?;
+        #[cfg(test)]
+        if self
+            .fail_audit_syncs
+            .try_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |count| count.checked_sub(1),
+            )
+            .is_ok()
+        {
+            // The rename has landed. A directory sync that fails must not
+            // pretend the record is absent.
+            return Err(SecretError::Audit);
+        }
         sync_directory(&self.audit).map_err(|_| SecretError::Audit)
     }
 
@@ -352,10 +378,9 @@ impl FileDeviceSecrets {
             initiator: initiator.to_owned(),
             before: None,
         };
-        if let Err(error) = self.intend(&open) {
-            let _ = self.clear_pending(&open.operation_id);
-            return Err(error);
-        }
+        // A failed audit write may still have renamed the intent into place.
+        // The pending secret stays, so the retry of this same intent can read it.
+        self.intend(&open)?;
         Ok(open)
     }
 
@@ -872,6 +897,52 @@ mod tests {
         assert_eq!(revoked[0]["before"], "active");
         assert_eq!(revoked[0]["after"], "revoked");
         assert_ne!(revoked[0]["operationId"], issue_operation);
+    }
+
+    #[test]
+    fn an_intent_that_lands_keeps_its_pending_secret_when_the_directory_sync_fails() {
+        let (directory, secrets, _) = store(vec!["device-1".into()]);
+        secrets.fail_next_audit_syncs(1);
+        assert_eq!(
+            secrets.issue("device-1", &[7; 32], "owner"),
+            Err(SecretError::Audit)
+        );
+        let pending = std::fs::read_dir(pending_dir(directory.path())).unwrap();
+        let pending: Vec<_> = pending.map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(pending.len(), 1, "the pending secret is kept");
+        let secret: [u8; 32] = std::fs::read(&pending[0]).unwrap().try_into().unwrap();
+        let records = audit_records(directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "intent")
+            .collect();
+        assert_eq!(intents.len(), 1, "the renamed intent is visible");
+        assert!(records.iter().all(|record| record["phase"] != "published"));
+        let operation = intents[0]["operationId"].as_str().unwrap().to_owned();
+        assert!(!secrets.accepts(&secret), "the secret file was not written");
+
+        let issued = secrets.issue("device-1", &[7; 32], "owner").unwrap();
+        assert_eq!(issued, secret);
+        assert!(secrets.accepts(&secret));
+        let records = audit_records(directory.path());
+        let intents: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "intent")
+            .collect();
+        let published: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "published")
+            .collect();
+        assert_eq!(intents.len(), 1, "the retry reuses the intent");
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0]["operationId"], operation);
+        assert_eq!(published[0]["after"], "active");
+        assert_eq!(
+            std::fs::read_dir(pending_dir(directory.path()))
+                .map(|entries| entries.count())
+                .unwrap_or(0),
+            0
+        );
     }
 
     fn audit_records(root: &std::path::Path) -> Vec<Value> {

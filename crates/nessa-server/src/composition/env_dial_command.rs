@@ -195,6 +195,13 @@ async fn approved_then_served(
         either.abort();
         return Ok(());
     };
+    // A credential without its tunnel secret is not a finished approval.
+    // Ask until the secret is stored, or stop.
+    reconcile_tunnel_secret(address, relay, &stopping).await?;
+    if *stopping.borrow() {
+        either.abort();
+        return Ok(());
+    }
     tracing::info!(%address, "approved; serving the gateway");
     remember_tunnel_secret();
     // Composing can wait on the serve lock; a stop or drain asked then
@@ -318,21 +325,74 @@ async fn approval(
 /// The secret saved when this machine's pairing became active, for the
 /// tunnel leg of the dial that follows. The pairing lock has been let go.
 fn remember_tunnel_secret() {
-    let installed = (|| -> Option<nessa_protocol::tunnel::TunnelSecret> {
-        let root = environment_directory().ok()?.canonicalize().ok()?;
-        let store = nessa_auth::adapters::pairing::FilePairingState::open(
-            &root,
-            std::path::Path::new("pairing"),
-        )
-        .ok()?;
-        use nessa_auth::application::pairing::ClientPendingStore;
-        store
-            .load_tunnel_secret()
-            .ok()
-            .flatten()
-            .map(nessa_protocol::tunnel::TunnelSecret::new)
-    })();
+    let installed = environment_directory()
+        .ok()
+        .and_then(|root| root.canonicalize().ok())
+        .and_then(|root| read_tunnel_secret_at(&root))
+        .map(nessa_protocol::tunnel::TunnelSecret::new);
     nessa_client_core::retained::install_tunnel_secret(installed);
+}
+
+/// Ask until the tunnel secret is on disk beside the credential. Approval
+/// is not finished while it is missing: a crash between the two writes
+/// would otherwise dial with no secret and never ask again.
+async fn reconcile_tunnel_secret(
+    address: &str,
+    relay: Option<&RelayAddress>,
+    stopping: &watch::Receiver<bool>,
+) -> Result<(), RunError> {
+    let root = match environment_directory().and_then(|root| {
+        root.canonicalize()
+            .map_err(|error| RunError::Agent(error.to_string()))
+    }) {
+        Ok(root) => root,
+        Err(error) => return Err(error),
+    };
+    if read_tunnel_secret_at(&root).is_some() {
+        return Ok(());
+    }
+    loop {
+        if *stopping.borrow() {
+            return Ok(());
+        }
+        let pairing = open(address)?.through(relay.cloned());
+        use crate::env_serve::application::EnvironmentPairing;
+        let answer = pairing.ask().await;
+        pairing.shutdown().await;
+        if read_tunnel_secret_at(&root).is_some() {
+            return Ok(());
+        }
+        match answer {
+            crate::env_serve::application::Answer::Ended => {
+                return Err(RunError::Agent(
+                    "the gateway ended this pairing without approving it".into(),
+                ));
+            }
+            crate::env_serve::application::Answer::NotPaired => {
+                return Err(RunError::Agent(
+                    "this machine is not paired: run nessa env enroll first".into(),
+                ));
+            }
+            crate::env_serve::application::Answer::Unusable(reason) => {
+                return Err(RunError::Agent(reason));
+            }
+            _ => {
+                tokio::select! {
+                    biased;
+                    () = stopped(stopping.clone()) => return Ok(()),
+                    () = tokio::time::sleep(APPROVAL_POLL) => {}
+                }
+            }
+        }
+    }
+}
+
+/// The tunnel secret stored under `root`/`pairing`, if the file is there.
+pub(crate) fn read_tunnel_secret_at(root: &Path) -> Option<[u8; 32]> {
+    let store =
+        nessa_auth::adapters::pairing::FilePairingState::open(root, Path::new("pairing")).ok()?;
+    use nessa_auth::application::pairing::ClientPendingStore;
+    store.load_tunnel_secret().ok().flatten()
 }
 
 fn open(address: &str) -> Result<FilePairingEnvironment, RunError> {
@@ -574,4 +634,62 @@ fn check_address(address: &str) -> Result<(), RunError> {
 
 fn clock() -> Arc<dyn Clock> {
     RuntimeDependencies::default().clock
+}
+
+#[cfg(test)]
+mod tunnel_secret_gate {
+    use super::read_tunnel_secret_at;
+    use nessa_auth::adapters::pairing::{FilePairingState, NativeIdentity};
+    use nessa_auth::application::pairing::{ClientPendingStore, PrivateKeyMaterial};
+    use nessa_auth::domain::pairing::{
+        AttemptId, ConsentClass, ConsentIntentId, InvitationId, PublicIntent,
+    };
+    use nessa_auth::domain::{CredentialId, ResourceId};
+    use std::path::Path;
+    use zeroize::Zeroizing;
+
+    fn intent() -> PublicIntent {
+        PublicIntent::new(
+            InvitationId::new([1; InvitationId::LENGTH]),
+            AttemptId::new([2; AttemptId::LENGTH]),
+            ConsentIntentId::new([3; ConsentIntentId::LENGTH]),
+            1,
+            9,
+            ConsentClass::PeerEnvironment,
+        )
+        .unwrap()
+    }
+
+    /// The credential alone is not a finished approval. Dialing waits until
+    /// the tunnel secret is stored beside it.
+    #[test]
+    fn a_credential_without_its_tunnel_secret_is_not_ready_to_dial() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("root");
+        nessa_local_storage::create_directory(&path).unwrap();
+        nessa_local_storage::create_directory_beneath(&path, Path::new("pairing")).unwrap();
+        let intent = intent();
+        let key = PrivateKeyMaterial::new(Zeroizing::new([4; 32]));
+        let pin = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([5; 32])))
+            .unwrap()
+            .public_spki();
+        let store = FilePairingState::open(&path, Path::new("pairing")).unwrap();
+        store.save_pending(&key, &pin, intent, None).unwrap();
+        store
+            .save_credential(
+                &CredentialId::new("env-1").unwrap(),
+                &ResourceId::new("receiver-1").unwrap(),
+                intent,
+            )
+            .unwrap();
+        drop(store);
+        assert!(
+            read_tunnel_secret_at(&path).is_none(),
+            "approval is not finished while the tunnel secret is missing"
+        );
+        let store = FilePairingState::open(&path, Path::new("pairing")).unwrap();
+        store.save_tunnel_secret(&[9; 32]).unwrap();
+        drop(store);
+        assert_eq!(read_tunnel_secret_at(&path), Some([9; 32]));
+    }
 }
