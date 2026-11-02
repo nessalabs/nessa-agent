@@ -43,9 +43,10 @@ const COMMITTED_VIEW_CACHE_ENTRIES: usize = 64;
 const COMMITTED_VIEW_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const COMMITTED_READ_FRAMES: usize = 256;
 /// Backstop for an unbounded head or page whose stream stays checked out.
-/// The wait itself runs off the thread that is polling the scan, so it cannot
-/// freeze the runtime that owns the discovery entry. Past this bound the scan
-/// answers unavailable instead of sitting on the blocking pool forever.
+/// The wait runs on its own thread, not the runtime's blocking pool: owner
+/// commands such as pairing cancel need that pool, and a one-thread pool
+/// deadlocks if this wait takes it. Past this bound the scan answers
+/// unavailable instead of leaving the thread parked.
 const UNBOUNDED_DISCOVERY_WAIT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
@@ -851,32 +852,38 @@ impl ReaderState {
         }
     }
 
-    /// Block for this stream's discovery entry on the runtime's blocking pool.
+    /// Wait for this stream's discovery entry off both the scheduler and the
+    /// runtime's blocking pool.
     ///
-    /// The product read waits on its own worker, outside the scheduler, and
-    /// stops at its work budget. An unbounded head or page is polled by
-    /// `Handle::block_on` on the source thread. Waiting on the condvar there
-    /// holds the scheduler core when this thread has taken it, so the owner
-    /// of the entry cannot run and the wait never ends. A local turn on that
-    /// runtime does not finish.
+    /// The product read waits on its own worker and stops at its work budget.
+    /// An unbounded head or page is polled by `Handle::block_on`. A condvar on
+    /// that thread holds the scheduler core when the thread has taken it, so
+    /// the owner cannot return the entry. `spawn_blocking` is the pool owner
+    /// commands use (`pairing.cancel` among them); a pool of one thread
+    /// deadlocks if this wait sits on it. This thread is neither of those.
     async fn wait_until_this_stream_can_be_checked_out(&self) -> Result<(), SourceError> {
         let stop = Arc::new(AtomicBool::new(false));
         let cache = Arc::clone(&self.terminal_cache);
         let stream = self.stream.clone();
         let stopped = Arc::clone(&stop);
-        let waiting = tokio::task::spawn_blocking(move || {
-            cache.wait_for_release(&stream, &|| stopped.load(Ordering::SeqCst));
-        });
-        tokio::pin!(waiting);
+        let (done, arrived) = tokio::sync::oneshot::channel();
+        thread::Builder::new()
+            .name("nessa-discovery-wait".into())
+            .spawn(move || {
+                cache.wait_for_release(&stream, &|| stopped.load(Ordering::SeqCst));
+                let _ = done.send(());
+            })
+            .map_err(|_| SourceError::Unavailable)?;
+        tokio::pin!(arrived);
         tokio::select! {
             biased;
-            finished = &mut waiting => {
+            finished = &mut arrived => {
                 finished.map_err(|_| SourceError::Unavailable)?;
             }
             () = tokio::time::sleep(UNBOUNDED_DISCOVERY_WAIT) => {
                 stop.store(true, Ordering::SeqCst);
                 self.terminal_cache.wake_waiters();
-                let _ = waiting.await;
+                let _ = arrived.await;
                 return Err(SourceError::Unavailable);
             }
         }

@@ -582,6 +582,59 @@ async fn a_head_for_one_stream_proceeds_while_another_stays_checked_out() {
     storage.shutdown().await.unwrap();
 }
 
+/// The unbounded wait must not sit on the runtime's blocking pool. Owner
+/// commands such as `pairing.cancel` run there, and a pool of one thread
+/// never reaches them if this wait has taken it.
+#[test]
+fn an_unbounded_discovery_wait_leaves_the_blocking_pool_free() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+        let records = storage.runtime().await.unwrap();
+        let stream = records
+            .create_stream(&StreamId::new("stream-a").unwrap())
+            .await
+            .unwrap();
+        append_save(&storage, &stream, 0, 8).await;
+        let hold = storage.terminal_cache.acquire(&stream).unwrap();
+        let storage = Arc::new(storage);
+        let handle = tokio::runtime::Handle::current();
+        let reading = {
+            let storage = Arc::clone(&storage);
+            thread::spawn(move || {
+                let mut source = handle
+                    .block_on(
+                        storage.record_source(&SessionId::new("stream-a").unwrap(), sid("origin")),
+                    )
+                    .unwrap()
+                    .unwrap();
+                let scope = source.scope(sid("receiver"), sid("epoch"));
+                source.head(&scope)
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let ran = tokio::time::timeout(Duration::from_secs(2), tokio::task::spawn_blocking(|| 1u8))
+            .await
+            .expect("the blocking pool ran while discovery waited");
+        assert_eq!(ran.expect("the blocking job joined"), 1);
+        drop(hold);
+        reading
+            .join()
+            .expect("the head thread joined")
+            .expect("the head returned after its entry was released");
+        storage.shutdown().await.unwrap();
+    });
+}
+
 #[tokio::test]
 async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
     let directory = tempfile::tempdir().unwrap();

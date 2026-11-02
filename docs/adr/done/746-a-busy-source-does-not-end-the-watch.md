@@ -32,11 +32,12 @@ stream's entry can be checked out again, or its existing work budget
 elapses, then calls again. Another stream that is still checked out does
 not hold that wait. That wait runs on the read's own thread, outside the
 scheduler. An unbounded head or page is polled by `Handle::block_on` on the
-source thread, so its wait runs on the blocking pool instead: a condvar on
-the polling thread holds the scheduler core when that thread has taken it,
-the owner cannot return the entry, and a local turn on that runtime does
-not finish. The unbounded scan gives up after thirty seconds rather than
-waiting for as long as the owner stays away. The budget starts when the
+source thread. A condvar there holds the scheduler core when that thread has
+taken it, so the owner cannot return the entry. The runtime's blocking pool
+is the wrong place for the wait too: owner commands, including
+`pairing.cancel`, run there, and a pool of one thread deadlocks if the wait
+takes it. The unbounded scan waits on its own thread and gives up after
+thirty seconds. The budget starts when the
 worker is about to make its first discovery call, after it has a thread and
 has looked up the stream. A real validation step still counts, and four
 preparing attempts still end a source that stays unready. A local
