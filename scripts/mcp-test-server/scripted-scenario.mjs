@@ -443,11 +443,24 @@ async function runStep(step, ctx) {
         : callTool(step, ctx, ctx.openCall(step.tool))
     case "permission":
       return ask(step, ctx)
-    case "pause":
+    case "pause": {
+      // Sleep only after the gateway has queued the updates already written.
+      // The receipt time of the previous call is that queue, so the sleep is
+      // the gap a later read of those times measures.
+      if (ctx.accepted) {
+        try {
+          await ctx.accepted()
+        } catch (error) {
+          if (ctx.cancelled()) return { stopReason: "cancelled" }
+          return { fail: error.message }
+        }
+      }
+      if (ctx.cancelled()) return { stopReason: "cancelled" }
       await (ctx.untilCancelledOr
         ? ctx.untilCancelledOr(step.ms)
         : new Promise((resolve) => setTimeout(resolve, step.ms)))
       return ctx.cancelled() ? { stopReason: "cancelled" } : null
+    }
     case "fail":
       return { fail: step.message }
     case "wait-cancel":

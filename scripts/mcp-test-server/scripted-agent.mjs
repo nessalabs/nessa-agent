@@ -499,6 +499,31 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
                 resolve()
               })
             }),
+      // The worker answers this only after it has queued every update written
+      // before it. The error is the answer: the method is not a product call.
+      accepted: () =>
+        new Promise((resolve, reject) => {
+          if (state.cancelled) return resolve()
+          const id = `accept-${randomUUID()}`
+          let settled = false
+          let timer
+          const finish = (error) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            replies.delete(id)
+            state.waiters = state.waiters.filter((wake) => wake !== finish)
+            if (error) reject(error)
+            else resolve()
+          }
+          timer = setTimeout(
+            () => finish(new Error("the gateway did not queue the update before the pause")),
+            10_000,
+          )
+          state.waiters.push(finish)
+          replies.set(id, () => finish())
+          send({ id, method: "session/accept", params: { sessionId } })
+        }),
       mode: () => session.values.mode,
       update,
       requestPermission: (params) =>

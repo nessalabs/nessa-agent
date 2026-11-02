@@ -1992,8 +1992,13 @@ impl SessionManager {
     /// restart draws the same timeline — a tool's start and end, when a
     /// review was asked — from what was saved; a report without a time was
     /// saved before times were kept. The session's clock is the only author:
-    /// a time a provider set on its event is replaced, not trusted.
+    /// a time a provider set on its event is replaced, not trusted. A report
+    /// the session already stamped when it queued it keeps that time, so a
+    /// read delayed past the queue does not move it.
     pub(crate) fn observed(&self, event: ExecutionEvent) -> ExecutionEvent {
+        if event.session_arrival() {
+            return event;
+        }
         event.with_observed_at_ms(self.message_commit_clock.unix_milliseconds())
     }
 

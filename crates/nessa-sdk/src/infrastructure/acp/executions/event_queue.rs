@@ -1,6 +1,7 @@
 //! Bounds retained decoded events across every process generation of one attachment.
 //! A dequeue transfers ownership to the consumer and releases its queue charge.
 use crate::application::agent_execution::executions::ExecutionEvent;
+use crate::infrastructure::clock::process_unix_ms;
 use std::{future::Future, mem::size_of, sync::Arc};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 
@@ -57,6 +58,9 @@ impl EventSender {
         if self.sender.is_closed() {
             return Err(QueueError::Closed);
         }
+        // Queue time, not the supervisor's later read. A slow consumer keeps
+        // this stamp; the session replaces a time the provider wrote.
+        let event = event.stamped_at_arrival(process_unix_ms());
         let bytes = u32::try_from(event_bytes(&event)).map_err(|_| QueueError::Full)?;
         let charge = self
             .permits

@@ -14,6 +14,7 @@ use crate::domain::agent_execution::{
     sessions::ExecutionSessionId,
     tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolKind, ToolStatus},
 };
+use crate::infrastructure::clock::process_unix_ms;
 
 fn text_event() -> ExecutionEvent {
     let mut text = String::with_capacity(1024);
@@ -231,4 +232,19 @@ async fn room_waits_for_a_moving_consumer_and_gives_up_on_a_stopped_one() {
     sender.room(0, || tokio::time::sleep(patience)).await;
     assert_eq!(started.elapsed(), patience);
     assert_eq!(sender.sender.capacity(), HEADROOM - 1);
+}
+
+/// The stamp is the queue, not a later read. A consumer that has not run yet
+/// already carries the process time from `try_send`.
+#[tokio::test]
+async fn a_queued_report_is_stamped_before_its_consumer_reads_it() {
+    let before = process_unix_ms();
+    let budget = budget(MAX_QUEUED_BYTES);
+    let (sender, mut receiver) = budget.channel(8);
+    assert_eq!(sender.try_send(text_event()), Ok(()));
+    let queued = receiver.recv().await.unwrap();
+    let after = process_unix_ms();
+    let stamped = queued.observed_at_ms().expect("queue time");
+    assert!(queued.session_arrival());
+    assert!(stamped >= before && stamped <= after);
 }
