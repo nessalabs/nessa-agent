@@ -17,7 +17,7 @@ phone or a second window sees the same one. The owner is
 | --- | --- | --- |
 | Which app, and GitHub's addresses | `github/infrastructure/app.rs` | `protocol/defaults/github-app.json`, or the file `NESSA_GITHUB_APP` names (checks point it at a fake GitHub on this machine) |
 | Signed out, waiting for a code, or signed in | `GithubConnections` | memory, and an encrypted vault entry when signed in |
-| The token and whose it is | `GithubTokenVault` | injected entry in the session-unlocked local vault; legacy `sign-in.json` is consumed only for a verified one-time upgrade |
+| The token and whose it is | `GithubTokenVault` | injected entry in the session-unlocked local vault. The key stays in gateway memory. A plaintext `sign-in.json` is deleted and not read ([1195](../adr/done/1195-isolate-github-sign-in.md)) |
 | Each step, for the owner to look back on | `DurableGithubAudit` | `<namespace>/conversations/audit/github`, one private file per record, never a token or a code; a `connect-ended` record names what decided it (`github_answered`, `deadline_passed`, `github_unreachable`, `store_failed`) |
 | What an agent can read through Nessa's sign-in | `GithubConnections` and the built-in `nessa-github` tool | a gateway-side request using the current sign-in, never an agent environment variable |
 | What the person sees | `src/desktop/settings/ui/github-row.tsx` | nothing: it reads `github.status` |
@@ -92,13 +92,14 @@ not imply that a write was authorized or completed.
 | GitHub refuses, redirects, times out, or returns an oversized answer | Return a typed failure without the token | No local GitHub state is inferred from the failure |
 | Agent or shell process opens before or after Connect or Disconnect | No Nessa token or helper is placed in its environment | Process restart cannot resurrect an earlier Nessa sign-in |
 
-The sign-in is persisted in the encrypted app-session vault. A legacy
-`<namespace>/github/sign-in.json` is migration input only: the upgrade verifies
-the encrypted receipt before removing the old plaintext. This PR preserves that
-migration and does not restore ordinary plaintext storage. Removing environment
-injection is a narrower guarantee than isolating an unlocked gateway from other
-processes running as the same OS user. [Issue 1195](https://github.com/nessalabs/nessa-agent/issues/1195)
-tracks that remaining process boundary; this broker does not claim to enforce it.
+The sign-in is persisted in the encrypted app-session vault. The key is
+derived from the passphrase and held only in the gateway while the vault is
+unlocked; it is not written beside the ciphertext. A plaintext
+`<namespace>/github/sign-in.json` is removed without being read, including
+while the vault is locked. Nessa is alpha, so that file is not imported.
+An agent command that knows the path can open the ciphertext and does not
+obtain the token bytes
+([1195](../adr/done/1195-isolate-github-sign-in.md)).
 
 ## Read cancellation and vault ordering
 
@@ -167,7 +168,7 @@ waiting.
 | G17 | connected | disconnect | `disconnect-requested` recorded first, then the encrypted entry deleted, then signed out; if `disconnected` is refused, still signed out with `unrecorded`, refused `github_audit_unavailable` | disconnect-requested, disconnected |
 | G18 | connected | disconnect, the encrypted entry cannot be deleted | still connected, refused `github_storage_unavailable`; if `disconnect-failed` is refused too, connected with `unrecorded` | disconnect-failed |
 | G19 | signed out | cancel, or disconnect | answers signed out; disconnect first deletes any credential entry left by G14 (refused `github_storage_unavailable` if it cannot) | — |
-| G20 | (start) | the gateway starts | no secret is loaded while the vault is locked; after unlock, restore the saved sign-in or signed out; unreadable saved data reports `last: store_unavailable` | — |
+| G20 | (start) | the gateway starts | a plaintext `sign-in.json` is removed before agents start, whether or not the vault is unlocked, and is not read; a failed removal stops startup and, on the connections owner, reports `last: store_unavailable`. No secret is loaded while the vault is locked; after unlock, restore the saved sign-in or signed out; unreadable saved data reports `last: store_unavailable` | `a_locked_startup_removes_a_plaintext_sign_in`, `a_plaintext_sign_in_that_cannot_be_removed_fails_startup` |
 | G21 | connecting | the gateway stops | the code attempt is gone; an approved credential durably saved before the stop can be restored after unlocking the vault | — |
 | G22 | a product GitHub command queued for an old vault unlock | the vault locks and unlocks before the command gate opens | refuse `vault_locked` before changing live bindings or the newer sign-in; the new generation owns any later command | — |
 | G23 | live-event selection from an old unlock is waiting to commit | the vault locks and unlocks before the inbox transaction commits | the selection owner refuses the old generation at commit, rolls back the whole selection and audit, and preserves the new selection | — |

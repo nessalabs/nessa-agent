@@ -1,0 +1,45 @@
+{
+  "renderer": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "browser": "151.0.7922.173",
+  "project": "/workspace/nessa-981-current",
+  "source": "027f430cbbe630c0ebfa62fa800eeabfe9f1eaee",
+  "pages": [
+    {
+      "id": "desktop-chat-stop-active-and-queued-work",
+      "figures": [
+        {
+          "state": "rendered",
+          "svgs": 1,
+          "width": 1076,
+          "height": 844
+        }
+      ],
+      "fullCheckpointVisible": true
+    },
+    {
+      "id": "sdk-history",
+      "figures": [
+        {
+          "state": "rendered",
+          "svgs": 1,
+          "width": 1076,
+          "height": 737
+        },
+        {
+          "state": "rendered",
+          "svgs": 1,
+          "width": 1076,
+          "height": 844
+        }
+      ],
+      "fullCheckpointVisible": true
+    }
+  ],
+  "healthIssues": 0,
+  "errors": {
+    "console": [],
+    "page": [],
+    "requests": []
+  },
+  "ok": true
+}

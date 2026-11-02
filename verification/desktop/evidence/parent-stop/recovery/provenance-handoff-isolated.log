@@ -1,0 +1,24 @@
+
+running 18 tests
+test conversation::application::service::handoff_tests::a_fork_retried_while_the_first_runs_is_saved_once ... ok
+test conversation::application::service::handoff_tests::a_fork_of_a_source_not_its_own_or_into_a_conversation_with_turns_is_refused ... ok
+test conversation::application::service::handoff_tests::a_fork_starts_a_new_conversation_from_the_sources_turns ... ok
+test conversation::application::service::handoff_tests::a_pending_switch_is_carried_on_by_the_next_opening ... ok
+test conversation::application::service::handoff_tests::a_switch_is_refused_to_the_same_agent_and_while_a_turn_runs ... ok
+test conversation::application::service::handoff_tests::a_pending_agent_switch_retries_invalidation_as_its_original_request ... ok
+test conversation::application::service::handoff_tests::a_switch_carries_the_conversation_on_under_another_agent ... ok
+test conversation::application::service::handoff_tests::a_switch_is_refused_while_a_restart_left_a_turn_owed ... ok
+test conversation::application::service::handoff_tests::a_switch_whose_agent_cannot_open_is_not_made ... ok
+test conversation::application::service::handoff_tests::an_unchanged_selection_admits_one_recovered_continuation ... ok
+test conversation::application::service::handoff_tests::an_agent_switch_seals_a_crash_left_unattempted_continuation ... ok
+test conversation::application::service::handoff_tests::another_switch_while_one_is_pending_carries_that_one_on_and_is_refused ... ok
+test conversation::application::service::handoff_tests::an_applied_pre_fix_selection_still_refuses_its_continuation_after_returning ... ok
+test conversation::application::service::handoff_tests::an_agent_switch_invalidates_the_original_limit_before_applying ... ok
+test conversation::application::service::handoff_tests::pending_selection_recovery_retains_its_refusal_when_selection_matches_again ... ok
+test conversation::application::service::handoff_tests::retrying_an_old_selection_does_not_seal_a_later_submit ... ok
+test conversation::application::service::handoff_tests::scheduled_delivery_recovers_pending_selection_before_fresh_classification ... ok
+test conversation::application::service::handoff_tests::unread_retained_selection_evidence_holds_admission_for_bounded_retry ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 4505 filtered out; finished in 2.35s
+
+local subreaper: reaped 0 adopted descendants; command status 0

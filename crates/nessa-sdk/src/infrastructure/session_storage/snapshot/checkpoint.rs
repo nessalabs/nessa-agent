@@ -214,6 +214,9 @@ impl Snapshot {
 pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
     let invocations = (0..count)
         .map(|index| InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -252,3 +255,7 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
         notes: Vec::new(),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/session_storage/decline_receipts.rs"]
+mod decline_receipts;

@@ -509,6 +509,11 @@ impl From<&SpawnProgress> for ProgressDto {
                 receipt: None,
                 known: None,
             },
+            SpawnProgress::Ready => Self {
+                kind: "ready".to_owned(),
+                receipt: None,
+                known: None,
+            },
             SpawnProgress::TaskAdmitted { receipt } => Self {
                 kind: "task_admitted".to_owned(),
                 receipt: Some(receipt.as_str().to_owned()),
@@ -546,6 +551,7 @@ impl TryFrom<ProgressDto> for SpawnProgress {
             "reserved" => Ok(Self::Reserved),
             "prepared" => Ok(Self::Prepared),
             "attached" => Ok(Self::Attached),
+            "ready" => Ok(Self::Ready),
             "task_admitted" => Ok(Self::TaskAdmitted {
                 receipt: TaskReceiptId::new(dto.receipt.ok_or(())?).map_err(|_| ())?,
             }),

@@ -36,6 +36,30 @@ fixture tools. Unexpected permission requests fail the test. Configuration remov
 keeps already-open MCP sessions by the existing contract, so the revocation check
 closes/reopens the reader before asking again.
 
+Delegation permits one child-creation approval per turn; the existing assertion
+still requires exactly four distinct VMs. The allowance is reserved before the
+answer is sent, because an interrupted answer may already have executed.
+This bounds reviewed coordinator approvals, not account-wide allocation or spend.
+The existing Full-access writer can execute tools without a review; monitor the
+run's actual provider resources and cumulative usage against its operating limits.
+
+| Review delivery | Fixture action |
+| --- | --- |
+| First child creation | Reserve the allowance, then answer once |
+| Same review repeated | Do not answer again |
+| Different second child creation, including while an answer is pending or after it fails | Fail before answering |
+| Delegated send-message or the selected local-log fixture | Keep the existing narrow one-time approval |
+| Any other tool | Fail before answering |
+
+Final cleanup closes conversations, stops the gateway and reads its final
+allocation receipts before the gateway removes its private directory. VMs assigned
+during close or shutdown remain owned and are deleted through the same
+provider-confirmed-absence check. Provisioning without an owned VM receipt, an
+unreadable ledger, or an unconfirmed/nonzero gateway shutdown remains a failure;
+an unrelated VM named only in a refused receipt does not authorize deletion.
+`cleanup.test.mjs` covers those orderings, and `local-gateway.test.mjs` checks the
+final inspection against a real disposable local process.
+
 Evidence includes only check names, test conversation/VM identities and cleanup
 receipts. The test records its owned VM IDs before requesting deletion, waits for
 provider-confirmed absence, and reports unconfirmed cleanup explicitly. Inspect

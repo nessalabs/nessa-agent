@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { messageText, settledMessage } from "./evidence.mjs"
+import { fixtureApprovals } from "./approvals.mjs"
+import { assignmentEvidence, reconcileAssignments } from "./cleanup.mjs"
 /** Opt-in, paid-provider check. Uses an isolated gateway and disposable VMs.
  * The token is read from a private file, never argv, environment or evidence.
  * See README.md before running; Boat must already have a connected subscription. */
@@ -89,20 +91,28 @@ async function until(check, label, ms = 180_000) {
   }
   throw new Error(`Timed out: ${label}`)
 }
-function assignments() {
+function assignments(final = false) {
   if (!gateway) return
   const root = join(gateway.directory, "ci", "instances", instance, "boat-workspaces")
   let files
   try {
     files = readdirSync(root)
   } catch (error) {
-    if (error.code === "ENOENT") return
+    if (!final && error.code === "ENOENT") return
     throw error
   }
   for (const file of files) {
     const history = JSON.parse(readFileSync(join(root, file), "utf8"))
-    for (const assignment of history.transitions ?? [])
-      if (assignment.state === "assigned") owned.set(assignment.vm, assignment.thread)
+    const receipt = assignmentEvidence(history)
+    for (const assignment of receipt.owned) owned.set(assignment.vm, assignment.thread)
+    if (final && receipt.unresolved) {
+      cleanup.push({
+        thread: receipt.thread,
+        vm: receipt.vm,
+        result: "provisioning or unowned assignment cleanup unconfirmed",
+      })
+      process.exitCode = 1
+    }
   }
   writeFileSync(
     join(evidence, "owned-vms.json"),
@@ -114,7 +124,7 @@ function assignments() {
   )
 }
 async function turn(id, text, permission = "none", uploads = []) {
-  const approved = new Set()
+  const approved = fixtureApprovals(permission)
   const executionId = randomUUID()
   const prepared = client.conversation.prepare(id, text, [], [], {
     requestId: executionId,
@@ -132,22 +142,11 @@ async function turn(id, text, permission = "none", uploads = []) {
     for (const entry of view.permissions) {
       const review = await client.conversation.permissionReview(id, entry.review)
       if (review.executionId !== executionId || approved.has(review.review)) continue
-      assert(
-        (permission === "log" && review.toolName.includes("read_local_log")) ||
-          (permission === "delegate" &&
-            ["create_thread", "send_message"].some(
-              (name) =>
-                review.toolName.includes("nessa-agents") &&
-                review.toolName.endsWith(name),
-            )),
-        "Unexpected approval; no broad permission is granted",
-      )
       const option = review.options.find((value) => value.effect === "allow")
       const { permissionTargets } = await import("@nessa/client")
       const target = permissionTargets({ conversationId: id, permissions: [review] })[0]
       assert(option && target, "No offered one-time allow")
-      await client.conversation.answer(target, option.id)
-      approved.add(review.review)
+      await approved.answer(review, () => client.conversation.answer(target, option.id))
     }
     const message = settledMessage(view, executionId)
     if (!message || !["completed", "failed", "cancelled"].includes(message.status))
@@ -481,19 +480,19 @@ try {
   record("PASS")
 } finally {
   try {
-    assignments()
+    await reconcileAssignments({
+      client,
+      gateway,
+      conversations,
+      assignments: () => assignments(true),
+      unconfirmed: (entry) => {
+        cleanup.push(entry)
+        process.exitCode = 1
+      },
+    })
   } catch {
-    cleanup.push({ result: "assignment ledger could not be read" })
-  }
-  if (client) {
-    for (const id of conversations) {
-      try {
-        await client.conversation.close(id)
-      } catch {
-        cleanup.push({ thread: id, result: "close unconfirmed" })
-      }
-    }
-    client.close()
+    cleanup.push({ result: "final assignment reconciliation unconfirmed" })
+    process.exitCode = 1
   }
   // IDs come exclusively from this fresh gateway's own allocation receipts.
   for (const [vm, thread] of owned) {
@@ -519,7 +518,7 @@ try {
       gateway.log().replaceAll(token, "[redacted]"),
       { mode: 0o600 },
     )
-    await gateway.stop()
   }
+  writeFileSync(join(evidence, "cleanup.json"), JSON.stringify(cleanup, null, 2))
   rmSync(local, { recursive: true, force: true })
 }

@@ -1,0 +1,10 @@
+Source: published93599d357 (product integration85f057b)
+Run40981242287 Windows server library tests (server-conversation)
+https://github.com/nessalabs/nessa-agent/actions/runs/40981242287
+Completed failure; root cause unresolved. Linux local/hosted pass does not clear Windows.
+2026-10-30T01:00:31.4586635Z [nessa-server nessa_server conversation] thread 'conversation::application::service::mutation::tests::parent_stop::owned_stop_export_and_submission_share_one_admission_order' (8688) panicked at crates\nessa-server\src\conversation\application\service\..\..\..\..\tests\conversation\parent_stop.rs:4133:13:
+2026-10-30T01:00:31.4589089Z [nessa-server nessa_server conversation] owned Stop/export/ordinary submission form an admission cycle
+2026-10-30T01:00:31.5331933Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::owned_stop_export_and_submission_share_one_admission_order ... FAILED
+2026-10-30T01:00:31.5970569Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::owned_preparation_cannot_adopt_an_existing_unowned_conversation ... ok
+2026-10-30T01:00:31.5331933Z [nessa-server nessa_server conversation] test conversation::application::service::mutation::tests::parent_stop::owned_stop_export_and_submission_share_one_admission_order ... FAILED
+2026-10-30T01:08:19.7656707Z [nessa-server nessa_server conversation] test result: FAILED. 1393 passed; 1 failed; 6 ignored; 0 measured; 2259 filtered out; finished in 1007.57s

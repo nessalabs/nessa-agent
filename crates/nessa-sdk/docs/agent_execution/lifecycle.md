@@ -119,6 +119,16 @@ compile-fail doctests hold that boundary. `authorization_wait_and_start_publish_
 `abandoned_authorization_blocks_replacement_until_audit_settles` check the issued
 session, generation, stage, cause and actor together.
 
+| Ordering | Required evidence and effect | Regression |
+| --- | --- | --- |
+| Start synchronously selects Starting; close seals before the attachment worker first runs | Join the real Started and Closed audit acknowledgements with their original actors; no provider acquisition; the attachment waiter is Closed, while close succeeds only after its actual cleanup and evidence complete | `close_before_the_attachment_worker_joins_its_actual_started_audit` |
+| The same ordering, but Started audit is rejected or its acknowledgement is held | Preserve the actual sink failure, or keep close pending until the real acknowledgement; never substitute the worker's generation refusal for an audit receipt | `close_before_the_attachment_worker_keeps_real_started_rejection_and_late_ack` |
+
+The installed Started obligation is already owned when close seals admission.
+Its evidence uses the existing serialized proof-retirement/audit owner; the
+attachment generation fence still guards provider I/O. A failed proof retirement
+prevents both the audit effect and provider acquisition and remains a failure.
+
 An audit sink's diagnostic does not replace the known origin of a failed
 attachment audit. `AttachmentAttemptFailure` retains the transition source;
 `starting_audit_origin_does_not_depend_on_sink_error_variant` and
@@ -724,3 +734,67 @@ terminal attempt remain present in the omission. The original mixed baseline
 and the first fixed run's two stale storage assertions remain separate records.
 This evidence covers executable task completion, not audit delivery after
 runtime destruction.
+
+## Reports from supervised close and suspend
+
+`Agent::close_report(action)` and `Agent::suspend_report(action)` return an
+`AgentCloseReport` from the same supervised transaction used by `close` and
+`suspend`. They add no cleanup owner or retry. Final cancellation stays final;
+suspend retains its owed-work meaning. Dropping the caller stops its wait, while
+the transaction continues on the owning Tokio runtime. The outer error means
+that transaction did not return a report.
+
+Read `cleanup()` for the full lifecycle `CleanupReport`, and `scheduling()` for
+pending-work cancellation persistence and audit. Confirmed resources can coexist
+with failed audit or completion. `ResourceCleanup::ReleasePending` confirms
+process cleanup while retaining an executable-use release owner; a successful
+`physical_outcome()` alone does not acknowledge that owner. The report's
+`operation_failure` retains its historical meaning and is not automatically a
+failure of an otherwise successful cleanup.
+
+`into_result()` gives the ordinary close result, retaining scheduling storage
+failure together with its cleanup result and other independent failures. It
+does not mutate Agent ownership. An encompassing environment's real cleanup
+receipt confirms that environment's physical release. Whole SDK release still
+requires its actual attachment owner's acknowledgement, including any
+executable-use guard; a derived report cannot acknowledge that obligation. A
+report concerns its transaction, not an aggregate claim about an Agent that a
+later invocation has already attached again.
+
+The `close_reports` public conformance matrix checks both modes, physical facts,
+forced status and independent fields. Scheduling tests
+`report_modes_keep_final_and_suspend_pending_work_semantics` and
+`report_retains_failed_pending_cancellation_separately_from_cleanup` check saved
+work and failed evidence. The gateway's
+`remote_ack_cannot_release_the_sdk_executable_use_owner` checks the separate
+remote and SDK release acknowledgements.
+
+## Historical decline acknowledgement
+
+`decline_turn` supervises its receipt through caller loss. It first saves a
+`DeclineDecision` preparation containing the original attributed terminal edge.
+Only an acknowledged preparation can apply NotResumed and publish its audit.
+Once the terminal edge is applied locally, audit is attempted independently even
+if saving that edge fails. The first preparation remains authoritative when
+another caller retries. `retry_declined_turns()` joins pending receipts without
+choosing another actor or resuming work, including after restoration with an
+empty owed list. A prepared decline excludes a competing resume.
+
+`InvocationRecord::decline` retains preparation and audit acknowledgement.
+Application/snapshot validation correlates the legal owed stop, original edge,
+caller and acknowledgement. Audit acknowledgement cannot precede the terminal
+edge or regress. A durable audit adapter must make repeated Declined input for
+the same session/execution idempotent: preserve original metadata and reject a
+conflicting semantic payload. An acknowledgement save failure remains a storage
+failure; a later flush can publish that already-observed receipt without another
+audit delivery. No audit delivery is inferred from older untracked NotResumed
+history, and no provider/tool work is replayed.
+
+`AgentCloseReport::after_retry` joins an actual later observation from the same
+cleanup owner. Its resource observation supersedes earlier uncertainty while
+independent audit, scheduling and completion failures remain observable. The
+value itself releases no Agent resources. In particular, remote physical End
+must be reconciled through that SDK owner; Unconfirmed can still contain an
+unattempted executable-use guard. Public report projections are not release
+acknowledgements. SDK close/suspend also joins already-prepared decline receipts;
+it does not automatically choose to decline otherwise owed work.

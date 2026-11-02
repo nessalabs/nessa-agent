@@ -4,7 +4,7 @@ title: "stop active and queued work"
 kind: "flow"
 status: "mixed"
 summary: "Stop targets the captured turn: withdraw it from the queue or cancel it if active."
-sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
+sourceRevision: "50bef867f45f9cb99fa27d798210e8e6a1dfe901"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/app.tsx"
@@ -12,6 +12,13 @@ sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-server/src/conversation/application/service/mutation.rs"
+  - "crates/nessa-server/src/conversation/application/service/parent_stop.rs"
+  - "crates/nessa-server/src/conversation/application/service/thread_report_admission.rs"
+  - "crates/nessa-server/src/conversation/application/service/thread_reports.rs"
+  - "crates/nessa-server/src/composition/runtime_config.rs"
+  - "crates/nessa-server/tests/conversation/parent_stop/confirmed_recovery.rs"
+  - "verification/desktop/scripts/parent-stop.mjs"
+  - "verification/desktop/scripts/lib/stress-parent-stop.mjs"
   - "crates/nessa-server/tests/conversation/mutation_commands.rs"
   - "src/conversation/application/usecases/control-failure.ts"
   - "src/conversation/adapters/store/control-failure.test.ts"
@@ -23,7 +30,7 @@ diagramLinks: {}
 
 # stop active and queued work
 
-Stop targets the captured turn: withdraw it from the queue or cancel it if active. Other queued turns and the agent attachment remain available.
+Stop targets the captured turn: withdraw it from the queue or cancel it if active. Unrelated queued turns and the agent attachment remain available.
 
 The panel captures the running turn, or its latest unsettled submission, together with its conversation identity. A delayed Stop cannot target a different conversation after tab rebinding. Stop can overtake a pending send; the prepared operation remembers it and asks again after admission. Closing the attachment, deleting a conversation and detaching a tab are separate operations. Stop does not release uploaded images or prove external tool effects were reversed.
 
@@ -44,11 +51,54 @@ stateDiagram-v2
     Reconciling --> Refreshed: Preserve known or uncertain outcome
     note right of CancelRequested
         Cancellation acknowledgement is not process cleanup.
-        Other queued turns and image holds are not closed.
+        Unrelated queued turns and image holds are not closed.
     end note
 ```
 
 The [mutation command regressions](../../../../../crates/nessa-server/tests/conversation/mutation_commands.rs) cover queue-to-active races, a concurrent close, unsupported cancellation, finished turns and receipt recovery. They distinguish the durable Stop command from the eventual turn outcome. The panel refreshes the current view after failure; it does not automatically look up or replay a Stop receipt. Explicit command clients can read the original receipt with its exact binding.
+
+## Owned descendants
+
+Stopping an active parent also captures unfinished owned child and grandchild
+turns by default. The gateway selects exact execution identities through the
+existing ownership coordinator. It withdraws captured report-created parent
+inputs before cancelling the parent, then stops the selected descendants.
+Unrelated conversations are outside that selection. The namespace setting
+`subagents.stopChildrenOnParentStop: false` selects parent-only scope; it does
+not close the descendant lifetimes or change their permissions.
+
+Reports retain their typed child-conversation and watched-execution origin while
+the mutation receipt keeps its original caller. Legacy Person-shaped report
+history remains readable, but a canonical person-command receipt anywhere in
+its continuation chain excludes that work from report capture and acknowledgement.
+Only later genuine person admission releases a stopped report; an agent's input
+does not carry that authority. Cedar's restriction on agent-initiated relay tools
+remains in force.
+
+The [parent Stop browser check](../../../../../verification/desktop/scripts/parent-stop.mjs)
+drives the window Stop button and the explicit override. The
+[recovery regressions](../../../../../crates/nessa-server/tests/conversation/parent_stop/confirmed_recovery.rs)
+retain the original confirmed Stop actor after process loss and distinguish
+unconfirmed receipts. These are separate from the unresolved historical default
+stress run in which parent and descendants stayed active; a later passing
+reproduction does not establish that failure's cause.
+
+This page's source checkpoint covers the panel's captured target, the gateway's
+selection/order, the configuration default and the cited regression contracts at
+that revision. It is not a fresh admission-lock review, a process-cleanup proof,
+or executed browser/platform evidence for the integrated tree. Other state
+pages retain their own checkpoints. The recovery integration review checked the
+captured target, selected receipt order and recovered root actor again at this
+checkpoint, including main's typed agent provenance alongside the existing
+report admission guard. The fixture starts its nested delegation from a genuine
+person turn, correlates seed/grandchild/report origins exactly, and observes
+the override's captured executions through the full observation window. The
+five-second admission regression now isolates writer acquisition from receipt
+completion; fresh Windows qualification is still required. Browser downloads were
+blocked by the environment policy. The [recovery evidence](../../../../../verification/desktop/evidence/parent-stop/recovery/README.md)
+separately records current system-Chromium results and earlier failures. This
+source checkpoint does not establish WebKit, Swift phone or hosted worker
+qualification.
 
 ## Further reading
 

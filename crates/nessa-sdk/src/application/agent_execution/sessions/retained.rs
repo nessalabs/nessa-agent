@@ -179,6 +179,10 @@ fn lease_record(record: &LeaseRecord) -> usize {
             .as_str()
             .len()
             .saturating_add(who.as_ref().map_or(0, actor)),
+        LeaseRecord::SdkCleanupAcknowledged { lease, lifetime }
+        | LeaseRecord::SdkCleanupRetired { lease, lifetime } => {
+            lease.as_str().len().saturating_add(lifetime.as_str().len())
+        }
         LeaseRecord::Ended { lease, .. }
         | LeaseRecord::Interrupted { lease }
         | LeaseRecord::CleanupReported { lease, .. } => lease.as_str().len(),
@@ -385,10 +389,28 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         );
     let acknowledgment = acknowledgement(&record.acknowledgement);
     let bytes = 0usize
+        .saturating_add(
+            record
+                .decline
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event())),
+        )
+        .saturating_add(
+            record
+                .cancellation_delivery
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event())),
+        )
         .saturating_add(prompt)
         .saturating_add(events)
         .saturating_add(scheduling)
         .saturating_add(record.request.execution_id.as_str().len())
+        .saturating_add(
+            record
+                .resumed_from
+                .as_ref()
+                .map_or(0, |id| id.as_str().len()),
+        )
         .saturating_add(actor(&record.actor))
         .saturating_add(initiation(&record.initiation))
         .saturating_add(
@@ -482,6 +504,20 @@ pub(super) fn touched(
                 0
             }
         }
+        SessionChange::DeclinePrepared { .. } => record.map_or(0, |record| {
+            record
+                .decline
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event()))
+        }),
+        SessionChange::DeclineAcknowledged { .. } => 0,
+        SessionChange::CancellationPrepared { .. } => record.map_or(0, |record| {
+            record
+                .cancellation_delivery
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event()))
+        }),
+        SessionChange::CancellationAcknowledged { .. } => 0,
         SessionChange::SchedulingTransition { .. } => record.map_or(0, |record| {
             record
                 .scheduling

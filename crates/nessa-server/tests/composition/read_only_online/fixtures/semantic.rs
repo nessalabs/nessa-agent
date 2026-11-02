@@ -285,7 +285,9 @@ pub(super) async fn serve(
                     .unwrap();
                 provider.request_permission.store(0, Ordering::SeqCst);
                 release.take().unwrap().send(()).unwrap();
+                heads.trace("producer_wait_started", None);
                 wait_until_settled(&producer).await;
+                heads.trace("producer_settled", None);
                 let terminal_view = service
                     .read(id.clone(), caller("capture-terminal"))
                     .await
@@ -300,6 +302,7 @@ pub(super) async fn serve(
                     Some(&checkpoint),
                 )
                 .await;
+                heads.trace("producer_oracle_captured", None);
                 assert_eq!(
                     provider.executions.lock().unwrap().as_slice(),
                     &["first", "second"]

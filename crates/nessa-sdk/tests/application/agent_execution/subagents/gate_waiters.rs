@@ -117,8 +117,8 @@ fn panicking_gate_join_waker_drop_is_contained_in_owned_publisher() {
                 assert!(gate.is_sealed());
                 assert_eq!(
                     resources.closes.load(Ordering::SeqCst),
-                    0,
-                    "external attachment report supplies cleanup"
+                    1,
+                    "the registered resource owner supplies cleanup"
                 );
                 let wakes = Arc::new(AtomicUsize::new(0));
                 let drops = Arc::new(AtomicUsize::new(0));
@@ -178,7 +178,11 @@ fn panicking_gate_join_waker_drop_is_contained_in_owned_publisher() {
                     0,
                     "fault payload stays inside SDK boundary before Tokio can drop it"
                 );
-                assert_eq!(resources.closes.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    resources.closes.load(Ordering::SeqCst),
+                    1,
+                    "joiners reuse the completed resource close"
+                );
                 assert_eq!(factory.prepares.load(Ordering::SeqCst), 0);
                 {
                     let records = audit.records.lock().unwrap();

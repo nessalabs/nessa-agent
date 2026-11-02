@@ -1,0 +1,141 @@
+▶ settleAppFrame
+  ✔ settles the discovered handles within the supplied bound (2.400737ms)
+  ✔ a caller rewriting the carrier does not replace the captured handles (0.246822ms)
+  ✔ a rewritten carrier cannot hide the captured app's retirement (1.005856ms)
+  ✔ refuses an unbounded wait before contacting the page (1.085042ms)
+  ✔ preserves a settlement timeout or page failure (2.434009ms)
+  ✔ refuses a departing proxy without selecting a replacement (1.160467ms)
+  ✔ refuses a departing app without selecting a replacement (0.76765ms)
+✔ settleAppFrame (11.652764ms)
+▶ oneMount
+  ✔ accepts exactly one inline frame (4.198124ms)
+  ✔ fails a call with no frame (3.24701ms)
+  ✔ fails a call drawn more than once, naming the count (0.406966ms)
+✔ oneMount (11.015611ms)
+▶ oneCard
+  ✔ accepts exactly one step (0.190865ms)
+  ✔ fails a call with no step (0.086319ms)
+  ✔ fails a call drawn as more than one step, naming the count (0.115474ms)
+✔ oneCard (0.52334ms)
+▶ exactly
+  ✔ W5: matches the text and nothing else, case and all (0.366922ms)
+  ✔ W5: takes the text's characters literally (0.257906ms)
+✔ exactly (0.732588ms)
+▶ approvalCardFor
+  ✔ W5: is the first shown card an app asked for whose head names the tool (7.43366ms)
+  ✔ W5: a part of a tool's name is not the tool (0.305005ms)
+✔ approvalCardFor (7.965362ms)
+▶ approvalShown
+  ✔ W5: waits for the card by the same locator (0.620779ms)
+✔ approvalShown (0.72147ms)
+▶ approvalGone
+  ✔ W1: a card already gone has gone (82.419986ms)
+  ✔ W2: a card still shown at the start is waited out, not sampled (20.154713ms)
+  ✔ W3: a card still shown at the bound has not gone (30.126885ms)
+  ✔ W4: an error other than the timeout is not the card's state (0.543335ms)
+  ✔ W5: waits on the same locator as approvalShown (1.224053ms)
+✔ approvalGone (135.240887ms)
+▶ recordFailedRequest
+  ✔ a 200 whose content-length was fully delivered is harmless only (#473) (1.904417ms)
+  ✔ a 200 is an error when the body is short, or the size was not reported (0.440487ms)
+  ✔ a later size report moves that same line to harmless, and a short body does not (0.239459ms)
+  ✔ a later size report does not excuse another origin or another error (0.171631ms)
+  ✔ only an unlabelled same-origin /mcp-resources abort is the mount-went-live case (0.511372ms)
+  ✔ #647: the live mount pattern is literal origin and exact endpoint (0.311837ms)
+  ✔ F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only (0.158383ms)
+  ✔ a 2xx other than a full 200 or an empty 204 is an error (0.174153ms)
+  ✔ F2: a response never received (aborted before headers) is an error only (0.258836ms)
+  ✔ F3: a response outside 2xx is an error only, at both bounds (0.272003ms)
+  ✔ F4: another origin is an error only (0.230725ms)
+  ✔ F4: any other error text is an error only (0.159144ms)
+  ✔ F4: a page with no origin (about:blank) leaves every failure an error (0.11031ms)
+  ✔ records nothing for the fresh browser's /favicon.ico, as before (0.119628ms)
+✔ recordFailedRequest (6.740064ms)
+▶ settleSizeReports
+  ✔ lets a full-body report leave errors before the caller reads them (0.677193ms)
+  ✔ leaves the line an error when the size report does not arrive (29.92608ms)
+  ✔ a late full body does not excuse a later identical line (31.834168ms)
+  ✔ leaves the line an error when the body is short (0.383944ms)
+✔ settleSizeReports (63.116616ms)
+▶ runAndClose
+  ✔ keeps the body's error when close also rejects (0.948477ms)
+  ✔ reports a browser close failure when the body succeeded (0.390484ms)
+✔ runAndClose (1.476973ms)
+▶ withCleanup
+  ✔ preserves Error, non-Error, and undefined rejections while logging close failure (0.293733ms)
+  ✔ reports close failure when a successful body returns undefined (0.149843ms)
+✔ withCleanup (0.520054ms)
+✔ a tool launch is the recorded agent, and a scenario launch is not (4.087401ms)
+✔ evidence wraps the agent and the MCP server with the recorder (1.898246ms)
+✔ a missing panel credential closes the stack before it escapes (33.574384ms)
+✔ a panel credential is returned and the stack stays open (1.400798ms)
+✔ a throw while building the target closes the stack (31.456824ms)
+✔ native no-send proof requires queued zero-attempt rows in the fixed complete scope (1357.561489ms)
+original-start-failure
+
+✔ the stack preserves startup and retention causes instead of rewriting failed evidence (349.403296ms)
+▶ admitOnce
+  ✔ A1: allows the first call of the app tool, and names the call (2.486157ms)
+  ✔ A2: leaves a permission it already answered alone (1.139683ms)
+  ✔ A2b: allows another permission of the admitted call: it is the same one call (0.351489ms)
+  ✔ A3: a second call of the app tool, once one is admitted, is not allowed but reported (0.2537ms)
+  ✔ A4: another tool's permission, an app's review, or one with no allow option is left alone (0.34277ms)
+✔ admitOnce (6.303695ms)
+▶ callsOf
+  ✔ A5: counts distinct calls of the tool, however often the view lists each (0.36899ms)
+  ✔ keeps each call as the view first lists it (0.279571ms)
+✔ callsOf (0.97746ms)
+▶ setupOutcome
+  ✔ A5: more than one distinct call is repeated, whatever their state (0.492529ms)
+  ✔ A6: one completed call naming its resourceUri, in a completed turn, is ready (0.226178ms)
+  ✔ A6: anything less is unusable — no call, a failed call, no resourceUri, a failed turn (0.344417ms)
+✔ setupOutcome (1.410532ms)
+▶ newReview
+  ✔ R1–R3: picks the review not in the baseline taken before the action (0.383615ms)
+  ✔ R4: a stale review, pending before the action, is never picked (0.118902ms)
+  ✔ R5: no review at all is none (0.080795ms)
+  ✔ the review is gone when its own key is, whatever else is pending (0.177408ms)
+✔ newReview (1.038773ms)
+▶ the app review a step waits for (#474)
+  ✔ the bound is the client's call deadline (0.216301ms)
+  ✔ R6: a review listed while the call is still pending is the one to answer (0.163429ms)
+  ✔ R6: a review that arrives after 15s is taken when the deadline is the client's (1.625747ms)
+  ✔ R6: the same review at 16s is missed when the deadline is 15s (1.472214ms)
+  ✔ R7: the call leaving pending, with no new review, is answered (0.370731ms)
+  ✔ R7: a review in the same read as an output that left pending is still the review (0.115775ms)
+  ✔ R8: still pending at the deadline is absent, and the samples name the transcript (0.291207ms)
+  ✔ an output that stays empty stops at the unstarted bound, not the call deadline (0.84735ms)
+  ✔ empty, then pending, still waits out a review that arrives after 15s (0.992725ms)
+  ✔ needs a deadline (0.859046ms)
+✔ the app review a step waits for (#474) (7.459588ms)
+▶ lastTurn
+  ✔ reads the last turn's text-only reply, its text parts joined and folded (1.064929ms)
+  ✔ a reply with a tool or a local notice in it is not text-only: could not run (0.522245ms)
+  ✔ a thought part is left out, as the window does not draw it (0.25607ms)
+  ✔ text the window draws otherwise — code, strong, anything not plain — could not run (2.599711ms)
+  ✔ an empty reply, a turn not yet answered, or no turn: could not run (0.239482ms)
+✔ lastTurn (5.249418ms)
+▶ messagesArrived
+  ✔ a second engine's send is the executionId the first did not have (0.510078ms)
+  ✔ an earlier message with the same text is not this send (0.121689ms)
+  ✔ two new executionIds are both this send, so the caller cannot keep the first (0.135422ms)
+  ✔ a queue entry is this send, and the turn wins when both list its executionId (0.183434ms)
+  ✔ a new executionId saying something else is not this send (1.377919ms)
+✔ messagesArrived (2.546739ms)
+✔ the verdict line is one JSON object naming the evidence and the summary (2.194093ms)
+✔ a failed check wins, and a skipped dev-only check is not could-not-run (0.357485ms)
+✔ engines and page lines come from the check's own results (0.665685ms)
+✔ the summary names the verdict, each engine, and the lines (0.503778ms)
+✔ writeView stores the view as JSON under the evidence directory (0.656292ms)
+✔ a bundled Chromium channel is forwarded on the child check's argv (0.251361ms)
+✔ a UI check's generated argv parses without gateway-only options (1.946501ms)
+✔ the scripted command accepts --channel bundled (138.964789ms)
+✔ an engine the document does not name is not the process status (0.75013ms)
+ℹ tests 95
+ℹ suites 18
+ℹ pass 95
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1916.850346

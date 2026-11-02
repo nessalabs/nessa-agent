@@ -76,6 +76,14 @@ injection. Unknown credential/access configuration refuses. Current settings are
 checked at creation and reconnection, with a concrete VM receipt check before
 any workspace SDK, harness, SSH or MCP authority.
 
+A fresh creation acknowledgement can arrive while the snapshot is still starting
+and inherited credentials are being removed. Nessa polls that new VM for at most
+90 seconds, then rechecks the environment and complete security receipt. A ready
+VM with a pending credential wipe still refuses. This wait runs no workspace,
+SSH, MCP or agent command and does not restart an idempotent replay. A timeout
+preserves the named VM and the original rollback disposition; it does not prove
+cleanup or authorize another allocation.
+
 Creation checks again after Boat's name-based create; the provider does not offer
 a version selector, so provider/privileged mutation during that operation remains
 a trust boundary. A mismatch durably records Refused with the actual target and
@@ -208,3 +216,7 @@ provider-side inspection still links the VM to the durable intent if both local
 stores are unavailable. No automatic replacement is authorized. Recovery audit
 files use the existing private, timestamped EnvironmentAudit store and backup
 inventory; their thread ID links the original conversation creation/lease actor.
+
+This correction reviews only fresh-allocation readiness and the corresponding
+ADR 1160 sequence. The page-wide source checkpoint is retained; the other
+placement, restoration and lifetime paths were not re-reviewed here.

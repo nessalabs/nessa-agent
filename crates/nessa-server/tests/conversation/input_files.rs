@@ -15,17 +15,17 @@ use nessa_sdk::{
 };
 use sha2::{Digest, Sha256};
 
-struct Fixture {
+pub(in crate::conversation::application) struct Fixture {
     #[cfg(unix)]
     _public_parent: tempfile::TempDir,
     directory: tempfile::TempDir,
-    service: ConversationService,
+    pub(in crate::conversation::application) service: ConversationService,
     provider: Arc<ProviderFactory>,
     attachments: Arc<MemoryAttachments>,
     audit: Arc<RecordingFileLinkAudit>,
-    id: ConversationId,
+    pub(in crate::conversation::application) id: ConversationId,
 }
-fn caller(action: &str) -> ConversationCaller {
+pub(in crate::conversation::application) fn caller(action: &str) -> ConversationCaller {
     ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),
         principal_id: PrincipalId::new("person").unwrap(),
@@ -34,7 +34,7 @@ fn caller(action: &str) -> ConversationCaller {
     }
 }
 impl Fixture {
-    async fn new() -> Self {
+    pub(in crate::conversation::application) async fn new() -> Self {
         #[cfg(unix)]
         let public_parent = tempfile::tempdir().unwrap();
         #[cfg(unix)]
@@ -115,7 +115,12 @@ impl Fixture {
             id,
         }
     }
-    fn keep(&self, bytes: &[u8], media: &str, name: &str) -> UploadedFileReference {
+    pub(in crate::conversation::application) fn keep(
+        &self,
+        bytes: &[u8],
+        media: &str,
+        name: &str,
+    ) -> UploadedFileReference {
         let file = UploadedFileReference::new(
             Sha256Digest::from_bytes(Sha256::digest(bytes).into()),
             MediaType::parse(media).unwrap(),
@@ -161,7 +166,10 @@ impl Fixture {
             .await
             .map(|_| ())
     }
-    async fn ended(&self, execution: &str) -> nessa_protocol::conversation::view::ConversationView {
+    pub(in crate::conversation::application) async fn ended(
+        &self,
+        execution: &str,
+    ) -> nessa_protocol::conversation::view::ConversationView {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let view = self.service.read(self.id.clone(), caller("read")).await.unwrap();

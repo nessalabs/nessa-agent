@@ -658,7 +658,9 @@ impl Environment for SshEnvironment {
             let LeaseWork::Agent(work) = &grant.work;
             let place = self.inner.budget_place(Work::Lease)?;
             let link = self.inner.link(Install::IfAbsent(lease.as_str())).await?;
+            let released = Arc::new(std::sync::OnceLock::new());
             let host: Arc<dyn HarnessHost> = Arc::new(LeaseHost {
+                released: released.clone(),
                 link: link.clone(),
                 lease: lease.as_str().into(),
             });
@@ -686,6 +688,7 @@ impl Environment for SshEnvironment {
                 workspace,
                 granted: granted(terms),
                 hold: Arc::new(SshHold {
+                    released,
                     host,
                     inner: self.inner.clone(),
                     link,
@@ -984,6 +987,8 @@ fn offer_artifacts(
 
 /// The gateway's side of one lease on a host.
 struct SshHold {
+    /// Actual audited End/account receipt, shared only with this lease's controls.
+    released: Arc<std::sync::OnceLock<CloseOutcome>>,
     host: Arc<dyn HarnessHost>,
     inner: Arc<Inner>,
     link: Arc<HostLink>,
@@ -1092,7 +1097,14 @@ impl LeaseHold for SshHold {
                 return LeaseRelease::Unanswered;
             }
             match evidence {
-                Some(cleanup) => LeaseRelease::Released(cleanup),
+                Some(cleanup) => {
+                    let physical = match cleanup {
+                        LeaseCleanup::Confirmed { forced } => CloseOutcome { forced },
+                        LeaseCleanup::NotHeld => CloseOutcome { forced: false },
+                    };
+                    let _ = self.released.set(physical);
+                    LeaseRelease::Released(cleanup)
+                }
                 None => LeaseRelease::Unanswered,
             }
         })
@@ -1110,6 +1122,7 @@ impl Drop for SshHold {
 
 /// The host as a binding sees it, for one lease.
 struct LeaseHost {
+    released: Arc<std::sync::OnceLock<CloseOutcome>>,
     link: Arc<HostLink>,
     lease: String,
 }
@@ -1153,6 +1166,7 @@ impl HarnessHost for LeaseHost {
             input: Box::new(started.input),
             output: Box::new(started.output),
             control: Box::new(SshControl {
+                released: self.released.clone(),
                 link: self.link.clone(),
                 lease: self.lease.clone(),
                 channel: started.channel,
@@ -1163,6 +1177,7 @@ impl HarnessHost for LeaseHost {
 
 /// How the binding stops its harness on the host.
 struct SshControl {
+    released: Arc<std::sync::OnceLock<CloseOutcome>>,
     link: Arc<HostLink>,
     lease: String,
     channel: u32,
@@ -1171,6 +1186,12 @@ struct SshControl {
 impl HarnessControl for SshControl {
     fn cleanup(&mut self, grace: Duration, kill_timeout: Duration) -> HarnessCleanupFuture<'_> {
         Box::pin(async move {
+            // End may have been acknowledged on a replacement connection. Join
+            // that same lease owner's real receipt even if this control's old
+            // connection is now gone; the SDK still releases its own use guard.
+            if let Some(outcome) = self.released.get() {
+                return Ok(*outcome);
+            }
             match self
                 .link
                 .stop(&self.lease, self.channel, grace, kill_timeout)

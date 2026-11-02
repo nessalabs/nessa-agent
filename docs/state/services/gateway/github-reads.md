@@ -70,16 +70,18 @@ active reads, then checks Disconnect and local socket closure.
 
 A new unlock owns a separate gate and does not wait on an old-generation GET.
 Queued old reads cannot borrow its sign-in, and old responses are refused after
-a generation change. The existing encrypted vault entry, verified legacy
-migration/removal, and live-event relay remain owned by their existing services.
+a generation change. The encrypted vault entry and the live-event relay remain
+owned by their existing services. A plaintext sign-in file is removed, not imported.
 Product Disconnect retains its live-event cleanup before forgetting the sign-in.
 See [the local vault](local-vault.md) and [the GitHub design and ordering tables](../../../design/github-connect.md).
 
-This is read-only credential containment. It adds no brokered writes and makes
-no OS-level isolation claim about unconfined processes sharing the unlocked
-gateway's user identity. [Issue 1195](https://github.com/nessalabs/nessa-agent/issues/1195)
-tracks the remaining process boundary. The vault encrypts ordinary persistence;
-a plaintext `sign-in.json` is legacy migration input rather than the normal store.
+This is read-only credential containment. It adds no brokered writes. The
+token's only durable copy is the passphrase-sealed vault entry: a same-user
+command that opens that file does not obtain the token bytes, and a plaintext
+`sign-in.json` is deleted rather than imported
+([1195](../../../adr/done/1195-isolate-github-sign-in.md)). This paragraph is
+that storage boundary. The read chart above was not re-walked, so
+`sourceRevision` stays on the broker checkpoint.
 
 ## Review scope
 
