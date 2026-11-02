@@ -130,15 +130,19 @@ the window's controls too. Only what opens in a chat's right panel is a tab,
 in the panel's own top row (`workspace/model/chat-panel.ts`).
 Column titles clear that group, moving below only where they cannot fit. The side rail (Settings › Advanced › Experimental) is a compact 48px
 column below that bar on every host, independent of the native traffic lights.
-Its toggle is nessa's mark at the sidebar's foot: wherever the rail is offered,
-Studio's square steps aside and the toggle stands in the footer's control-sized
-mark slot, on its line just before "nessa Studio"; with the rail open beside the
-sidebar it travels past the rail on the drawer's curve.
+Its toggle is nessa's mark at the window's bottom-left: wherever the rail is offered,
+Studio's square steps aside and the toggle stands in one place, in the footer's
+control-sized mark slot when the rail is closed, on its line just before "nessa Studio".
+Opening the rail does not move the toggle; the pill runs down around it, and the
+words step right so they clear the pill.
 The toggle remains available with both side columns closed. The workspace sidebar
 uses a soft gradient wash without a rounded card, rim or shadow. Its content clears the titlebar while the wash blends into the window's
-background. A rail item's full view covers the underlying workspace up to the
-window's top, including its cards and chat navigation controls. Each plugin
-keeps one top sidebar toggle for its rail, alongside the persistent bottom toggle.
+background. A rail item's full view covers the workspace underneath, which takes no
+keys. The view meets the window's top, and the titlebar stays over that strip: its
+free room is the drag region that moves and zooms the window, and its one control
+folds the rail. Devices leaves the bottom-left corner clear of "nessa Studio",
+because its cards run under that corner. Agents keeps the words beside the toggle.
+The corner toggle stays beside that one titlebar control.
 The workspace sidebar uses the window's theme lights for its frameless
 gradient. Its content begins below the titlebar row, and folding it slides it
 toward its edge on the drawer's curve (`--desktop-drawer`) while what stands

@@ -23,11 +23,18 @@
  *   pane-clipping    focusing an overflowing fixture cannot scroll the pane
  *                    root or move its header; the transcript owns scrolling.
  *   rail-corner      the toggle holds one bottom-left place in the rail's
- *                    column, rail open or closed; with the rail closed it is
- *                    the footer's mark, right before "nessa Studio".
- *   rail-view-inert  under an item's full view the workspace takes no keys:
- *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
- *                    to Agents finds it as it was left.
+ *                    column, rail open or closed, in Agents and in Devices;
+ *                    with the rail closed it is the footer's mark, right
+ *                    before "nessa Studio". Devices draws no "nessa Studio"
+ *                    (its cards run under the corner). Agents draws it again
+ *                    where that rail state left it. The open rail steps the
+ *                    words past the pill, so that box is not the closed one.
+ *   rail-view-inert  under Devices the workspace takes no keys: ⌘B, ⌘0 and
+ *                    ⌥⌘S change nothing behind it, and coming back to Agents
+ *                    finds it as it was left. The view meets the window's top.
+ *                    Just below the titlebar the hit is the view. The
+ *                    titlebar's free room is a drag region, and its one
+ *                    control folds and reopens the rail.
  *   quiet-composer   three stacked panes: in a short window a pane you are not
  *                    in has a one-line composer, Stop alone while its turn
  *                    runs; going into one grows its composer out of the
@@ -139,9 +146,11 @@ Checks, per engine, layout and size:
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
-  rail-corner      the bottom-left toggle never moves as the rail or sidebar
-                   toggles; "nessa Studio" stays clear in Agents and a full view
-  rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
+  rail-corner      the bottom-left toggle never moves as the rail, the sidebar
+                   or the view changes; "nessa Studio" stays clear of it in
+                   Agents, and Devices does not draw it
+  rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under Devices change nothing behind it; the
+                   titlebar's free room moves the window
   rail-loading     Devices opens with no loader; still loading at 3 s it shows
                    only the kit's sweeping text, with no panel or border
   titlebar-steady  through a rail toggle the titlebar's controls stay between
@@ -675,8 +684,10 @@ const body = {
           failures.push(`${label}: "nessa Studio" at x ${studio[0]} is under the toggle`)
         if (await squareShown(page))
           failures.push(`${label}: Studio's square is drawn beside the toggle`)
-        // An item's full view puts "nessa Studio" where the sidebar's foot does.
-        if (!now.sidebar) continue
+        // Devices leaves the corner clear of "nessa Studio": its cards run
+        // under it. The toggle stays. Agents draws the words again where
+        // this rail state left them. Open, the pill steps the words right
+        // of the closed box, so the two states are not compared.
         const roomy =
           (await page.locator(css.sideRailToggle).getAttribute("aria-disabled")) !==
           "true"
@@ -687,11 +698,10 @@ const body = {
         await rest(page, size)
         const inView = await boxOf(page, css.studio)
         const viewToggle = await boxOf(page, css.sideRailToggle)
+        const drawn = await page.locator(".side-rail-studio").count()
         seen.push({ label: `${label}, Devices`, toggle: viewToggle, studio: inView })
-        if (inView?.join() !== studio?.join())
-          failures.push(
-            `${label}: "nessa Studio" is at [${inView}] in a full view, [${studio}] in Agents`,
-          )
+        if (drawn !== 0 || inView)
+          failures.push(`${label}: Devices draws "nessa Studio" at [${inView}]`)
         if (viewToggle?.join() !== toggle.join())
           failures.push(
             `${label}, Devices: the toggle is at [${viewToggle}], not [${toggle}]`,
@@ -700,6 +710,11 @@ const body = {
         await page.locator(selectorFor.railItem("agents")).click()
         if (!now.rail) await setRail(page, false)
         await rest(page, size)
+        const restored = await boxOf(page, css.studio)
+        if (restored?.join() !== studio?.join())
+          failures.push(
+            `${label}: back in Agents, "nessa Studio" is at [${restored}], was [${studio}]`,
+          )
       }
     return { failures, detail: seen }
   },
@@ -1665,18 +1680,32 @@ const body = {
       await page.keyboard.press(key)
     await rest(page, size)
     const under = await state()
-    const pluginChrome = await page.evaluate(() => {
+    const pluginChrome = await page.evaluate((titlebar) => {
       const view = document.querySelector(".rail-view")
+      const bar = document.querySelector(titlebar)?.getBoundingClientRect()
+      const space = document.querySelector(".workspace-titlebar-space")
+      if (!view || !bar || !space) return { missing: true }
       const bounds = view.getBoundingClientRect()
-      const hit = document.elementFromPoint(bounds.x + bounds.width / 2, 12)
+      const spaceBox = space.getBoundingClientRect()
+      const dragHit = document.elementFromPoint(
+        spaceBox.left + spaceBox.width / 2,
+        spaceBox.top + spaceBox.height / 2,
+      )
+      const below = document.elementFromPoint(
+        bounds.left + bounds.width / 2,
+        Math.floor(bar.bottom) + 4,
+      )
+      const inView = below === view || (below !== null && view.contains(below))
       return {
         top: bounds.top,
-        coversHeader: view === hit || view.contains(hit),
+        inView,
+        inWorkspace: below?.closest(".workspace") !== null && !inView,
+        drag: dragHit?.closest("[data-tauri-drag-region]") !== null,
         navigation: [...document.querySelectorAll(".workspace-titlebar button")].map(
           (e) => e.getAttribute("aria-controls"),
         ),
       }
-    })
+    }, css.titlebar)
     const pluginToggles = []
     for (const id of ["devices"]) {
       await page.locator(selectorFor.railItem(id)).click()
@@ -1696,19 +1725,29 @@ const body = {
         failures.push(
           `${toggle.id}: top sidebar toggle does not fold and reopen the rail`,
         )
-    if (
-      pluginChrome.top !== 0 ||
-      !pluginChrome.coversHeader ||
-      pluginChrome.navigation.join() !== "side-rail"
-    )
-      failures.push("plugin view exposes the workspace cards or controls above it")
+    if (pluginChrome.missing)
+      failures.push("Devices drew no view or no titlebar")
+    else {
+      if (pluginChrome.top !== 0)
+        failures.push(
+          `the full view starts at y ${pluginChrome.top}, not the window's top`,
+        )
+      if (!pluginChrome.inView || pluginChrome.inWorkspace)
+        failures.push("plugin view exposes the workspace cards or controls above it")
+      if (!pluginChrome.drag)
+        failures.push("the full view's titlebar does not move the window")
+      if (pluginChrome.navigation.join() !== "side-rail")
+        failures.push(
+          `the full view's titlebar controls ${pluginChrome.navigation.join(",") || "nothing"}, not only the side rail`,
+        )
+    }
     for (const [name, value] of Object.entries(before)) {
       if (under[name] !== value)
         failures.push(`under Devices, ${name} became ${under[name]} (was ${value})`)
       if (after[name] !== value)
         failures.push(`back in Agents, ${name} is ${after[name]} (was ${value})`)
     }
-    return { before, under, after, failures }
+    return { before, under, after, chrome: pluginChrome, failures }
   },
 
   "rail-loading": async ({ page, size }) => {
