@@ -35,7 +35,7 @@ final class ProductSubmitLane: @unchecked Sendable {
         queue.removeAll()
         lock.unlock()
         for attempt in abandoned {
-            attempt.fail(NativeWorkerError.closed)
+            attempt.settleIfWaiting(NativeWorkerError.closed)
         }
     }
 
@@ -60,7 +60,7 @@ final class ProductSubmitLane: @unchecked Sendable {
         }
         if closed {
             lock.unlock()
-            attempt.fail(NativeWorkerError.closed)
+            attempt.settleIfWaiting(NativeWorkerError.closed)
             return
         }
         if handingOff {
@@ -88,7 +88,7 @@ final class ProductSubmitLane: @unchecked Sendable {
             queue.removeAll()
             lock.unlock()
             for attempt in abandoned {
-                attempt.fail(NativeWorkerError.closed)
+                attempt.settleIfWaiting(NativeWorkerError.closed)
             }
             return
         }
@@ -105,26 +105,21 @@ final class ProductSubmitLane: @unchecked Sendable {
 
     private func cancel(_ attempt: any SubmitAttempt) {
         lock.lock()
-        if closed {
-            lock.unlock()
-            attempt.fail(NativeWorkerError.closed)
-            return
-        }
+        let laneClosed = closed
         if let index = queue.firstIndex(where: { ObjectIdentifier($0) == ObjectIdentifier(attempt) }) {
             queue.remove(at: index)
-            lock.unlock()
-            attempt.fail(CancellationError())
-            return
         }
         lock.unlock()
-        attempt.cancelBeforeBody()
+        // Queued attempts have not started. A started body ignores this and
+        // keeps the result it is already producing, including after shutdown.
+        attempt.settleIfWaiting(laneClosed ? NativeWorkerError.closed : CancellationError())
     }
 }
 
 private protocol SubmitAttempt: AnyObject, Sendable {
     func runIfCurrent()
-    func fail(_ error: any Error)
-    func cancelBeforeBody()
+    /// Settle only when the body has not started. The body owns the result after that.
+    func settleIfWaiting(_ error: any Error)
     var isSettled: Bool { get }
 }
 
@@ -157,29 +152,20 @@ private final class HandoffAttempt<T: Sendable>: SubmitAttempt, @unchecked Senda
         return outcome != nil
     }
 
-    func fail(_ error: any Error) {
-        finish(.failure(error))
-    }
-
-    func cancelBeforeBody() {
+    func settleIfWaiting(_ error: any Error) {
         lock.lock()
         cancelRequested = true
         let suppress = startedBody || outcome != nil
         lock.unlock()
         if !suppress {
-            finish(.failure(CancellationError()))
+            finish(.failure(error))
         }
     }
 
     func runIfCurrent() {
         lock.lock()
-        if outcome != nil {
+        if outcome != nil || cancelRequested {
             lock.unlock()
-            return
-        }
-        if cancelRequested {
-            lock.unlock()
-            finish(.failure(CancellationError()))
             return
         }
         startedBody = true

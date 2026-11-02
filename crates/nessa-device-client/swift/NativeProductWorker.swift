@@ -41,29 +41,31 @@ public final class NativeProductWorker: @unchecked Sendable {
             try Task.checkCancellation()
             // Enter before the first await so close's drain cannot miss this call.
             try admitSubmit()
+            // One leave for this admission. The hand-off owns it when no ticket
+            // exists. The ticket wait owns it once a ticket does, including when
+            // capture throws. Those paths do not overlap.
+            let ticket: NativeProductTicket
             do {
-                // The closure is the hand-off only. The ticket wait is below, so
-                // a queued caller is not held for the reply.
-                let ticket = try await submitLane.handoff { [self] () throws -> NativeProductTicket in
+                ticket = try await submitLane.handoff { [self] () throws -> NativeProductTicket in
                     if stop.isStopped() { throw CancellationError() }
                     return try session.request(method: method, paramsJson: paramsJson)
-                }
-                // An admitted command settles even if its Swift observer is
-                // canceled. This wait does not block the next hand-off.
-                return try await withCheckedThrowingContinuation { continuation in
-                    ticketWait.async { [self, ticket] in
-                        defer { calls.leave() }
-                        let completion = ticket.wait()
-                        do { continuation.resume(returning: try capture(completion)) }
-                        catch {
-                            continuation.resume(throwing: NativeProductCaptureFailure(
-                                completion: completion, underlying: error))
-                        }
-                    }
                 }
             } catch {
                 calls.leave()
                 throw error
+            }
+            // An admitted command settles even if its Swift observer is canceled.
+            // This wait does not block the next hand-off.
+            return try await withCheckedThrowingContinuation { continuation in
+                ticketWait.async { [self, ticket] in
+                    defer { calls.leave() }
+                    let completion = ticket.wait()
+                    do { continuation.resume(returning: try capture(completion)) }
+                    catch {
+                        continuation.resume(throwing: NativeProductCaptureFailure(
+                            completion: completion, underlying: error))
+                    }
+                }
             }
         } onCancel: { stop.stop() }
     }

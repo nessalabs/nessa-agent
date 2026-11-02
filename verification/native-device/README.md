@@ -64,9 +64,16 @@ package and does not claim simulator execution.
 
 `check-submit-lane.swift` is the product submit lane without a native library.
 It compiles `NativeWorkerError.swift` and `ProductSubmitLane.swift` only. A held
-hand-off, eight waiters, a cancel in the middle, and shutdown are the cases in
+hand-off, eight waiters, a cancel in the middle, shutdown, and a cancel after
+close of a body that has started are the cases in
 [ADR 1138](../../docs/adr/done/1138-queue-product-submissions.md). The queue under
 test is concurrent, so a second start cannot hide behind a serial queue.
+
+`check-product-request.swift` compiles those files plus `NativeProductWorker.swift`
+against stand-in session types. A throwing capture with one request and with
+three must leave the drain group once. Closing during a native hand-off, then
+cancelling that call, must still deliver the ticket and keep the drain waiting
+until that reply finishes.
 
 `check-simulator.swift` is a disposable SwiftUI app linked with the generated
 declarations, worker and release iOS library. Its simulator run reports private

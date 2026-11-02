@@ -111,6 +111,13 @@ private func hold(_ lane: ProductSubmitLane, _ id: Int, _ log: Log) -> (Task<Int
     return (task, entered, release)
 }
 
+private final class Box<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T?
+    func set(_ value: T) { lock.withLock { self.value = value } }
+    func get() -> T? { lock.withLock { value } }
+}
+
 private enum CheckFailure: Error, Sendable { case deadline }
 private struct BodyBroke: Error, Sendable {}
 
@@ -121,7 +128,8 @@ private struct BodyBroke: Error, Sendable {}
         guard await failedBodyReleasesTheNext() else { exit(1) }
         guard await shutdownWithWaiters() else { exit(1) }
         guard await closedWhileIdle() else { exit(1) }
-        print("PASS: product submissions run one at a time, in order; a cancelled waiter leaves; shutdown fails the queue")
+        guard await closeDuringStartedBodyKeepsTheResult() else { exit(1) }
+        print("PASS: product submissions run one at a time, in order; a cancelled waiter leaves; shutdown fails the queue; a started hand-off keeps its result")
     }
 
     static func ordered() async -> Bool {
@@ -241,6 +249,26 @@ private struct BodyBroke: Error, Sendable {}
         let after = Task { try await lane.handoff { () -> Int in log.enter(9); log.leave(); return 9 } }
         guard await waitFor(after) == .closed else { return fail("a submission after shutdown did not fail closed") }
         guard log.snapshot().order == [0] else { return fail("a submission after shutdown ran its body") }
+        return true
+    }
+
+    static func closeDuringStartedBodyKeepsTheResult() async -> Bool {
+        let lane = lane()
+        let log = Log()
+        let (first, entered, release) = hold(lane, 7, log)
+        guard await wait(entered) else { return fail("held hand-off did not start") }
+        let settled = Box<Wait<Int>>()
+        Task { settled.set(await waitFor(first)) }
+        lane.close()
+        first.cancel()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        if let early = settled.get() {
+            return fail("a started hand-off settled while its body was running: \(early)")
+        }
+        release.signal()
+        guard await poll({ settled.get() == .value(7) }) else {
+            return fail("a started hand-off lost its result after shutdown: \(String(describing: settled.get()))")
+        }
         return true
     }
 

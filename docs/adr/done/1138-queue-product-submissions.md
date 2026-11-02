@@ -77,7 +77,7 @@ The queue is FIFO. `closed` is set by shutdown and never clears.
 | Body returns, queue not empty | — | Start the head. The rest stay in order. | Fail anything still queued. Stay closed. |
 | Cancel a queued waiter | — | Remove that waiter. `CancellationError`. The rest keep their order. Do not wait for the current body. | — |
 | Cancel the running hand-off before its body starts | — | `CancellationError`. Start the next waiter, or go idle. | — |
-| Cancel the running hand-off after its body starts | — | The body finishes with its own result. The next waiter starts when it returns. | The body finishes. |
+| Cancel the running hand-off after its body starts | — | The body finishes with its own result. The next waiter starts when it returns. | The body finishes with its own result. A cancel after shutdown does not replace it with `closed`, and the reply wait still runs. |
 | Shutdown | Closed. | Every queued waiter gets `closed` now. The running body finishes and does not start another. | Closed. |
 
 A waiter already taken off the queue for its hand-off is the running hand-off,
@@ -94,6 +94,8 @@ waiter is one or the other.
 | A submission is not run twice. A cancelled or closed waiter does not run. | Those runs record body entry. A second resume of one continuation traps the process. |
 | Cancel while queued returns without waiting for the current body, and the others still run in order. | The cancel run awaits the cancelled task before releasing the held body, then checks the survivors. |
 | Shutdown does not hang. Queued waiters get `NativeWorkerError.closed` while a body is still held. That body then returns its own value. A later call gets `closed` and does not run. | The shutdown run, with a five-second deadline on each wait. |
+| A hand-off whose body has started keeps that result if shutdown or cancel arrives during the body. The ticket is not dropped, and the worker's drain waits for the reply. | `check-submit-lane.swift` closes, then cancels, a held body and expects its value. `check-product-request.swift` holds the native call, closes, cancels, and checks the drain is still waiting until the ticket wait leaves. |
+| A capture failure leaves the drain group once. One outstanding request does not crash. With others still outstanding, the drain does not finish early. | `check-product-request.swift` throws from capture for one request and for three. |
 | The submit lane does not throw `busy`. | The lane has no such path. `check-worker.swift` still requires `busy` for a second session call. |
 
 ## Alternatives considered
