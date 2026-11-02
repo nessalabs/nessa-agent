@@ -21,8 +21,10 @@ Current development surface:
 - `native_product`: immutable actual Ready, native-ID tickets, full response/stage
   completions and delivered event batches over core's sole protected product pump.
   Completion/batch objects retain core count/byte permits until final handle release.
-  Relative event waits capture one deadline on the native clock. Product waits run
-  independently of retained admission and of submission/close dispatch.
+  Relative event waits capture one deadline on the native clock. A second
+  `request` waits until the current hand-off returns, then sends. It is not
+  `busy`, and it does not hold the lane while the reply is outstanding. Product
+  waits run independently of retained admission and of submission/close dispatch.
 - `native_session`: generated immutable session/receipt/refresh/read/catalogue
   objects. Failure objects retain publication, cleanup and reconciliation payloads.
   `close_observed` returns physical release separately from its original typed
