@@ -118,10 +118,11 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 3] = [
+static UPGRADES: [Upgrade; 4] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
     Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
+    Upgrade::new(9, include_str!("schema_upgrades/9.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -1236,6 +1237,43 @@ impl ConversationRepository for LocalConversationStore {
                 )
                 .map_err(failed)?;
             Ok(found)
+        })
+    }
+    fn close_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .cached_execute(
+                    "INSERT INTO closed_threads (conversation_id) VALUES (?1)
+                     ON CONFLICT (conversation_id) DO NOTHING",
+                    [id],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn open_thread(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .cached_execute(
+                    "DELETE FROM closed_threads WHERE conversation_id = ?1",
+                    [id],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .cached_row(
+                    "SELECT EXISTS (SELECT 1 FROM closed_threads WHERE conversation_id = ?1)",
+                    [id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(failed)
         })
     }
     fn observe_mode_application(

@@ -9,5 +9,8 @@
   "kdfParallelism": 1,
   "failedAttempts": 5,
   "cooldownSeconds": 30,
-  "auditRows": 1000
+  "auditRows": 1000,
+  "minimumSetupCharacters": 15,
+  "maximumCooldownCallers": 1024,
+  "maximumCooldownIdentityBytes": 512
 }

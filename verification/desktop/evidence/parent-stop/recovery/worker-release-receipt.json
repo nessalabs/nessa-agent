@@ -1,0 +1,197 @@
+{
+  "sourceRevision": "22a8218b0ff2c392e911e07c75994f33e4896048",
+  "leaseProtocol": "dad5afbc1bc5755f",
+  "image": "bsh_-6mHzeuFu3FWNbJWOe0IbXLXxhBcJPNOjq76Bk_nMGI",
+  "snapshot": "nessa-worker-dad5afbc-22a8218-linux-x64",
+  "nessaSha256": "9448ba2c2e6c01e6a7a41f23f32183ceae17918a279f4bfc9ddb8113873d019f",
+  "nessaBytes": 146162512,
+  "nessaMcpSha256": "4684f72dd49d07c06ab76c168cb8165fab0d7ef6fde62414e00fe26c4c678e25",
+  "nessaMcpBytes": 5243680,
+  "rustVersion": "1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargoVersion": "1.99.1 (5f94df478 2026-08-27)",
+  "target": "x86_64-unknown-linux-gnu",
+  "buildProfile": "dev, dependency opt-level=0, debug=0, incremental=0, stripped",
+  "source": "Application source archive at sourceRevision, excluding three external skill links, plus locked vendored dependencies and exact pinned PTY support restoration documented below.",
+  "ptyRuntimeRevision": "c68837e2b7bf1c9009e1a4587a1a58107ec0425c",
+  "cleanClone": {
+    "protocolMatched": true,
+    "checksumMatched": true,
+    "nessaMcpPresent": true,
+    "executablesVerified": true,
+    "linkedLibrariesVerified": true,
+    "mcpInitializationPassed": true,
+    "supervisorProvenanceVerified": true,
+    "buildSourceAbsent": true,
+    "knownPersonalCredentialPathsAbsent": true,
+    "claudeConfigContainsNoAuthFields": true,
+    "workspaceSdkProvenancePreserved": true
+  },
+  "ownedVMsDeleted": [
+    {
+      "id": "bx_c3za4fgy",
+      "role": "builder",
+      "confirmedAbsent": true,
+      "deletionCompleted": true,
+      "deletionOperationId": "bdop_d9c8fa2ec3be4457ba4e091b773bcbd1",
+      "deletionCompletedAt": "2026-11-01T19:51:08.756Z"
+    },
+    {
+      "id": "bx_m6z943hr",
+      "role": "seed",
+      "confirmedAbsent": true,
+      "deletionCompleted": true,
+      "deletionOperationId": "bdop_97958129bf7c44edad1ca03de5501c6b",
+      "deletionCompletedAt": "2026-11-01T19:51:04.178Z"
+    },
+    {
+      "id": "bx_aruauz2j",
+      "role": "check",
+      "confirmedAbsent": true,
+      "deletionCompleted": true,
+      "deletionOperationId": "bdop_f31b51c0f2504596a82da477cae5a4aa",
+      "deletionCompletedAt": "2026-11-01T19:51:04.749Z"
+    }
+  ],
+  "publicationUsageUsd": 0.03031,
+  "publicationVmCreations": 3,
+  "remainingAuthorizedVmCreations": 4,
+  "retainedSnapshots": 1,
+  "snapshotAllowance": "within existing account included allowance",
+  "activePublicationVms": 0,
+  "evidenceSource": "Sanitized Mac publication receipt relayed by parent; upstream source comparisons independently executed in cloud. Cloud made no Boat call.",
+  "sourceTree": "b80e5bf9a713efabdf8d24a88b330591312e3347",
+  "shareId": "shr_ab96efbcd1a407ec",
+  "snapshotId": "357a004f-dcaa-4b62-8117-107daf551e42",
+  "snapshotBytes": 151617509,
+  "snapshotCreatedAt": "2026-11-01T19:47:38.305Z",
+  "seedImage": "bsh_SuwMO3FoyEUsQUOyr6Hm_hvHw6iyY85H-s6jRWjXszM",
+  "workspaceSdkRevision": "33b8382d72657d176baca19797d8d146803f3d89",
+  "supervisorSha256": "afe8510ce3f9fce707a14b221d28ea68a0a8298c983443eee1dbe14a77cd90d6",
+  "nodeSha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb",
+  "sourceArchive": {
+    "bytes": 430799210,
+    "sha256": "b56eb88a291d37595c0b23777cf85ad7c69fe54e46be5944f286c2462e743858",
+    "excludedExternalSkillLinks": [
+      ".claude/skills/system-architect",
+      ".claude/skills/coding",
+      ".claude/skills/method"
+    ],
+    "credentialsGitMetadataAndCargoCachesExcluded": true
+  },
+  "ptySupplementArchive": {
+    "bytes": 34738,
+    "sha256": "987bc53bae8a5c1c9a497f925a3d4d440fcf8855fd9a36ca95b296a8ca4e7dae"
+  },
+  "runtimeArchive": {
+    "bytes": 44092168,
+    "sha256": "3fb02e30164ac730b1fc7615bf4e46302bde4485bd9605031e8b381c971cafac",
+    "contents": ["bin/nessa", "bin/nessa-mcp", "BUILD-new.json", "Cargo.lock", "LICENSE"]
+  },
+  "build": {
+    "os": "Ubuntu 24.04.4 LTS",
+    "glibc": "2.39",
+    "finalProcessId": 31715,
+    "finalExitCode": 0,
+    "initialAttempts": "Compiler failures from omitted PTY shared files/build metadata; pinned support restored and the same build cache resumed.",
+    "command": "CARGO_HOME=/usr/local/cargo CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true cargo +1.99.1 --config 'profile.dev.debug=0' --config 'profile.dev.package.\"*\".opt-level=0' build --frozen --target x86_64-unknown-linux-gnu -p nessa-server --bin nessa -p nessa-mcp --bin nessa-mcp"
+  },
+  "ptyVendoringAudit": {
+    "dependencyRevision": "c68837e2b7bf1c9009e1a4587a1a58107ec0425c",
+    "mainCargoLockSha256": "b711aeccc49f6ebe0da00158cb6f58349793eeafd2493b5b3bbb5becbd8c38b0",
+    "mainCargoLockMatchesQualifiedCommitExportAndRuntimeArtifact": true,
+    "originalInfrastructureManifestSha256": "a038532f168dfeb1ea7f746b9b84d3a5976f6a1bc0c53b00654fceb7a802bb57",
+    "normalizedManifestBeforeSha256": "fff9ebd5a902b85fb71060b50d5c0d4521ac2b68c136accf1e2f4d8ef1ffa43d",
+    "normalizedManifestAfterSha256": "3a1312b48da31d9e3543cd80672db228579ecac50b3bc6798cb7bc34fa1a97d7",
+    "onlyNormalizedManifestChange": {
+      "path": "vendor/pty-runtime-infrastructure-0.1.0/Cargo.toml",
+      "from": "build = false",
+      "to": "build = \"../../scripts/native/build.rs\""
+    },
+    "onlyVendorChecksumChange": "files.Cargo.toml SHA-256 updated to restored manifest digest",
+    "allRestoredFilesMatchGitShowAtPinnedCommit": true,
+    "restoredFileHashes": {
+      "helpers/guardian/.gitignore": "306fd52e74fca6746e12acc750f232de15e71da917756a1270d74c91f5eb7368",
+      "helpers/guardian/Cargo.lock": "79c168f4fda6803fce1352c02556648fba99a2282ec3476d531b5f3d3593eaab",
+      "helpers/guardian/Cargo.toml": "d57a1434ae472f5e3b290d172de6d4ee343e8a37656e0a0bf59f6a21018ba4e9",
+      "helpers/guardian/src/anchor.rs": "0fb02e4da72b3def14f7dea0408e18af68d3e534a92c10cd7bfb539340b10589",
+      "helpers/guardian/src/cancellation.rs": "b8c88ef201b5cbe47763c048c2c69d731b431630cf313d70282dde73eb37b0a3",
+      "helpers/guardian/src/cleanup.rs": "00ca08c8f8d369d720f82e9a10a0556e3077ad0f776fb5890371e3af563a942a",
+      "helpers/guardian/src/discovery.rs": "a5604459145e52b7b364ab8dc763a4405c33b9971fd0bec91d5a6f4d9850220c",
+      "helpers/guardian/src/discovery_linux.rs": "097c60068661cb0a945abee11c727887a97edcb5996d405c7c9281fd63a805d0",
+      "helpers/guardian/src/discovery_macos.rs": "fe894c16a71579f430fe57d961fdcb5300468681a96a656fec4b02f2faee39d8",
+      "helpers/guardian/src/drain.rs": "48e29fefcf4819c83b882fe406a3faa2a054a9acbfd4e011c3b5ae5bb8f9750a",
+      "helpers/guardian/src/fault_recovery.rs": "c5cb61d12a40ab68a9531e2ae03c05b47b256c38cf650e323c14a86799b9d306",
+      "helpers/guardian/src/guardian.rs": "ce48ed3a48a8edd7784ffcd85ac171be1e9fce5d003aec13aa57df2f9843b454",
+      "helpers/guardian/src/links.rs": "91508fc96fb0d6a74520a4d78eb0fedd2cc88ccd2346ac1fc68c6a7f0cf3fc68",
+      "helpers/guardian/src/main.rs": "6c79011abf7eac53c541c40cddbd9b838658cd5cd45d349ee812222c8b862771",
+      "helpers/guardian/src/os.rs": "0fba927896f7faa72aa127c28ef1c02163e3d7cde48bb560554d6d5baef94864",
+      "helpers/guardian/src/sentinel.rs": "dec2b983c1c49bbe4c2b3e6c58d20b1b70426059d6e639a24c99602be1596f65",
+      "helpers/guardian/src/successor.rs": "fa29975713865a106c3430f74356355d69840d9ec39008a6c61291dfad3fbaa0",
+      "helpers/guardian/src/workload.rs": "a55431700b6a673283e7d75be9169c03719124133c1e777faeee902f0506105f",
+      "helpers/guardian/tests/fault_fixture.rs": "ec05e7f4c5675f30569576eda95ad23c2a7e04a0005b44000999c94bba1b4068",
+      "helpers/guardian/tests/fault_injection.rs": "515cd7af626353e53544953874ba9f8e624a98396b1abad98f37400d9cc17dbe",
+      "helpers/guardian/tests/fault_recovery.rs": "1eb3d80cb40076a969267badbf82b85e773a3a7fc957c4387075048fd3a64c83",
+      "helpers/guardian/tests/fixture.rs": "535336cfb0cc33e56c42403edfeed09a8074bea63dbdbc9b69ea7fca509875e5",
+      "helpers/guardian/tests/links.rs": "608ae8c5c17263f5d19626374e781f31570297cb9b39dfe79f858946189c31ce",
+      "helpers/guardian/tests/public_boundaries.rs": "b33978fb33ca3817a85fd84dfd83e6a75a0d3df657a4a60fa01599e066add11b",
+      "helpers/guardian/tests/startup.rs": "10f4bb310c2e4160dc2471dcd868eb52680d0b468834ff1855b78aa84b532241",
+      "scripts/guardian/build.rs": "b44963854c2bb94852d03d74e0d870992bd971ba06d59c99a65713caf27050d2",
+      "scripts/guardian/protocol.rs": "2a1a51213f3455009ffab91159eebb039d46146c7ff900265418c858cef794b5",
+      "scripts/native/build.rs": "9f9c4399caf9cd7a866752b17df18a61c5dc2e6c9fcda3ff7c4e4d4c668f2260",
+      "crates/atomic_update.rs": "fc72aa5caeaf6c58c4eb377bfd205e398d800019783e911be16b0be798f6b867"
+    },
+    "restoredPathMapping": {
+      "crates/atomic_update.rs": "vendor/atomic_update.rs",
+      "helpers/guardian/**": "helpers/guardian/**",
+      "scripts/guardian/build.rs": "scripts/guardian/build.rs",
+      "scripts/guardian/protocol.rs": "scripts/guardian/protocol.rs",
+      "scripts/native/build.rs": "scripts/native/build.rs"
+    },
+    "cloudIndependentCheck": "All 29 reported restored file hashes, original build declaration/manifest hash, application source tree and Cargo.lock hash agree with the locked git commits. Vendor normalization/checksum edits and remote image checks are publisher-reported.",
+    "lockedPackages": {
+      "pty-runtime": "0.1.0",
+      "pty-runtime-application": "0.1.0",
+      "pty-runtime-domain": "0.1.0",
+      "pty-runtime-infrastructure": "0.1.0"
+    }
+  },
+  "excludedPaths": [
+    "/home/user/pr981-build",
+    "/home/user/source",
+    "/src",
+    "/home/user/.claude/.credentials.json",
+    "/home/user/.codex/auth.json",
+    "/home/user/.config/opencode/auth.json",
+    "/home/user/.local/share/opencode/auth.json",
+    "/home/user/.ssh/id_rsa",
+    "/home/user/.ssh/id_ed25519",
+    "/home/user/.cargo/credentials.toml",
+    "/root/.ssh/id_rsa",
+    "/root/.ssh/id_ed25519",
+    "/home/user/.nessa",
+    "/home/user/.local/share/nessa"
+  ],
+  "exclusionCheckScope": "Named paths and recursive Claude-config auth-field checks; not an exhaustive secret scan or independent secure-erasure attestation.",
+  "remainingAuthorizedUsageUsd": 4.96969,
+  "liveBoatAcceptance": "Prepared by Mac owner; not launched at publication/pin preparation. Four creation slots remain.",
+  "usage": {
+    "cumulativeUsageDollars": 0.03031,
+    "billableWeightedSeconds": 3031,
+    "temporaryVMCreations": 3,
+    "peakConcurrentPublicationVMs": 3,
+    "activeVMsAfterCleanup": 0,
+    "retainedTaskSnapshots": 1,
+    "remainingCreationAllowance": 4,
+    "remainingUsageDollars": 4.96969,
+    "snapshotAllowance": {
+      "included": 10,
+      "used": 8,
+      "extra": 0,
+      "extraMonthlyDollars": 0,
+      "extraDailyDollars": 0
+    }
+  },
+  "snapshotSourceSandboxId": "bx_m6z943hr",
+  "snapshotStatus": "ready",
+  "snapshotType": "small"
+}

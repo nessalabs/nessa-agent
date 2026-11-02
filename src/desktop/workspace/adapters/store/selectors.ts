@@ -65,7 +65,8 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import { canClosePane } from "../../application/usecases/panes"
-import type { WidgetRef } from "../../../widgets/model/widget-ref"
+import { paneItemKey, widgetItem } from "../../model/pane-item"
+import { sameWidget, type WidgetRef } from "../../../widgets/model/widget-ref"
 
 type Root = { workspace: WorkspaceState }
 
@@ -289,6 +290,17 @@ export const selectPaneSession = (state: Root, pane: PaneKey): string | null => 
 /** Chat `sessionId`'s right panel: its widgets as tabs; none while it has none. */
 export const selectChatPanel = (state: Root, sessionId: string): ChatPanel | null =>
   entry(state.workspace.panels, sessionId) ?? null
+
+/**
+ * Whether `widget` lives outside its message: in the window, or opened into
+ * a panel while the window runs (`panelled`, kept after its tab closes). Its
+ * card in a message is then a row leading there.
+ */
+export const selectWidgetOpenElsewhere = (state: Root, widget: WidgetRef): boolean => {
+  const shown = windowWidget(state.workspace.content)
+  if (shown && sameWidget(shown, widget)) return true
+  return state.workspace.panelled.includes(paneItemKey(widgetItem(widget)))
+}
 
 /** How many times something asked the window to show the right panel. */
 export const selectPanelAsked = (state: Root): number => state.workspace.panelAsked

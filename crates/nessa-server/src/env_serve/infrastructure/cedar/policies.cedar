@@ -35,3 +35,16 @@ permit (
     resource is NessaEnv::Command
 )
 when { principal.commands };
+
+// Its gateway's build, run in place of this host's own, once that gateway
+// refused this build's protocol. Granted with commands: a peer that may run
+// any command here as this account can already replace this build, so this
+// gives it nothing more. A peer granted only agents, whose harnesses may be
+// sandboxed, is never sent a build to run outside them.
+@id("grant.commands_update")
+permit (
+    principal is NessaEnv::Peer,
+    action == NessaEnv::Action::"build.update",
+    resource is NessaEnv::Build
+)
+when { principal.commands };

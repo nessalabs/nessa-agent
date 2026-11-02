@@ -26,13 +26,6 @@ async function select(value: string) {
     field.dispatchEvent(new Event("change", { bubbles: true }))
   })
 }
-async function save() {
-  await act(async () => {
-    const form = host.querySelector("form")
-    if (!form) throw new Error("missing runtime settings form")
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
-  })
-}
 it("a late save cannot replace a newly connected gateway's settings", async () => {
   let finish: ((value: BoatRuntimeSettings) => void) | undefined
   const old = {
@@ -44,7 +37,6 @@ it("a late save cannot replace a newly connected gateway's settings", async () =
   }
   await act(async () => root.render(<BoatRuntimeControl gateway={old} />))
   await select("14400")
-  await save()
   expect(finish).toBeDefined()
   const fresh = {
     runtimeSettings: async (): Promise<BoatRuntimeSettings> => ({
@@ -57,10 +49,9 @@ it("a late save cannot replace a newly connected gateway's settings", async () =
   await act(async () => root.render(<BoatRuntimeControl gateway={fresh} />))
   await act(async () => finish?.({ defaultLifetime: { mode: "after", seconds: 14_400 } }))
   expect(host.querySelector("select")?.value).toBe("28800")
-  expect(host.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true)
   expect(fresh.setRuntimeSettings).not.toHaveBeenCalled()
 })
-it("preserves a custom saved duration after discarding a preset draft", async () => {
+it("choosing the saved custom duration again saves nothing", async () => {
   const setRuntimeSettings = vi.fn(async (): Promise<BoatRuntimeSettings> => {
     throw new Error("unexpected save")
   })
@@ -72,9 +63,8 @@ it("preserves a custom saved duration after discarding a preset draft", async ()
   }
   await act(async () => root.render(<BoatRuntimeControl gateway={gateway} />))
   expect(host.querySelector("select")?.value).toBe("12345")
-  await select("14400")
+  expect(host.textContent).toContain("After 12345 seconds")
   await select("12345")
-  await save()
   expect(setRuntimeSettings).not.toHaveBeenCalled()
   expect(host.querySelector("select")?.value).toBe("12345")
 })
@@ -95,11 +85,11 @@ it("saves an ordinary global default without receiving token capabilities", asyn
   await act(async () => root.render(<BoatRuntimeControl gateway={gateway} />))
   expect(host.querySelector("select")?.value).toBe("never")
   await select("14400")
-  await save()
   expect(setRuntimeSettings.mock.calls).toEqual([[{ mode: "after", seconds: 14_400 }]])
   expect(host.querySelector("select")?.value).toBe("14400")
-  expect(host.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true)
-  expect(host.textContent).toContain("Active VM deadlines stay unchanged")
+  expect(host.textContent).not.toContain("keep billing")
+  await select("never")
+  expect(host.textContent).toContain("VMs keep billing until you stop them in Boat.")
 })
 it("keeps explicit unlimited separate from inheritance and resets one channel", async () => {
   let stored: BoatRuntimeSettings = {
@@ -132,10 +122,8 @@ it("keeps explicit unlimited separate from inheritance and resets one channel", 
   )
   expect(host.querySelector("select")?.value).toBe("default")
   await select("never")
-  await save()
   expect(host.querySelector("select")?.value).toBe("never")
   await select("default")
-  await save()
   expect(writes).toEqual([
     { mode: "never", channelId: "ch_bbbbbbbbbb" },
     { mode: "default", channelId: "ch_bbbbbbbbbb" },
@@ -178,14 +166,11 @@ it("requires an explicit reload after an uncertain save and does not replay it",
   const gateway = { runtimeSettings, setRuntimeSettings }
   await act(async () => root.render(<BoatRuntimeControl gateway={gateway} />))
   await select("14400")
-  await save()
   expect(setRuntimeSettings).toHaveBeenCalledTimes(1)
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
-    "could not be confirmed",
-  )
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("Couldn’t confirm")
   await act(async () =>
     [...host.querySelectorAll("button")]
-      .find((button) => button.textContent === "Reload VM settings")
+      .find((button) => button.textContent === "Reload")
       ?.click(),
   )
   expect(setRuntimeSettings).toHaveBeenCalledTimes(1)

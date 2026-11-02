@@ -41,13 +41,9 @@ export function ChannelSettingsButton({
           }}
           size="sm"
           title={`#${name} settings`}
-          description={
-            scope === undefined
-              ? "This edits Nessa’s default for every channel that inherits it."
-              : "Override Nessa’s default VM lifetime for this channel."
-          }
+          description={scope === undefined ? "The default for every channel." : undefined}
         >
-          <div className="settings-boat">
+          <div className="settings-boat settings-surface">
             <BoatRuntimeControl channelId={scope} gateway={gateway} />
           </div>
         </Dialog>

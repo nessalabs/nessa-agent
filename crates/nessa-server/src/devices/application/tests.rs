@@ -20,6 +20,11 @@ fn report(hostname: &str, cpu_permille: u32) -> MachineReport {
         memory_used_bytes: 8,
         disk_total_bytes: 100,
         disk_used_bytes: 40,
+        disks: vec![nessa_protocol::lease::MachineDisk {
+            mount: "/".into(),
+            total_bytes: 100,
+            used_bytes: 40,
+        }],
     }
 }
 
@@ -127,15 +132,27 @@ impl Fixture {
 #[tokio::test]
 async fn the_hub_is_read_and_no_worker_is_listed_before_one_dials() {
     let fixture = Fixture::new();
-    let list = fixture.devices(Some(report("studio", 230))).list().await;
+    let list = fixture
+        .devices(Some(report("studio", 230)))
+        .list(None)
+        .await;
     assert_eq!(list.hub, Some(report("studio", 230)));
     assert!(list.workers.is_empty());
+    // A later page continues the first and does not read the hub again.
+    let later = fixture
+        .devices(Some(report("studio", 230)))
+        .list(Some(peer(1)))
+        .await;
+    assert_eq!(later.hub, None);
 }
 
 #[tokio::test]
 async fn a_hub_report_out_of_bounds_is_not_listed() {
     let fixture = Fixture::new();
-    let list = fixture.devices(Some(report("studio", 1_001))).list().await;
+    let list = fixture
+        .devices(Some(report("studio", 1_001)))
+        .list(None)
+        .await;
     assert_eq!(list.hub, None);
 }
 
@@ -146,7 +163,7 @@ async fn a_serving_worker_is_online_with_its_report_and_its_sighting_is_saved() 
         (peer(1), Some((3, false)), Some(report("build-box", 610))),
         (peer(2), Some((0, true)), Some(report("laptop", 10))),
     ];
-    let list = fixture.devices(None).list().await;
+    let list = fixture.devices(None).list(None).await;
     assert_eq!(
         list.workers,
         vec![
@@ -180,7 +197,7 @@ async fn a_worker_seen_before_and_not_connected_is_offline_as_last_seen() {
         },
     ));
     *fixture.live.0.lock().unwrap() = vec![(peer(1), None, Some(report("gaming-pc", 900)))];
-    let list = fixture.devices(None).list().await;
+    let list = fixture.devices(None).list(None).await;
     assert_eq!(
         list.workers,
         vec![Worker {
@@ -204,7 +221,7 @@ async fn a_serving_worker_before_its_first_report_keeps_what_was_saved() {
         },
     ));
     *fixture.live.0.lock().unwrap() = vec![(peer(1), Some((1, false)), None)];
-    let list = fixture.devices(None).list().await;
+    let list = fixture.devices(None).list(None).await;
     assert_eq!(list.workers[0].state, WorkerState::Online);
     assert_eq!(list.workers[0].machine, Some(report("build-box", 500)));
     assert_eq!(list.workers[0].last_seen_ms, Some(400));
@@ -288,17 +305,17 @@ async fn a_worker_no_longer_paired_is_forgotten_unless_it_is_connected() {
     ];
     // Unreadable, nothing is forgotten.
     let devices = fixture.devices(None);
-    assert_eq!(devices.list().await.workers.len(), 4);
+    assert_eq!(devices.list(None).await.workers.len(), 4);
     *fixture.paired.0.lock().unwrap() = Some(BTreeSet::from([peer(1)]));
     let listed: Vec<_> = devices
-        .list()
+        .list(None)
         .await
         .workers
         .into_iter()
         .map(|worker| worker.peer)
         .collect();
-    // Online first.
-    assert_eq!(listed, vec![peer(2), peer(1)]);
+    // In the order of their keys.
+    assert_eq!(listed, vec![peer(1), peer(2)]);
     let kept: Vec<_> = fixture
         .store
         .saved
@@ -311,9 +328,9 @@ async fn a_worker_no_longer_paired_is_forgotten_unless_it_is_connected() {
 }
 
 #[tokio::test]
-async fn the_list_names_at_most_its_bound_online_first_and_counts_the_rest() {
+async fn the_list_pages_by_key_and_each_worker_is_listed_once() {
     let fixture = Fixture::new();
-    let total = MAX_LISTED_WORKERS + 6;
+    let total = 2 * MAX_LISTED_WORKERS + 6;
     for index in 0..total {
         let byte = u8::try_from(index + 1).unwrap();
         fixture.store.saved.lock().unwrap().push((
@@ -324,15 +341,31 @@ async fn the_list_names_at_most_its_bound_online_first_and_counts_the_rest() {
             },
         ));
     }
-    let online = peer(1);
-    *fixture.live.0.lock().unwrap() = vec![(online, Some((0, false)), Some(report("box", 1)))];
-    let list = fixture.devices(None).list().await;
-    assert_eq!(list.workers.len(), MAX_LISTED_WORKERS);
-    assert_eq!(list.omitted, total - MAX_LISTED_WORKERS);
-    assert_eq!(list.workers[0].peer, online);
-    // Then the most recently seen of the rest.
-    let last = u8::try_from(total).unwrap();
-    assert_eq!(list.workers[1].peer, peer(last));
+    *fixture.live.0.lock().unwrap() = vec![(peer(3), Some((0, false)), Some(report("box", 1)))];
+    let devices = fixture.devices(None);
+    let mut listed = Vec::new();
+    let mut after = None;
+    let mut pages = 0;
+    loop {
+        let page = devices.list(after).await;
+        assert!(page.workers.len() <= MAX_LISTED_WORKERS);
+        pages += 1;
+        // A worker's state changing between pages moves it nowhere.
+        *fixture.live.0.lock().unwrap() = vec![];
+        listed.extend(page.workers.iter().map(|worker| worker.peer));
+        match page.next {
+            Some(next) => {
+                assert_eq!(Some(&next), listed.last());
+                after = Some(next);
+            }
+            None => break,
+        }
+    }
+    assert_eq!(pages, 3);
+    let every: Vec<_> = (1..=total)
+        .map(|i| peer(u8::try_from(i).unwrap()))
+        .collect();
+    assert_eq!(listed, every);
 }
 
 #[tokio::test]

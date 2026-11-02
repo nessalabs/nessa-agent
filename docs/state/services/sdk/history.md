@@ -5,7 +5,7 @@ kind: "operation"
 status: "implemented"
 summary: "Nessa shows live output while saving conversation records in small batches."
 parent: "sdk"
-sourceRevision: "ae6e33529887746079702d4eca5f528ec42146bd"
+sourceRevision: "50bef867f45f9cb99fa27d798210e8e6a1dfe901"
 sources:
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -13,6 +13,7 @@ sources:
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/semantic.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/validation.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/records.rs"
+  - "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs"
   - "crates/nessa-sdk/src/domain/agent_execution/sessions/value_objects/attachment.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/context.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/checkpoint.rs"
@@ -54,7 +55,9 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ReadTail: Reconstruct under writer lease
+    [*] --> FlushRetained: Prepare under writer lease
+    FlushRetained --> ReadTail: Retained changes durably acknowledged
+    FlushRetained --> Refused: Save fails / retain exact decisions
     ReadTail --> Fold: Complete or previously aborted facts
     ReadTail --> AbortTail: Valid incomplete physical fact
     AbortTail --> Fold: Durable exact abort acknowledged
@@ -62,6 +65,7 @@ stateDiagram-v2
     Fold --> Validate: Apply committed semantic decisions
     Validate --> Prepared: Agreement valid
     Validate --> Refused: Contradictory evidence
+    Prepared --> RecordOnly: Cleanup evidence / preserve pending handoff
     Prepared --> Resume: Authorize required saved-context restoration
     Prepared --> Fresh: Authorize initial or replacement context
     Resume --> Attached: Exact context restored
@@ -71,6 +75,19 @@ stateDiagram-v2
     PublishContext --> Attached: Context and related changes acknowledged
     PublishContext --> Cleanup: Save fails / retain typed failure
 ```
+
+Preparation flushes already-retained decisions through their existing save owner
+before reading storage again. A failed flush retains those decisions and refuses
+preparation. Lease-record-only preparation validates and initializes saved evidence
+without opening, restoring or dispatching a provider; it preserves a pending
+handoff and any fresh context already selected for provider preparation.
+
+Saved decline and cancellation decisions keep their actual applied meaning
+separate from storage and audit acknowledgements. Restoration checks agreement
+between those decisions and scheduling evidence. A `resumed_from` relationship
+must match a preceding canonical resumption admission, including the original
+actor, initiation, request and queued mode; an execution-ID prefix alone does
+not establish a successor.
 
 ## Work admitted to the current native context
 
@@ -146,20 +163,23 @@ semantic folding, custom snapshots, checkpoint mapping and the Claude binding.
 The existing provenance, copied-history, record-writer and streaming behavior was
 checked against its unchanged owning source; the streaming chart keeps its
 existing transitions. The restoration chart now distinguishes required resume
-from fresh context publication and a failed publication's cleanup obligation.
+from fresh context publication, lease-record preparation, and a failed
+publication's cleanup obligation.
 
 The review also checks the captured pre-open boundary against withdrawal during
 opening and the local credential wrapper's delegation to Claude. The latter uses
-the provider-owned rule rather than a copied server-side admission check.
-
-The final source checkpoint restores the original accurate Claude-binding comment.
-The 45 protocol sources then match the base byte-for-byte; the admission behavior
-and these diagram transitions are unchanged from the reviewed implementation.
+the provider-owned rule rather than a copied server-side admission check. It
+also covers retained Stop decisions and canonical successors. The record writer,
+streaming boundaries and provider restoration protocol are unchanged by the
+admission work. Public storage regressions cover rejection without append and
+reopening a fork with its source intact.
 
 The linked tests were read for their asserted behavior. This documentation review
 does not claim executed tests, native or browser qualification, or visual diagram
-inspection. Resume/decline atomicity (#1003), shared timers (#762) and metadata
-admission (#934) remain planned work waiting for #981 to merge.
+inspection. The `sourceRevision` above is main's prior checkpoint; it will move
+to the merge commit once this page is reviewed against the combined tree.
+Resume/decline atomicity (#1003), shared timers (#762) and metadata admission
+(#934) are in scope now that #981 has merged.
 
 ## Further reading
 

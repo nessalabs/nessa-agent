@@ -6,12 +6,15 @@ use super::{
 use crate::vault::application::{verify_and_retire, Migration};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::{
-    product::generated::{VaultPassphraseParams, VaultState, VaultStatus},
+    product::generated::{
+        VaultPassphraseChangeState, VaultPassphraseChangeStatus, VaultPassphraseParams, VaultState,
+        VaultStatus,
+    },
     protocol::{OutgoingMessage, RequestFrame},
 };
 use nessa_vault::{
-    application::{Caller, Lease, Session, Vault},
-    domain::{Failure, Passphrase, Status},
+    application::{Caller, ChangeReceipt, Lease, Session, Vault},
+    domain::{ChangePublication, Failure, Passphrase, Status},
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -71,6 +74,9 @@ pub(super) async fn dispatch(
     let Some(lease) = state.vault_lease.clone() else {
         return failure(&frame.id, "vault_session_closed");
     };
+    if frame.method == "vault.changePassphrase" {
+        return change_passphrase(state, routes.clone(), lease, frame).await;
+    }
     let operation = match frame.method.as_str() {
         "vault.status" => Operation::Status,
         "vault.setup" => Operation::Setup,
@@ -134,6 +140,72 @@ pub(super) async fn dispatch(
             )
         }
         Err(problem) => failure(&frame.id, code(problem)),
+    }
+}
+/// Cleanup belongs to the blocking attempt, so dropping its response future does
+/// not leave an admitted change's old GitHub cache awaiting another request.
+async fn change_passphrase(
+    state: &ProductRouteState,
+    routes: Arc<VaultRoutes>,
+    lease: Lease,
+    mut frame: RequestFrame,
+) -> OutgoingMessage {
+    let Ok(params) = serde_json::from_value::<VaultPassphraseParams>(std::mem::replace(
+        &mut frame.params,
+        json!({}),
+    )) else {
+        return failure(&frame.id, "invalid_request");
+    };
+    let passphrase = match Passphrase::new(params.passphrase) {
+        Ok(value) => value,
+        Err(problem) => return failure(&frame.id, code(problem)),
+    };
+    let github = state.github.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let changed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            routes.vault.change_passphrase(&lease, passphrase)
+        }));
+        let cleanup_failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            github
+                .as_ref()
+                .is_some_and(|github| github.connections.clear_locked().is_err())
+        }))
+        .unwrap_or(true);
+        match changed {
+            Ok(Ok(receipt)) => change_result(&receipt, cleanup_failed),
+            Ok(Err(problem)) => Err(code(problem)),
+            Err(_) => Err(if cleanup_failed {
+                "vault_change_not_confirmed_audit_unavailable"
+            } else {
+                "vault_change_not_confirmed"
+            }),
+        }
+    })
+    .await
+    .unwrap_or(Err("vault_change_not_confirmed"));
+    match result {
+        Ok(()) => success(
+            &frame.id,
+            &VaultPassphraseChangeStatus {
+                state: VaultPassphraseChangeState::Locked,
+            },
+        ),
+        Err(code) => failure(&frame.id, code),
+    }
+}
+fn change_result(receipt: &ChangeReceipt, cleanup_failed: bool) -> Result<(), &'static str> {
+    match (
+        receipt.publication(),
+        receipt.audit_failed() || cleanup_failed,
+    ) {
+        (ChangePublication::Committed, false) => Ok(()),
+        (ChangePublication::Committed, true) => Err("vault_changed_audit_unavailable"),
+        (ChangePublication::Unchanged(_), false) => Err("vault_change_unchanged"),
+        (ChangePublication::Unchanged(_), true) => Err("vault_change_unchanged_audit_unavailable"),
+        (ChangePublication::Uncertain(_), false) => Err("vault_change_not_confirmed"),
+        (ChangePublication::Uncertain(_), true) => {
+            Err("vault_change_not_confirmed_audit_unavailable")
+        }
     }
 }
 #[derive(Clone, Copy)]

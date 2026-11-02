@@ -48,6 +48,7 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
+            DurableOwnershipAudit, DurableTrustedApps,
         },
     },
 };
@@ -103,11 +104,17 @@ use nessa_protocol::{
     agents::AgentId,
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
+#[cfg(unix)]
+use nessa_sdk::application::agent_execution::subagents::{
+    LiveCapacity, OwnershipCoordinator, OwnershipDependencies, OwnershipStore,
+};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 #[cfg(unix)]
 use nessa_sdk::infrastructure::clock::RuntimeClock;
 #[cfg(unix)]
-use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
+use nessa_sdk::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, SqliteOwnershipStore,
+};
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice},
@@ -394,6 +401,14 @@ pub(super) async fn product_state(
     // for every command, passive read and share change (ADR 803 step 3).
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
+    // Voice calls, with their key in the same vault.
+    let voice = super::voice::compose(namespace, vault.vault.clone());
+    // A leftover plaintext sign-in is removed before agents start, whether or
+    // not the vault is unlocked. A failed delete stops startup; the file is
+    // not left in place and treated as signed out.
+    crate::github::infrastructure::remove_plaintext_sign_in(namespace.join("github"))
+        .await
+        .map_err(|_| RunError::Agent("the plaintext GitHub sign-in could not be removed".into()))?;
     // The GitHub sign-in, composed where agents are: they are what it is for.
     #[cfg(unix)]
     let github = match &settings.agents {
@@ -411,6 +426,9 @@ pub(super) async fn product_state(
                     packaged_agents,
                     record_origin.clone(),
                     ConversationSettings {
+                        stop_children_on_parent_stop: settings
+                            .subagents
+                            .stop_children_on_parent_stop,
                         #[cfg(unix)]
                         workspace_service: workspace_service.clone(),
                         #[cfg(unix)]
@@ -542,6 +560,9 @@ pub(super) async fn product_state(
     if let Some(github) = github {
         product = product.with_github(github.routes);
     }
+    if let Some(voice) = voice {
+        product = product.with_voice(voice);
+    }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
     // Composed whether or not native pairing runs: turning it on is how it
@@ -606,7 +627,10 @@ pub(super) async fn product_state(
     )));
     let native = match native {
         Some((prepared, commands, peers)) => {
-            product = product.with_pairing(Arc::new(commands)).with_peers(peers);
+            product = product
+                .with_pairing(Arc::new(commands))
+                .with_peers(peers)
+                .with_tunnel_secrets(prepared.tunnel_secrets());
             let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,
@@ -807,6 +831,7 @@ type PairedWorkers = (
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    stop_children_on_parent_stop: bool,
     #[cfg(unix)]
     workspace_service: Arc<Workspaces>,
     #[cfg(unix)]
@@ -869,6 +894,7 @@ async fn conversations(
 pub(super) fn mcp_app_ports(
     mcp: &mut super::mcp_servers::McpComposition,
     audit: Arc<dyn McpAppAudit>,
+    trusted: Arc<dyn crate::conversation::application::TrustedApps>,
 ) -> McpAppPorts {
     let dropped = mcp.start_recorders(audit.clone());
     McpAppPorts {
@@ -879,6 +905,7 @@ pub(super) fn mcp_app_ports(
         tickets: mcp.resource_tickets.clone(),
         dropped,
         policy: mcp.app_policy.clone(),
+        trusted,
     }
 }
 
@@ -1170,6 +1197,7 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
+        stop_children_on_parent_stop,
         workspace_service,
         workspace_audit,
         read_work_budget,
@@ -1277,6 +1305,16 @@ async fn conversations(
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
+        // Its own shell is never used: each VM's install runs over that
+        // VM's connection.
+        installer: Arc::new(
+            crate::conversation::infrastructure::ssh_environment::HostInstaller::this_build(
+                Arc::new(
+                    crate::conversation::infrastructure::ssh_environment::OpenSshConnector::new(),
+                ),
+                root.join("host-builds"),
+            ),
+        ),
         environments: Default::default(),
     });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
@@ -1554,7 +1592,11 @@ async fn conversations(
                 },
                 workspace,
                 tool_uis,
-                mcp_app_ports(mcp, mcp_app_audit.clone()),
+                mcp_app_ports(
+                    mcp,
+                    mcp_app_audit.clone(),
+                    Arc::new(DurableTrustedApps::new(root.clone())),
+                ),
             );
             (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
         }
@@ -1622,6 +1664,38 @@ async fn conversations(
             },
         )?,
     ));
+    let ownership_path = root.join("ownership.sqlite3");
+    let ownership_store = Arc::new(
+        SqliteOwnershipStore::open(&ownership_path)
+            .map_err(|error| RunError::Agent(format!("ownership store: {error}")))?,
+    );
+    let ownership = OwnershipCoordinator::new(OwnershipDependencies {
+        store: ownership_store.clone(),
+        audit: Arc::new(
+            DurableOwnershipAudit::new(root.join("audit").join("ownership"), clock.clone())
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        ),
+        factory: service.owned_thread_factory(),
+        room: Arc::new(LiveCapacity::new(live_conversations)),
+    });
+    ownership
+        .resume()
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    service
+        .bind_owned_threads(ownership, stop_children_on_parent_stop)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let ownership_snapshot = OwnershipStore::read(ownership_store.as_ref())
+        .await
+        .map_err(|error| RunError::Agent(format!("ownership read: {error:?}")))?;
+    service
+        .recover_owned_threads(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(format!("owned thread recovery: {error:?}")))?;
+    service
+        .recover_parent_stops(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     conversation_tools.attach(service.clone());
     background_tools.attach(service.clone());
     let background_path = root.join("background-tasks.sqlite3");
@@ -1726,7 +1800,7 @@ fn environments(
     use crate::conversation::infrastructure::{
         ssh_environment::{
             DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
-            SshEnvironment, SshTimings,
+            PeerUpdates, SshEnvironment, SshTimings,
         },
         CedarCommandPolicyEvaluator, FileBindings, FilePlacements,
     };
@@ -1751,6 +1825,13 @@ fn environments(
             audience: serving.audience.clone(),
         }) as Arc<dyn crate::devices::application::PairedKeys>
     });
+    // One installer for SSH hosts and paired ones alike: the same build,
+    // and the same release builds it pins, kept in one cache.
+    let connector = Arc::new(OpenSshConnector::new());
+    let installer = Arc::new(HostInstaller::this_build(
+        connector.clone(),
+        root.join("host-builds"),
+    ));
     let peers = match (serving, &audit) {
         (Some(serving), Some(audit)) => Some(Arc::new(
             PeerEnvironments::new(
@@ -1765,16 +1846,12 @@ fn environments(
                 SshTimings::default(),
                 organization,
             )
-            .with_sightings(Arc::new(SavedSightings(sightings.clone()))),
+            .with_sightings(Arc::new(SavedSightings(sightings.clone())))
+            .with_updates(Arc::new(PeerUpdates::new(installer.clone(), audit.clone()))),
         )),
         _ => None,
     };
     if let (false, Some(audit)) = (hosts.is_empty(), &audit) {
-        let connector = Arc::new(OpenSshConnector::new());
-        let installer = Arc::new(HostInstaller::this_build(
-            connector.clone(),
-            root.join("host-builds"),
-        ));
         for host in hosts {
             environments.insert(
                 host.as_str().to_owned(),
@@ -2043,6 +2120,25 @@ impl RecoveryAudit for WorkspaceRecoveryAudit {
                 thread: thread.clone(),
                 vm: vm.clone(),
                 confirmed: *confirmed,
+            },
+            RecoveryEvent::StopRequested { thread, vm, cause } => {
+                EnvironmentEvent::WorkspaceStopRequested {
+                    thread: thread.clone(),
+                    vm: vm.clone(),
+                    cause: cause.as_str().into(),
+                }
+            }
+            RecoveryEvent::StopAnswered {
+                thread,
+                vm,
+                cause,
+                failure,
+            } => EnvironmentEvent::WorkspaceStopAnswered {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                cause: cause.as_str().into(),
+                accepted: failure.is_none(),
+                failure: failure.map(str::to_owned),
             },
         };
         self.0

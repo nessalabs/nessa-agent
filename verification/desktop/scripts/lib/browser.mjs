@@ -489,12 +489,22 @@ export function liveMountResourceAbortPattern(pageUrl) {
  * covers lines already held and ones delivered later, until the page closes.
  * The page's existing line owner retains reporting and close ownership.
  *
+ * `servedFrom` is a URL on the origin that serves the app's
+ * `/mcp-resources`: the page's own by default, or the gateway's when the
+ * window reaches a gateway on another origin. Only that one origin is
+ * exempt.
+ *
  * @param {{ page: { url(): string }, noteHarmless(pattern: RegExp): void }} opened
  * @param {string | undefined} mountState the apps check's observed mount state
+ * @param {string} [servedFrom]
  */
-export function noteLiveMountResourceAbort(opened, mountState) {
+export function noteLiveMountResourceAbort(
+  opened,
+  mountState,
+  servedFrom = opened.page.url(),
+) {
   if (mountState !== "live") return
-  const pattern = liveMountResourceAbortPattern(opened.page.url())
+  const pattern = liveMountResourceAbortPattern(servedFrom)
   if (pattern) opened.noteHarmless(pattern)
 }
 

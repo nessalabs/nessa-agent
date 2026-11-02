@@ -55,6 +55,31 @@ impl SqliteRelayStore {
 pub(super) fn failure(_: nessa_local_database::rusqlite::Error) -> Failure {
     Failure::Storage
 }
+/// Drops the oldest rows down to the contract's `auditRows`. Call it in the
+/// transaction that inserted, before commit. The new row has the greatest id,
+/// so `direct_gap_and_acceptance_keep_each_audit_store_within_its_cap` still
+/// reads that transition's target, cause, actor, and cursors.
+/// `trim_binding_audit` is the same rule for generation evidence.
+pub(super) fn trim_event_audit(
+    tx: &nessa_local_database::rusqlite::Transaction,
+) -> Result<(), Failure> {
+    tx.execute(
+        "DELETE FROM audit WHERE id IN (SELECT id FROM audit ORDER BY id DESC LIMIT -1 OFFSET ?)",
+        [contract::AUDIT_ROWS],
+    )
+    .map_err(failure)?;
+    Ok(())
+}
+pub(super) fn trim_binding_audit(
+    tx: &nessa_local_database::rusqlite::Transaction,
+) -> Result<(), Failure> {
+    tx.execute(
+        "DELETE FROM binding_audit WHERE id IN (SELECT id FROM binding_audit ORDER BY id DESC LIMIT -1 OFFSET ?)",
+        [contract::AUDIT_ROWS],
+    )
+    .map_err(failure)?;
+    Ok(())
+}
 #[async_trait::async_trait]
 impl RelayStore for SqliteRelayStore {
     async fn bindings(&self) -> Result<Vec<Binding>, Failure> {
@@ -81,7 +106,8 @@ impl RelayStore for SqliteRelayStore {
                 tx.execute("UPDATE bindings SET cursor=MAX(cursor,COALESCE(gap_through,cursor)), gap_through=NULL WHERE user_id=? AND repository_id=?",params![binding.user_id(),binding.repository_id()]).map_err(failure)?;
             }
             if !existing { tx.execute("INSERT INTO audit(user_id,repository_id,cause,initiator,observed_at) VALUES(?,?,'connected',?,?)",params![binding.user_id(),binding.repository_id(),format!("local-owner:github:{}",binding.user_id()),now]).map_err(failure)?; }
-            tx.execute("DELETE FROM binding_audit WHERE id IN (SELECT id FROM binding_audit ORDER BY id DESC LIMIT -1 OFFSET ?)",[contract::AUDIT_ROWS]).map_err(failure)?;
+            trim_event_audit(&tx)?;
+            trim_binding_audit(&tx)?;
             tx.commit().map_err(failure)
         }).await
     }
@@ -95,8 +121,8 @@ impl RelayStore for SqliteRelayStore {
             tx.execute("INSERT INTO audit(user_id,repository_id,delivery_id,cause,initiator,observed_at) SELECT user_id,repository_id,delivery_id,'disconnected','local-owner',? FROM events WHERE user_id=? AND repository_id=?",params![now,binding.user_id(),binding.repository_id()]).map_err(failure)?;
             tx.execute("DELETE FROM events WHERE user_id=? AND repository_id=?",params![binding.user_id(),binding.repository_id()]).map_err(failure)?;
             tx.execute("DELETE FROM bindings WHERE user_id=? AND repository_id=?",params![binding.user_id(),binding.repository_id()]).map_err(failure)?;
-            tx.execute("DELETE FROM audit WHERE id IN (SELECT id FROM audit ORDER BY id DESC LIMIT -1 OFFSET ?)",[contract::AUDIT_ROWS]).map_err(failure)?;
-            tx.execute("DELETE FROM binding_audit WHERE id IN (SELECT id FROM binding_audit ORDER BY id DESC LIMIT -1 OFFSET ?)",[contract::AUDIT_ROWS]).map_err(failure)?;
+            trim_event_audit(&tx)?;
+            trim_binding_audit(&tx)?;
             tx.commit().map_err(failure)
         }).await
     }
@@ -146,8 +172,8 @@ impl RelayStore for SqliteRelayStore {
             }
             tx.execute("UPDATE bindings SET cursor=? WHERE user_id=? AND repository_id=?",params![next,binding.user_id(),binding.repository_id()]).map_err(failure)?;
             if next!=after { tx.execute("INSERT INTO binding_audit(user_id,repository_id,before_generation,after_generation,before_cursor,after_cursor,cause,initiator,observed_at) VALUES(?,?,?,?,?,?,'page_committed','system:local-relay',?)",params![binding.user_id(),binding.repository_id(),binding.generation().to_string(),binding.generation().to_string(),after,next,now]).map_err(failure)?; }
-            tx.execute("DELETE FROM audit WHERE id IN (SELECT id FROM audit ORDER BY id DESC LIMIT -1 OFFSET ?)",[contract::AUDIT_ROWS]).map_err(failure)?;
-            tx.execute("DELETE FROM binding_audit WHERE id IN (SELECT id FROM binding_audit ORDER BY id DESC LIMIT -1 OFFSET ?)",[contract::AUDIT_ROWS]).map_err(failure)?;
+            trim_event_audit(&tx)?;
+            trim_binding_audit(&tx)?;
             tx.commit().map_err(failure)
         }).await
     }
@@ -159,7 +185,7 @@ impl RelayStore for SqliteRelayStore {
             if current.as_deref()!=Some(&binding.generation().to_string()) { return Err(Failure::CursorChanged); }
             tx.execute("INSERT INTO audit(user_id,repository_id,before_cursor,after_cursor,cause,initiator,observed_at) SELECT user_id,repository_id,cursor,?,'cloud_retention_gap','system:cloud-relay',? FROM bindings WHERE user_id=? AND repository_id=? AND gap_through IS NULL",params![through,now,binding.user_id(),binding.repository_id()]).map_err(failure)?;
             tx.execute("UPDATE bindings SET gap_through=MAX(COALESCE(gap_through,0),?) WHERE user_id=? AND repository_id=?",params![through,binding.user_id(),binding.repository_id()]).map_err(failure)?;
-            tx.execute("DELETE FROM binding_audit WHERE id IN (SELECT id FROM binding_audit ORDER BY id DESC LIMIT -1 OFFSET ?)",[contract::AUDIT_ROWS]).map_err(failure)?;
+            trim_event_audit(&tx)?;
             tx.commit().map_err(failure)
         }).await
     }

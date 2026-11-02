@@ -64,6 +64,7 @@ mod opencode_profile;
 mod relay_command;
 #[cfg(unix)]
 mod tunnel;
+mod voice;
 
 mod runtime_config;
 

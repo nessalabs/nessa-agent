@@ -149,6 +149,58 @@ test("an evidence write failure still removes the private gateway directory", as
   assert.equal(existsSync(gateway.directory), false)
 })
 
+test("stop inspects final files after exit and before removing private data", async (t) => {
+  t.after(() => delete process.env.MCP_LIVE_NESSA)
+  process.env.MCP_LIVE_NESSA = nessa
+  const gateway = await start()
+  let inspected = false
+  await gateway.stop(async (status) => {
+    assert.deepEqual(status, { stopped: true, exitCode: 0, signal: null })
+    assert.ok(gateway.log().endsWith("\nlast words\n"))
+    assert.ok(existsSync(join(gateway.directory, "server-env.json")))
+    await Promise.resolve()
+    inspected = true
+  })
+  assert(inspected)
+  assert.equal(existsSync(gateway.directory), false)
+})
+
+test("failed final inspection retains diagnostics and still removes private data", async (t) => {
+  t.after(() => delete process.env.MCP_LIVE_NESSA)
+  process.env.MCP_LIVE_NESSA = nessa
+  const evidence = mkdtempSync(join(scratch, "inspection-evidence-"))
+  const gateway = await start({ evidence })
+  await assert.rejects(
+    gateway.stop(async () => {
+      throw new Error("ledger unavailable")
+    }),
+    /ledger unavailable/,
+  )
+  assert.equal(existsSync(gateway.directory), false)
+  assert.match(readFileSync(join(evidence, "gateway.log"), "utf8"), /last words/)
+})
+
+test("inspection and diagnostic failures retain both causes while removing private data", async (t) => {
+  t.after(() => delete process.env.MCP_LIVE_NESSA)
+  process.env.MCP_LIVE_NESSA = nessa
+  const evidence = join(scratch, "inspection-and-evidence-failure")
+  writeFileSync(evidence, "occupied")
+  const gateway = await start({ evidence })
+  const inspection = new Error("ledger unavailable")
+  await assert.rejects(
+    gateway.stop(async () => {
+      throw inspection
+    }),
+    (error) => {
+      assert(error instanceof AggregateError)
+      assert.equal(error.errors[0], inspection)
+      assert.equal(error.errors[1].code, "EEXIST")
+      return true
+    },
+  )
+  assert.equal(existsSync(gateway.directory), false)
+})
+
 test("failed startup keeps its original cause when diagnostic retention also fails", async (t) => {
   t.after(() => {
     delete process.env.MCP_LIVE_NESSA

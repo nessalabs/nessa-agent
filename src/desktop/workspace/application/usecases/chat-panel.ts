@@ -6,7 +6,9 @@
  * brings that chat to the front first.
  */
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
+import { isAppPluginId } from "../../../widgets/app/model/app-ref"
 import { closeInPanel, openInPanel, showInPanel } from "../../model/chat-panel"
+import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { focusedPane } from "../../../split-panes/model/pane-layout"
 import {
   entry,
@@ -56,9 +58,16 @@ export function openWidgetInPanel(
   const front = ownerInFront(state, origin)
   if (!front) return state
   const { state: shown, owner } = front
+  const app = isAppPluginId(widget.plugin)
+  const key = paneItemKey(widgetItem(widget))
   return {
     ...shown,
-    panels: { ...shown.panels, [owner]: openInPanel(entry(shown.panels, owner), widget) },
+    panels: {
+      ...shown.panels,
+      [owner]: openInPanel(entry(shown.panels, owner), widget, app),
+    },
+    panelled:
+      app && !shown.panelled.includes(key) ? [...shown.panelled, key] : shown.panelled,
     panelAsked: shown.panelAsked + 1,
   }
 }

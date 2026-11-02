@@ -14,6 +14,7 @@ import {
   chooseChannelFolder,
   chooseChannelResources,
   homeFolder,
+  openGatewayConfig,
   onPathsDragged,
   host,
   loadAssignedGatewayEndpoint,
@@ -44,12 +45,20 @@ import {
   McpServersProvider,
   NativeHooksProvider,
   PermissionRulesProvider,
+  VoiceKeyProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
+import {
+  scriptedTransport,
+  storeConversations,
+  VoiceController,
+  VoiceProvider,
+  webrtcTransport,
+} from "./voice"
 import {
   bindConversationTitles,
   bindNoticeAccess,
@@ -188,6 +197,19 @@ bindConversationTitles((conversationId) => {
   const title = sessions[conversationId].title.trim()
   return title.length > 0 ? title : null
 })
+// The window's voice call: the gateway mints it and names how to connect,
+// from every transport it may name; the conversation is the store's.
+const voice = dependencies.voice
+  ? new VoiceController({
+      gateway: dependencies.voice,
+      transports: { webrtc: webrtcTransport(), scripted: scriptedTransport() },
+      conversations: storeConversations(store),
+      timers: {
+        setTimeout: (run, ms) => window.setTimeout(run, ms),
+        clearTimeout: (handle) => window.clearTimeout(handle as number),
+      },
+    })
+  : undefined
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
@@ -205,7 +227,18 @@ createRoot(container).render(
               <SubagentsProvider source={dependencies.subagents}>
                 {/* Every icon in the window resolves through the family chosen in Settings. */}
                 <DesktopIconFamilyProvider>
-                  <McpServersProvider gateway={dependencies.mcpServers}>
+                  <McpServersProvider
+                    gateway={dependencies.mcpServers}
+                    // The app's own gateway is on this computer: its config
+                    // file can be opened here, where the host has an opener
+                    // (macOS, Linux). A browser's may be anywhere.
+                    openConfig={
+                      backend === "host" &&
+                      (host.kind === "macos" || host.kind === "linux")
+                        ? openGatewayConfig
+                        : undefined
+                    }
+                  >
                     <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
                       <DevicesProvider gateway={dependencies.devices}>
                         <ClipboardProvider write={writeClipboardText}>
@@ -223,11 +256,15 @@ createRoot(container).render(
                                       gateway={dependencies.github}
                                       avatar={githubAvatar}
                                     >
-                                      <DesktopWindow
-                                        hostKind={host.kind}
-                                        browserSurface={host.kind === "browser"}
-                                        inspectable={import.meta.env.DEV}
-                                      />
+                                      <VoiceKeyProvider gateway={dependencies.voiceKey}>
+                                        <VoiceProvider controller={voice}>
+                                          <DesktopWindow
+                                            hostKind={host.kind}
+                                            browserSurface={host.kind === "browser"}
+                                            inspectable={import.meta.env.DEV}
+                                          />
+                                        </VoiceProvider>
+                                      </VoiceKeyProvider>
                                     </GithubProvider>
                                   </BoatProvider>
                                 </PermissionRulesProvider>

@@ -58,6 +58,9 @@ async fn worker_projection_after_reload(
             0,
         ),
         invocations: vec![InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: request(),

@@ -27,8 +27,8 @@ pub use share_access::{
 };
 pub use tool_call::{ToolCall, ToolSource};
 pub use workspace_window::{
-    PaneContent, PanePlace, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,
-    WindowShowing, WorkspaceWindow,
+    PaneContent, PanePlace, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowPanel,
+    WindowRefusal, WindowShowing, WorkspaceWindow, MAX_PANEL_TABS,
 };
 
 pub use vm_lifetime::{VmLifetime, VmLifetimeScope, VmLifetimeSettings};

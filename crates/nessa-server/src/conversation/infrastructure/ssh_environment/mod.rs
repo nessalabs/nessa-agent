@@ -24,13 +24,17 @@ mod install;
 mod link;
 mod open_ssh;
 mod peer;
+mod peer_update;
+pub(crate) use peer_update::PeerUpdates;
 mod release;
 mod sftp;
 mod transfer;
 pub(crate) use durable_audit::DurableEnvironmentAudit;
 pub(crate) use environment::{SshEnvironment, SshTimings};
-pub(crate) use install::HostInstaller;
-pub(crate) use open_ssh::OpenSshConnector;
+#[cfg(test)]
+pub(crate) use install::{Build, BuildSource, InstallTimings};
+pub(crate) use install::{HostInstaller, RemoteShell, ShellFuture};
+pub(crate) use open_ssh::{log_stderr, read_tail, OpenSshConnector};
 pub(crate) use peer::{PeerEnvironments, ServingCredentials, Sightings};
 
 #[cfg(test)]
@@ -40,3 +44,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_artifacts.rs"]
 mod artifact_tests;
+
+#[cfg(test)]
+pub(crate) use tests::preparation_environment;

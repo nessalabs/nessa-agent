@@ -116,6 +116,12 @@ impl ServiceNamespace {
     pub(crate) fn log_directory(&self) -> PathBuf {
         self.root.join(self.logs_relative())
     }
+
+    /// The gateway's `config.json`, at the top of this namespace: where its
+    /// stored MCP servers are (the gateway's `runtime_config::config_path`).
+    pub(crate) fn config_file(&self) -> PathBuf {
+        self.root.join(&self.relative).join("config.json")
+    }
 }
 
 /// Whether a name may be one path segment of a namespace.
@@ -961,6 +967,25 @@ mod tests {
                 .join("instances")
                 .join("wt")
                 .join("logs")
+        );
+    }
+
+    /// `config.json` sits at the top of the namespace, as the gateway's
+    /// `runtime_config::config_path` puts it: the host opens the same file the
+    /// gateway reads, prod and staged alike.
+    #[test]
+    fn the_config_file_is_the_one_the_gateway_reads() {
+        let base = || Some(absolute("data"));
+        let prod = service_namespace(base(), "prod", None).expect("prod namespace");
+        assert_eq!(prod.config_file(), absolute("data").join("config.json"));
+        let staged = service_namespace(base(), "dev", Some("wt")).expect("dev namespace");
+        assert_eq!(
+            staged.config_file(),
+            absolute("data")
+                .join("dev")
+                .join("instances")
+                .join("wt")
+                .join("config.json")
         );
     }
 

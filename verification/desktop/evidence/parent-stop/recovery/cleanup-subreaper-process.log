@@ -1,0 +1,19 @@
+
+running 13 tests
+test infrastructure::process::tests::an_interrupted_group_signal_is_not_a_cleanup_failure ... ok
+test infrastructure::process::tests::a_group_probe_classifies_delivery_refusal_and_absence ... ok
+test infrastructure::process::tests::an_interrupted_reap_keeps_the_same_cleanup_budget ... ok
+test infrastructure::process::tests::a_group_that_refuses_signals_is_never_confirmed_gone ... ok
+test infrastructure::process::tests::an_interrupted_group_kill_retries_then_returns_the_verdict ... ok
+test infrastructure::process::tests::failed_directory_release_is_retried_after_process_cleanup ... ok
+test infrastructure::process::tests::cancelled_directory_release_keeps_the_same_owned_task_for_retry ... ok
+test infrastructure::process::tests::signalling_an_exited_unreaped_group_is_not_a_cleanup_failure ... ok
+test infrastructure::process::tests::spawn_failure_retains_directory_until_failed_release_is_retried ... ok
+test infrastructure::process::tests::dropping_an_unconfirmed_process_retains_its_private_directory ... ok
+test infrastructure::process::tests::timed_out_directory_release_is_awaited_again_without_starting_another ... ok
+test infrastructure::process::tests::panicking_cleanup_waiter_does_not_stop_later_cleanup ... ok
+test infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1585 filtered out; finished in 0.17s
+
+local subreaper: reaped 6 adopted descendants; command status 0

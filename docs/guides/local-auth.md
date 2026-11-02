@@ -374,6 +374,22 @@ Each change is kept, with who made it and the grant before and after, in
 `environment/grants-audit.jsonl`; a change that cannot be recorded there is
 not made.
 
+When the gateway is updated to a build that speaks another lease protocol,
+it refuses this machine's connection and says which protocol it speaks. If
+this machine lets that gateway run commands (`nessa env grant --commands`),
+it then asks the gateway for its build, checks its size, its SHA-256 and the
+protocol the copy itself says, keeps it in `environment/builds/` beside its
+pairing, and runs it in its own place with the same arguments. Every later
+start of the same `nessa` runs the kept build first, so a container started
+again from its old image still serves; a newer image runs itself. Without
+that grant, nothing is fetched: the machine logs that its build is out of
+date and keeps dialing until it runs the gateway's build. A gateway allowed
+only agents never gets to run a build here, since an agent's harness may be
+sandboxed and a build is not. Another protocol is followed whichever way it
+moved, so a gateway rolled back takes its machines back too. A fetch that
+fails is tried again after ten minutes, and the gateway sends one machine its
+build at most once in ten minutes; the builds kept are only the current one.
+
 To serve one gateway from a container, run one container per gateway, and so
 per organization: a gateway is one organization, and a machine is paired with
 one gateway. [docs/guides/env-worker/](env-worker/) has an example image and a

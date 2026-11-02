@@ -38,10 +38,10 @@ pub use value_objects::{
     PanePlace, ProviderSessionErasure, ProviderSessionLink, ShareAccess, ShareAccessError,
     ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
     VmLifetime, VmLifetimeScope, VmLifetimeSettings, WidgetRef, WindowArrangement, WindowColumn,
-    WindowPane, WindowRefusal, WindowShowing, WorkspacePlacement, WorkspaceWindow,
+    WindowPane, WindowPanel, WindowRefusal, WindowShowing, WorkspacePlacement, WorkspaceWindow,
     MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
     MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES,
-    MAX_CHANNEL_RESOURCE_BYTES,
+    MAX_CHANNEL_RESOURCE_BYTES, MAX_PANEL_TABS,
 };
 
 #[cfg(test)]

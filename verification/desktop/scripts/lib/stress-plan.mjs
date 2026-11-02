@@ -44,6 +44,10 @@ export const KNOBS = {
   turns: { default: 3, what: "turns each background conversation takes" },
   switches: { default: 3, what: "access mode changes from the composer's shield" },
   stops: { default: 2, what: "turns stopped with the composer's Stop" },
+  parentstops: {
+    default: 1,
+    what: "parent turns stopped in the window with running owned child and grandchild",
+  },
   fails: { default: 1, what: "turns that fail, each followed by another message" },
   usageLimits: {
     default: 1,
@@ -77,6 +81,10 @@ export const KNOBS = {
     default: 2,
     what: "other clients following every conversation's events, view and list, stopping and following again as they go",
   },
+  closes: {
+    default: 1,
+    what: "conversations whose agent closes its own thread (close_thread) while the window shows it, parked once the turn ends, then talked to again",
+  },
   parks: {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
@@ -99,7 +107,7 @@ export const KNOBS = {
   },
   windows: {
     default: 1,
-    what: "turns where an agent reads the window: beside another pane, then alone",
+    what: "turns where an agent reads the window: beside another pane, the focused chat's panel (two tabs, the front tab, hidden and shown, then the other chat), then alone",
   },
   rails: {
     default: 1,
@@ -125,6 +133,10 @@ export const KNOBS = {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway, with a code opened by Pair a device while it is on",
   },
+  mcpServers: {
+    default: 1,
+    what: "MCP servers added, edited (the stored variable kept when Replace is left empty) and removed from Settings, each followed by a message",
+  },
   pastes: {
     default: 1,
     what: "images pasted into the composer as a screenshot is, shown as tiles, sent with the message and handed to the agent",
@@ -137,6 +149,10 @@ export const KNOBS = {
     default: 1,
     what: "turns whose tool calls the window draws as a waterfall, with their times and input kept by the gateway",
   },
+  transcriptViews: {
+    default: 1,
+    what: "trace turns read in the compact transcript, chosen from the pane menu: only the reply and one Working line show, and the choice outlasts a reload",
+  },
   notices: {
     default: 1,
     what: "reviews waiting in a conversation the window does not show: the host's notice opens it and is taken back once answered",
@@ -147,7 +163,7 @@ export const KNOBS = {
   },
   devices: {
     default: 1,
-    what: "times a paired worker is shown in the side rail's Devices with its machine, opened, offered by Add a computer's commands, and kept as offline with when it was last seen once it stops",
+    what: "times a paired worker is shown in the side rail's Devices with its machine in one list beside the cloud, opened, Boat's page opened, offered by Add device's computer commands, and kept as offline with when it was last seen once it stops",
   },
   tunnels: {
     default: 1,
@@ -169,9 +185,17 @@ export const KNOBS = {
     default: 1,
     what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
+  passphrases: {
+    default: 1,
+    what: "vault passphrase changes through Settings, each sealed and explicitly unlocked, followed by a conversation reply",
+  },
   githubs: {
     default: 1,
     what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
+  },
+  voices: {
+    default: 1,
+    what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, End call",
   },
   launches: {
     default: 1,
@@ -180,6 +204,10 @@ export const KNOBS = {
   webhooks: {
     default: 1,
     what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
+  },
+  huddles: {
+    default: 1,
+    what: "turns that show a voice app (the test server's talk board): its frame is allowed the microphone, it opens in the chat's panel as one tab, and after Always allow its next message goes unasked",
   },
   channels: {
     default: 1,
@@ -229,7 +257,9 @@ const MODES = ["ask", "auto", "full"]
  * The many-reviews and large-review turns are about cards being shown, so a
  * switch back to ask comes first when full access is in force.
  */
-export function plan(knobs) {
+export function plan(knobs, accessScenario = "full") {
+  if (!["full", "ask-only"].includes(accessScenario))
+    throw new Error(`unknown stress access scenario: ${accessScenario}`)
   const next = random(knobs.seed)
   const pick = (list) => list[Math.floor(next() * list.length)]
   const steps = []
@@ -237,6 +267,7 @@ export function plan(knobs) {
     for (let i = 0; i < count; i += 1) steps.push(make())
   }
   add(knobs.stops, () => ({ kind: "stop" }))
+  add(knobs.parentstops, () => ({ kind: "parent-stop" }))
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
@@ -250,6 +281,7 @@ export function plan(knobs) {
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  add(knobs.closes, () => ({ kind: "close" }))
   add(knobs.renames, () => ({ kind: "rename" }))
   add(knobs.handoffs, () => ({ kind: "handoff" }))
   add(knobs.deletes, () => ({ kind: "delete" }))
@@ -261,8 +293,10 @@ export function plan(knobs) {
   add(knobs.streams, () => ({ kind: "stream" }))
   add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
+  add(knobs.mcpServers, () => ({ kind: "mcp" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.traces, () => ({ kind: "trace" }))
+  add(knobs.transcriptViews, () => ({ kind: "transcriptView" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
   add(knobs.devices, () => ({ kind: "devices" }))
@@ -273,7 +307,10 @@ export function plan(knobs) {
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
   add(knobs.menus, () => ({ kind: "menu" }))
   add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.voices, () => ({ kind: "voice" }))
+  add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))
+  add(knobs.huddles, () => ({ kind: "huddle" }))
   add(knobs.webhooks, () => ({ kind: "webhook" }))
   add(knobs.pastes, () => ({ kind: "paste" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
@@ -300,8 +337,13 @@ export function plan(knobs) {
   for (const step of sequence) {
     if (step.kind === "switch") {
       const to = pick(MODES.filter((each) => each !== mode))
-      out.push({ kind: "switch", from: mode, to, during: next() < 0.5 })
-      mode = to
+      const during = next() < 0.5
+      if (accessScenario === "ask-only")
+        out.push({ kind: "refused-access", from: mode, to: "full", during })
+      else {
+        out.push({ kind: "switch", from: mode, to, during })
+        mode = to
+      }
     } else if (step.kind === "permission") {
       out.push({ ...step, answer: next() < 0.7 ? "allow" : "deny", mode })
     } else if (
@@ -340,7 +382,7 @@ export function describe(steps) {
   return steps
     .map((step) => {
       const extra =
-        step.kind === "switch"
+        step.kind === "switch" || step.kind === "refused-access"
           ? ` ${step.from}→${step.to}${step.during ? " during a turn" : ""}`
           : step.kind === "restart"
             ? ` ${step.signal}`
@@ -354,4 +396,23 @@ export function describe(steps) {
       return `${step.index}. ${step.kind}${extra}`
     })
     .join("\n")
+}
+
+/** Select existing planned steps without changing a single knob or deadline.
+ * The unfiltered plan remains the full qualification; a selected run reports
+ * its scope explicitly and cannot stand in for the unselected feature checks. */
+export function selectedPlan(knobs, only, accessScenario = "full") {
+  const planned = plan(knobs, accessScenario)
+  if (!only) return planned
+  const selected = new Set(
+    only
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  )
+  const available = new Set(planned.map((step) => step.kind))
+  const unknown = [...selected].filter((kind) => !available.has(kind))
+  if (selected.size === 0 || unknown.length)
+    throw new Error(`No planned stress step matches: ${unknown.join(",") || only}`)
+  return planned.filter((step) => selected.has(step.kind))
 }

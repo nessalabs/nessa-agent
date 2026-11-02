@@ -90,7 +90,10 @@ const recorder = join(repoRoot, "scripts/mcp-test-server/acp-recorder.mjs")
  * same direction names the live check records). Always signed out: the
  * scripted agent reads no credential.
  */
-export function scriptedLaunch(agent, { tool, scenario, evidence, nativeContext } = {}) {
+export function scriptedLaunch(
+  agent,
+  { tool, scenario, evidence, nativeContext, model = MODELS[agent] } = {},
+) {
   if (!scenario && !tool) throw new Error("a scripted launch names a tool or a scenario")
   const script = join(repoRoot, "scripts/mcp-test-server/scripted-agent.mjs")
   const semanticArgs = scenario ? [agent, "--scenario", scenario] : [agent, tool]
@@ -129,7 +132,7 @@ export function scriptedLaunch(agent, { tool, scenario, evidence, nativeContext 
       argv,
       stagedRuntime,
       semanticArgs,
-      model: MODELS[agent],
+      model,
       path: null,
     },
     mcp,
@@ -167,6 +170,8 @@ export async function startGatewayStack(
     webhooks,
     environment,
     servers = [],
+    model,
+    stopChildrenOnParentStop,
     others = [],
   } = {},
 ) {
@@ -175,7 +180,7 @@ export async function startGatewayStack(
     throw new CannotRun(`--agent ${agent}: claude or codex`)
   const launch =
     scenario || scripted
-      ? scriptedLaunch(agent, { tool: scripted, scenario, evidence, nativeContext })
+      ? scriptedLaunch(agent, { tool: scripted, scenario, evidence, nativeContext, model })
       : null
   const command = launch?.command ?? agentCommand(agent)
   if (others.length > 0 && !launch)
@@ -219,6 +224,7 @@ export async function startGatewayStack(
       ...servers,
     ],
     signedOut: launch?.signedOut ?? false,
+    stopChildrenOnParentStop,
     limits,
     native,
     webhooks,

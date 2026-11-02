@@ -28,6 +28,8 @@ use zeroize::Zeroizing;
 const GATEWAY_FILE: &str = "gateway-key";
 /// The client's one enrollment record: pending, or the credential that replaced it.
 const ENROLLMENT_FILE: &str = "client-enrollment";
+/// The tunnel secret issued with the credential. 32 raw bytes, private.
+const TUNNEL_SECRET_FILE: &str = "tunnel-secret";
 const LOCK_FILE: &str = "pairing-state.lock";
 const KEY_BYTES: usize = 36;
 const PENDING_BYTES: usize = 144;
@@ -356,6 +358,42 @@ impl FilePairingState {
             .map_err(|_| PrivateStateError::Unavailable)?;
         Ok(self.load_client()?.is_some_and(|saved| saved.signed))
     }
+
+    /// Caller holds the operation lock.
+    fn read_tunnel_secret(&self) -> Result<Option<[u8; 32]>, PrivateStateError> {
+        let mut file = match self
+            .directory
+            .open_file(OsStr::new(TUNNEL_SECRET_FILE), OpenMode::ReadNonblocking)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut bytes = [0; 33];
+        let read = file.read(&mut bytes).map_err(storage_error)?;
+        if read != 32 {
+            return Err(PrivateStateError::Corrupt);
+        }
+        let mut secret = [0; 32];
+        secret.copy_from_slice(&bytes[..32]);
+        Ok(Some(secret))
+    }
+
+    /// Caller holds the operation lock.
+    fn remove_tunnel_secret(&self) -> Result<(), PrivateStateError> {
+        let name = OsStr::new(TUNNEL_SECRET_FILE);
+        let file = match self.directory.open_file(name, OpenMode::ReadNonblocking) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        self.directory
+            .remove_file(name, &file)
+            .map_err(storage_error)?;
+        self.directory
+            .sync()
+            .map_err(|_| PrivateStateError::Uncertain)
+    }
 }
 impl ClientPendingStore for FilePairingState {
     fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
@@ -365,6 +403,7 @@ impl ClientPendingStore for FilePairingState {
             .map_err(|_| PrivateStateError::Unavailable)?;
         self.verify_lock()?;
         let Some(saved) = self.load_client()? else {
+            self.remove_tunnel_secret()?;
             return Ok(());
         };
         let intent = match &saved.record {
@@ -375,6 +414,7 @@ impl ClientPendingStore for FilePairingState {
             return Err(PrivateStateError::Conflict);
         }
         let name = OsStr::new(ENROLLMENT_FILE);
+        self.remove_tunnel_secret()?;
         let mut file = match self.directory.open_file(name, OpenMode::ReadNonblocking) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -419,6 +459,26 @@ impl ClientPendingStore for FilePairingState {
             Some(ClientRecord::Credential(credential)) => Some(credential),
             Some(ClientRecord::Pending(_)) | None => None,
         })
+    }
+    fn save_tunnel_secret(&self, secret: &[u8; 32]) -> Result<(), PrivateStateError> {
+        let _guard = self
+            .operation
+            .lock()
+            .map_err(|_| PrivateStateError::Unavailable)?;
+        self.verify_lock()?;
+        let replace = self
+            .directory
+            .open_file(OsStr::new(TUNNEL_SECRET_FILE), OpenMode::ReadNonblocking)
+            .is_ok();
+        self.publish(TUNNEL_SECRET_FILE, secret, replace)
+    }
+    fn load_tunnel_secret(&self) -> Result<Option<[u8; 32]>, PrivateStateError> {
+        let _guard = self
+            .operation
+            .lock()
+            .map_err(|_| PrivateStateError::Unavailable)?;
+        self.verify_lock()?;
+        self.read_tunnel_secret()
     }
     fn save_pending(
         &self,

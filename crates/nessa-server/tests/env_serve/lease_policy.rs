@@ -75,7 +75,11 @@ fn ssh_without_an_entry_is_allowed_every_agent_and_commands() {
 #[test]
 fn a_gateway_without_an_entry_is_not_permitted() {
     let policy = policy();
-    for asked in [LeaseAsk::Agent("claude"), LeaseAsk::Command] {
+    for asked in [
+        LeaseAsk::Agent("claude"),
+        LeaseAsk::Command,
+        LeaseAsk::Update,
+    ] {
         assert_eq!(
             ask(&policy, &DIALED, None, asked),
             LeaseDecision::Deny(Denial::NotPermitted)
@@ -91,7 +95,11 @@ fn whether_an_entry_was_written_does_not_decide() {
     let policy = policy();
     for peer in [Peer::Ssh, DIALED] {
         let held = unwritten(&peer);
-        for asked in [LeaseAsk::Agent("claude"), LeaseAsk::Command] {
+        for asked in [
+            LeaseAsk::Agent("claude"),
+            LeaseAsk::Command,
+            LeaseAsk::Update,
+        ] {
             assert_eq!(
                 ask(&policy, &peer, None, asked),
                 ask(&policy, &peer, Some(&held), asked),
@@ -165,6 +173,34 @@ fn an_entry_allows_commands_only_when_it_grants_them() {
 
 /// A bundle that does not parse, does not validate strictly, or holds a
 /// policy without an `@id` is refused when it is built.
+/// A peer may replace this build with its gateway's only when it may run
+/// commands here, which could replace it anyway: agents alone, whose
+/// harnesses may be sandboxed, never let it.
+#[test]
+fn an_update_is_allowed_only_with_commands() {
+    let policy = policy();
+    for peer in [Peer::Ssh, DIALED] {
+        assert_eq!(
+            ask(
+                &policy,
+                &peer,
+                Some(&PeerGrant::new(named(&[]), commands())),
+                LeaseAsk::Update
+            ),
+            LeaseDecision::Allow {
+                policies: vec!["grant.commands_update".into()]
+            }
+        );
+        assert!(!allowed(&ask(
+            &policy,
+            &peer,
+            Some(&PeerGrant::new(Agents::All, None)),
+            LeaseAsk::Update
+        )));
+    }
+    assert!(allowed(&ask(&policy, &Peer::Ssh, None, LeaseAsk::Update)));
+}
+
 #[test]
 fn a_malformed_bundle_fails_construction() {
     assert!(CedarLeasePolicy::from_sources("{", POLICIES).is_err());

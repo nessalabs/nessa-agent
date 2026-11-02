@@ -121,6 +121,11 @@ mod tests {
                 memory_used_bytes: 8,
                 disk_total_bytes: 100,
                 disk_used_bytes: 40,
+                disks: vec![nessa_protocol::lease::MachineDisk {
+                    mount: "/".into(),
+                    total_bytes: 100,
+                    used_bytes: 40,
+                }],
             },
             seen_ms,
         }

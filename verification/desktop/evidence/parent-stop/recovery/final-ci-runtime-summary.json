@@ -1,0 +1,209 @@
+{
+  "source": "027f430cbbe630c0ebfa62fa800eeabfe9f1eaee",
+  "selection": "eight CI packages,38 binaries,concurrency2",
+  "exit": 1,
+  "binaries": 38,
+  "totals": {
+    "passed": 8493,
+    "failed": 1,
+    "ignored": 41
+  },
+  "results": {
+    "nessa-sdk application": {
+      "passed": 719,
+      "failed": 0,
+      "ignored": 4
+    },
+    "nessa-sdk infrastructure": {
+      "passed": 77,
+      "failed": 0,
+      "ignored": 3
+    },
+    "nessa-sdk domain": {
+      "passed": 274,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server env_serve_binary": {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server credential_registry_refusal": {
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server nessa_server": {
+      "passed": 4506,
+      "failed": 1,
+      "ignored": 16
+    },
+    "nessa-sdk nessa_sdk": {
+      "passed": 1586,
+      "failed": 0,
+      "ignored": 16
+    },
+    "nessa-server nessa-backup-verify": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server backup_verifier": {
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server backup_restore_plan": {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server native_enrollment": {
+      "passed": 121,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server nessa": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server mcp_relay": {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-server mcp_authorization_benchmark": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 1
+    },
+    "nessa-server nessa-backup-plan": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-device-client nessa_device_client": {
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-vault encrypted_file": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-vault lifecycle": {
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-vault audit": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-vault nessa_vault": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-client-core nessa_client_core": {
+      "passed": 483,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-protocol phone_wire": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-protocol owner_phone_consent_wire": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-protocol nessa_protocol": {
+      "passed": 198,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth cedar_flow": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth native_transport_failure_order": {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth native_transport_key_update": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth origin": {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth owner_phone_consent_admission": {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth owner_phone_device_proof": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth owner_phone_record": {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth pairing_domain": {
+      "passed": 41,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth revocation": {
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-auth nessa_auth": {
+      "passed": 216,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-local-storage windows_protected_directory": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-local-storage retained_directory": {
+      "passed": 39,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-local-storage windows_replacement": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nessa-local-storage nessa_local_storage": {
+      "passed": 41,
+      "failed": 0,
+      "ignored": 1
+    }
+  },
+  "soleFailure": "workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol",
+  "environment": "normal ownership; task-local descendant subreaper; standard profiles; CARGO_INCREMENTAL=0;CARGO_BUILD_JOBS=1",
+  "adoptedDescendantsReaped": 23,
+  "buildSeconds": 831.3,
+  "serverRuntimeSeconds": 251.89,
+  "doctests": "run separately after preserved guard stops main runner"
+}

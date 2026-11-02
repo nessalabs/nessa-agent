@@ -11,7 +11,13 @@
  * a 4px scale (4 8 12 16 24 32 48); type to four sizes (title, body 13.5,
  * small 12, label 11 set in capitals).
  */
-.settings {
+/*
+ * Settings' tones, and (below) its groups, rows and fields, also hold on a
+ * `.settings-surface`: another page that shows a setting where it is
+ * used — Boat on Devices, linking on Add a phone — draws it the same way.
+ */
+.settings,
+.settings-surface {
   /* The desktop's own tones, under Settings' names for what they do here. */
   --settings-hairline: var(--desktop-rim);
   --settings-fill: var(--desktop-pane-fill);
@@ -32,7 +38,9 @@
   --settings-column-w: min(var(--settings-column), 100% - 2 * var(--settings-margin));
   /* How a page arrives: quick, and only confirming what is already there. */
   --settings-arrive: 220ms;
+}
 
+.settings {
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -488,8 +496,13 @@ html:not(.dark) .settings-glass {
 .settings-tabs {
   position: relative;
   display: flex;
+  max-width: calc(100% + 10px);
   gap: 2px;
   margin: 20px 0 0 -10px;
+  /* Tabs that outgrow a narrow page scroll on their own, never the page.
+     Their focus ring is drawn inside, so the strip clips none of it. */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 /* The pill under the selected tab, placed by measurement; it glides once placed. */
@@ -554,7 +567,7 @@ html:not(.dark) .settings-glass {
 
 /* ——— Groups and rows: the UI kit's, set for this page ——— */
 
-.settings .settings-group {
+:is(.settings, .settings-surface) .settings-group {
   gap: 10px;
 }
 
@@ -564,7 +577,7 @@ html:not(.dark) .settings-glass {
 }
 
 /* A group's title, where a tab has several: small and quiet, over its card. */
-.settings .settings-group > h2 {
+:is(.settings, .settings-surface) .settings-group > h2 {
   margin: 0;
   padding: 0 16px;
   color: var(--desktop-muted);
@@ -574,17 +587,20 @@ html:not(.dark) .settings-glass {
 }
 
 /* A group named like its tab: the tab already says it; the name stays for assistive technology. */
-.settings .settings-group[data-title="hidden"] > h2 {
+:is(.settings, .settings-surface) .settings-group[data-title="hidden"] > h2 {
   position: absolute;
   width: 1px;
   height: 1px;
+  /* The kit's heading pads itself; a padded 1px box is wider than 1px. */
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
 }
 
-.settings [data-slot="settings-group-card"],
-.settings .settings-card {
+:is(.settings, .settings-surface) [data-slot="settings-group-card"],
+:is(.settings, .settings-surface) .settings-card {
   overflow: hidden;
   border: 0;
   border-radius: var(--desktop-radius);
@@ -592,15 +608,15 @@ html:not(.dark) .settings-glass {
   box-shadow: inset 0 0 0 1px var(--settings-hairline);
 }
 
-html:not(.dark) .settings [data-slot="settings-group-card"],
-html:not(.dark) .settings .settings-card {
+html:not(.dark) :is(.settings, .settings-surface) [data-slot="settings-group-card"],
+html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   background: color-mix(in oklab, var(--background) 70%, white);
   box-shadow:
     inset 0 0 0 1px var(--settings-hairline),
     0 1px 2px rgb(0 0 0 / 4%);
 }
 
-.settings [data-slot="settings-group-footnote"] {
+:is(.settings, .settings-surface) [data-slot="settings-group-footnote"] {
   padding: 0 16px;
   color: var(--desktop-faint);
   font-size: var(--desktop-text-footnote);
@@ -621,19 +637,22 @@ html:not(.dark) .settings .settings-card {
   font-weight: 500;
 }
 
-.settings .settings-row {
+:is(.settings, .settings-surface) .settings-row {
   position: relative;
   gap: 8px;
   padding: 12px 16px;
 }
 
-.settings .settings-row > :first-child {
+:is(.settings, .settings-surface) .settings-row > :first-child {
   min-height: 28px;
   gap: 16px;
 }
 
 /* Hairlines between rows, starting where the words do, as a list's rules do. */
-.settings [data-slot="settings-group-card"] > .settings-row + .settings-row {
+:is(.settings, .settings-surface)
+  [data-slot="settings-group-card"]
+  > .settings-row
+  + .settings-row {
   border-top: 0;
 }
 
@@ -654,14 +673,14 @@ html:not(.dark) .settings .settings-card {
   background: var(--settings-hairline);
 }
 
-.settings [data-slot="settings-row-label"] {
+:is(.settings, .settings-surface) [data-slot="settings-row-label"] {
   color: var(--foreground);
   font-size: var(--desktop-text-body);
   line-height: 1.35;
   letter-spacing: -0.01em;
 }
 
-.settings [data-slot="settings-row-detail"] {
+:is(.settings, .settings-surface) [data-slot="settings-row-detail"] {
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
   line-height: 1.4;
@@ -701,15 +720,17 @@ html:not(.dark) .settings .settings-card {
 /* ——— Controls ——— */
 
 /* The kit's switch, in this page's ink: a satisfying, springy thumb. */
-.settings .settings-switch {
+:is(.settings, .settings-surface) .settings-switch {
   cursor: default;
 }
 
-.settings .settings-switch [data-slot="switch-thumb"] {
+:is(.settings, .settings-surface) .settings-switch [data-slot="switch-thumb"] {
   transition: transform 220ms var(--desktop-spring);
 }
 
-.settings .settings-switch:active:not(:disabled) [data-slot="switch-thumb"] {
+:is(.settings, .settings-surface)
+  .settings-switch:active:not(:disabled)
+  [data-slot="switch-thumb"] {
   width: 19px;
 }
 
@@ -720,13 +741,13 @@ html:not(.dark) .settings .settings-card {
 }
 
 /* The same ring, with the weight to outrank the kit's own. */
-.settings .settings-switch:focus-visible,
-.settings .settings-segmented button:focus-visible {
+:is(.settings, .settings-surface) .settings-switch:focus-visible,
+:is(.settings, .settings-surface) .settings-segmented button:focus-visible {
   outline: var(--settings-focus-outline);
   outline-offset: var(--settings-focus-offset);
 }
 
-.settings .settings-segmented button {
+:is(.settings, .settings-surface) .settings-segmented button {
   height: 26px;
   font-size: var(--desktop-text-footnote);
   font-weight: 500;
@@ -771,7 +792,7 @@ html:not(.dark) .settings .settings-card {
 }
 
 /* A list of keys reads as a list: its rows sit closer than a setting's. */
-.settings .settings-row:has(.settings-kbd) {
+:is(.settings, .settings-surface) .settings-row:has(.settings-kbd) {
   padding-block: 8px;
 }
 
@@ -840,24 +861,19 @@ html:not(.dark) .settings .settings-card {
   font-size: var(--desktop-text-footnote);
 }
 
-/* The panel's heading takes focus when an inspection starts; it is not a control. */
-.settings-servers h2[tabindex="-1"]:focus {
-  outline: none;
-}
-
 /*
  * A server's row wraps rather than squeezes: in a narrow page its actions go
  * under its name instead of pushing past the card, whatever the width.
  */
-.settings .settings-server > :first-child {
+:is(.settings, .settings-surface) .settings-server > :first-child {
   flex-wrap: wrap;
 }
 
-.settings .settings-server > :first-child > :not([data-slot]) {
+:is(.settings, .settings-surface) .settings-server > :first-child > :not([data-slot]) {
   flex: 1 1 12rem;
 }
 
-.settings .settings-server [data-slot="settings-row-control"] {
+:is(.settings, .settings-surface) .settings-server [data-slot="settings-row-control"] {
   max-width: 100%;
   flex-shrink: 1;
 }
@@ -884,15 +900,49 @@ html:not(.dark) .settings .settings-card {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
-/* The list's foot: Add server, at the end of its line. */
+/* Where the managed row has no menu: its switch stays in line with the rest. */
+.settings-server-actions-space {
+  /* The small IconButton's square (icon-button.css, data-size="sm"). */
+  width: 26px;
+}
+
+/* The list's foot: Add Server, a row of its own under the servers. */
 .settings-servers-add {
   position: relative;
   display: flex;
-  justify-content: flex-end;
+}
+
+.settings-server-add-button {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
   padding: 10px 16px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--desktop-text-body);
+  text-align: start;
+  cursor: default;
+}
+
+.settings-server-add-button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+.settings-server-add-button:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--settings-accent) 70%, transparent);
+  outline-offset: -2px;
+}
+
+.settings-server-add-button:disabled {
+  color: var(--desktop-faint);
 }
 
 /* A name stored more than once: its servers, read-only, one under another. */
@@ -908,16 +958,6 @@ html:not(.dark) .settings .settings-card {
 .settings-server-shared li {
   display: flex;
   flex-direction: column;
-}
-
-/* A group's one action names the server: it wraps rather than overflows. */
-.settings-button-wrapped {
-  height: auto;
-  min-height: 26px;
-  padding-block: 4px;
-  white-space: normal;
-  text-align: start;
-  overflow-wrap: anywhere;
 }
 
 .settings-button-danger:not(:disabled) {
@@ -944,14 +984,45 @@ html:not(.dark) .settings .settings-card {
   background: color-mix(in oklab, var(--foreground) 9%, transparent);
 }
 
+/*
+ * A server's dialog (Edit, Add, Show Tools): the kit's dialog, holding the
+ * same cards and rows the page is built from.
+ */
 .settings-form {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: 20px;
   margin: 0;
-  padding: 14px;
+  padding: 0;
   border: 0;
+}
+
+.settings-form-short {
+  width: 15rem;
+}
+
+.settings-form-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-form-section > h3 {
+  margin: 0;
+  padding: 0 4px;
+  font-weight: 500;
+}
+
+/* The command on its own line, in mono, above where to change it. */
+.settings-mcp-dialog .settings-server-command {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--desktop-text-footnote);
+  color: var(--foreground);
+  /* Arguments are shown whole, so a long one wraps rather than widening the dialog. */
+  overflow-wrap: anywhere;
 }
 
 .settings-field {
@@ -965,12 +1036,6 @@ html:not(.dark) .settings .settings-card {
 .settings-field-label {
   color: var(--desktop-muted);
   font-size: 12px;
-}
-
-.settings-field-inline {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
 }
 
 .settings-input {
@@ -1012,10 +1077,50 @@ html:not(.dark) .settings .settings-card {
   color: var(--desktop-faint);
 }
 
+/* A server's variables: one card, a row each, a hairline between. */
+.settings-variables {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--desktop-radius-md);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 1px var(--settings-hairline);
+}
+
 .settings-variable {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 8px 6px 14px;
+}
+
+.settings-variable + .settings-variable::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 14px;
+  height: 1px;
+  background: var(--settings-hairline);
+}
+
+/* A stored variable's name is not edited: it reads as a name, not a field. */
+.settings-variable .settings-input[readonly] {
+  padding-inline: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.settings-secret-stored {
+  display: flex;
+  flex: 1 1 8rem;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
 }
 
 .settings-variable .settings-input,
@@ -1079,20 +1184,6 @@ html:not(.dark) .settings .settings-card {
   position: absolute;
 }
 
-.settings-form-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.settings-inspection {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-}
-
 .settings-inspection-note {
   margin: 0;
   color: var(--desktop-muted);
@@ -1100,27 +1191,17 @@ html:not(.dark) .settings .settings-card {
   overflow-wrap: anywhere;
 }
 
-.settings-tools {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.settings-tool-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.settings-tool-head code,
+.settings-tools code,
 .settings-tool-ui code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
   overflow-wrap: anywhere;
+}
+
+.settings-tool-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .settings-badge {
@@ -1481,13 +1562,31 @@ html:not(.dark) .settings .settings-card {
 .settings-boat-fields .settings-button {
   flex: none;
 }
+/* A token is one short paste: the field need not span the page. */
+.settings-boat-fields .settings-input {
+  flex: 0 1 260px;
+}
+.settings-boat-runtime {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.settings-boat-runtime > p {
+  flex-basis: 100%;
+}
+.settings-boat-select {
+  width: auto;
+  min-width: 140px;
+}
 .settings-boat-status {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 .settings-boat-note {
-  color: var(--desktop-faint);
+  /* A dialog is portaled outside the desktop surface that defines its tones. */
+  color: var(--desktop-faint, var(--muted-foreground));
   line-height: 1.5;
 }
 @media (max-width: 480px) {

@@ -418,4 +418,4 @@ fn fetch_error(error: FetchFailure) -> UserFileError {
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/input_files.rs"]
-mod tests;
+pub(in crate::conversation::application) mod tests;

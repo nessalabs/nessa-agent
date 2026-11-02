@@ -83,6 +83,13 @@ it("lists Agents and Devices only", () => {
   expect(railItems.map((item) => item.id)).toEqual(["agents", "devices"])
 })
 
+it('keeps "nessa Studio" in the corner for Agents but not for Devices', () => {
+  expect(railItems.map((item) => [item.id, item.studio !== false])).toEqual([
+    ["agents", true],
+    ["devices", false],
+  ])
+})
+
 it("shows the content the composition gave an item, with no loader", async () => {
   const host = document.createElement("div")
   const root = createRoot(host)

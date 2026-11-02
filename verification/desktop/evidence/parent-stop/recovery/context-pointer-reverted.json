@@ -1,0 +1,71 @@
+{
+  "check": "mcp-apps-gateway",
+  "ok": false,
+  "started": "2026-10-30T01:06:44.549Z",
+  "finished": "2026-10-30T01:07:13.905Z",
+  "target": {
+    "url": "http://127.0.0.1:41409/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "setup",
+      "seen": {
+        "title": "Use the tools of the \"mcptest\" MCP server. If th"
+      },
+      "timings": {
+        "gatewayMs": 334,
+        "devServerMs": 6828,
+        "agentTurnMs": 1309
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "message",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1902,
+      "seen": {
+        "before": "pending",
+        "pointerMoves": 1,
+        "inputStarted": true,
+        "allowed": true,
+        "tool": "review_rows",
+        "labelled": "Sent by review_rows, from mcptest",
+        "answer": "ok",
+        "arrived": 1,
+        "executionId": "app-d86e78d1461b2a1d999164eeb45e9fbf",
+        "app": {
+          "executionId": "83fa34fc-6631-4a2c-8b10-a88f7d10d151",
+          "toolId": "toolu_scripted_174a7384-12a9-4e1e-a1e5-23e48ef1e246",
+          "server": "mcptest",
+          "tool": "review_rows"
+        }
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "context",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 10238,
+      "seen": {
+        "answer": ""
+      },
+      "failures": ["the context update was answered \"\""],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "requestfailed: http://127.0.0.1:41409/browser/check net::ERR_ABORTED (aborted after a 204 response, #485)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

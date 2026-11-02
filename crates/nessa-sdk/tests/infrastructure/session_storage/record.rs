@@ -238,6 +238,39 @@ async fn failed_discard_releases_its_reservation_without_resetting_history() {
 }
 
 #[tokio::test]
+async fn sqlite_refuses_invalid_resume_origin_before_publishing_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+    let id = SessionId::new("invalid-resume-origin").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (opening, _) = opened(&id);
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
+        )
+        .await
+        .unwrap();
+    let before = storage.read_committed(id.clone()).await.unwrap().unwrap();
+    let mut input = input_record("ordinary-input", 8);
+    input.resumed_from = Some(input.request.execution_id.clone());
+    let change = SessionChange::InputAccepted(Box::new(input));
+    let result = lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
+        )
+        .await;
+    assert!(
+        matches!(result, Err(StorageError::Corrupt(_))),
+        "an impossible origin must not become published input"
+    );
+    let after = storage.read_committed(id).await.unwrap().unwrap();
+    assert_eq!(after.position(), before.position());
+    assert!(after.snapshot().unwrap().invocations.is_empty());
+}
+
+#[tokio::test]
 async fn record_watch_stays_clean_after_unit_seal_until_original_completion_retry() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("sessions");

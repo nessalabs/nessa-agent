@@ -331,6 +331,10 @@ describe("a conversation view as a transcript", () => {
       ["e1", "Chart the sales"],
       ["e2", "And costs"],
     ])
+    // Only the message the source still holds waiting says so.
+    expect(
+      transcript.messages.map((message) => "waiting" in message && message.waiting),
+    ).toEqual([false, true])
   })
 
   it("ends a turn's reply with the files it published, and puts the rest after the last turn", () => {

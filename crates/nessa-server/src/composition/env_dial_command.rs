@@ -34,13 +34,18 @@ use crate::{
     app::dependencies::RuntimeDependencies,
     core::RunError,
     device_pairing::infrastructure::TlsStream,
+    env::LEASE_PROTOCOL,
     env_serve::{
+        application::ServeEnd,
         application::{
             self, enroll_once, redial, stop_past_deadline, Backoff, EnrolledOnce, NotApproved,
             NotEnrolled,
         },
         domain::Peer,
-        infrastructure::{dial, Approved, FileEnrollmentCode, FilePairingEnvironment},
+        infrastructure::{
+            dial, fetch, kept_for, run_in_place, this_build, Approved, FileEnrollmentCode,
+            FilePairingEnvironment, FETCH_DEADLINE,
+        },
     },
     timer::TokioTimer,
 };
@@ -54,7 +59,7 @@ use std::{
     future::Future,
     io::{self, Write},
     path::Path,
-    sync::Arc,
+    sync::{Arc, PoisonError},
     time::Duration,
 };
 use tokio::{
@@ -111,6 +116,9 @@ pub(super) async fn dial_in(
     enroll_code_file: Option<&Path>,
 ) -> Result<(), RunError> {
     check_address(address)?;
+    // A build fetched from the gateway runs in this one's place, from the
+    // start: nothing is held yet.
+    run_kept_copy();
     // Before any signal is taken: a stop while enrolling has nothing to
     // drain, and the process's default ends it.
     if let Some(code_file) = enroll_code_file {
@@ -187,7 +195,17 @@ async fn approved_then_served(
         either.abort();
         return Ok(());
     };
+    // A credential without its tunnel secret is not a finished approval.
+    // Ask until the secret is stored, or stop. Drain is the same signal
+    // approval already uses: nothing has been served, so there is nothing
+    // to drain.
+    reconcile_tunnel_secret(address, relay, &asking).await?;
+    if *asking.borrow() {
+        either.abort();
+        return Ok(());
+    }
     tracing::info!(%address, "approved; serving the gateway");
+    remember_tunnel_secret();
     // Composing can wait on the serve lock; a stop or drain asked then
     // still has nothing to drain, so it ends the wait. The wait holds
     // nothing until it returns, so dropping it leaves nothing behind.
@@ -200,20 +218,72 @@ async fn approved_then_served(
     let Some(composed) = composed else {
         return Ok(());
     };
-    let composed = composed.map_err(|(_, failure)| failure)?;
-    let served = serve_dialing(
-        &composed,
-        address,
-        Beyond { relay, tunnel },
-        identity,
-        pin,
-        stopping,
-        draining,
-    )
-    .await;
-    composed.finish().await;
-    served
+    let mut composed = composed.map_err(|(_, failure)| failure)?;
+    // After a fetch that failed, none is tried again for a while: the
+    // gateway's build is large, and redialing goes on meanwhile.
+    let mut fetch_after: Option<std::time::Instant> = None;
+    loop {
+        let served = serve_dialing(
+            &composed,
+            address,
+            Beyond { relay, tunnel },
+            identity.clone(),
+            pin,
+            fetch_after,
+            stopping.clone(),
+            draining.clone(),
+        )
+        .await;
+        composed.finish().await;
+        let Some(protocol) = served? else {
+            return Ok(());
+        };
+        // Every lease has ended here, so a stop or drain asked while the
+        // build arrives has nothing left to wait for: it ends the fetch
+        // (nothing half-fetched is kept) and the process, and is never
+        // passed over by running the build fetched.
+        let fetched = tokio::select! {
+            biased;
+            () = stopped(stopping.clone()) => return Ok(()),
+            () = stopped(draining.clone()) => return Ok(()),
+            fetched = fetch_update(
+                address,
+                Beyond { relay, tunnel },
+                identity.clone(),
+                pin,
+                &protocol,
+            ) => fetched,
+        };
+        if *stopping.borrow() || *draining.borrow() {
+            return Ok(());
+        }
+        match fetched {
+            Ok(copy) => {
+                tracing::info!(copy = %copy.display(), "running the gateway's build");
+                let error = run_in_place(&copy);
+                tracing::error!(%error, "the gateway's build could not be run; this one serves");
+            }
+            Err(reason) => tracing::warn!(%reason, "the gateway's build was not taken"),
+        }
+        fetch_after = Some(std::time::Instant::now() + FETCH_AGAIN_AFTER);
+        composed = tokio::select! {
+            biased;
+            () = stopped(stopping.clone()) => return Ok(()),
+            () = stopped(draining.clone()) => return Ok(()),
+            composed = compose() => composed.map_err(|(_, failure)| failure)?,
+        };
+    }
 }
+
+/// Where builds fetched from the gateway are kept: beside this machine's
+/// pairing, on its data volume, so a container started again from the same
+/// image still runs the build it fetched.
+fn fetched_builds() -> Result<std::path::PathBuf, RunError> {
+    Ok(environment_directory()?.join("builds"))
+}
+
+/// How long after a fetch that failed another may be tried.
+const FETCH_AGAIN_AFTER: Duration = Duration::from_secs(600);
 
 /// This machine's key and the gateway's pin, or `None` when stop was asked
 /// first. The pairing, and its directory's lock, is let go either way.
@@ -254,6 +324,127 @@ async fn approval(
     })
 }
 
+/// The secret saved when this machine's pairing became active, for the
+/// tunnel leg of the dial that follows. The pairing lock has been let go.
+fn remember_tunnel_secret() {
+    let installed = environment_directory()
+        .ok()
+        .and_then(|root| root.canonicalize().ok())
+        .and_then(|root| read_tunnel_secret_at(&root))
+        .map(nessa_protocol::tunnel::TunnelSecret::new);
+    nessa_client_core::retained::install_tunnel_secret(installed);
+}
+
+/// Ask until the tunnel secret is on disk beside the credential. Approval
+/// is not finished while it is missing: a crash between the two writes
+/// would otherwise dial with no secret and never ask again. `stop` is the
+/// combined stop-or-drain signal: a drain before anything is served ends
+/// the wait.
+async fn reconcile_tunnel_secret(
+    address: &str,
+    relay: Option<&RelayAddress>,
+    stop: &watch::Receiver<bool>,
+) -> Result<(), RunError> {
+    let root = match environment_directory().and_then(|root| {
+        root.canonicalize()
+            .map_err(|error| RunError::Agent(error.to_string()))
+    }) {
+        Ok(root) => root,
+        Err(error) => return Err(error),
+    };
+    recover_secret_at(&root, address, relay, stop).await
+}
+
+/// The recovery loop for the pairing stored under `root`.
+async fn recover_secret_at(
+    root: &Path,
+    address: &str,
+    relay: Option<&RelayAddress>,
+    stop: &watch::Receiver<bool>,
+) -> Result<(), RunError> {
+    if read_tunnel_secret_at(root).is_some() {
+        return Ok(());
+    }
+    loop {
+        if *stop.borrow() {
+            return Ok(());
+        }
+        let pairing = FilePairingEnvironment::open(root, address, clock())
+            .map_err(RunError::Agent)?
+            .through(relay.cloned());
+        let Some(answer) = status_unless_stopped(&pairing, stop).await else {
+            pairing.shutdown().await;
+            return Ok(());
+        };
+        // `ask` stores the secret on this owner. It still holds the
+        // directory lock, so the read opens the store only after the
+        // owner is gone.
+        if read_secret_after_release(pairing, root).await.is_some() {
+            return Ok(());
+        }
+        match answer {
+            crate::env_serve::application::Answer::Ended => {
+                return Err(RunError::Agent(
+                    "the gateway ended this pairing without approving it".into(),
+                ));
+            }
+            crate::env_serve::application::Answer::NotPaired => {
+                return Err(RunError::Agent(
+                    "this machine is not paired: run nessa env enroll first".into(),
+                ));
+            }
+            crate::env_serve::application::Answer::Unusable(reason) => {
+                return Err(RunError::Agent(reason));
+            }
+            _ => {
+                tokio::select! {
+                    biased;
+                    () = stopped(stop.clone()) => return Ok(()),
+                    () = tokio::time::sleep(APPROVAL_POLL) => {}
+                }
+            }
+        }
+    }
+}
+
+/// The gateway's answer, or `None` when `stop` is asked while the status
+/// request is still in flight.
+async fn status_unless_stopped(
+    pairing: &FilePairingEnvironment,
+    stop: &watch::Receiver<bool>,
+) -> Option<crate::env_serve::application::Answer> {
+    use crate::env_serve::application::EnvironmentPairing;
+    tokio::select! {
+        biased;
+        () = stopped(stop.clone()) => None,
+        answer = pairing.ask() => Some(answer),
+    }
+}
+
+/// The tunnel secret stored while `pairing` held the directory, read once
+/// that owner is gone.
+///
+/// `shutdown` stops the enrollment worker and leaves the store, and the
+/// store's exclusive lock, alive. A second store opened before the drop
+/// cannot see the file `ask` just wrote, so `env dial` would poll forever
+/// instead of serving.
+async fn read_secret_after_release(
+    pairing: FilePairingEnvironment,
+    root: &Path,
+) -> Option<[u8; 32]> {
+    pairing.shutdown().await;
+    drop(pairing);
+    read_tunnel_secret_at(root)
+}
+
+/// The tunnel secret stored under `root`/`pairing`, if the file is there.
+pub(crate) fn read_tunnel_secret_at(root: &Path) -> Option<[u8; 32]> {
+    let store =
+        nessa_auth::adapters::pairing::FilePairingState::open(root, Path::new("pairing")).ok()?;
+    use nessa_auth::application::pairing::ClientPendingStore;
+    store.load_tunnel_secret().ok().flatten()
+}
+
 fn open(address: &str) -> Result<FilePairingEnvironment, RunError> {
     FilePairingEnvironment::open(&environment_directory()?, address, clock())
         .map_err(RunError::Agent)
@@ -266,17 +457,35 @@ struct Beyond<'a> {
     tunnel: Option<&'a TunnelAddress>,
 }
 
+/// Serve the gateway over each connection dialed, until stopped or drained,
+/// or until the gateway refused this build's protocol for another and this
+/// host's owner lets it update this build: then the protocol it named. No
+/// fetch is asked for before `fetch_after`, when one failed.
+#[allow(clippy::too_many_arguments)]
 async fn serve_dialing(
     composed: &Composed,
     address: &str,
     Beyond { relay, tunnel }: Beyond<'_>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
+    fetch_after: Option<std::time::Instant>,
     stopping: watch::Receiver<bool>,
     draining: watch::Receiver<bool>,
-) -> Result<(), RunError> {
+) -> Result<Option<String>, RunError> {
     let drain = draining.clone();
-    redial(
+    // Stopped from outside, or to fetch the gateway's build.
+    let (own_stop, own_stopping) = watch::channel(false);
+    let own_stop = Arc::new(own_stop);
+    let forward = {
+        let own_stop = own_stop.clone();
+        tokio::spawn(async move {
+            stopped(stopping).await;
+            own_stop.send_replace(true);
+        })
+    };
+    let refused: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+    let peer = Peer::Gateway { pin };
+    let served = redial(
         || {
             let identity = identity.clone();
             // Resolved on every dial, the gateway's address may move; each
@@ -295,28 +504,122 @@ async fn serve_dialing(
             // Each connection was dialed to the gateway holding this pin: its
             // grants are that gateway's.
             let drain = drain.clone();
-            serve_until_stopped(stream, stopping, |input, output| {
-                composed.serve(Peer::Gateway { pin }, input, output, drain)
-            })
+            let (refused, own_stop) = (refused.clone(), own_stop.clone());
+            async move {
+                let end = serve_until_stopped(stream, stopping, |input, output| {
+                    composed.serve(peer, input, output, drain)
+                })
+                .await;
+                let ServeEnd::VersionRefused { protocol } = end else {
+                    return;
+                };
+                // Asked when the refusal comes, so a fetch that failed is
+                // tried again once its wait is over, however long dialing
+                // has gone on.
+                let may_fetch = fetch_after.is_none_or(|after| std::time::Instant::now() >= after);
+                if protocol == LEASE_PROTOCOL {
+                    // Refused for something else than its protocol: a build
+                    // that speaks this one would be refused the same.
+                    tracing::warn!("the gateway refused this build, which speaks its protocol");
+                } else if !may_fetch {
+                    // A fetch failed a moment ago: dialing goes on, and the
+                    // gateway may yet come to this build's protocol.
+                } else if composed.may_update(&peer) {
+                    tracing::info!(gateway = protocol, "fetching the gateway's build");
+                    *refused.lock().unwrap_or_else(PoisonError::into_inner) = Some(protocol);
+                    own_stop.send_replace(true);
+                } else {
+                    tracing::warn!(
+                        gateway = protocol,
+                        this = LEASE_PROTOCOL,
+                        "the gateway runs another build and this machine does not let it \
+                         update this one: let it run commands here (nessa env grant \
+                         --commands --max-timeout 10m), or install the gateway's build"
+                    );
+                }
+            }
         },
         Backoff::default(),
         &TokioTimer::new(),
-        stopping,
+        own_stopping,
         draining,
     )
     .await
-    .map_err(|error| RunError::Agent(format!("{address}: {error}")))
+    .map_err(|error| RunError::Agent(format!("{address}: {error}")));
+    forward.abort();
+    served?;
+    let protocol = refused
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    Ok(protocol)
+}
+
+/// Fetch the gateway's build, which it said speaks `protocol`, over a
+/// connection of its own, and keep it in place of this build.
+async fn fetch_update(
+    address: &str,
+    Beyond { relay, tunnel }: Beyond<'_>,
+    identity: Arc<NativeIdentity>,
+    pin: [u8; 44],
+    protocol: &str,
+) -> Result<std::path::PathBuf, String> {
+    let builds = fetched_builds().map_err(|error| error.to_string())?;
+    let this = tokio::task::spawn_blocking(this_build)
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("this build could not be read: {error}"))?;
+    let stream = dial(
+        address.to_owned(),
+        relay.cloned(),
+        tunnel.cloned(),
+        identity,
+        pin,
+        clock(),
+    )
+    .await
+    .map_err(|error| format!("the gateway could not be reached: {error}"))?;
+    let (input, output) = tokio::io::split(stream);
+    tokio::time::timeout(
+        FETCH_DEADLINE,
+        fetch(input, output, protocol, &builds, &this),
+    )
+    .await
+    .map_err(|_| "the gateway's build did not arrive in time".to_owned())?
+    .map_err(|refused| refused.to_string())
+}
+
+/// The copy of another build fetched to run in place of this one, when
+/// there is one: run before anything else, with the same arguments.
+fn run_kept_copy() {
+    let Ok(builds) = fetched_builds() else {
+        return;
+    };
+    // Asked only of a machine that ever fetched one: reading this build to
+    // know which it is takes a moment.
+    if !builds.join("current").exists() {
+        return;
+    }
+    let Ok(this) = this_build() else {
+        return;
+    };
+    if let Some(copy) = kept_for(&builds, &this) {
+        tracing::info!(copy = %copy.display(), "running the build fetched from the gateway");
+        let error = run_in_place(&copy);
+        tracing::error!(%error, "the fetched build could not be run; this one serves");
+    }
 }
 
 /// Serve one dialed connection with `serve`, closing it once stop is asked
 /// so its leases end as they do when a gateway goes away.
-pub(super) async fn serve_until_stopped<Serve, Served>(
+pub(super) async fn serve_until_stopped<Serve, Served, End>(
     stream: TlsStream,
     stopping: watch::Receiver<bool>,
     serve: Serve,
-) where
+) -> End
+where
     Serve: FnOnce(ReadHalf<TlsStream>, WriteHalf<TlsStream>) -> Served,
-    Served: Future<Output = ()>,
+    Served: Future<Output = End>,
 {
     let closer = stream.closer();
     let closing = tokio::spawn(async move {
@@ -324,8 +627,9 @@ pub(super) async fn serve_until_stopped<Serve, Served>(
         closer.close();
     });
     let (input, output) = tokio::io::split(stream);
-    serve(input, output).await;
+    let end = serve(input, output).await;
     closing.abort();
+    end
 }
 
 async fn stopped(mut stopping: watch::Receiver<bool>) {
@@ -380,4 +684,178 @@ fn check_address(address: &str) -> Result<(), RunError> {
 
 fn clock() -> Arc<dyn Clock> {
     RuntimeDependencies::default().clock
+}
+
+#[cfg(test)]
+mod tunnel_secret_gate {
+    use super::{read_secret_after_release, read_tunnel_secret_at};
+    use nessa_auth::adapters::pairing::{FilePairingState, NativeIdentity};
+    use nessa_auth::application::pairing::{ClientPendingStore, PrivateKeyMaterial};
+    use nessa_auth::domain::pairing::{
+        AttemptId, ConsentClass, ConsentIntentId, InvitationId, PublicIntent,
+    };
+    use nessa_auth::domain::{CredentialId, ResourceId};
+    use nessa_protocol::clock::Clock;
+    use std::path::Path;
+    use std::sync::Arc;
+    use zeroize::Zeroizing;
+
+    fn intent() -> PublicIntent {
+        PublicIntent::new(
+            InvitationId::new([1; InvitationId::LENGTH]),
+            AttemptId::new([2; AttemptId::LENGTH]),
+            ConsentIntentId::new([3; ConsentIntentId::LENGTH]),
+            1,
+            9,
+            ConsentClass::PeerEnvironment,
+        )
+        .unwrap()
+    }
+
+    /// The credential alone is not a finished approval. Dialing waits until
+    /// the tunnel secret is stored beside it.
+    #[test]
+    fn a_credential_without_its_tunnel_secret_is_not_ready_to_dial() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("root");
+        nessa_local_storage::create_directory(&path).unwrap();
+        nessa_local_storage::create_directory_beneath(&path, Path::new("pairing")).unwrap();
+        let intent = intent();
+        let key = PrivateKeyMaterial::new(Zeroizing::new([4; 32]));
+        let pin = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([5; 32])))
+            .unwrap()
+            .public_spki();
+        let store = FilePairingState::open(&path, Path::new("pairing")).unwrap();
+        store.save_pending(&key, &pin, intent, None).unwrap();
+        store
+            .save_credential(
+                &CredentialId::new("env-1").unwrap(),
+                &ResourceId::new("receiver-1").unwrap(),
+                intent,
+            )
+            .unwrap();
+        drop(store);
+        assert!(
+            read_tunnel_secret_at(&path).is_none(),
+            "approval is not finished while the tunnel secret is missing"
+        );
+        let store = FilePairingState::open(&path, Path::new("pairing")).unwrap();
+        store.save_tunnel_secret(&[9; 32]).unwrap();
+        drop(store);
+        assert_eq!(read_tunnel_secret_at(&path), Some([9; 32]));
+    }
+
+    struct Fixed;
+    impl Clock for Fixed {
+        fn elapsed_ms(&self) -> u64 {
+            0
+        }
+    }
+
+    /// `ask` stores the secret on the owner that still holds the directory
+    /// lock. `env dial` drops that owner and reads the secret, then serves.
+    /// Opening a second store while the owner is alive cannot see the file,
+    /// so the dial would poll forever.
+    #[tokio::test]
+    async fn env_dial_proceeds_to_serve_after_the_owner_recovers_the_secret() {
+        use crate::env_serve::infrastructure::FilePairingEnvironment;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("root");
+        nessa_local_storage::create_directory(&path).unwrap();
+        nessa_local_storage::create_directory_beneath(&path, Path::new("pairing")).unwrap();
+        let intent = intent();
+        let key = PrivateKeyMaterial::new(Zeroizing::new([4; 32]));
+        let pin = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([5; 32])))
+            .unwrap()
+            .public_spki();
+        {
+            let store = FilePairingState::open(&path, Path::new("pairing")).unwrap();
+            store.save_pending(&key, &pin, intent, None).unwrap();
+            store
+                .save_credential(
+                    &CredentialId::new("env-1").unwrap(),
+                    &ResourceId::new("receiver-1").unwrap(),
+                    intent,
+                )
+                .unwrap();
+            store.save_tunnel_secret(&[9; 32]).unwrap();
+        }
+        let pairing = FilePairingEnvironment::open(&path, "127.0.0.1:9", Arc::new(Fixed)).unwrap();
+        assert!(
+            read_tunnel_secret_at(&path).is_none(),
+            "the live owner holds the directory, so env dial cannot see the recovered secret"
+        );
+        assert_eq!(
+            read_secret_after_release(pairing, &path).await,
+            Some([9; 32]),
+            "env dial reads the secret once the owner is gone and goes on to serve"
+        );
+    }
+
+    /// A drain deadline sets draining, not stopping. Recovery is still
+    /// waiting on status, and that wait ends without a lease to drain.
+    #[tokio::test]
+    async fn drain_ends_tunnel_secret_recovery_while_status_is_in_flight() {
+        use super::{recover_secret_at, stopped};
+        use nessa_auth::adapters::pairing::{FilePairingState, NativeIdentity};
+        use nessa_auth::application::pairing::{ClientPendingStore, PrivateKeyMaterial};
+        use nessa_auth::domain::{CredentialId, ResourceId};
+        use std::time::Duration;
+        use zeroize::Zeroizing;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("root");
+        nessa_local_storage::create_directory(&path).unwrap();
+        nessa_local_storage::create_directory_beneath(&path, Path::new("pairing")).unwrap();
+        let intent = intent();
+        let key = PrivateKeyMaterial::new(Zeroizing::new([4; 32]));
+        let pin = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([5; 32])))
+            .unwrap()
+            .public_spki();
+        {
+            let store = FilePairingState::open(&path, Path::new("pairing")).unwrap();
+            store.save_pending(&key, &pin, intent, None).unwrap();
+            store
+                .save_credential(
+                    &CredentialId::new("env-1").unwrap(),
+                    &ResourceId::new("receiver-1").unwrap(),
+                    intent,
+                )
+                .unwrap();
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let (stopping_tx, stopping) = tokio::sync::watch::channel(false);
+        let (draining_tx, draining) = tokio::sync::watch::channel(false);
+        let (asked, asking) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            tokio::select! {
+                () = stopped(stopping) => {}
+                () = stopped(draining) => {}
+            }
+            let _ = asked.send(true);
+        });
+        let recovery = {
+            let path = path.clone();
+            let asking = asking.clone();
+            tokio::spawn(async move { recover_secret_at(&path, &address, None, &asking).await })
+        };
+        let (stream, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .expect("status has connected and is in flight")
+            .unwrap();
+        assert!(
+            !*stopping_tx.borrow(),
+            "a drain deadline does not set stopping"
+        );
+        draining_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), recovery)
+            .await
+            .expect("drain ends recovery while status is in flight")
+            .unwrap()
+            .unwrap();
+        drop(stream);
+        drop(stopping_tx);
+    }
 }

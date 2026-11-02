@@ -44,7 +44,6 @@ export async function channelRuntimeSettings(run, channel, failures) {
     await unlockRequestedVault(client, page)
     const global = page.locator(css.boatRuntimeSettings)
     await global.locator("select").selectOption("14400")
-    await global.getByRole("button", { name: "Save VM settings", exact: true }).click()
     const defaultSaved = await waitFor(
       async () =>
         (await client.boat.runtimeSettings()).defaultLifetime.seconds === 14_400,
@@ -53,7 +52,8 @@ export async function channelRuntimeSettings(run, channel, failures) {
     if (!defaultSaved)
       failures.push("the global VM lifetime was not saved through settings")
     receipts.default = await client.boat.runtimeSettings()
-    await global.getByRole("button", { name: "Save VM settings", exact: true }).waitFor()
+    // A choice saves as it is made; the select is live again once it lands.
+    await waitFor(() => global.locator("select").isEnabled(), 10_000)
     if (run.evidence)
       await page.screenshot({
         path: join(run.evidence, `boat-default-${channel.channelId}.png`),
@@ -92,7 +92,6 @@ export async function channelRuntimeSettings(run, channel, failures) {
     if ((await select.inputValue()) !== "default")
       failures.push("a new channel did not inherit the VM lifetime default")
     await select.selectOption("never")
-    await control.getByRole("button", { name: "Save VM settings", exact: true }).click()
     if (
       !(await waitFor(
         async () =>
@@ -102,7 +101,7 @@ export async function channelRuntimeSettings(run, channel, failures) {
       ))
     )
       failures.push("the channel's explicit unlimited lifetime was not saved")
-    await control.getByRole("button", { name: "Save VM settings", exact: true }).waitFor()
+    await waitFor(() => select.isEnabled(), 10_000)
     receipts.override = await client.boat.runtimeSettings({
       channelId: channel.channelId,
     })
@@ -113,7 +112,6 @@ export async function channelRuntimeSettings(run, channel, failures) {
         path: join(run.evidence, `boat-channel-${channel.channelId}.png`),
       })
     await select.selectOption("default")
-    await control.getByRole("button", { name: "Save VM settings", exact: true }).click()
     if (
       !(await waitFor(
         async () =>

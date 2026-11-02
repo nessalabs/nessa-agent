@@ -13,6 +13,9 @@ import { FoldMark } from "./column-paint"
 import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../../../clock"
+import { makeDesktopStore } from "../../../store"
+import { createQuestionFlights } from "../../application/question-flights"
+import type { ShownWindow } from "../../model/shown-window"
 import {
   closePane,
   focusPane,
@@ -22,6 +25,8 @@ import {
   openBeside,
   openSession,
   openWidget,
+  closePanelTab,
+  showPanelTab,
   setComposerText,
   showContent,
   toggleSidebar,
@@ -31,7 +36,9 @@ import {
   controlledAnimationFrames,
   fakeSource,
   flushAnimationFrames,
+  keptFilter,
   opus,
+  roomyGrid,
   settle,
   shownBy,
   testStore,
@@ -344,6 +351,89 @@ describe("the right panel, in both layouts", () => {
     expect(store.getState().workspace.chrome.sidebarWidth).toBe(256)
     await key("Resize Sidebar", "ArrowLeft")
     expect(store.getState().workspace.chrome.sidebarWidth).toBe(240)
+    await act(async () => root.unmount())
+  })
+})
+
+describe("the window tells its agents the focused chat's panel", () => {
+  const subagents = { plugin: "subagents", id: "chat" }
+  const app = { plugin: "mcp:huddle", id: "call-1" }
+  const notes = { plugin: "subagents", id: "other" }
+
+  it("publishes closed, open with tabs, the front tab, a chat switch, and the last tab closing", async () => {
+    const told: (ShownWindow | null)[] = []
+    let next = 0
+    const store = makeDesktopStore({
+      workspace: fakeSource(),
+      now: () => 1000,
+      newId: () => `id-${++next}`,
+      measure: () => roomyGrid,
+      overviewFilter: keptFilter(),
+      questionFlights: createQuestionFlights(),
+      windowPublisher: { publish: (window) => told.push(window) },
+    })
+    await store.dispatch(loadWorkspace())
+    await settle()
+    const root = createRoot(host)
+    await act(async () =>
+      root.render(
+        <Provider store={store}>
+          <ClockProvider now={() => 1000}>
+            <ThreeColumns hostKind="browser" browserSurface />
+          </ClockProvider>
+        </Provider>,
+      ),
+    )
+    const panelOf = () => told.at(-1)?.panel
+    const drawn = () => host.querySelector<HTMLElement>("[data-workspace]")?.dataset.panel
+    expect(panelOf()).toEqual({ open: false, tabs: [], front: null })
+    expect(drawn()).toBe("closed")
+
+    await act(async () => {
+      store.dispatch(openWidget({ widget: subagents, place: "panel", origin: "a" }))
+      store.dispatch(openWidget({ widget: app, place: "panel", origin: "a" }))
+    })
+    expect(drawn()).toBe("open")
+    expect(panelOf()).toEqual({ open: true, tabs: [subagents, app], front: app })
+
+    await act(async () => {
+      store.dispatch(showPanelTab({ sessionId: "a", widget: subagents }))
+    })
+    expect(panelOf()?.front).toEqual(subagents)
+    expect(panelOf()?.tabs).toEqual([subagents, app])
+
+    const hide = [...host.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.startsWith("Hide Panel"),
+    )
+    await act(async () => hide?.click())
+    expect(drawn()).toBe("closed")
+    expect(panelOf()).toEqual({ open: false, tabs: [subagents, app], front: subagents })
+
+    const show = [...host.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.startsWith("Show Panel"),
+    )
+    await act(async () => show?.click())
+    expect(panelOf()?.open).toBe(true)
+
+    await act(async () => {
+      store.dispatch(openBeside({ sessionId: "b" }))
+      store.dispatch(openWidget({ widget: notes, place: "panel", origin: "b" }))
+    })
+    expect(panelOf()).toEqual({ open: true, tabs: [notes], front: notes })
+
+    const back = store.getState().workspace.panes
+    const pane = back && panesOf(back).find((each) => shownBy(each) === "a")
+    await act(async () => {
+      if (pane) store.dispatch(focusPane({ pane: pane.key }))
+    })
+    expect(panelOf()?.tabs).toEqual([subagents, app])
+
+    await act(async () => {
+      store.dispatch(closePanelTab({ sessionId: "a", widget: subagents }))
+      store.dispatch(closePanelTab({ sessionId: "a", widget: app }))
+    })
+    expect(panelOf()).toEqual({ open: true, tabs: [], front: null })
+    expect(host.querySelector("#workspace-panel")?.textContent).toBe("Nothing open")
     await act(async () => root.unmount())
   })
 })

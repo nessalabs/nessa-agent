@@ -64,6 +64,9 @@ pub(super) fn turn(id: &str, message: UserMessage, tools: Vec<ToolCallUpdate>) -
         ExecutionUpdate::Finished(ExecutionOutcome::Completed),
     ));
     InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {

@@ -170,6 +170,8 @@ pub use drive_tool_audit::DurableDriveToolAudit;
 
 mod mcp_app_audit;
 pub use mcp_app_audit::DurableMcpAppAudit;
+mod trusted_apps;
+pub use trusted_apps::DurableTrustedApps;
 
 mod context_drops;
 pub use context_drops::audit_context_drops;
@@ -212,6 +214,8 @@ pub(crate) use record_read::TestReadGate;
 mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
 
+mod ownership_audit;
+pub use ownership_audit::DurableOwnershipAudit;
 #[cfg(unix)]
 mod workspaces;
 #[cfg(unix)]

@@ -132,7 +132,9 @@ export function workspaceEffects(
       current.workspace.chrome !== previous.workspace.chrome ||
       current.workspace.content !== previous.workspace.content ||
       current.workspace.sessions !== previous.workspace.sessions ||
-      current.workspace.drafts !== previous.workspace.drafts,
+      current.workspace.drafts !== previous.workspace.drafts ||
+      current.workspace.panels !== previous.workspace.panels ||
+      current.workspace.panelOpen !== previous.workspace.panelOpen,
     effect: (_action, api) => {
       const publisher = dependencies.windowPublisher
       if (!publisher) return

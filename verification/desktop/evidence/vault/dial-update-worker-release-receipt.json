@@ -1,0 +1,39 @@
+{
+  "sourceRevision": "b3fcbc556d7413e6408c66bdc60e59a5f15de44c",
+  "leaseProtocol": "a8cbfd3cb04e54cc",
+  "nessaSha256": "5f174b829569e1118111c306157d82626d1644fe55b9d66d58c699a4d6597acb",
+  "nessaBytes": 146722264,
+  "nessaMcpSha256": "575b9b07e9c903a719726fe079f13e6a5a72c0dea23b0d4902c34e382fcb3eb9",
+  "nessaMcpBytes": 5317768,
+  "buildProfile": "dev, dependency opt-level=0, debug=0, incremental=0, stripped",
+  "target": "x86_64-unknown-linux-gnu",
+  "source": "public GitHub archive of the commit, checked byte-identical to git archive; the builder held no Git or account credentials",
+  "seedImage": "bsh_SuwMO3FoyEUsQUOyr6Hm_hvHw6iyY85H-s6jRWjXszM",
+  "replaced": [
+    "/opt/nessa/bin/nessa",
+    "/opt/nessa/bin/nessa-mcp",
+    "/opt/nessa/BUILD.json",
+    "/opt/nessa/Cargo.lock"
+  ],
+  "image": "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4",
+  "share": "shr_d55d002bdffc1f06",
+  "snapshot": "nessa-worker-a8cbfd3c-b3fcbc5-linux-x64",
+  "snapshotBytes": 1857585152,
+  "cleanClone": {
+    "protocolMatched": true,
+    "checksumMatched": true,
+    "nessaMcpPresent": true,
+    "buildSourceAbsent": true,
+    "knownPersonalCredentialPathsAbsent": true
+  },
+  "ownedVMsDeleted": [
+    { "id": "bx_cgq524c4", "role": "builder", "confirmedAbsent": true },
+    { "id": "bx_2nh556t2", "role": "seed", "confirmedAbsent": true },
+    { "id": "bx_w96hjey5", "role": "check", "confirmedAbsent": true }
+  ],
+  "deletionOperations": [
+    "bdop_742941967d4442d8bafa7827b688f74b",
+    "bdop_c1ad1739b0724aadaa022104d8b72c4b",
+    "bdop_290287c83da64919a846505d4a441b92"
+  ]
+}

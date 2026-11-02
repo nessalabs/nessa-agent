@@ -63,6 +63,7 @@ macro_rules! lease_protocol {
 lease_protocol!(
     "../../../nessa-protocol/src/lease.rs",
     "../../../nessa-protocol/src/pairing/frames.rs",
+    "../../../nessa-protocol/src/build_update.rs",
     "../env_serve/mod.rs",
     "../env_serve/application/mod.rs",
     "../env_serve/application/serve.rs",
@@ -86,6 +87,7 @@ lease_protocol!(
     "../env_serve/infrastructure/inbox.rs",
     "../env_serve/infrastructure/dial.rs",
     "../env_serve/infrastructure/pairing.rs",
+    "../env_serve/infrastructure/self_update.rs",
     "../env_serve/infrastructure/grant_audit.rs",
     "../env_serve/infrastructure/grants.rs",
     "../env_serve/infrastructure/cedar/mod.rs",

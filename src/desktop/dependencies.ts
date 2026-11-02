@@ -53,6 +53,13 @@ import {
   type HeldFileReader,
 } from "../conversation"
 import {
+  voiceGateway,
+  voiceKeyGateway,
+  type VoiceGateway,
+  type VoiceClient,
+  type VoiceKeyGateway,
+} from "./voice"
+import {
   githubGateway,
   linkedDevicesGateway,
   mcpServersGateway,
@@ -133,6 +140,10 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly boat: BoatGateway | undefined
   readonly github: GithubGateway | undefined
+  /** The gateway's side of a voice call; absent without a gateway. Provided by `main.tsx`. */
+  readonly voice: VoiceGateway | undefined
+  /** The saved voice key, for Settings; absent without a gateway. */
+  readonly voiceKey: VoiceKeyGateway | undefined
   readonly vault: VaultSource | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
@@ -253,6 +264,8 @@ export function createDesktopDependencies(
     vault: options.vault ?? (source ? gatewayVault(() => source.connected()) : undefined),
     boat: source ? boatGateway(() => source.connected()) : undefined,
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
+    voice: source ? voiceGateway(() => source.connected()) : undefined,
+    voiceKey: source ? voiceKeyGateway(() => source.connected()) : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
     sharing: source
@@ -296,9 +309,10 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub and share sessions through. */
+/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
 type WindowGatewayClient = GatewayClient &
   DevicesClient &
+  VoiceClient &
   GithubClient & { readonly vault: VaultApi; readonly boat: BoatApi } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &

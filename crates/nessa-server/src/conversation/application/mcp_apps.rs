@@ -179,6 +179,10 @@ pub enum McpAppAuditPhase {
     ApprovalRequested { permission_id: String },
     /// The person allowed it; sent next.
     Approved { permission_id: String },
+    /// With that answer the person chose to always allow the app's
+    /// messages; `kept` is whether that choice was saved. Unsaved, the next
+    /// message asks again.
+    AppTrusted { permission_id: String, kept: bool },
     /// The person denied it.
     Denied { permission_id: String },
     /// Nobody answered within the review's deadline.
@@ -436,4 +440,21 @@ pub struct McpAppPorts {
     pub tickets: Arc<dyn ResourceTickets>,
     pub dropped: Arc<dyn DroppedContexts>,
     pub policy: Arc<dyn AppCallPolicyEvaluator>,
+    pub trusted: Arc<dyn TrustedApps>,
 }
+
+/// The apps whose messages the person chose to always allow ("Always allow
+/// this app"), by the MCP server that serves them. Kept across restarts.
+/// This only says what was chosen: whether a message then goes unasked is
+/// the policy's answer (`message_skips_review`).
+pub trait TrustedApps: Send + Sync {
+    /// Whether the person chose to always allow `server`'s app.
+    fn trusts(&self, server: &str) -> bool;
+    /// Remember that the person always allows `server`'s app. `Err` when it
+    /// could not be kept; nothing is remembered then.
+    fn trust(&self, server: &str) -> Result<(), TrustNotKept>;
+}
+
+/// "Always allow this app" could not be written down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrustNotKept;

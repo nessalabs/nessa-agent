@@ -46,6 +46,7 @@ use super::{
     audit::EnvironmentAudit,
     connector::{ArtifactTransport, LeaseConnection},
     environment::{SshEnvironment, SshTimings},
+    peer_update::PeerUpdates,
 };
 use crate::conversation::application::{
     Environment, EnvironmentFuture, OrganizationBudgets, PairedEnvironments, WorkerLoad,
@@ -102,6 +103,8 @@ pub(crate) struct PeerEnvironments {
     /// revoked.
     connections: watch::Sender<u64>,
     sightings: Option<Arc<dyn Sightings>>,
+    /// Told to each connection whose host speaks another protocol.
+    updates: Option<Arc<PeerUpdates>>,
 }
 
 impl PeerEnvironments {
@@ -119,7 +122,15 @@ impl PeerEnvironments {
             peers: Mutex::new(BTreeMap::new()),
             connections: watch::Sender::new(0),
             sightings: None,
+            updates: None,
         }
+    }
+
+    /// Tell a host that dials in with another protocol's build which one
+    /// this gateway speaks, and send it this build when it asks.
+    pub(crate) fn with_updates(mut self, updates: Arc<PeerUpdates>) -> Self {
+        self.updates = Some(updates);
+        self
     }
 
     /// Tell `sightings` each machine report a connection carries, and when
@@ -163,6 +174,7 @@ impl PeerEnvironments {
             to_environment,
             keep,
             artifacts: ArtifactTransport::Frames,
+            updates: self.updates.clone(),
         };
         let reported = |machine: MachineReport| {
             if let Some(sightings) = &self.sightings {

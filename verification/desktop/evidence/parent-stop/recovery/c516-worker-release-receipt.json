@@ -1,0 +1,102 @@
+{
+  "sourceRevision": "66e064de4a6177454e22873314391d8956b5da79",
+  "sourceTree": "e953899f2bc727d49fbc6b563c593dc839897c16",
+  "integratedMain": "100d7aef822056d21209f980125c9227b88d099a",
+  "leaseProtocol": "c516606214ce8bc2",
+  "image": "bsh_MF9Ppg9XWHyVD8qYw7Wv6mku_yJpX2lS-Dlj4-LZ27E",
+  "shareId": "shr_21496be30941eddd",
+  "snapshot": "nessa-worker-c5166062-66e064d-linux-x64",
+  "snapshotId": "77138583-08e6-4b3e-bd19-4c32972bfc2e",
+  "snapshotBytes": 152150437,
+  "target": "x86_64-unknown-linux-gnu",
+  "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo": "1.99.1 (5f94df478 2026-08-27)",
+  "buildProfile": "dev, dependency opt-level=0, debug=0, incremental=0, stripped",
+  "nessaSha256": "7c535c83e514b2fe41068b981abe3c9fce1f6d814bf1cc55f971148a85042b12",
+  "nessaBytes": 146695440,
+  "nessaMcpSha256": "4684f72dd49d07c06ab76c168cb8165fab0d7ef6fde62414e00fe26c4c678e25",
+  "nessaMcpBytes": 5243680,
+  "workspaceSdkRevision": "33b8382d72657d176baca19797d8d146803f3d89",
+  "supervisorSha256": "afe8510ce3f9fce707a14b221d28ea68a0a8298c983443eee1dbe14a77cd90d6",
+  "nodeSha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb",
+  "cargoLockSha256": "b711aeccc49f6ebe0da00158cb6f58349793eeafd2493b5b3bbb5becbd8c38b0",
+  "sourceArchiveSha256": "359c7b9a82bbd8d81936b6bbf44ed6568886d3d6eb6b5f557e1807deef75afd8",
+  "runtimeArchiveSha256": "18f6356ffe7e34580df2543f11de7e382c5f1d658968a549d91bb4752f0c315c",
+  "linuxBuildAttempts": 1,
+  "linuxBuildExitCode": 0,
+  "ptyVendoringAudit": {
+    "dependencyRevision": "c68837e2b7bf1c9009e1a4587a1a58107ec0425c",
+    "auditedSupportFiles": 29,
+    "priorDetailedAudit": "worker-release-receipt.json: ptyVendoringAudit",
+    "restoration": "Restore the locked PTY shared support and original external build declaration omitted by cargo vendor; update only the normalized manifest checksum entry. Dependency revisions and application lockfile are unchanged.",
+    "cloudVerification": "Frozen source tree and Cargo.lock matched locally; locked PTY sources and all 29 support hashes were independently checked for the preceding publication. New publication audit count is supplied by the Mac owner."
+  },
+  "seedChecksPassed": true,
+  "freshCloneChecksPassed": true,
+  "freshCloneChecks": {
+    "protocolMatched": true,
+    "bothBinaryHashesMatched": true,
+    "bothBinaryLengthsMatched": true,
+    "bothExecutablesVerified": true,
+    "sharedLibrariesResolved": true,
+    "mcpInitializeSucceeded": true,
+    "cargoLockIdentityMatched": true,
+    "nodeProvenanceVerified": true,
+    "supervisorProvenanceVerified": true,
+    "workspaceSdkProvenanceVerified": true,
+    "namedCredentialAndStateExclusionsPassed": true
+  },
+  "exclusionCheckScope": "Named credential/state exclusions reported by the Mac owner; not an exhaustive secret scan or independent secure-erasure attestation.",
+  "publicationVMs": [
+    {
+      "role": "builder",
+      "id": "bx_xvp5d7u9",
+      "deletionOperationId": "bdop_8f946993a856411890705ac58687c74b",
+      "deletionCompleted": true,
+      "confirmedAbsent": true
+    },
+    {
+      "role": "seed",
+      "id": "bx_3n6aqrgu",
+      "deletionOperationId": "bdop_56a80664190f4f1bbc52d98f673b287f",
+      "deletionCompleted": true,
+      "confirmedAbsent": true
+    },
+    {
+      "role": "check",
+      "id": "bx_523nwjck",
+      "deletionOperationId": "bdop_c9583cacdf0e40c1994003db635cbafc",
+      "deletionCompleted": true,
+      "confirmedAbsent": true
+    }
+  ],
+  "usage": {
+    "cumulativeUsageDollars": 0.0624,
+    "usageCapDollars": 5,
+    "temporaryVMCreations": 6,
+    "creationCap": 10,
+    "remainingCreations": 4,
+    "maxConcurrentVMs": 4,
+    "activeVMs": 0,
+    "retainedTaskSnapshots": 1,
+    "snapshotAllowance": "Within the account's included allowance; one retained task snapshot up to US$2/month."
+  },
+  "previousPublication": {
+    "receipt": "worker-release-receipt.json",
+    "protocol": "dad5afbc1bc5755f",
+    "snapshotId": "357a004f-dcaa-4b62-8117-107daf551e42",
+    "snapshotConfirmedAbsent": true,
+    "retiredAfterC516FreshCloneQualification": true,
+    "allSixPublicationVMsConfirmedAbsent": true,
+    "unrelatedSnapshotsPreserved": true
+  },
+  "verifier": {
+    "launched": false,
+    "remainingCreationAllowance": 4,
+    "nativeRust": "1.99.1",
+    "nativeBinariesReportProtocol": "c516606214ce8bc2",
+    "approvalAndCleanupTestsPassed": 9,
+    "acceptance": "Awaiting published pin SHA for unchanged four-distinct-VM verifier; not a live acceptance pass."
+  },
+  "evidenceSource": "Sanitized Mac publication receipt relayed by parent. Cloud verified source/lockfile binding and made no Boat call."
+}

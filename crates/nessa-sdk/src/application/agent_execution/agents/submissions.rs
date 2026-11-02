@@ -3,16 +3,14 @@
 
 use super::scheduling::QueuedInvocation;
 use super::{
-    AdmissionEvidence, AdmissionEvidenceFailure, AgentError, QueueAdmission, SteeringDelivery,
-    SteeringEvidence,
+    resumed_turn_id, AdmissionEvidence, AdmissionEvidenceFailure, AgentError, QueueAdmission,
+    SteeringDelivery, SteeringEvidence,
 };
 use crate::application::agent_execution::{
     executions::{ExecutionRequest, SubmissionMode, Submitter},
     sessions::{InvocationSchedulingEvent, SessionManager, SubmissionAcknowledgement},
 };
-use crate::domain::agent_execution::executions::{
-    ExecutionId, ExecutionOutcome, InvocationStage, Resumption,
-};
+use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, InvocationStage};
 use std::collections::HashMap;
 use tokio::sync::watch;
 
@@ -66,34 +64,35 @@ async fn successor_receipt(
     receipts: &HashMap<ExecutionId, SubmissionReceipt>,
     input: &ExecutionRequest,
 ) -> Option<Result<SteeringDelivery, AgentError>> {
+    let snapshot = manager.snapshot().await?;
     let mut id = input.execution_id.clone();
     loop {
-        let next = Resumption::of(&id).successor()?;
+        let next = resumed_turn_id(&snapshot.invocations, &id)?;
         let queued = |result, evidence| {
             Ok(SteeringDelivery::Queued(QueueAdmission::new(
                 QueuedInvocation::new(input.execution_id.clone(), result),
                 evidence,
             )))
         };
-        let record = manager.submission(&next).await?;
+        let record = snapshot
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id == next)?;
         let last = record.scheduling.last()?;
         // Followed only while a later successor is saved: the newest one
         // answers, however it ended, and an older link's receipt does not.
-        if continued(last) {
-            if let Some(after) = Resumption::of(&next).successor() {
-                if receipts.contains_key(&after) || manager.submission(&after).await.is_some() {
-                    id = next;
-                    continue;
-                }
-            }
+        if resumed_turn_id(&snapshot.invocations, &next).is_some() {
+            id = next;
+            continue;
         }
         if let Some(SubmissionReceipt::Queued { result, evidence }) = receipts.get(&next) {
             return Some(queued(result.clone(), evidence.clone()));
         }
         let result = match last.stage {
-            InvocationStage::Cancelled => record.result.unwrap_or(Err(AgentError::Closed)),
+            InvocationStage::Cancelled => record.result.clone().unwrap_or(Err(AgentError::Closed)),
             _ => record
                 .result
+                .clone()
                 .unwrap_or(Err(AgentError::SubmissionUnresolved)),
         };
         let (_, receiver) = watch::channel(Some(result));

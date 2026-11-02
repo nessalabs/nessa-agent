@@ -1,4 +1,3 @@
-use crate::contract;
 use zeroize::Zeroizing;
 /// Secret bytes erase their allocation on drop and redact diagnostic formatting.
 #[derive(Clone)]
@@ -31,25 +30,6 @@ impl From<Zeroizing<Vec<u8>>> for Secret {
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("[REDACTED]")
-    }
-}
-/// Validated user input. The shared contract owns strength and size bounds.
-pub struct Passphrase(Zeroizing<String>);
-impl Passphrase {
-    /// Validate Unicode character count and UTF-8 byte bounds from the shared
-    /// contract. Rejected input is erased by its owned zeroizing guard too.
-    pub fn new(value: String) -> Result<Self, Failure> {
-        let value = Zeroizing::new(value);
-        if value.len() > contract::MAXIMUM_PASSPHRASE_BYTES
-            || value.chars().count() < contract::MINIMUM_CHARACTERS
-            || value.chars().all(char::is_whitespace)
-        {
-            return Err(Failure::PassphrasePolicy);
-        }
-        Ok(Self(value))
-    }
-    pub(crate) fn bytes(&self) -> &[u8] {
-        self.0.as_bytes()
     }
 }
 /// Internal, application-chosen entry identity, never a caller-selected wire path.

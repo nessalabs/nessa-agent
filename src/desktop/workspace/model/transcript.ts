@@ -211,6 +211,11 @@ export interface TurnMessage {
    */
   readonly working?: true
   /**
+   * Set on the person's message while the source holds it waiting, not yet
+   * a turn (no agent free for it, say). Absent once it is one.
+   */
+  readonly waiting?: true
+  /**
    * How this turn ended, when the gateway said it ended other than by
    * finishing. On the agent's reply when there is one, otherwise on the
    * input, so a turn that said nothing still shows it.

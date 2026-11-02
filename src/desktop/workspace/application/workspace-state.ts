@@ -197,6 +197,14 @@ export interface WorkspaceState {
    */
   readonly panels: Readonly<Record<string, ChatPanel>>
   /**
+   * The MCP App widgets opened into a panel while the window runs, by
+   * `widgetKey`: each lives there, so its card in a message stays the row that
+   * leads back, even after its tab is closed. Without it a closed tab's card
+   * would run the app again, and an app that asks for the panel as it starts
+   * would open its tab again at once.
+   */
+  readonly panelled: readonly string[]
+  /**
    * How many times something asked the window to show the right panel — a
    * widget opened into it. The window shows the panel when this changes;
    * whether it is open stays the window's own (`use-workspace-window.ts`).
@@ -220,6 +228,11 @@ export interface WorkspaceState {
    * (`usecases/window.ts`) is said only while one is.
    */
   readonly arrangement: WindowArrangement | null
+  /**
+   * Whether the right panel is drawn, as the layout last said
+   * (`panelShown`). False until a layout has said.
+   */
+  readonly panelOpen: boolean
   readonly tree: Tree
   /**
    * Whether a session can be shared from this window: composition gave it a
@@ -430,6 +443,7 @@ export const initialWorkspace: WorkspaceState = {
   composerImages: {},
   panes: null,
   panels: {},
+  panelled: [],
   panelAsked: 0,
   view: { channelId: "" },
   content: "panes",
@@ -441,6 +455,7 @@ export const initialWorkspace: WorkspaceState = {
     sessionListWidth: 312,
   },
   arrangement: null,
+  panelOpen: false,
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
   shareable: false,
   share: null,

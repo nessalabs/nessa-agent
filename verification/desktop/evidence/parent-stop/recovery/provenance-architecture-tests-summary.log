@@ -1,0 +1,10 @@
+✔ command implementations are imported only by the command list (1.83177ms)
+✔ a view may select what it shows (0.467662ms)
+ℹ tests 108
+ℹ suites 0
+ℹ pass 108
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2400.691731

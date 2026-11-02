@@ -235,6 +235,7 @@ struct Connector {
     grants: Arc<SshGrant>,
     /// Asks every serving host to drain.
     drain: tokio::sync::watch::Sender<bool>,
+    end_pause: Mutex<Option<Arc<PreparationEndPause>>>,
 }
 
 impl Connector {
@@ -266,6 +267,7 @@ impl Connector {
             runner: Mutex::new(None),
             grants: Arc::default(),
             drain: tokio::sync::watch::channel(false).0,
+            end_pause: Mutex::new(None),
         })
     }
     /// Cut every connection both ways, as a network that went away.
@@ -666,7 +668,10 @@ impl LeaseConnector for Connector {
         let (gateway_end_in, gateway_end_out) = split(gateway_end);
         let (host_end_in, host_end_out) = split(host_end);
         self.relays.lock().unwrap().push((
-            relay(gateway_end_in, host_end_out),
+            match self.end_pause.lock().unwrap().clone() {
+                Some(pause) => relay_preparation_end(gateway_end_in, host_end_out, pause),
+                None => relay(gateway_end_in, host_end_out),
+            },
             relay(host_end_in, gateway_end_out),
         ));
         let (from_environment, to_environment) = split(gateway);
@@ -676,6 +681,7 @@ impl LeaseConnector for Connector {
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
             artifacts: super::connector::ArtifactTransport::Channels(Arc::new(NoChannels)),
+            updates: None,
         })
     }
 }
@@ -4179,6 +4185,124 @@ async fn model_targets_and_normalization_retain_the_granted_host() {
     connector.cut();
 }
 
+/// Control frames still reach the actual environment-role frame loop. Only End
+/// delivery is held; the host's Granted/Ended ledger remains the evidence.
+pub(crate) struct PreparationEndPause {
+    entered: tokio::sync::Notify,
+    requests: AtomicUsize,
+    release: tokio::sync::watch::Sender<bool>,
+    connector: std::sync::Weak<Connector>,
+}
+impl PreparationEndPause {
+    pub(crate) async fn wait_end(&self) {
+        tokio::time::timeout(Duration::from_secs(60), self.entered.notified())
+            .await
+            .unwrap();
+    }
+    pub(crate) fn end_requests(&self) -> usize {
+        self.requests.load(Ordering::SeqCst)
+    }
+    pub(crate) fn release(&self) {
+        self.release.send_replace(true);
+    }
+    pub(crate) fn held(&self) -> usize {
+        let connector = self
+            .connector
+            .upgrade()
+            .expect("environment still owns connector");
+        let rows = connector.ledger.0.lock().unwrap();
+        rows.iter()
+            .filter(|row| match row {
+                LedgerEntry::Granted { lease, .. } => !rows.iter().any(
+                    |row| matches!(row, LedgerEntry::Ended { lease: ended, .. } if ended == lease),
+                ),
+                _ => false,
+            })
+            .count()
+    }
+    pub(crate) fn close(&self) {
+        self.release();
+        if let Some(connector) = self.connector.upgrade() {
+            connector.cut();
+        }
+    }
+}
+fn relay_preparation_end(
+    from: tokio::io::ReadHalf<DuplexStream>,
+    mut to: tokio::io::WriteHalf<DuplexStream>,
+    pause: Arc<PreparationEndPause>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut stream = FrameStream::new(from);
+        while let Ok(Some(body)) = stream.next().await {
+            let frame: ToEnvironment = decode(&body).unwrap();
+            if matches!(frame, ToEnvironment::End { .. }) {
+                pause.requests.fetch_add(1, Ordering::SeqCst);
+                pause.entered.notify_one();
+                let mut release = pause.release.subscribe();
+                let _ = release.wait_for(|open| *open).await;
+            }
+            if to.write_all(&encode(&frame).unwrap()).await.is_err() {
+                break;
+            }
+        }
+        let _ = to.shutdown().await;
+    })
+}
+pub(crate) fn preparation_environment() -> (Arc<dyn Environment>, Arc<PreparationEndPause>) {
+    let connector = Connector::new(Reach::Serving);
+    let pause = Arc::new(PreparationEndPause {
+        entered: tokio::sync::Notify::new(),
+        requests: AtomicUsize::new(0),
+        release: tokio::sync::watch::channel(false).0,
+        connector: Arc::downgrade(&connector),
+    });
+    *connector.end_pause.lock().unwrap() = Some(pause.clone());
+    (
+        Arc::new(environment(connector, Arc::new(Audit::default()))),
+        pause,
+    )
+}
+
+#[tokio::test]
+async fn confirmed_lease_end_remains_the_harness_cleanup_receipt_after_disconnect() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, given) = binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap();
+    let host = given.lock().unwrap().clone().unwrap();
+    let mut process = host.start(HarnessLaunch::default()).unwrap();
+    process.input.write_all(b"before End").await.unwrap();
+    assert_eq!(read_some(process.output.as_mut()).await, b"before End");
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Closed).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 1);
+    connector.cut();
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            process
+                .control
+                .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        CloseOutcome { forced: false },
+        "the original actual End receipt survives the old connection"
+    );
+    assert_eq!(
+        connector.stopped.load(Ordering::SeqCst),
+        1,
+        "joining End does not clean the native scope again"
+    );
+}
+
 /// The startup table is consumed on both sides of the wire. A client waiting
 /// less than this actual connection bound abandoned a live Boat allocation.
 #[tokio::test(start_paused = true)]
@@ -4224,4 +4348,69 @@ async fn workspace_connection_deadline_matches_the_published_client_budget() {
         opening.await.unwrap().err(),
         Some(LeaseRefusal::EnvironmentUnreachable)
     );
+}
+
+/// A workspace's connection is let go only while nothing uses it: not while
+/// a lease is on it, and again once the lease ended and every holder of it
+/// is gone; the next lease connects again.
+#[tokio::test]
+async fn a_workspace_connection_is_let_go_only_while_nothing_uses_it() {
+    // As a VM's runtime does, the connection's owner ends its stream when
+    // it is dropped, so a closed link sees its end.
+    struct Cut(Arc<Connector>);
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.cut();
+        }
+    }
+    struct Through(Arc<Connector>);
+    impl super::connector::WorkspaceConnector for Through {
+        fn connect(
+            &self,
+            _: bool,
+        ) -> crate::conversation::application::EnvironmentFuture<
+            '_,
+            Result<LeaseConnection, LeaseRefusal>,
+        > {
+            Box::pin(async move {
+                let mut connection =
+                    LeaseConnector::connect(self.0.as_ref(), &devbox(), String::new())
+                        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+                connection.keep = Box::new((connection.keep, Cut(self.0.clone())));
+                Ok(connection)
+            })
+        }
+    }
+    let connector = Connector::new(Reach::Serving);
+    let environment = SshEnvironment::workspace(
+        Arc::new(Through(connector.clone())),
+        Arc::new(Audit::default()),
+    );
+    assert!(environment.let_go().await, "nothing was connected");
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert!(!environment.let_go().await, "a lease is on it");
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Idle).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    assert!(
+        !environment.let_go().await,
+        "the ended lease's provider still holds it"
+    );
+    drop(opened);
+    assert!(environment.let_go().await, "nothing uses it now");
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+    let again = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap();
+    assert_eq!(
+        connector.connects.load(Ordering::SeqCst),
+        2,
+        "the next lease connects again"
+    );
+    again.hold.end(LeaseEndCause::Closed).await;
 }

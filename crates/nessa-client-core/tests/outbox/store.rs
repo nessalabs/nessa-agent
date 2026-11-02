@@ -1378,6 +1378,7 @@ impl DepartureGate {
 struct YieldingLease {
     inner: SqliteIntents,
     gate: Arc<(Mutex<DepartureGate>, Condvar)>,
+    draft_read: fn(),
 }
 
 impl YieldingLease {
@@ -1385,6 +1386,7 @@ impl YieldingLease {
         Self {
             inner: SqliteIntents::open(path).unwrap(),
             gate,
+            draft_read: || {},
         }
     }
 
@@ -1405,6 +1407,7 @@ impl IntentStore for YieldingLease {
             .as_ref()
             .is_some_and(|record| matches!(record.outcome(), PhoneOutcome::Draft))
         {
+            (self.draft_read)();
             let (lock, cv) = &*self.gate;
             let mut gate = lock.lock().expect("gate");
             gate.drafts.insert(thread::current().id());

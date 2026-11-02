@@ -1,0 +1,47 @@
+{
+  "check": "parent-stop",
+  "ok": false,
+  "started": "2026-10-30T00:31:35.246Z",
+  "finished": "2026-10-30T00:33:00.447Z",
+  "target": {
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "default",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:40531/desktop.html: page.goto: Page crashed",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "override",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "parentTurns": 1,
+        "parent": "cancelled",
+        "child": "running",
+        "grandchild": "running",
+        "unrelated": "running",
+        "unrelatedQueued": 1,
+        "observationMs": 1500,
+        "releasedReport": null
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:42449/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

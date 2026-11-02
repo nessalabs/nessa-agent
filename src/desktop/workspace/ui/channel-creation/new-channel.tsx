@@ -34,6 +34,7 @@ import {
   findComposerModel,
 } from "../../../ui/catalogue-model-picker"
 import { DesktopIcon } from "../../../ui/icons"
+import { BoatTokenForm, useBoatConnection } from "../../../settings/ui/boat-row"
 import type { ChannelCreation } from "../../application/workspace-state"
 import {
   addChannelResources,
@@ -638,6 +639,10 @@ function ResourcesAnswer({ flow }: { flow: ChannelCreation }) {
 function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
   const dispatch = useWorkspaceDispatch()
   const onKeyDown = useReturnAnswers()
+  // Boat is offered only once it is connected: a channel placed there before
+  // would refuse every message. Connecting it is offered right here.
+  const boat = useBoatConnection()
+  const boatReady = boat.status?.state === "connected"
   return (
     <div
       className="new-channel-placement"
@@ -664,7 +669,9 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
             }}
           >
             <option value="local">Local</option>
-            <option value="boat">Boat</option>
+            <option value="boat" disabled={!boatReady}>
+              {boatReady ? "Boat" : "Boat (not connected)"}
+            </option>
           </select>
         </label>
       ))}
@@ -674,6 +681,12 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
         channels use your default Boat VM lifetime; change it in channel settings to
         override.
       </p>
+      {boatReady || boat.unread ? null : (
+        <div className="settings-boat" data-boat-connect>
+          <BoatTokenForm connection={boat} />
+          {boat.error && <p role="alert">{boat.error}</p>}
+        </div>
+      )}
     </div>
   )
 }

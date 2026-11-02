@@ -5,7 +5,8 @@
  * are moved between with the session list, the sidebar and ⌘K.
  *
  * ```text
- *   open(w)    ──▶ w is a tab (added after the last, if new) and in front
+ *   open(w)    ──▶ w is a tab (added after the last, if new) and in front;
+ *                  with `onePerPlugin`, it takes the place of its plugin's tab
  *   show(w)    ──▶ w in front
  *   close(w)   ──▶ w's tab goes; the one after it, else before it, comes to the front;
  *                  the panel goes when it was the last
@@ -20,11 +21,27 @@ export interface ChatPanel {
   readonly front: WidgetRef
 }
 
-/** `widget` in front, a tab of its own after the others if it was not one yet. */
-export function openInPanel(panel: ChatPanel | undefined, widget: WidgetRef): ChatPanel {
+/**
+ * `widget` in front, a tab of its own after the others if it was not one yet.
+ * With `onePerPlugin`, a tab of another widget of the same plugin is replaced
+ * in place: an MCP App has one tab per chat, its latest call's.
+ */
+export function openInPanel(
+  panel: ChatPanel | undefined,
+  widget: WidgetRef,
+  onePerPlugin = false,
+): ChatPanel {
   if (!panel) return { tabs: [widget], front: widget }
   const tab = panel.tabs.find((each) => sameWidget(each, widget))
   if (tab) return tab === panel.front ? panel : { ...panel, front: tab }
+  const sibling = onePerPlugin
+    ? panel.tabs.findIndex((each) => each.plugin === widget.plugin)
+    : -1
+  if (sibling >= 0)
+    return {
+      tabs: panel.tabs.map((each, index) => (index === sibling ? widget : each)),
+      front: widget,
+    }
   return { tabs: [...panel.tabs, widget], front: widget }
 }
 

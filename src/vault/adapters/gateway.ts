@@ -8,7 +8,9 @@ export function gatewayVault(
     try {
       const { vault } = await connected()
       const result =
-        operation === "setup" || operation === "unlock"
+        operation === "setup" ||
+        operation === "unlock" ||
+        operation === "changePassphrase"
           ? await vault[operation](passphrase ?? "")
           : await vault[operation]()
       return result.state
@@ -16,7 +18,9 @@ export function gatewayVault(
       throw new VaultRefusal(
         cause instanceof NessaVaultError && cause.refusal
           ? cause.refusal
-          : "vault_unavailable",
+          : operation === "changePassphrase"
+            ? "vault_change_not_confirmed"
+            : "vault_unavailable",
       )
     }
   }
@@ -24,6 +28,7 @@ export function gatewayVault(
     status: () => call("status"),
     setup: (p) => call("setup", p),
     unlock: (p) => call("unlock", p),
+    changePassphrase: (p) => call("changePassphrase", p),
     lock: () => call("lock"),
   }
 }

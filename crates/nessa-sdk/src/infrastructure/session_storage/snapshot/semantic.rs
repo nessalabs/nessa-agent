@@ -194,6 +194,20 @@ enum WireChange<E = Event> {
         execution_id: String,
         event: SchedulingEvent,
     },
+    DeclinePrepared {
+        execution_id: String,
+        decision: super::records::SavedDecline,
+    },
+    DeclineAcknowledged {
+        execution_id: String,
+    },
+    CancellationPrepared {
+        execution_id: String,
+        decision: super::records::SavedCancellation,
+    },
+    CancellationAcknowledged {
+        execution_id: String,
+    },
     ProviderObservation(E),
     ReceiptUpdated {
         execution_id: String,
@@ -286,6 +300,28 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
                 execution_id: execution_id.as_str().into(),
                 event: event.clone().into(),
             },
+            SessionChange::DeclinePrepared {
+                execution_id,
+                decision,
+            } => Self::DeclinePrepared {
+                execution_id: execution_id.as_str().into(),
+                decision: decision.into(),
+            },
+            SessionChange::DeclineAcknowledged { execution_id } => Self::DeclineAcknowledged {
+                execution_id: execution_id.as_str().into(),
+            },
+            SessionChange::CancellationPrepared {
+                execution_id,
+                decision,
+            } => Self::CancellationPrepared {
+                execution_id: execution_id.as_str().into(),
+                decision: decision.into(),
+            },
+            SessionChange::CancellationAcknowledged { execution_id } => {
+                Self::CancellationAcknowledged {
+                    execution_id: execution_id.as_str().into(),
+                }
+            }
             SessionChange::ProviderObservation(event) => Self::ProviderObservation(event.into()),
             SessionChange::ReceiptUpdated {
                 execution_id,
@@ -379,6 +415,28 @@ impl TryFrom<WireChange> for SessionChange {
                 execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
                 event: event.decode()?,
             },
+            WireChange::DeclinePrepared {
+                execution_id,
+                decision,
+            } => Self::DeclinePrepared {
+                execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
+                decision: decision.decode()?,
+            },
+            WireChange::DeclineAcknowledged { execution_id } => Self::DeclineAcknowledged {
+                execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
+            },
+            WireChange::CancellationPrepared {
+                execution_id,
+                decision,
+            } => Self::CancellationPrepared {
+                execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
+                decision: decision.decode()?,
+            },
+            WireChange::CancellationAcknowledged { execution_id } => {
+                Self::CancellationAcknowledged {
+                    execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
+                }
+            }
             WireChange::ProviderObservation(_) => {
                 return Err(corrupt("provider observation requires folded context"));
             }
@@ -709,6 +767,9 @@ mod tests {
     fn admission_round_trip_reuses_the_existing_metadata_mapping() {
         let id = ExecutionId::new("one").unwrap();
         let record = InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -886,6 +947,9 @@ mod tests {
         let image =
             ImageReference::new(Sha256Digest::from_bytes([1; 32]), ImageMediaType::Png, 1).unwrap();
         let record = InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -951,6 +1015,9 @@ mod tests {
         .unwrap();
         let record = InvocationRecord {
             target_event_offset: None,
+            resumed_from: None,
+            decline: None,
+            cancellation_delivery: None,
             submission: SubmissionMode::Queued,
             request: ExecutionRequest {
                 execution_id: ExecutionId::new("file-turn").unwrap(),
@@ -1018,6 +1085,9 @@ mod tests {
     #[test]
     fn semantic_admission_restores_who_started_the_turn() {
         let record = |initiation| InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Queued,
             request: ExecutionRequest {
@@ -1164,6 +1234,9 @@ mod tests {
             ])
             .unwrap();
         let record = InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {

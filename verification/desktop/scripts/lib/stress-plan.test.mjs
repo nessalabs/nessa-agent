@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
-import { KNOBS, describe, knobsFrom, plan, random } from "./stress-plan.mjs"
+import { KNOBS, describe, knobsFrom, plan, random, selectedPlan } from "./stress-plan.mjs"
 
 test("the same numbers and seed give the same plan, and another seed another", () => {
   const knobs = knobsFrom({}, {})
@@ -23,6 +23,7 @@ test("every required step appears as often as its number says", () => {
     knobs.pairedCatalogues,
   )
   assert.equal(count("stop"), knobs.stops)
+  assert.equal(count("parent-stop"), knobs.parentstops)
   assert.equal(count("fail"), knobs.fails)
   assert.equal(count("usageLimit"), knobs.usageLimits)
   assert.equal(count("restart"), knobs.restarts)
@@ -31,12 +32,14 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("aside"), knobs.asides)
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
+  assert.equal(count("close"), knobs.closes)
   assert.equal(count("rename"), knobs.renames)
   assert.equal(count("handoff"), knobs.handoffs)
   assert.equal(count("delete"), knobs.deletes)
   assert.equal(count("fresh"), knobs.fresh)
   assert.equal(count("window"), knobs.windows)
   assert.equal(count("linking"), knobs.linkings)
+  assert.equal(count("mcp"), knobs.mcpServers)
   assert.equal(count("rail"), knobs.rails)
   assert.equal(count("panel"), knobs.panels)
   assert.equal(count("menuPanel"), knobs.menuPanels)
@@ -46,6 +49,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
   assert.equal(count("trace"), knobs.traces)
+  assert.equal(count("transcriptView"), knobs.transcriptViews)
   assert.equal(count("notice"), knobs.notices)
   assert.equal(count("pool"), knobs.pools)
   assert.equal(count("devices"), knobs.devices)
@@ -54,7 +58,9 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("upgrade"), knobs.upgrades)
   assert.equal(count("launch"), knobs.launches)
   assert.equal(count("github"), knobs.githubs)
+  assert.equal(count("passphrase"), knobs.passphrases)
   assert.equal(count("channel"), knobs.channels)
+  assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
@@ -102,6 +108,15 @@ test("numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one
   assert.match(describe(plan(knobsFrom({}, {}))), /^1\. /)
 })
 
+test("parent Stop appears once by default and at the raised flag or environment count", () => {
+  const count = (knobs) =>
+    plan(knobs).filter((step) => step.kind === "parent-stop").length
+  assert.equal(count(knobsFrom({}, {})), 1)
+  assert.equal(count(knobsFrom({ parentstops: "3" }, {})), 3)
+  assert.equal(count(knobsFrom({}, { NESSA_STRESS_PARENTSTOPS: "4" })), 4)
+  assert.equal(count(knobsFrom({ parentstops: "0" }, {})), 0)
+})
+
 test("handoffs run last of all, after every upgrade, whatever the seed", () => {
   for (let seed = 0; seed < 50; seed += 1) {
     const steps = plan(knobsFrom({ seed: String(seed), handoffs: "2" }, {}))
@@ -142,10 +157,13 @@ test("the legacy seed preserves the existing non-model work's relative order", (
   const steps = plan(
     knobsFrom(
       {
+        parentstops: "0",
+        handoffs: "0",
         inputFiles: "0",
         backgroundTasks: "0",
         windows: "0",
         linkings: "0",
+        mcpServers: "0",
         rails: "0",
         panels: "0",
         waitingRows: "0",
@@ -153,6 +171,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         onboardings: "0",
         tables: "0",
         traces: "0",
+        transcriptViews: "0",
         notices: "0",
         pools: "0",
         devices: "0",
@@ -163,15 +182,18 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menuPanels: "0",
         menus: "0",
         githubs: "0",
+        voices: "0",
+        passphrases: "0",
         channels: "0",
+        huddles: "0",
         webhooks: "0",
         pastes: "0",
         awaits: "0",
+        closes: "0",
         fresh: "0",
         renames: "0",
         deletes: "0",
         usageLimits: "0",
-        handoffs: "0",
       },
       {},
     ),
@@ -224,5 +246,55 @@ test("native-context drift keeps its default and raised repetition counts", () =
   assert.equal(
     plan(knobsFrom({ drifts: "2" }, {})).filter((step) => step.kind === "drift").length,
     2,
+  )
+})
+
+test("passphrase change count raises independently and can be disabled", () => {
+  assert.equal(
+    plan(knobsFrom({ passphrases: "3" }, {})).filter((step) => step.kind === "passphrase")
+      .length,
+    3,
+  )
+  assert.ok(
+    !plan(knobsFrom({ passphrases: "0" }, {})).some((step) => step.kind === "passphrase"),
+  )
+})
+
+test("selected stress preserves the full plan, knobs and step identities", () => {
+  const knobs = knobsFrom({}, {})
+  const before = structuredClone(knobs)
+  assert.deepEqual(selectedPlan(knobs), plan(knobs))
+  assert.deepEqual(
+    selectedPlan(knobs, "passphrase"),
+    plan(knobs).filter((step) => step.kind === "passphrase"),
+  )
+  assert.deepEqual(knobs, before)
+  assert.throws(() => selectedPlan(knobs, "unknown"), /No planned stress step/)
+  assert.throws(() => selectedPlan(knobs, ","), /No planned stress step/)
+  assert.equal(selectedPlan({ ...knobs, passphrases: 3 }, "passphrase").length, 3)
+})
+
+test("selected Ask-only qualification filters that profile's plan without admitting Full", () => {
+  for (const seed of [1, 9, 42]) {
+    const knobs = knobsFrom({ seed: String(seed), switches: "9", parentstops: "3" }, {})
+    const before = structuredClone(knobs)
+    const complete = plan(knobs, "ask-only")
+    assert.deepEqual(selectedPlan(knobs, undefined, "ask-only"), complete)
+    assert.deepEqual(
+      selectedPlan(knobs, "refused-access,parent-stop,permission", "ask-only"),
+      complete.filter((step) =>
+        ["refused-access", "parent-stop", "permission"].includes(step.kind),
+      ),
+    )
+    assert.equal(selectedPlan(knobs, "refused-access", "ask-only").length, 9)
+    assert.throws(
+      () => selectedPlan(knobs, "switch", "ask-only"),
+      /No planned stress step/,
+    )
+    assert.deepEqual(knobs, before)
+  }
+  assert.throws(
+    () => selectedPlan(knobsFrom({}, {}), "parent-stop", "unknown"),
+    /scenario/,
   )
 })

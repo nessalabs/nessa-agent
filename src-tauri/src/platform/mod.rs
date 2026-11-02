@@ -145,6 +145,16 @@ pub trait Host: Send + Sync {
     fn open_externally(&self, _url: &str) -> Result<(), String> {
         Err("this host cannot open a browser".into())
     }
+
+    /// Open a file the host itself named in an app of the person's (macOS:
+    /// their default text editor; Linux: the app registered for its type,
+    /// through `xdg-open`). The window offers it on those two only. Never
+    /// given a path from the page: only one the host composed
+    /// (`crate::gateway_config`), so the page cannot make the OS act on a
+    /// path an agent wrote.
+    fn open_file(&self, _path: &std::path::Path) -> Result<(), String> {
+        Err("This computer can't open the file from here.".into())
+    }
 }
 
 /// The host for this binary. Compile-time DI: only one of the platform

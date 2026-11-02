@@ -369,85 +369,54 @@ impl HostInstaller {
         lease: &str,
         audit: &dyn EnvironmentAudit,
     ) -> Result<Installation, LeaseRefusal> {
+        self.ensure_on(self.shell.as_ref(), host, lease, audit)
+            .await
+    }
+
+    /// Whether a copy of this build is installed on `host`, asked by
+    /// `shell` without installing one; `None` when the host did not say.
+    pub(crate) async fn installed_on(
+        &self,
+        shell: &dyn RemoteShell,
+        host: &SshDestination,
+    ) -> Option<bool> {
+        match self.probe(shell, host).await? {
+            Probe::Present => Some(true),
+            Probe::Absent(_) => Some(false),
+        }
+    }
+
+    /// [`Self::ensure`], with each command run by `shell` instead of the
+    /// shell this installer was made with: a cloud workspace's VM is
+    /// reached through its own connection, and `host` only names it in the
+    /// records.
+    ///
+    /// # Errors
+    /// As [`Self::ensure`].
+    pub(crate) async fn ensure_on(
+        &self,
+        shell: &dyn RemoteShell,
+        host: &SshDestination,
+        lease: &str,
+        audit: &dyn EnvironmentAudit,
+    ) -> Result<Installation, LeaseRefusal> {
         let name = host.as_str();
-        let platform = match self.probe(host).await {
+        let platform = match self.probe(shell, host).await {
             Some(Probe::Present) => return Ok(Installation::Present),
             Some(Probe::Absent(platform)) => platform,
             None => return Err(LeaseRefusal::EnvironmentUnreachable),
         };
-        // This build where it runs, else the release build for the host's
-        // platform. Served by its digest, so it is known by now; the copy
-        // sent must be those bytes, or it would be kept where another build
-        // is looked for (on macOS the path can name a newer executable than
-        // the one running; a download can be anything).
-        let (source, expected, reason) = if self.platform.runs_on(&platform) {
-            (
-                self.build.clone(),
-                self.digest().await?,
-                InstallRefusal::Source,
-            )
-        } else if let Some(release) = self
-            .releases
-            .iter()
-            .find(|release| release.platform.runs_on(&platform))
-        {
-            (
-                release.build.clone(),
-                release.digest.as_str(),
-                InstallRefusal::Release,
-            )
-        } else {
-            return Err(refused(
-                audit,
-                name,
-                lease,
-                InstallRefusal::Platform,
-                Some(platform.to_string()),
-                LeaseRefusal::EnvironmentPlatformUnsupported,
-            ));
-        };
-        // This build's own executable shares one offset among its copies,
-        // so one is sent at a time; a release build opens a file of its own,
-        // and its download is not held up behind another host's upload.
-        let sending = match reason {
-            InstallRefusal::Source => Some(self.sending.lock().await),
-            _ => None,
-        };
-        let opened = tokio::task::spawn_blocking(move || source.open())
-            .await
-            .map_err(io::Error::other)
-            .and_then(|opened| opened);
-        let Build { file, digest } = match opened {
-            Ok(build) if build.digest == expected => build,
-            Ok(build) => {
-                tracing::error!(
-                    measured = build.digest,
-                    expected,
-                    ?reason,
-                    "the build to install is not the one expected; nothing is sent"
-                );
-                // A download's digest is what it was; this build's own
-                // executable changing under it says nothing of the host.
-                let seen = (reason == InstallRefusal::Release).then_some(build.digest);
-                return Err(refused(
-                    audit,
-                    name,
-                    lease,
-                    reason,
-                    seen,
-                    LeaseRefusal::EnvironmentInstallFailed,
-                ));
-            }
-            Err(error) => {
-                tracing::error!(%error, ?reason, "the build to install could not be had");
-                return Err(refused(
-                    audit,
-                    name,
-                    lease,
-                    reason,
-                    None,
-                    LeaseRefusal::EnvironmentInstallFailed,
-                ));
+        let OpenedCopy {
+            build: Build { file, digest },
+            sending,
+        } = match self.opened_for(&platform).await {
+            Ok(opened) => opened,
+            Err(NotOpened {
+                reason,
+                seen,
+                refusal,
+            }) => {
+                return Err(refused(audit, name, lease, reason, seen, refusal));
             }
         };
         let started = EnvironmentEvent::InstallStarted {
@@ -462,8 +431,7 @@ impl HostInstaller {
         }
         let uploaded = tokio::time::timeout(
             self.timings.upload,
-            self.shell
-                .run(host, upload_command(self.protocol, &digest), Some(file)),
+            shell.run(host, upload_command(self.protocol, &digest), Some(file)),
         )
         .await;
         drop(sending);
@@ -483,7 +451,7 @@ impl HostInstaller {
         // and its word) is asked of the host again rather than recorded as
         // refused: a copy the probe finds there runs and speaks this
         // protocol.
-        if answer.is_none() && self.probe(host).await == Some(Probe::Present) {
+        if answer.is_none() && self.probe(shell, host).await == Some(Probe::Present) {
             let found = EnvironmentEvent::InstallFound {
                 host: name.into(),
                 lease: lease.into(),
@@ -557,13 +525,111 @@ impl HostInstaller {
     }
 }
 
+/// A copy of this build for a platform, opened and measured, ready to send.
+pub(crate) struct OpenedCopy<'a> {
+    pub(crate) build: Build,
+    /// Held while this build's own executable is read, which its copies
+    /// share where they read: `None` for a release build's own file.
+    pub(crate) sending: Option<tokio::sync::MutexGuard<'a, ()>>,
+}
+
+/// Why no copy was opened: what to record, and the refusal to answer.
+pub(crate) struct NotOpened {
+    pub(crate) reason: InstallRefusal,
+    /// What was found instead: the platform, or a download's digest.
+    pub(crate) seen: Option<String>,
+    pub(crate) refusal: LeaseRefusal,
+}
+
 impl HostInstaller {
+    /// The copy of this build that runs on `platform`: this build where it
+    /// runs, else the release build it pins for that platform, opened, and
+    /// only when its bytes are the ones expected. The copy sent must be those
+    /// bytes, or it would be kept where another build is looked for (on macOS
+    /// the path can name a newer executable than the one running; a download
+    /// can be anything).
+    ///
+    /// # Errors
+    /// No build runs there, or the one that does could not be had as it is.
+    pub(crate) async fn opened_for(
+        &self,
+        platform: &Platform,
+    ) -> Result<OpenedCopy<'_>, NotOpened> {
+        let digest = self.digest().await.map_err(|refusal| NotOpened {
+            reason: InstallRefusal::Source,
+            seen: None,
+            refusal,
+        })?;
+        let (source, expected, reason) = if self.platform.runs_on(platform) {
+            (self.build.clone(), digest, InstallRefusal::Source)
+        } else if let Some(release) = self
+            .releases
+            .iter()
+            .find(|release| release.platform.runs_on(platform))
+        {
+            (
+                release.build.clone(),
+                release.digest.as_str(),
+                InstallRefusal::Release,
+            )
+        } else {
+            return Err(NotOpened {
+                reason: InstallRefusal::Platform,
+                seen: Some(platform.to_string()),
+                refusal: LeaseRefusal::EnvironmentPlatformUnsupported,
+            });
+        };
+        // This build's own executable shares one offset among its copies,
+        // so one is sent at a time; a release build opens a file of its own,
+        // and its download is not held up behind another host's upload.
+        let sending = match reason {
+            InstallRefusal::Source => Some(self.sending.lock().await),
+            _ => None,
+        };
+        let opened = tokio::task::spawn_blocking(move || source.open())
+            .await
+            .map_err(io::Error::other)
+            .and_then(|opened| opened);
+        match opened {
+            Ok(build) if build.digest == expected => Ok(OpenedCopy { build, sending }),
+            Ok(build) => {
+                tracing::error!(
+                    measured = build.digest,
+                    expected,
+                    ?reason,
+                    "the build to install is not the one expected; nothing is sent"
+                );
+                // A download's digest is what it was; this build's own
+                // executable changing under it says nothing of the host.
+                let seen = (reason == InstallRefusal::Release).then_some(build.digest);
+                Err(NotOpened {
+                    reason,
+                    seen,
+                    refusal: LeaseRefusal::EnvironmentInstallFailed,
+                })
+            }
+            Err(error) => {
+                tracing::error!(%error, ?reason, "the build to install could not be had");
+                Err(NotOpened {
+                    reason,
+                    seen: None,
+                    refusal: LeaseRefusal::EnvironmentInstallFailed,
+                })
+            }
+        }
+    }
+
+    /// The lease protocol every copy it sends speaks.
+    pub(crate) fn protocol(&self) -> &'static str {
+        self.protocol
+    }
+
     /// What the host's probe says; `None` when it said nothing this reads.
-    async fn probe(&self, host: &SshDestination) -> Option<Probe> {
+    async fn probe(&self, shell: &dyn RemoteShell, host: &SshDestination) -> Option<Probe> {
         let name = host.as_str();
         let probed = tokio::time::timeout(
             self.timings.probe,
-            self.shell.run(
+            shell.run(
                 host,
                 probe_command(self.protocol, &self.builds().await.ok()?),
                 None,

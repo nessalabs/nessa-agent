@@ -10,6 +10,7 @@ import { attempt } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys, names } from "./lib/selectors.mjs"
+import { settingsTabFailures } from "./lib/settings-tabs.mjs"
 import {
   contentIs,
   focusComposer,
@@ -34,8 +35,8 @@ Checks, per engine and layout:
   draft-unlisted   ⌘N adds no row to the lists until something is sent
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
-  settings         ⌘, opens Settings; Advanced offers Experimental and Setup,
-                   preview switches and the browser's setup hint; Back returns to panes
+  settings         ⌘, opens Settings; Advanced shows its catalogue's tabs and preview
+                   switches; its Back button closes it and the panes return
   overview         on a fresh profile the sidebar offers "Agents"; ⌘0 shows the
                    overview and the keyboard lands on its row; Escape returns to the
                    panes (focus.mjs covers Escape before it lands)
@@ -154,7 +155,8 @@ await main(meta, async ({ options, rep, url }) => {
         if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
         // Advanced › Experimental: the home of previews, each a switch — the
         // subagents preview (on unless turned off) and the side rail (off until
-        // turned on). Setup is the other tab; the dek says what Advanced is for.
+        // turned on). The catalogue owns which tabs are offered; its dek says
+        // what the page is for.
         await page.locator(css.settingsCategory, { hasText: "Advanced" }).click()
         await page
           .locator(css.settingsHeading, { hasText: "Advanced" })
@@ -182,11 +184,7 @@ await main(meta, async ({ options, rep, url }) => {
             dek: css.settingsDek,
           },
         )
-        const expectedTabs = [names.experimental, names.setupTab]
-        if (advanced.tabs.join() !== expectedTabs.join())
-          failures.push(
-            `Advanced shows tabs ${JSON.stringify(advanced.tabs)}, expected ${JSON.stringify(expectedTabs)}`,
-          )
+        failures.push(...settingsTabFailures("advanced", advanced.tabs))
         if (!advanced.dek)
           failures.push("Advanced has no line under its title saying what it is for")
         for (const preview of ["Subagents", "Side rail"])

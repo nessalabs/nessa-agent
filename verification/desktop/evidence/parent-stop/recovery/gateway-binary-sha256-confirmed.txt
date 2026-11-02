@@ -1,0 +1,2 @@
+7f41488d5f62aad9f7331d8284790613b96fb89e70ea3826c005974b8b3e42ca  /tmp/nessa-981-gateway
+7f41488d5f62aad9f7331d8284790613b96fb89e70ea3826c005974b8b3e42ca  /workspace/nessa-agent/target/debug/nessa

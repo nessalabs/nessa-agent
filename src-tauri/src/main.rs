@@ -9,6 +9,7 @@ mod composition;
 mod desktop_window;
 mod diagnostics;
 mod gateway;
+mod gateway_config;
 mod gateway_endpoint;
 mod host;
 mod host_log;
@@ -35,6 +36,8 @@ mod vault;
 mod stage_port;
 mod startup;
 mod surface_credential;
+#[cfg(all(test, unix))]
+mod test_executable;
 mod tray;
 mod updater;
 
@@ -137,6 +140,7 @@ fn main() {
             channel_paths::choose_channel_folder,
             channel_paths::choose_channel_resources,
             channel_paths::home_folder,
+            gateway_config::open_gateway_config,
             saving::save_file_begin,
             saving::save_file_part,
             saving::save_file_finish,

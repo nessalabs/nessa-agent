@@ -2,4 +2,4 @@
 mod ports;
 mod vault;
 pub use ports::{Audit, AuditRecord, Caller, Clock, Entropy, ObservationClock, Repository};
-pub use vault::{Lease, Session, Vault};
+pub use vault::{ChangeReceipt, Lease, Session, Vault};

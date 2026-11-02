@@ -292,8 +292,8 @@ export const css = {
   settingsPanel: "#settings-panel", // the open tab's page
   settingsLinkedDevices: '#settings-panel [data-setting="linked-devices"]', // Linked devices, as its tab draws it
   settingsCard: '[data-slot="settings-group-card"]', // the UI kit's card on a Settings page, which what it holds must lie inside
-  settingsFormCard: ".settings-card", // class: a card Settings draws itself (Integrations' form and inspection), there only while open
-  settingsGroupHeading: ".settings-group > h2", // class: a group's heading on a Settings page
+  settingsFormCard: ".settings-card", // class: a card Settings draws itself, there only while open
+  settingsGroupHeading: '.settings-group:not([data-title="hidden"]) > h2', // class: a group's shown heading on a Settings page (one named as its tab keeps it for screen readers only)
   settingsScrollers: ".settings-content, .settings-scroll, .settings-panel", // class: what scrolls in Settings, which must not scroll sideways
   settingsScroll: ".settings-scroll", // class: the page's scroller, below its bar
   settingsBar: ".settings-bar", // class: the page's titlebar row (drag strip); data-condensed on .settings-content once the masthead's title has scrolled under it
@@ -306,7 +306,7 @@ export const css = {
   settingsSearch: 'input[aria-label="Search settings"]',
   control: 'button, input, select, textarea, [role="switch"]',
 
-  // Settings › Connections › Integrations: the gateway's MCP servers
+  // Settings › Connections › MCP servers: the gateway's MCP servers
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
@@ -360,7 +360,10 @@ export const css = {
   mcpTooLarge: "[data-mcp-too-large]", // a list too large to show: its sentence and the remove-by-name field (U44)
   mcpNotices: "[data-mcp-notices]", // the notices' live region, drawn from the tab's first draw
   mcpNotice: "[data-mcp-notice]", // what an answer said, in the notices' region
-  mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
+  mcpConfirm: "[data-mcp-confirm]", // the remove dialog; its value is the name asked about
+  mcpMenu: "[data-mcp-menu]", // a row's ⋯ menu, open; its value is the row's name
+  mcpCommand: "[data-mcp-command]", // the edit form's command, named and not editable
+  mcpSecretStored: "[data-mcp-secret-stored]", // a stored value at rest: "Stored" and Replace
   mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
   mcpVariable: "[data-mcp-variable]", // a variable's row in the form
   mcpVariableAdded: "[data-mcp-variable-key]", // a variable's row whose name is typed in the form
@@ -371,7 +374,7 @@ export const css = {
   mcpValuesNeeded: "[data-mcp-values-needed]", // why Save waits on stored values, empty until it does
   mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
   mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
-  mcpInspectionHeading: "[data-mcp-inspection] h2", // the inspection's heading, where focus lands
+  mcpInspectionHeading: "[data-mcp-inspection] h2", // the inspection dialog's title
   mcpInspectionStatus: "[data-mcp-inspection-status]", // what the inspection says of how it ended
   mcpAnyTool: "[data-mcp-tool]", // any inspected tool
   mcpCut: "[data-mcp-cut]",
@@ -424,7 +427,8 @@ export const selectorFor = {
   mcpVariableNamed: (name) => `[data-mcp-variable="${name}"]`, // a stored variable's row, by its name
   mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
   mcpProblemFor: (field) => `[data-mcp-problem="${field}"]`, // a field's problem region by field: form for the form's own
-  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | removeFirst | cancel | confirm | close | removeByName (the name field) | clear-value | trim-value | keep-value
+  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | more | edit | inspect | remove | removeFirst | authorize | revoke | cancel | confirm | close | save | open-config | add-argument | add-variable | removeByName (the name field) | replace-value | clear-value | trim-value | keep-value
+  mcpMenuOf: (name) => `[data-mcp-menu="${name}"]`, // a row's ⋯ menu, open
   mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
   mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
   mcpBadge: (badge) => `[data-badge="${badge}"]`, // a tool's badge: read-only | destructive | ui
@@ -597,7 +601,7 @@ export const names = {
   leaveSettings: "Back to nessa Agent",
   /** Settings' category and tab holding the MCP servers. */
   connections: "Connections",
-  integrations: "Integrations",
+  integrations: "MCP servers",
   linkedDevices: "Linked devices",
   /** Settings › Connections' tab holding the GitHub sign-in, and its row's buttons. */
   accounts: "Accounts",
@@ -630,22 +634,30 @@ export const names = {
   },
   /** A session's menu item that opens the share dialog. */
   share: "Share…",
-  /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
+  /** What MCP servers says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
   mcp: {
-    add: "Add server…",
-    addVariable: "Add variable",
+    add: "Add Server…",
+    addVariable: "Add Variable",
     save: "Save",
     cancel: "Cancel",
-    edit: "Edit",
-    inspect: "Inspect",
-    remove: "Remove",
-    close: "Close",
+    /** A row's ⋯ menu, by the row's name. */
+    more: (name) => `More for ${name}`,
+    /** The ⋯ menu's items. */
+    edit: "Edit…",
+    inspect: "Show Tools…",
+    remove: "Remove…",
+    /** The remove dialog's confirm. */
+    confirmRemove: "Remove",
+    close: "Done",
     name: "Name",
     command: "Command",
-    addArgument: "Add argument",
+    openConfig: "Open config.json",
+    replaceValue: (name) => `Replace the value of ${name}`,
+    useInNew: "Use in new conversations",
+    addArgument: "Add Argument",
     argument: (place) => `Argument ${place}`,
     variableName: "Variable name",
-    storedValue: "Stored value kept",
+    storedValue: "Stored",
     storedValueAgain: "Enter the value again",
     valuesAgain:
       "Changing the command, arguments or variables needs every stored value entered again.",
@@ -668,7 +680,8 @@ export const names = {
       `Remove the first server named “${name}”, which runs ${command}? New conversations stop getting it. Open ones keep it until they close.`,
     nameShared: (count) =>
       `${count} servers share this name. Only the first can be removed here, and none edited.`,
-    storedValueCleared: "Empty: the stored value will be cleared",
+    storedValueCleared: "Enter a value, or keep the stored one",
+    valuesCleared: "Enter a value, or keep the stored one.",
     keepStored: "Keep stored value",
     pasted: (lines, endsWithBreak) =>
       `Pasted value: ${lines === 1 ? "1 line" : `${lines} lines`}${endsWithBreak ? ", ends with a line break" : ""}`,

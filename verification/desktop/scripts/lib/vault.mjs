@@ -199,3 +199,24 @@ export async function unlockVault(page, { screenshot, expectedContainer } = {}) 
     await dialog.waitFor({ state: "hidden" })
   }
 }
+
+/** Drive an explicit change and unlock through the window, keeping the native
+ * owner. The optional readback verifies sealing without issuing a mutation. */
+export async function changeVaultPassphrase(page, passphrase, { locked } = {}) {
+  await page.getByRole("button", { name: "Change passphrase", exact: true }).click()
+  const change = page.locator("[data-vault-change]")
+  await change.getByLabel("New passphrase", { exact: true }).fill(passphrase)
+  await change.getByLabel("Confirm new passphrase").fill(passphrase)
+  await change.getByRole("button", { name: "Change passphrase", exact: true }).click()
+  await change
+    .getByRole("status")
+    .filter({ hasText: "Your passphrase changed" })
+    .waitFor()
+  if (locked && !(await locked()))
+    throw new Error("Passphrase change did not seal the vault")
+  await change.getByRole("button", { name: "Unlock vault", exact: true }).click()
+  const unlock = page.locator('[data-vault-dialog="unlock"]')
+  await unlock.getByLabel("Passphrase", { exact: true }).fill(passphrase)
+  await unlock.getByRole("button", { name: "Unlock", exact: true }).click()
+  await unlock.waitFor({ state: "hidden" })
+}

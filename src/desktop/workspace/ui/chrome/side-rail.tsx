@@ -27,8 +27,8 @@ export interface RailItem {
   readonly icon: ReactElement
   /**
    * Whether its full view keeps "nessa Studio" — the way to Settings — in
-   * the bottom-left corner, where the sidebar keeps it. On unless the item
-   * needs that corner for itself.
+   * the bottom-left corner, where the sidebar keeps it. On unless the item's
+   * view wants that corner clear.
    */
   readonly studio?: boolean
 }
@@ -61,6 +61,8 @@ export const railItems: readonly RailItem[] = [
   {
     id: "devices",
     name: "Devices",
+    // Its cards run to the window's foot, under the corner.
+    studio: false,
     icon: svg(
       <>
         <rect className="g-screen" x="2.5" y="4.5" width="13" height="10" rx="1.8" />

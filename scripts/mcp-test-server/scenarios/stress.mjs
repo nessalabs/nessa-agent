@@ -18,6 +18,8 @@ export const STRESS = {
   webhook: "stress webhook witness",
   model: "stress model witness",
   permission: "stress permission",
+  listPermission: "stress compact version review",
+  listPreview: "stress list preview",
   reviews: "stress reviews",
   large: "stress large review",
   wait: "stress wait",
@@ -26,12 +28,17 @@ export const STRESS = {
   fail: "stress fail",
   limit: "stress usage limit",
   delegate: "stress delegate",
+  parentStop: "stress parent stop",
+  ownedChild: "stress owned child",
+  ownedSeed: "stress owned seed",
   await: "stress await",
+  close: "stress close",
   watch: "stress watch",
   long: "stress long",
   oversized: "stress oversized",
   stream: "stress stream",
   window: "stress window",
+  panelTabs: "stress panel tabs",
   table: "stress table",
   paste: "stress paste",
   trace: "stress trace",
@@ -39,6 +46,7 @@ export const STRESS = {
   githubRead: "stress repository read",
   githubShell: "stress shell github",
   channel: "stress channel",
+  huddle: "stress huddle",
 }
 
 /**
@@ -72,7 +80,9 @@ export const SAYS = {
   failure: "the stress scenario failed this turn",
   delegated: "Delegated to ",
   awaited: "Awaited ",
+  closed: "Closing this thread: ",
   report: "Report received.",
+  owned: "Owned execution: ",
   backgroundStarted: "Background task started.",
   backgroundFinished: "Background outcome received.",
   watched: "Watched: ",
@@ -81,6 +91,7 @@ export const SAYS = {
   stream: "Streamed: ",
   streamEnd: "Stream finished.",
   window: "Window: ",
+  panelTabs: "Panel tabs: ",
   table: "Tables: ",
   paste: "Images: ",
   trace: "Traced: ",
@@ -90,6 +101,7 @@ export const SAYS = {
   carried: "Carried on by ",
   channel: "Working in: ",
   channelPrompt: "System prompt: ",
+  huddle: "Talk board: ",
 }
 
 /**
@@ -181,7 +193,7 @@ export const GITHUB_FINGERPRINTS = `node -e '${[
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
 
-const review = (title, args, allowedText) => ({
+const review = (title, args, allowedText, deniedText = SAYS.denied) => ({
   do: "permission",
   tool: TOOL,
   arguments: args,
@@ -191,7 +203,7 @@ const review = (title, args, allowedText) => ({
       { do: "tool", tool: TOOL, arguments: {} },
       { do: "text", chunks: [allowedText] },
     ],
-    "deny-once": [{ do: "text", chunks: [SAYS.denied] }],
+    "deny-once": [{ do: "text", chunks: [deniedText] }],
   },
 })
 
@@ -203,6 +215,7 @@ const review = (title, args, allowedText) => ({
  * `oversizedChunks` such chunks, longer than one view's frame.
  */
 export function stressScenario({
+  agent = "claude",
   reviews = 20,
   largeBytes = 24_000,
   pauseMs = 3_000,
@@ -210,6 +223,8 @@ export function stressScenario({
   longChunkBytes = 300,
   oversizedChunks = 240,
 } = {}) {
+  if (!["claude", "codex"].includes(agent))
+    throw new Error("unsupported stress fixture agent")
   const many = Array.from({ length: Math.max(1, reviews) }, (_, index) =>
     review(`Review ${index + 1} of ${reviews}`, { index }, `Allowed ${index + 1}.`),
   )
@@ -273,6 +288,17 @@ export function stressScenario({
       {
         when: STRESS.reply,
         steps: [{ do: "text", chunks: [SAYS.echo, "${prompt.text}"] }, { do: "end" }],
+      },
+      {
+        // The test server's talk app, drawn where the turn shows it: what a
+        // voice app asks of its host (the microphone, the chat's panel, and
+        // messages sent as the person).
+        when: STRESS.huddle,
+        steps: [
+          { do: "tool", tool: "talk_board", arguments: {} },
+          { do: "text", chunks: [SAYS.huddle, "${prompt.text}"] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.long,
@@ -412,6 +438,46 @@ export function stressScenario({
         ],
       },
       {
+        when: STRESS.listPermission,
+        steps: [
+          ...(agent === "claude"
+            ? [
+                review(
+                  "A compact review",
+                  {},
+                  SAYS.allowed + " ${prompt.text}",
+                  SAYS.denied + " ${prompt.text}",
+                ),
+              ]
+            : [
+                {
+                  do: "version-review",
+                  on: {
+                    "allow-once": [
+                      { do: "text", chunks: [SAYS.allowed + " ${prompt.text}"] },
+                    ],
+                    "deny-once": [
+                      { do: "text", chunks: [SAYS.denied + " ${prompt.text}"] },
+                    ],
+                  },
+                },
+              ]),
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.listPreview,
+        steps: [
+          review(
+            "A list preview",
+            { body: "x".repeat(128) },
+            SAYS.allowed + " ${prompt.text}",
+            SAYS.denied + " ${prompt.text}",
+          ),
+          { do: "end" },
+        ],
+      },
+      {
         when: STRESS.permission,
         steps: [
           { do: "text", chunks: ["Asking: ${prompt.text}"] },
@@ -492,6 +558,18 @@ export function stressScenario({
         ],
       },
       {
+        // Two panel widgets, from two servers, so the chat's panel has two
+        // tabs. The window step opens them, changes the front tab, hides and
+        // shows the panel, and switches chats.
+        when: STRESS.panelTabs,
+        steps: [
+          { do: "tool", tool: "talk_board", arguments: {} },
+          { do: "tool", server: "panelpin", tool: "panel_pin", arguments: {} },
+          { do: "text", chunks: [SAYS.panelTabs] },
+          { do: "end" },
+        ],
+      },
+      {
         // Where the session works and what it was told, said back: a turn in
         // a channel is seen to run in the channel's folder, with its notes.
         when: STRESS.channel,
@@ -513,14 +591,40 @@ export function stressScenario({
           { do: "fail", message: SAYS.failure },
         ],
       },
-      {
-        when: STRESS.limit,
+      ...[STRESS.parentStop, STRESS.ownedChild].map((when) => ({
+        when,
         steps: [
           {
-            do: "fail",
-            message: "You've hit your weekly limit",
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
           },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "send_message",
+            arguments: {
+              threadId: "${thread.threadId}",
+              message: when === STRESS.parentStop ? STRESS.ownedSeed : STRESS.wait,
+            },
+            save: "sent",
+          },
+          {
+            do: "text",
+            chunks: [SAYS.owned, "${thread.threadId}", " ", "${sent.executionId}"],
+          },
+          { do: "wait-cancel" },
         ],
+      })),
+      {
+        when: STRESS.ownedSeed,
+        steps: [{ do: "text", chunks: ["Owned child seed completed"] }, { do: "end" }],
+      },
+      {
+        when: STRESS.limit,
+        steps: [{ do: "usage-limit" }],
       },
       {
         when: STRESS.delegate,
@@ -543,6 +647,22 @@ export function stressScenario({
             save: "sent",
           },
           { do: "text", chunks: [SAYS.delegated, "${thread.threadId}"] },
+          { do: "end" },
+        ],
+      },
+      // Closes its own thread, as an agent whose work is done is told to:
+      // the agent stops once this turn ends, and the next message opens it.
+      {
+        when: STRESS.close,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "close_thread",
+            arguments: {},
+            save: "closed",
+          },
+          { do: "text", chunks: [SAYS.closed, "${closed}"] },
           { do: "end" },
         ],
       },

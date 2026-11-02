@@ -1,0 +1,10 @@
+building production into /tmp/nessa-desktop-verify-kBlQ4Z…
+previewing production at http://127.0.0.1:40317/desktop.html
+ok    permission [chromium columns]
+ok    allow [chromium columns]
+ok    fail [chromium columns]
+ok    cancel [chromium columns]
+ok    console [chromium columns]
+chromium columns: 8774 ms
+wrote /tmp/nessa-981-evidence/quiet-scripted-scenarios.json
+scripted-scenarios: 5/5 held

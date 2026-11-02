@@ -1,0 +1,10 @@
+starting a dev server of its own on port 40531…
+warmed 1296 modules in 35232 ms
+ERROR default [chromium columns]
+        ! could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:40531/desktop.html: page.goto: Page crashed
+starting a dev server of its own on port 42449…
+warmed 1296 modules in 14311 ms
+ok    override [chromium columns]
+ok    console [chromium columns]
+wrote /tmp/nessa-981-evidence/latest-parent-stop.json
+parent-stop: 2/3 held (some could not run)

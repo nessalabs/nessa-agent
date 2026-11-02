@@ -16,6 +16,15 @@ export interface DeviceMachine {
   readonly memoryUsedBytes: number
   readonly diskTotalBytes: number
   readonly diskUsedBytes: number
+  /** Each local volume the disk figures add up; absent from older hubs. */
+  readonly disks?: readonly DeviceDisk[]
+}
+
+/** One volume (`devices.list`'s `DeviceDisk`). */
+export interface DeviceDisk {
+  readonly mount: string
+  readonly totalBytes: number
+  readonly usedBytes: number
 }
 
 /** A worker as the hub lists it (`devices.list`'s `DeviceWorker`). */
@@ -64,9 +73,17 @@ export interface WorkerCard {
   readonly cpu?: Usage
   readonly memory?: Usage
   readonly disk?: Usage
+  /** Each volume while it serves, when it has more than one. */
+  readonly disks?: readonly DiskUsage[]
   readonly cpus?: number
   readonly lastSeenMs?: number
   readonly environment: string
+}
+
+/** One volume and how full it is. */
+export interface DiskUsage {
+  readonly mount: string
+  readonly usage: Usage
 }
 
 const GB = 1024 ** 3
@@ -152,6 +169,14 @@ export function workerCard(worker: DeviceWorker): WorkerCard {
           cpu: cpu(machine),
           memory: usage(machine.memoryUsedBytes, machine.memoryTotalBytes),
           disk: usage(machine.diskUsedBytes, machine.diskTotalBytes),
+          ...(machine.disks && machine.disks.length > 1
+            ? {
+                disks: machine.disks.map((disk) => ({
+                  mount: disk.mount,
+                  usage: usage(disk.usedBytes, disk.totalBytes),
+                })),
+              }
+            : {}),
         }
       : {}),
     ...(machine ? { cpus: machine.cpus } : {}),
@@ -207,19 +232,11 @@ export function ago(thenMs: number, nowMs: number): string {
   return days === 1 ? "yesterday" : `${days} days ago`
 }
 
-/**
- * The page's one line under its title. `omitted` workers past the list's
- * bound count toward the total; the hub lists online ones first, so they
- * are off unless every listed one is on.
- */
-export function summary(
-  hub: string,
-  workers: readonly WorkerCard[],
-  omitted = 0,
-): string {
+/** The page's one line under its title. */
+export function summary(hub: string, workers: readonly WorkerCard[]): string {
   const online = workers.filter((worker) => worker.status !== "offline").length
   const agents = workers.reduce((sum, worker) => sum + worker.agents, 0)
-  const total = workers.length + omitted
+  const total = workers.length
   if (total === 0) return `${hub} is your hub. Add a computer to run agents on it too.`
   const devices = `${online} of ${total} ${total === 1 ? "computer" : "computers"} online`
   return `${hub} is your hub. ${devices}, ${agentsWord(agents).toLowerCase()} on them.`
