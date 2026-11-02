@@ -15,6 +15,7 @@
 //!
 //! Absent, every connected computer is in the pool, none goes first, and a
 //! computer at 90% processor or memory use is busy.
+#![cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
 use crate::conversation::domain::{
     ChannelId, PoolPreference, PoolSettings, SettingsScope, MAX_POOL_ENTRIES,
 };

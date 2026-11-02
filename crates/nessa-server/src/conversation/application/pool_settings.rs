@@ -2,6 +2,7 @@
 //! each channel's override (`PoolPreference`), with when a computer is too
 //! busy for new work. Implemented over config.json in infrastructure
 //! (`ConfigPoolSettings`), under the file's one shared lock.
+#![cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
 use crate::conversation::domain::{PoolPreference, PoolSettings, SettingsScope};
 use async_trait::async_trait;
 use nessa_auth::domain::{OrganizationId, PrincipalId};

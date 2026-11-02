@@ -70,18 +70,11 @@ impl PairedEnvironments for Workers {
         self.serving.lock().unwrap().clone()
     }
 
-    fn machine_use(
-        &self,
-        peer: &PeerEnvironment,
-    ) -> Option<crate::conversation::application::MachineUse> {
-        self.cpu
-            .lock()
-            .unwrap()
-            .get(peer)
-            .map(|cpu| crate::conversation::application::MachineUse {
-                cpu_permille: *cpu,
-                memory_permille: 100,
-            })
+    fn machine_use(&self, peer: &PeerEnvironment) -> Option<MachineUse> {
+        self.cpu.lock().unwrap().get(peer).map(|cpu| MachineUse {
+            cpu_permille: *cpu,
+            memory_permille: 100,
+        })
     }
 }
 

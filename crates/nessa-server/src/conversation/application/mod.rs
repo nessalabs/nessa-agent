@@ -195,7 +195,9 @@ pub use passive_read::AdmittedCatalogueRead;
 mod organization_budget;
 mod placement;
 mod pool_settings;
-pub(crate) use pool_settings::{PoolCaller, PoolSettingsError, PoolSettingsStore};
+#[cfg(any(unix, test))]
+pub(crate) use pool_settings::PoolSettingsError;
+pub(crate) use pool_settings::{PoolCaller, PoolSettingsStore};
 mod ports;
 mod provider_sessions;
 mod record_read;

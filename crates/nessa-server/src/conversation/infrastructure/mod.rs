@@ -225,7 +225,9 @@ mod workspace_runtime_config;
 pub(crate) use workspace_runtime_config::BoatRuntimeConfig;
 mod pool_config;
 pub(crate) use pool_config::PoolConfig;
+#[cfg(unix)]
 mod pool_settings;
+#[cfg(unix)]
 pub(crate) use pool_settings::ConfigPoolSettings;
 
 #[cfg(any(unix, test))]
