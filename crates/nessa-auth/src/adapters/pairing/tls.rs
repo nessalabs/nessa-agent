@@ -113,6 +113,18 @@ impl NativeIdentity {
         bytes.copy_from_slice(signature.as_ref());
         Ok(bytes)
     }
+    /// Sign a tunnel origin this gateway is about to publish. The message
+    /// starts with [`TUNNEL_ORIGIN_CONTEXT`], never with the 64 spaces a TLS
+    /// 1.3 handshake signature starts with. A phone checks the signature
+    /// against the key it pinned before it sends its tunnel secret.
+    pub fn sign_tunnel_origin(&self, origin: &[u8]) -> Result<[u8; 64], PairingCryptoError> {
+        let pair = Ed25519KeyPair::from_seed_unchecked(self.seed.expose_bytes())
+            .map_err(|_| PairingCryptoError::Unavailable)?;
+        let signature = pair.sign(&tunnel_origin_message(&self.public_key(), origin));
+        let mut bytes = [0; 64];
+        bytes.copy_from_slice(signature.as_ref());
+        Ok(bytes)
+    }
     fn certified_key(&self) -> Result<Arc<CertifiedKey>, PairingCryptoError> {
         let mut bytes = Zeroizing::new(Vec::with_capacity(48));
         bytes.extend_from_slice(&PKCS8_PREFIX);
@@ -129,6 +141,8 @@ impl NativeIdentity {
 }
 /// What every relay proof message starts with.
 pub const RELAY_PROOF_CONTEXT: &[u8] = b"nessa-relay-serve-v1\0";
+/// What every published-tunnel-origin signature starts with.
+pub const TUNNEL_ORIGIN_CONTEXT: &[u8] = b"nessa-tunnel-origin-v1\0";
 /// The context, the key, then the challenge: the one layout a relay proof
 /// signs.
 fn relay_proof_message(key: &[u8; 32], challenge: &[u8; 32]) -> Vec<u8> {
@@ -143,6 +157,20 @@ fn relay_proof_message(key: &[u8; 32], challenge: &[u8; 32]) -> Vec<u8> {
 pub fn verify_relay_proof(key: &[u8; 32], challenge: &[u8; 32], signature: &[u8; 64]) -> bool {
     UnparsedPublicKey::new(&ED25519, key)
         .verify(&relay_proof_message(key, challenge), signature)
+        .is_ok()
+}
+fn tunnel_origin_message(key: &[u8; 32], origin: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(TUNNEL_ORIGIN_CONTEXT.len() + 32 + origin.len());
+    message.extend_from_slice(TUNNEL_ORIGIN_CONTEXT);
+    message.extend_from_slice(key);
+    message.extend_from_slice(origin);
+    message
+}
+/// Whether `signature` is `key`'s signature over `origin`, as
+/// [`NativeIdentity::sign_tunnel_origin`] makes it.
+pub fn verify_tunnel_origin(key: &[u8; 32], origin: &[u8], signature: &[u8; 64]) -> bool {
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(&tunnel_origin_message(key, origin), signature)
         .is_ok()
 }
 /// The raw key inside a pinned gateway SPKI: the id the gateway is

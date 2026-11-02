@@ -682,7 +682,7 @@ fn the_connector_notes_a_relay_offline_and_a_connect_clears_it() {
     };
     for (answer, noted) in [(RelayFrame::Offline, true), (RelayFrame::NoAnswer, false)] {
         let offline = Arc::new(AtomicBool::new(false));
-        let (address, serving) = answering_relay(answer);
+        let (address, serving) = answering_relay(answer.clone());
         assert!(connector(address, &offline)
             .connect(refused, Duration::from_secs(5))
             .is_err());

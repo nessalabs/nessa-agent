@@ -450,13 +450,24 @@ struct Gate {
 }
 struct ProductDependencies {
     connector: Arc<dyn ProductConnector>,
+    /// Named after open, when the phone knows the gateway's relay.
+    relay: Arc<Mutex<Option<nessa_protocol::relay::RelayAddress>>>,
     wake: Arc<dyn ProductWake>,
     limits: ProductLimits,
 }
 impl ProductDependencies {
-    fn reaching(tunnel: Option<TunnelAddress>) -> Self {
+    fn reaching(
+        tunnel: Option<TunnelAddress>,
+        secrets: Arc<dyn nessa_auth::application::pairing::ClientPendingStore>,
+    ) -> Self {
+        let relay = Arc::new(Mutex::new(None));
         Self {
-            connector: Arc::new(LocalProductConnector::reaching(tunnel)),
+            connector: Arc::new(LocalProductConnector::reaching(
+                tunnel,
+                Some(secrets),
+                relay.clone(),
+            )),
+            relay,
             ..Self::default()
         }
     }
@@ -465,6 +476,7 @@ impl Default for ProductDependencies {
     fn default() -> Self {
         Self {
             connector: Arc::new(LocalProductConnector::default()),
+            relay: Arc::new(Mutex::new(None)),
             wake: Arc::new(ThreadProductWake::default()),
             limits: ProductLimits::default(),
         }
@@ -944,6 +956,19 @@ impl NativeSession {
     ) -> Result<Self, SessionFailure> {
         Self::open_with_clock(root, directory, address, tunnel, Arc::new(Monotonic::new()))
     }
+
+    /// Remember the relay a paired phone already uses to look this gateway up.
+    /// When a later product dial's saved tunnel address does not connect, the
+    /// dial asks the relay for the address the gateway has published.
+    pub fn remember_relay(&self, relay: String) -> Result<(), SessionFailure> {
+        let address = nessa_protocol::relay::RelayAddress::try_from(relay)
+            .map_err(|_| SessionFailure::Runtime(std::io::ErrorKind::InvalidInput))?;
+        let mut operation = self.enter(None)?;
+        let slot = operation.driver().product.relay.clone();
+        drop(operation);
+        *slot.lock().unwrap_or_else(|error| error.into_inner()) = Some(address);
+        Ok(())
+    }
     /// Compose a private session over its host's monotonic elapsed-time clock.
     /// The clock controls retained reads and product socket budgets; it must
     /// satisfy [`Clock`]'s monotonic contract. Auth's wall clock is independent.
@@ -957,6 +982,7 @@ impl NativeSession {
         let state = Arc::new(
             FilePairingState::open(root, directory).map_err(SessionFailure::PrivateState)?,
         );
+        let secrets = state.clone();
         let wall = Arc::new(Wall);
         let runtime = Builder::new_current_thread()
             .enable_all()
@@ -974,7 +1000,7 @@ impl NativeSession {
             files: Arc::new(OsCacheFiles),
             artifacts: Arc::new(DiskArtifactFiles),
             runtime,
-            product: ProductDependencies::reaching(tunnel),
+            product: ProductDependencies::reaching(tunnel, secrets),
         })
     }
     fn compose(dependencies: Dependencies) -> Result<Self, SessionFailure> {

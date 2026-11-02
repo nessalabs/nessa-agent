@@ -3641,6 +3641,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "tempfile",
  "tokio",
  "tokio-rustls",
@@ -3738,6 +3739,7 @@ name = "nessa-protocol"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "hmac",
  "nessa-auth",
  "nessa-local-storage",
  "nessa-sdk",
