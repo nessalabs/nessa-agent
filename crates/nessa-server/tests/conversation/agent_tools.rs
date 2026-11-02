@@ -1581,12 +1581,14 @@ async fn saved_thread_reports_are_delivered_after_a_restart() {
         let provider = Arc::new(ProviderFactory::default());
         let (service, storage, metadata) = fixture(&root, provider.clone());
         service.bind_commands(storage.clone());
-        service.bind_thread_reports(Arc::new(LocalThreadReports::open(&saved).unwrap()));
+        let reports = Arc::new(LocalThreadReports::open(&saved).unwrap());
+        service.bind_thread_reports(reports.clone());
         opened(&service, &provider, &source).await;
         opened(&service, &provider, &worker).await;
         finish_turn(&service, &provider, &worker, "done").await;
-        // Registered with no look after it, as a run that stopped before
-        // it could deliver leaves them.
+        // The turn's scheduling has settled, so its after-hook has returned
+        // without these rows. A run that stopped before it could deliver
+        // leaves them.
         for execution in ["done", "never"] {
             assert_eq!(
                 service
@@ -1595,6 +1597,19 @@ async fn saved_thread_reports_are_delivered_after_a_restart() {
                 ReportRegistration::Registered
             );
         }
+        assert_eq!(
+            reports.pending().await.unwrap().len(),
+            2,
+            "registered after settlement"
+        );
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            reports.pending().await.unwrap().len(),
+            2,
+            "the finished turn's look took a report registered after it settled"
+        );
         retire(service, storage, metadata).await;
     }
     let provider = Arc::new(ProviderFactory::default());

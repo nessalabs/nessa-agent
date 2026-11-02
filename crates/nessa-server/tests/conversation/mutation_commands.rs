@@ -21,7 +21,7 @@ use nessa_sdk::application::agent_execution::{
     commands::CreationFailure,
     sessions::{SessionSnapshot, SessionStorage},
 };
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -210,7 +210,27 @@ async fn finish_turn(
                 .any(|id| id == execution);
             if started {
                 let live = service.resolve(target, &caller("create")).await.unwrap();
-                if super::turn_is_final(&live, &turn).await == Some(true) {
+                // Settled is recorded after the after-hook returns. The result
+                // alone is earlier, and a report saved in that gap is not part
+                // of the look armed when the result was saved.
+                let settled = live
+                    .agent
+                    .session_manager()
+                    .snapshot()
+                    .await
+                    .and_then(|snapshot| {
+                        snapshot
+                            .invocations
+                            .into_iter()
+                            .find(|record| &record.request.execution_id == &turn)
+                    })
+                    .is_some_and(|record| {
+                        matches!(
+                            record.scheduling.last().map(|event| event.stage),
+                            Some(InvocationStage::Settled | InvocationStage::Cancelled)
+                        )
+                    });
+                if settled {
                     break;
                 }
             }
@@ -218,7 +238,7 @@ async fn finish_turn(
         }
     })
     .await
-    .unwrap();
+    .expect("the turn's scheduling did not settle");
 }
 async fn send(service: &ConversationService, target: &ConversationId, execution: &str, text: &str) {
     service
