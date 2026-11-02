@@ -76,6 +76,7 @@ authorization and parent identity.
 | [1185 — Bound native relay audit retention](done/1185-bound-native-relay-audit-retention.md) | A direct gap and a CLI acceptance trim the audit store they write in that transaction. State table: [1185](done/1185-bound-native-relay-audit-retention.md#states) |
 | [1195 — Isolate saved GitHub sign-in](done/1195-isolate-github-sign-in.md) | The GitHub token's only durable copy is the passphrase-sealed vault entry. A plaintext sign-in file is deleted and not imported. An agent command that knows the path does not obtain the token bytes. State table: [1195](done/1195-isolate-github-sign-in.md#states) |
 | [1138 — A second product submission waits its turn](done/1138-queue-product-submissions.md) | The phone's product hand-off waits in arrival order instead of refusing a second send. Reply waits stay side by side. `busy` remains for the session worker and for Ready and events. State table: [1138](done/1138-queue-product-submissions.md#states). nessa-ios still regenerates `Vendor/NessaNative` and drops the 2 ms retry |
+| [1034 — A captured stop is finished after a restart](done/1034-finish-a-captured-stop-after-restart.md) | A person's stop or a session close saved before its scheduling edge is recorded and not continued. A settled stop receipt is still declined by the gateway Stop owner. State table: [1034](done/1034-finish-a-captured-stop-after-restart.md#states) |
 
 ## Todo — implementation priority
 

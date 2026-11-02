@@ -9,7 +9,9 @@ parent: "sdk"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/executions/value_objects/scheduling.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs"
+  - "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/submissions.rs"
+  - "crates/nessa-sdk/tests/application/agent_execution/agents/conformance/resumption.rs"
   - "crates/nessa-sdk/docs/agent_execution/scheduling.md"
   - "crates/nessa-sdk/tests/application/agent_execution/scheduling/retries.rs"
 diagramLinks: {}
@@ -36,6 +38,8 @@ stateDiagram-v2
         failure a retry can fix: resume_turn queues a successor,
         at most three in a row.
         NotResumed is the host's final no.
+        A person's stop or a session close already captured on a
+        Queued or Running turn is recorded as that edge and not continued.
     end note
     [*] --> Injected: Native steering acknowledged / retain target
     note right of Injected
