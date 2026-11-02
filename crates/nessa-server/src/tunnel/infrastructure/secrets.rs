@@ -375,12 +375,21 @@ impl FileDeviceSecrets {
         Ok(open)
     }
 
-    /// The secret file already holds `row`. Write the publication if the
-    /// intent is still open, and drop the pending copy either way.
-    fn finish_issue(&self, row: &Row) -> Result<(), SecretError> {
-        if let Some(open) = self.open_operation(&row.credential_id, ACTION_ISSUE)? {
-            self.confirm(&open, "active")?;
-            self.clear_pending(&open.operation_id)?;
+    /// Confirm operations the secret file already shows. Every issue and
+    /// revoke runs this first, while the row is still the evidence of what
+    /// was published. An issuance whose row is stored becomes active. A
+    /// revocation whose row is already gone becomes revoked.
+    fn reconcile(&self, credential_id: &str, rows: &[Row]) -> Result<(), SecretError> {
+        if let Some(row) = rows.iter().find(|row| row.credential_id == credential_id) {
+            if let Some(open) = self.open_operation(credential_id, ACTION_ISSUE)? {
+                if fingerprint(&row.secret) != open.fingerprint {
+                    return Err(SecretError::Storage);
+                }
+                self.confirm(&open, "active")?;
+                self.clear_pending(&open.operation_id)?;
+            }
+        } else if let Some(open) = self.open_operation(credential_id, ACTION_REVOKE)? {
+            self.confirm(&open, "revoked")?;
         }
         Ok(())
     }
@@ -408,10 +417,9 @@ impl DeviceTunnelSecrets for FileDeviceSecrets {
     ) -> Result<[u8; 32], SecretError> {
         let _held = self.lock();
         let mut rows = self.read()?;
+        self.reconcile(credential_id, &rows)?;
         if let Some(row) = rows.iter().find(|row| row.credential_id == credential_id) {
-            let secret = row.secret;
-            self.finish_issue(row)?;
-            return Ok(secret);
+            return Ok(row.secret);
         }
         let open = match self.open_operation(credential_id, ACTION_ISSUE)? {
             Some(open) => open,
@@ -437,6 +445,7 @@ impl DeviceTunnelSecrets for FileDeviceSecrets {
     ) -> Result<(), SecretError> {
         let _held = self.lock();
         let mut rows = self.read()?;
+        self.reconcile(credential_id, &rows)?;
         let Some(index) = rows
             .iter()
             .position(|row| row.credential_id == credential_id)
@@ -811,6 +820,58 @@ mod tests {
         assert_eq!(published[0]["operationId"], operation);
         assert_eq!(published[0]["before"], "active");
         assert_eq!(published[0]["after"], "revoked");
+    }
+
+    #[test]
+    fn a_revoke_confirms_the_issuance_the_file_already_holds() {
+        let (directory, secrets, _) = store(vec!["device-1".into()]);
+        secrets.fail_next_confirmations(1);
+        assert_eq!(
+            secrets.issue("device-1", &[7; 32], "owner"),
+            Err(SecretError::Audit)
+        );
+        let pending = std::fs::read_dir(pending_dir(directory.path())).unwrap();
+        let pending: Vec<_> = pending.map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(pending.len(), 1, "the unpublished copy is still aside");
+        let secret: [u8; 32] = std::fs::read(&pending[0]).unwrap().try_into().unwrap();
+        assert!(secrets.accepts(&secret), "the secret file holds the row");
+        let records = audit_records(directory.path());
+        let issue_intent = records
+            .iter()
+            .find(|record| record["action"] == "issue" && record["phase"] == "intent")
+            .unwrap();
+        let issue_operation = issue_intent["operationId"].as_str().unwrap().to_owned();
+        assert!(records
+            .iter()
+            .all(|record| record["action"] != "issue" || record["phase"] != "published"));
+
+        secrets
+            .revoke("device-1", SecretRevocation::CredentialRevoked, "owner")
+            .unwrap();
+        assert!(!secrets.accepts(&secret));
+        assert!(
+            std::fs::read_dir(pending_dir(directory.path()))
+                .map(|entries| entries.count())
+                .unwrap_or(0)
+                == 0,
+            "the pending secret is deleted once the issuance is confirmed"
+        );
+        let records = audit_records(directory.path());
+        let issued: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "issue" && record["phase"] == "published")
+            .collect();
+        let revoked: Vec<_> = records
+            .iter()
+            .filter(|record| record["action"] == "revoke" && record["phase"] == "published")
+            .collect();
+        assert_eq!(issued.len(), 1);
+        assert_eq!(issued[0]["operationId"], issue_operation);
+        assert_eq!(issued[0]["after"], "active");
+        assert_eq!(revoked.len(), 1);
+        assert_eq!(revoked[0]["before"], "active");
+        assert_eq!(revoked[0]["after"], "revoked");
+        assert_ne!(revoked[0]["operationId"], issue_operation);
     }
 
     fn audit_records(root: &std::path::Path) -> Vec<Value> {

@@ -196,6 +196,7 @@ async fn approved_then_served(
         return Ok(());
     };
     tracing::info!(%address, "approved; serving the gateway");
+    remember_tunnel_secret();
     // Composing can wait on the serve lock; a stop or drain asked then
     // still has nothing to drain, so it ends the wait. The wait holds
     // nothing until it returns, so dropping it leaves nothing behind.
@@ -312,6 +313,26 @@ async fn approval(
             NotApproved::Unusable(reason) => reason,
         })
     })
+}
+
+/// The secret saved when this machine's pairing became active, for the
+/// tunnel leg of the dial that follows. The pairing lock has been let go.
+fn remember_tunnel_secret() {
+    let installed = (|| -> Option<nessa_protocol::tunnel::TunnelSecret> {
+        let root = environment_directory().ok()?.canonicalize().ok()?;
+        let store = nessa_auth::adapters::pairing::FilePairingState::open(
+            &root,
+            std::path::Path::new("pairing"),
+        )
+        .ok()?;
+        use nessa_auth::application::pairing::ClientPendingStore;
+        store
+            .load_tunnel_secret()
+            .ok()
+            .flatten()
+            .map(nessa_protocol::tunnel::TunnelSecret::new)
+    })();
+    nessa_client_core::retained::install_tunnel_secret(installed);
 }
 
 fn open(address: &str) -> Result<FilePairingEnvironment, RunError> {

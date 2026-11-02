@@ -99,6 +99,10 @@ struct Registration {
 /// A reader waiting to be told the tunnel origin, or refused.
 struct LookupWait {
     key: GatewayKey,
+    /// The registration this lookup was queued for. A retiring registration
+    /// drops only its own lookups, not ones queued after a newer connection
+    /// took the key.
+    registration: u64,
     answer: oneshot::Sender<bool>,
 }
 
@@ -308,11 +312,11 @@ where
         }
         let prepared = {
             let mut table = self.lock();
-            let incoming = table
+            let registration = table
                 .registrations
                 .get(&key)
-                .map(|registration| registration.incoming.clone());
-            if let Some(incoming) = incoming {
+                .map(|registration| (registration.id, registration.incoming.clone()));
+            if let Some((registration, incoming)) = registration {
                 let waiting = table
                     .lookups
                     .values()
@@ -331,7 +335,14 @@ where
                         }
                     };
                     let (answer, waiting) = oneshot::channel();
-                    table.lookups.insert(token, LookupWait { key, answer });
+                    table.lookups.insert(
+                        token,
+                        LookupWait {
+                            key,
+                            registration,
+                            answer,
+                        },
+                    );
                     Prepared::Ready {
                         token,
                         nonce,
@@ -545,7 +556,9 @@ impl<S> Drop for Registered<'_, S> {
         {
             table.registrations.remove(&self.key);
         }
-        table.lookups.retain(|_, lookup| lookup.key != self.key);
+        table
+            .lookups
+            .retain(|_, lookup| lookup.registration != self.id);
     }
 }
 
