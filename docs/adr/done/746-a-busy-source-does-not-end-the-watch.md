@@ -30,11 +30,18 @@ case. A source that never becomes ready must still end.
 An occupied checkout is not a discovery step. The read waits until its own
 stream's entry can be checked out again, or its existing work budget
 elapses, then calls again. Another stream that is still checked out does
-not hold that wait. The unbounded head and page scans use the same wait, so
-they return when their stream's entry is back. The budget
-starts when the worker is about to make its first discovery call, after it
-has a thread and has looked up the stream. A real validation step still
-counts, and four preparing attempts still end a source that stays unready.
+not hold that wait. That wait runs on the read's own thread, outside the
+scheduler. An unbounded head or page is polled by `Handle::block_on` on the
+source thread, so its wait runs on the blocking pool instead: a condvar on
+the polling thread holds the scheduler core when that thread has taken it,
+the owner cannot return the entry, and a local turn on that runtime does
+not finish. The unbounded scan gives up after thirty seconds rather than
+waiting for as long as the owner stays away. The budget starts when the
+worker is about to make its first discovery call, after it has a thread and
+has looked up the stream. A real validation step still counts, and four
+preparing attempts still end a source that stays unready. A local
+conversation turn does not read through this cache; holding its entry does
+not keep the turn from completing.
 
 ## States
 

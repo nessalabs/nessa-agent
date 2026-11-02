@@ -29,10 +29,11 @@ use nessa_sync::replication::{
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc, Arc, Mutex, PoisonError,
     },
     thread,
+    time::Duration,
 };
 use tokio::runtime::Handle;
 
@@ -41,6 +42,11 @@ const SOURCE_QUEUE_CAPACITY: usize = 64;
 const COMMITTED_VIEW_CACHE_ENTRIES: usize = 64;
 const COMMITTED_VIEW_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const COMMITTED_READ_FRAMES: usize = 256;
+/// Backstop for an unbounded head or page whose stream stays checked out.
+/// The wait itself runs off the thread that is polling the scan, so it cannot
+/// freeze the runtime that owns the discovery entry. Past this bound the scan
+/// answers unavailable instead of sitting on the blocking pool forever.
+const UNBOUNDED_DISCOVERY_WAIT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -705,12 +711,12 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => break terminal,
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
-                // This stream's entry is checked out. The wait ends when that
-                // entry can be checked out again; another stream does not hold it.
-                // The product read counts the same wait outside its steps.
-                RecordReadStatus::Occupied => self
-                    .terminal_cache
-                    .wait_for_release(&self.stream, &|| false),
+                // This stream's entry is checked out. Yield the polling thread;
+                // a blocking wait here freezes a runtime whose scheduler core
+                // this scan is driving, and the owner never gets to return.
+                RecordReadStatus::Occupied => {
+                    self.wait_until_this_stream_can_be_checked_out().await?
+                }
             }
         };
         Ok(self.head)
@@ -838,11 +844,43 @@ impl ReaderState {
             {
                 RecordReadStatus::Ready(terminal) => return Ok(terminal == target),
                 RecordReadStatus::Preparing => tokio::task::yield_now().await,
-                RecordReadStatus::Occupied => self
-                    .terminal_cache
-                    .wait_for_release(&self.stream, &|| false),
+                RecordReadStatus::Occupied => {
+                    self.wait_until_this_stream_can_be_checked_out().await?
+                }
             }
         }
+    }
+
+    /// Block for this stream's discovery entry on the runtime's blocking pool.
+    ///
+    /// The product read waits on its own worker, outside the scheduler, and
+    /// stops at its work budget. An unbounded head or page is polled by
+    /// `Handle::block_on` on the source thread. Waiting on the condvar there
+    /// holds the scheduler core when this thread has taken it, so the owner
+    /// of the entry cannot run and the wait never ends. A local turn on that
+    /// runtime does not finish.
+    async fn wait_until_this_stream_can_be_checked_out(&self) -> Result<(), SourceError> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let cache = Arc::clone(&self.terminal_cache);
+        let stream = self.stream.clone();
+        let stopped = Arc::clone(&stop);
+        let waiting = tokio::task::spawn_blocking(move || {
+            cache.wait_for_release(&stream, &|| stopped.load(Ordering::SeqCst));
+        });
+        tokio::pin!(waiting);
+        tokio::select! {
+            biased;
+            finished = &mut waiting => {
+                finished.map_err(|_| SourceError::Unavailable)?;
+            }
+            () = tokio::time::sleep(UNBOUNDED_DISCOVERY_WAIT) => {
+                stop.store(true, Ordering::SeqCst);
+                self.terminal_cache.wake_waiters();
+                let _ = waiting.await;
+                return Err(SourceError::Unavailable);
+            }
+        }
+        Ok(())
     }
 }
 
