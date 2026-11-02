@@ -35,7 +35,6 @@ describe("devicesGateway list", () => {
         workers: [worker(1), worker(2), worker(3)],
         more: false,
         sshHosts: [],
-        defaultEnvironment: null,
       },
     })
     expect(asked).toEqual([undefined, worker(1).environment, worker(2).environment])
@@ -75,10 +74,12 @@ describe("devicesGateway SSH hosts and the default", () => {
       }),
       sshHosts: async () => ({ suggested: [{ host: "orb" }], connecting: [] }),
       connectSsh: async (host: string) => (
-        asked.push(["connect", host]), { host, state: "installing" }
+        asked.push(["connect", host]),
+        { host, state: "installing" }
       ),
       setDefault: async (environment: string | null) => (
-        asked.push(["default", environment]), environment
+        asked.push(["default", environment]),
+        environment
       ),
     }
     const gateway = devicesGateway({

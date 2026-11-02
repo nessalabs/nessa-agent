@@ -8,12 +8,14 @@
 //!   ──▶ ssh_config::suggestions (SshConfigSource, less this run's hosts)
 //!   ──▶ the connections under way, from memory
 //! devices.connectSsh(host) ──▶ DeviceSetup::connect ──▶ Installing (answered)
-//!   └─ task ──▶ HostInstall::install(host, operation)   audited as a lease's install
-//!        failed ──▶ Failed(refusal), nothing saved
+//!   └─ task ──▶ DeviceSettings::begin_ssh_host           asked for, audited with the caller
+//!        refused (restarting, stopping, hosts full) ──▶ Failed, nothing installed
+//!        ──▶ HostInstall::install(host, operation)        audited as a lease's install
+//!        failed ──▶ ssh_host_not_installed (audited) ──▶ Failed(refusal), nothing saved
 //!        ──▶ DeviceSettings::add_ssh_host                 config.json sshHosts, audited
 //!            this run serves it ──▶ Connected
 //!            otherwise ──▶ Restarting: the gateway starts again in place with it
-//! devices.setDefault(environment) ──▶ DeviceSetup::set_default
+//! devices.setDefault(environment) ──▶ DeviceSetup::set_default, one at a time
 //!   ──▶ named here? (null, a configured SSH host, or a peer: name)
 //!   ──▶ DeviceSettings::set_default                       config.json defaultEnvironment, audited
 //!   ──▶ the default watch ──▶ conversation creation, the agent catalog
@@ -55,17 +57,36 @@ pub(crate) trait HostInstall: Send + Sync {
 /// Where the Devices settings are saved: config.json, under its one lock,
 /// each change audited. Implemented in composition.
 pub(crate) trait DeviceSettings: Send + Sync {
-    /// Add `host` to `sshHosts`; restarting when this run does not serve it.
+    /// Record that `caller` asked for `host` under `operation`, and whether
+    /// it may be added now: refused busy while the gateway restarts or
+    /// stops, and at the host bound. Asked before anything is installed.
+    fn begin_ssh_host(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<(), LinkingError>>;
+    /// Record that `operation`'s install failed: nothing was saved.
+    fn ssh_host_not_installed(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<(), LinkingError>>;
+    /// Add `host` to `sshHosts` under the `operation` begun for it;
+    /// restarting when this run does not serve it.
     fn add_ssh_host(
         &self,
         caller: LinkingCaller,
         operation: String,
         host: SshDestination,
     ) -> SetupFuture<'_, Result<LinkingApply, LinkingError>>;
-    /// Save `environment` as `defaultEnvironment`, `None` removing it.
+    /// Save `environment` as `defaultEnvironment` in place of `before`,
+    /// `None` removing it.
     fn set_default(
         &self,
         caller: LinkingCaller,
+        before: Option<String>,
         environment: Option<String>,
     ) -> SetupFuture<'_, Result<(), LinkingError>>;
 }
@@ -120,6 +141,9 @@ pub(crate) struct DeviceSetup {
     settings: Arc<dyn DeviceSettings>,
     connects: Mutex<BTreeMap<SshDestination, ConnectState>>,
     default: watch::Sender<Option<String>>,
+    /// Held across a default's save and its watch, so the watch ends at the
+    /// value the file does when two are chosen at once.
+    choosing: tokio::sync::Mutex<()>,
 }
 
 impl DeviceSetup {
@@ -139,6 +163,7 @@ impl DeviceSetup {
             settings,
             connects: Mutex::new(BTreeMap::new()),
             default,
+            choosing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -221,8 +246,26 @@ impl DeviceSetup {
 
     async fn connected(&self, caller: LinkingCaller, host: &SshDestination) -> ConnectState {
         let operation = uuid::Uuid::new_v4().to_string();
+        if let Err(error) = self
+            .settings
+            .begin_ssh_host(caller.clone(), operation.clone(), host.clone())
+            .await
+        {
+            return ConnectState::Failed(linking_refusal(error));
+        }
         if let Err(refusal) = self.install.install(host, &operation).await {
-            tracing::info!(host = host.as_str(), ?refusal, "the host could not be set up");
+            tracing::info!(
+                host = host.as_str(),
+                ?refusal,
+                "the host could not be set up"
+            );
+            if let Err(error) = self
+                .settings
+                .ssh_host_not_installed(caller, operation, host.clone())
+                .await
+            {
+                tracing::error!(?error, "a failed install could not be recorded");
+            }
             return ConnectState::Failed(ConnectRefusal::Install(refusal));
         }
         match self
@@ -232,9 +275,7 @@ impl DeviceSetup {
         {
             Ok(LinkingApply::Restarting) => ConnectState::Restarting,
             Ok(LinkingApply::Unchanged) => ConnectState::Connected,
-            Err(LinkingError::HostLimit) => ConnectState::Failed(ConnectRefusal::HostLimit),
-            Err(LinkingError::Busy) => ConnectState::Failed(ConnectRefusal::Busy),
-            Err(_) => ConnectState::Failed(ConnectRefusal::Unavailable),
+            Err(error) => ConnectState::Failed(linking_refusal(error)),
         }
     }
 
@@ -255,7 +296,13 @@ impl DeviceSetup {
                 return Err(DefaultRefusal::NotADevice);
             }
         }
-        match self.settings.set_default(caller, environment.clone()).await {
+        let _choosing = self.choosing.lock().await;
+        let before = self.default.borrow().clone();
+        match self
+            .settings
+            .set_default(caller, before, environment.clone())
+            .await
+        {
             Ok(()) => {
                 self.default.send_replace(environment.clone());
                 Ok(environment)
@@ -263,6 +310,15 @@ impl DeviceSetup {
             Err(LinkingError::Busy) => Err(DefaultRefusal::Busy),
             Err(_) => Err(DefaultRefusal::Unavailable),
         }
+    }
+}
+
+/// A connection's refusal for a refused change to the settings.
+fn linking_refusal(error: LinkingError) -> ConnectRefusal {
+    match error {
+        LinkingError::HostLimit => ConnectRefusal::HostLimit,
+        LinkingError::Busy => ConnectRefusal::Busy,
+        _ => ConnectRefusal::Unavailable,
     }
 }
 
@@ -309,11 +365,42 @@ mod tests {
 
     #[derive(Default)]
     struct Settings {
+        begun: Mutex<Vec<(String, String)>>,
+        not_installed: Mutex<Vec<(String, String)>>,
         added: Mutex<Vec<(String, String)>>,
-        defaults: Mutex<Vec<Option<String>>>,
+        defaults: Mutex<Vec<(Option<String>, Option<String>)>>,
+        refuse_begin: Option<LinkingError>,
         refuse: Option<LinkingError>,
     }
     impl DeviceSettings for Settings {
+        fn begin_ssh_host(
+            &self,
+            _caller: LinkingCaller,
+            operation: String,
+            host: SshDestination,
+        ) -> SetupFuture<'_, Result<(), LinkingError>> {
+            Box::pin(async move {
+                self.begun
+                    .lock()
+                    .unwrap()
+                    .push((host.as_str().to_owned(), operation));
+                self.refuse_begin.map_or(Ok(()), Err)
+            })
+        }
+        fn ssh_host_not_installed(
+            &self,
+            _caller: LinkingCaller,
+            operation: String,
+            host: SshDestination,
+        ) -> SetupFuture<'_, Result<(), LinkingError>> {
+            Box::pin(async move {
+                self.not_installed
+                    .lock()
+                    .unwrap()
+                    .push((host.as_str().to_owned(), operation));
+                Ok(())
+            })
+        }
         fn add_ssh_host(
             &self,
             _caller: LinkingCaller,
@@ -338,13 +425,14 @@ mod tests {
         fn set_default(
             &self,
             _caller: LinkingCaller,
+            before: Option<String>,
             environment: Option<String>,
         ) -> SetupFuture<'_, Result<(), LinkingError>> {
             Box::pin(async move {
                 if let Some(error) = self.refuse {
                     return Err(error);
                 }
-                self.defaults.lock().unwrap().push(environment);
+                self.defaults.lock().unwrap().push((before, environment));
                 Ok(())
             })
         }
@@ -365,7 +453,12 @@ mod tests {
     fn setup(
         install: Install,
         settings: Settings,
-    ) -> (Arc<DeviceSetup>, Arc<Install>, Arc<Settings>, watch::Receiver<Option<String>>) {
+    ) -> (
+        Arc<DeviceSetup>,
+        Arc<Install>,
+        Arc<Settings>,
+        watch::Receiver<Option<String>>,
+    ) {
         let install = Arc::new(install);
         let settings = Arc::new(settings);
         let (default, read) = watch::channel(None);
@@ -399,7 +492,10 @@ mod tests {
         let (setup, ..) = setup(Install::default(), Settings::default());
         let (suggested, connects) = setup.ssh_hosts();
         assert_eq!(
-            suggested.iter().map(|each| each.host.as_str()).collect::<Vec<_>>(),
+            suggested
+                .iter()
+                .map(|each| each.host.as_str())
+                .collect::<Vec<_>>(),
             ["box"]
         );
         assert!(connects.is_empty());
@@ -409,13 +505,17 @@ mod tests {
     #[tokio::test]
     async fn a_connection_installs_then_saves_with_one_operation() {
         let (setup, install, settings, _) = setup(Install::default(), Settings::default());
-        assert_eq!(setup.connect(caller(), host("box")), ConnectState::Installing);
+        assert_eq!(
+            setup.connect(caller(), host("box")),
+            ConnectState::Installing
+        );
         assert_eq!(settled(&setup, "box").await, ConnectState::Restarting);
         let installed = install.asked.lock().unwrap().clone();
         let added = settings.added.lock().unwrap().clone();
         assert_eq!(installed.len(), 1);
-        // The install and the change are one operation in the audit.
+        // Asked for, installed and saved: one operation in the audit.
         assert_eq!(installed, added);
+        assert_eq!(*settings.begun.lock().unwrap(), added);
         // One this run serves is installed and connected, with no restart.
         setup.connect(caller(), host("served"));
         assert_eq!(settled(&setup, "served").await, ConnectState::Connected);
@@ -438,7 +538,15 @@ mod tests {
             ))
         );
         assert!(settings.added.lock().unwrap().is_empty());
-        assert_eq!(setup.connect(caller(), host("box")), ConnectState::Installing);
+        // Recorded as refused under the operation it was asked under.
+        assert_eq!(
+            *settings.not_installed.lock().unwrap(),
+            *settings.begun.lock().unwrap()
+        );
+        assert_eq!(
+            setup.connect(caller(), host("box")),
+            ConnectState::Installing
+        );
     }
 
     #[tokio::test]
@@ -452,11 +560,34 @@ mod tests {
             Settings::default(),
         );
         setup.connect(caller(), host("box"));
-        assert_eq!(setup.connect(caller(), host("box")), ConnectState::Installing);
+        assert_eq!(
+            setup.connect(caller(), host("box")),
+            ConnectState::Installing
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(install.asked.lock().unwrap().len(), 1);
         hold.notify_one();
         assert_eq!(settled(&setup, "box").await, ConnectState::Restarting);
+    }
+
+    #[tokio::test]
+    async fn a_connection_refused_before_its_install_installs_nothing() {
+        for (error, refusal) in [
+            (LinkingError::Busy, ConnectRefusal::Busy),
+            (LinkingError::HostLimit, ConnectRefusal::HostLimit),
+        ] {
+            let (setup, install, settings, _) = setup(
+                Install::default(),
+                Settings {
+                    refuse_begin: Some(error),
+                    ..Settings::default()
+                },
+            );
+            setup.connect(caller(), host("box"));
+            assert_eq!(settled(&setup, "box").await, ConnectState::Failed(refusal));
+            assert!(install.asked.lock().unwrap().is_empty());
+            assert!(settings.added.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]
@@ -496,12 +627,20 @@ mod tests {
             Ok(Some("served".into()))
         );
         assert_eq!(read.borrow().as_deref(), Some("served"));
-        setup.set_default(caller(), Some(peer.clone())).await.unwrap();
+        setup
+            .set_default(caller(), Some(peer.clone()))
+            .await
+            .unwrap();
         setup.set_default(caller(), None).await.unwrap();
         assert_eq!(*read.borrow(), None);
+        // Each saved with the one it replaced.
         assert_eq!(
             *settings.defaults.lock().unwrap(),
-            [Some("served".into()), Some(peer), None]
+            [
+                (None, Some("served".into())),
+                (Some("served".into()), Some(peer.clone())),
+                (Some(peer), None)
+            ]
         );
         assert_eq!(setup.default_environment(), None);
     }

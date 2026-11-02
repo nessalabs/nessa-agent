@@ -664,6 +664,28 @@ it("stars the hub, a computer or an SSH host as where new chats run", async () =
   await act(async () => root.unmount())
 })
 
+it("says when a star could not be saved, and draws none on a hub that sets no machines up", async () => {
+  const { gateway } = fakeGateway({
+    setDefault: async () => ({ ok: false }),
+  })
+  const { host, root } = await mount(gateway)
+  await act(async () =>
+    (
+      host.querySelector("[data-devices-default]:not([data-chosen])") as HTMLElement
+    ).click(),
+  )
+  expect(host.querySelector("[data-devices-default-failed]")?.textContent).toBe(
+    "Couldn't change where new chats run. Try again.",
+  )
+  await act(async () => root.unmount())
+  const { defaultEnvironment: _, ...without } = listed
+  const older = await mount(
+    fakeGateway({ list: async () => ({ ok: true, value: without }) }).gateway,
+  )
+  expect(older.host.querySelectorAll("[data-devices-default]")).toHaveLength(0)
+  await act(async () => older.root.unmount())
+})
+
 it("suggests the SSH config's machines, with Connect, and says how setting one up goes", async () => {
   let connecting: DeviceSshConnect[] = []
   const { gateway, calls } = fakeGateway({

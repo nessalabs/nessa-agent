@@ -117,7 +117,10 @@ mod tests {
         fs::create_dir_all(home.path().join(".orbstack/ssh")).unwrap();
         fs::write(home.path().join(".orbstack/ssh/config"), "Host orb\n").unwrap();
         let source = HomeSshConfig::new(home.path().to_path_buf());
-        assert_eq!(source.main().as_deref(), Some("Include conf.d/*.conf\nHost box\n"));
+        assert_eq!(
+            source.main().as_deref(),
+            Some("Include conf.d/*.conf\nHost box\n")
+        );
         assert_eq!(source.include("conf.d/*.conf", 8), ["Host a\n", "Host b\n"]);
         assert_eq!(source.include("conf.d/*.conf", 1), ["Host a\n"]);
         assert_eq!(source.include("~/.orbstack/ssh/config", 8), ["Host orb\n"]);

@@ -25,6 +25,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
@@ -249,13 +250,23 @@ function DevicesList({
   const now = useNow(30_000)
   const loaded = read.workers !== undefined
   const hubName = read.hub?.name ?? "This Mac"
-  // The star a person just pressed, shown at once and until the list says.
-  const [starring, setStarring] = useState<{ readonly to: string | null } | null>(null)
+  // The star a person last pressed, shown at once and until its answer;
+  // an earlier press answering later does not take it back.
+  const [starring, setStarring] = useState<{
+    readonly to: string | null
+    readonly press: number
+  } | null>(null)
+  const presses = useRef(0)
+  const [starFailed, setStarFailed] = useState(false)
   const current = starring !== null ? starring.to : (read.defaultEnvironment ?? null)
   const makeDefault = (environment: string | null) => {
-    setStarring({ to: environment })
-    void gateway.setDefault(environment).then(() => {
+    const press = (presses.current += 1)
+    setStarring({ to: environment, press })
+    setStarFailed(false)
+    void gateway.setDefault(environment).then((answer) => {
+      if (presses.current !== press) return
       setStarring(null)
+      setStarFailed(!answer.ok)
       onChanged()
     })
   }
@@ -292,6 +303,11 @@ function DevicesList({
       {read.unreachable ? (
         <p className="devices-muted" role="status" data-devices-unreachable>
           The hub isn&apos;t answering. Showing what it last said.
+        </p>
+      ) : null}
+      {starFailed ? (
+        <p className="devices-muted" role="status" data-devices-default-failed>
+          Couldn&apos;t change where new chats run. Try again.
         </p>
       ) : null}
       {!loaded ? (
@@ -575,11 +591,13 @@ function Suggestions({
     void gateway.connectSsh(host).then((answer) => {
       setPressed((last) => ({
         ...last,
+        // Not answered at all: said as a setup that failed, never held on
+        // Installing.
         [host]: {
           connect: answer.ok
             ? answer.value
-            : (last[host]?.connect ?? { host, state: "installing" }),
-          answered: true,
+            : { host, state: "failed", refusal: "devices_unavailable" },
+          answered: answer.ok,
         },
       }))
       onChanged()

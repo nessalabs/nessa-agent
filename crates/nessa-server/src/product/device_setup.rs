@@ -50,8 +50,7 @@ pub(super) async fn dispatch(
             )
         }
         "devices.connectSsh" => {
-            let Ok(params) = serde_json::from_value::<DevicesConnectSshParams>(frame.params)
-            else {
+            let Ok(params) = serde_json::from_value::<DevicesConnectSshParams>(frame.params) else {
                 return failure(&frame.id, "invalid_request");
             };
             let Ok(host) = SshDestination::new(params.host) else {
@@ -66,8 +65,7 @@ pub(super) async fn dispatch(
             )
         }
         "devices.setDefault" => {
-            let Ok(params) = serde_json::from_value::<DevicesSetDefaultParams>(frame.params)
-            else {
+            let Ok(params) = serde_json::from_value::<DevicesSetDefaultParams>(frame.params) else {
                 return failure(&frame.id, "invalid_request");
             };
             match setup

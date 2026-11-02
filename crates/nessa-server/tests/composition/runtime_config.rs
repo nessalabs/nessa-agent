@@ -44,11 +44,11 @@ fn a_host_that_is_not_a_destination_a_repeat_or_too_many_refuse_the_configuratio
 
 fn default_device(json: &str) -> Result<Option<String>, String> {
     let config = RuntimeConfig::parse(json.as_bytes()).map_err(|error| error.to_string())?;
-    Ok(config.default_environment().unwrap())
+    Ok(config.default_environment())
 }
 
 #[test]
-fn the_default_device_is_a_configured_host_or_a_paired_environment() {
+fn the_default_device_is_a_configured_host_or_a_paired_environment_else_this_machine() {
     assert_eq!(default_device("{}"), Ok(None));
     assert_eq!(
         default_device(r#"{"sshHosts":["devbox"],"defaultEnvironment":"devbox"}"#),
@@ -59,14 +59,16 @@ fn the_default_device_is_a_configured_host_or_a_paired_environment() {
         default_device(&serde_json::json!({ "defaultEnvironment": peer }).to_string()),
         Ok(Some(peer))
     );
+    // One that is no device (a host taken out of sshHosts by hand) still
+    // starts, with new conversations here.
     for json in [
         r#"{"defaultEnvironment":"devbox"}"#,
         r#"{"defaultEnvironment":"peer:any"}"#,
         r#"{"defaultEnvironment":"here"}"#,
-        r#"{"defaultEnvironment":7}"#,
     ] {
-        assert!(default_device(json).is_err(), "{json}");
+        assert_eq!(default_device(json), Ok(None), "{json}");
     }
+    assert!(default_device(r#"{"defaultEnvironment":7}"#).is_err());
 }
 
 fn policy(json: &str) -> Result<Option<CommandPolicy>, String> {

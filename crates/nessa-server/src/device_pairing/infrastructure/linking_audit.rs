@@ -87,25 +87,34 @@ fn stored(record: &LinkingAuditRecord) -> Value {
                     LinkingError::LinkingOff => "linking_off",
                     LinkingError::TunnelIncomplete => "tunnel_incomplete",
                     LinkingError::HostLimit => "host_limit",
+                    LinkingError::InstallFailed => "install_failed",
                 },
             }),
         ),
     };
     // Each subject's target, kept beside the change: the tunnel's mode, the
-    // SSH host added, or the device chosen (null: this machine).
+    // SSH host added, or the device chosen and the one before it (null:
+    // this machine).
     let (kind, target) = match &record.subject {
-        LinkingSubject::Linking => ("native_linking", None),
+        LinkingSubject::Linking => ("native_linking", vec![]),
         LinkingSubject::Tunnel { mode } => (
             "native_tunnel",
-            Some((
+            vec![(
                 "mode",
                 mode.map_or(Value::Null, |mode| json!(mode.as_str())),
-            )),
+            )],
         ),
-        LinkingSubject::SshHost { host } => ("ssh_host", Some(("host", json!(host)))),
-        LinkingSubject::DefaultDevice { environment } => {
-            ("default_device", Some(("environment", json!(environment))))
-        }
+        LinkingSubject::SshHost { host } => ("ssh_host", vec![("host", json!(host))]),
+        LinkingSubject::DefaultDevice {
+            environment,
+            before,
+        } => (
+            "default_device",
+            vec![
+                ("environment", json!(environment)),
+                ("before", json!(before)),
+            ],
+        ),
     };
     let mut value = json!({
         "kind": kind,
@@ -122,8 +131,10 @@ fn stored(record: &LinkingAuditRecord) -> Value {
             "credentialId": record.caller.credential_id,
         },
     });
-    if let (Some((key, target)), Value::Object(fields)) = (target, &mut value) {
-        fields.insert(key.into(), target);
+    if let Value::Object(fields) = &mut value {
+        for (key, target) in target {
+            fields.insert(key.into(), target);
+        }
     }
     value
 }
@@ -285,15 +296,20 @@ mod tests {
             .record(&LinkingAuditRecord {
                 operation_id: "op2".into(),
                 caller,
-                subject: LinkingSubject::DefaultDevice { environment: None },
+                subject: LinkingSubject::DefaultDevice {
+                    environment: None,
+                    before: Some("box".into()),
+                },
                 enabled: false,
                 running: true,
                 phase: LinkingAuditPhase::Requested,
             })
             .unwrap();
         let read = |name: &str| -> Value {
-            serde_json::from_slice(&std::fs::read(directory.path().join("audit").join(name)).unwrap())
-                .unwrap()
+            serde_json::from_slice(
+                &std::fs::read(directory.path().join("audit").join(name)).unwrap(),
+            )
+            .unwrap()
         };
         let host = read("ssh-host-op-outcome.json");
         assert_eq!(host["kind"], "ssh_host");
@@ -303,6 +319,7 @@ mod tests {
         assert_eq!(device["kind"], "default_device");
         assert_eq!(device["environment"], Value::Null);
         assert!(device.as_object().unwrap().contains_key("environment"));
+        assert_eq!(device["before"], "box");
     }
 
     #[test]

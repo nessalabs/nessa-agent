@@ -393,7 +393,7 @@ pub(super) async fn product_state(
     // and moved by Devices (`devices.setDefault`) without a restart.
     #[cfg_attr(not(unix), allow(unused_variables))]
     let (default_device, default_read) =
-        tokio::sync::watch::channel(settings.default_environment()?);
+        tokio::sync::watch::channel(settings.default_environment());
     // Paired environments dial the native listener, so they are served only
     // where it is.
     let serving = settings.native.as_ref().map(|_| ServingAuth {
@@ -616,7 +616,9 @@ pub(super) async fn product_state(
                     super::device_setup::home(),
                 )),
                 settings.ssh_hosts()?,
-                Arc::new(super::device_setup::SshInstall::new(&conversation_root(namespace))?),
+                Arc::new(super::device_setup::SshInstall::new(&conversation_root(
+                    namespace,
+                ))?),
                 linking,
                 default_device,
             )),

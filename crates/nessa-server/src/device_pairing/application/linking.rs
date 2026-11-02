@@ -109,6 +109,9 @@ pub enum LinkingError {
     TunnelIncomplete,
     /// `sshHosts` already names as many hosts as it may. Nothing was saved.
     HostLimit,
+    /// This build could not be installed on the SSH host asked for (the
+    /// environment audit keeps why). Nothing was saved.
+    InstallFailed,
 }
 
 /// One record of a change.
@@ -134,11 +137,15 @@ pub enum LinkingSubject {
     /// The web tunnel (`pairing.setTunnel`), with the mode asked for, when
     /// one was.
     Tunnel { mode: Option<TunnelMode> },
-    /// An SSH host added to `sshHosts` from Devices (`devices.connectSsh`),
-    /// once this build was installed on it.
+    /// An SSH host added to `sshHosts` from Devices (`devices.connectSsh`):
+    /// asked for before this build is installed on it, saved after.
     SshHost { host: String },
-    /// The default device (`devices.setDefault`): `None` is this machine.
-    DefaultDevice { environment: Option<String> },
+    /// The default device (`devices.setDefault`), changed from `before` to
+    /// `environment`: `None` is this machine.
+    DefaultDevice {
+        environment: Option<String>,
+        before: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

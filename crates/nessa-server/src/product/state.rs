@@ -490,10 +490,9 @@ impl ProductRouteState {
         self
     }
 
-    /// Register the hub's devices, which `devices.list` reads.
     /// Set the hub's machines up from Devices, and offer the default device
     /// `default` holds in the catalog.
-    #[cfg_attr(not(any(unix, test)), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn with_device_setup(
         mut self,
         setup: Arc<crate::devices::application::DeviceSetup>,

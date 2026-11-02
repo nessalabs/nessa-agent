@@ -148,16 +148,17 @@ describe("devices SSH hosts and the default device", () => {
   it("connects a host and saves the default", async () => {
     const asked: unknown[] = []
     expect(
-      await answering({ connecting: { host: "box", state: "installing" } }, asked).connectSsh(
-        "box",
-      ),
+      await answering(
+        { connecting: { host: "box", state: "installing" } },
+        asked,
+      ).connectSsh("box"),
     ).toEqual({ host: "box", state: "installing" })
     expect(
       await answering({ defaultEnvironment: null }, asked).setDefault(null),
     ).toBeNull()
-    expect(
-      await answering({ defaultEnvironment: "box" }, asked).setDefault("box"),
-    ).toBe("box")
+    expect(await answering({ defaultEnvironment: "box" }, asked).setDefault("box")).toBe(
+      "box",
+    )
     expect(asked).toEqual([
       ["devices.connectSsh", { host: "box" }],
       ["devices.setDefault", { environment: null }],

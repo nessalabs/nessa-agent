@@ -40,6 +40,8 @@ mod credential_registry;
 #[cfg(unix)]
 mod current_agent;
 #[cfg(unix)]
+mod device_setup;
+#[cfg(unix)]
 mod env_dial_command;
 #[cfg(unix)]
 mod env_grant_command;
@@ -53,8 +55,6 @@ mod github_tools;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;
-#[cfg(unix)]
-mod device_setup;
 mod local_auth;
 #[cfg(unix)]
 mod managed_adapter;

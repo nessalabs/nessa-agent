@@ -69,8 +69,7 @@ pub(crate) fn suggestions(
         files: 1,
         bytes: main.len(),
     };
-    let lines = read.lines(&main, 0);
-    let blocks = blocks(&lines);
+    let blocks = read.blocks(&main);
     let mut seen: Vec<String> = Vec::new();
     let mut hosts = Vec::new();
     for block in &blocks {
@@ -85,6 +84,12 @@ pub(crate) fn suggestions(
                 continue;
             }
             seen.push(alias.clone());
+            // A block that never matches its own alias (`Host box !box`,
+            // or one included under a block for another name) names no
+            // machine `ssh` would reach by it.
+            if !block.applies(alias) {
+                continue;
+            }
             let Ok(host) = SshDestination::new(alias.clone()) else {
                 continue;
             };
@@ -92,12 +97,7 @@ pub(crate) fn suggestions(
                 continue;
             }
             let found = resolve(&blocks, alias);
-            let suggestion = SshHost {
-                host,
-                host_name: found.host_name.filter(|name| name.len() <= MAX_FIELD_BYTES),
-                user: found.user.filter(|user| user.len() <= MAX_FIELD_BYTES),
-                port: found.port,
-            };
+            let suggestion = host_of(host, found);
             if !git_server(&suggestion) {
                 hosts.push(suggestion);
             }
@@ -117,14 +117,20 @@ pub(crate) fn resolved(source: &dyn SshConfigSource, host: &SshDestination) -> S
                 files: 1,
                 bytes: main.len(),
             };
-            blocks(&read.lines(&main, 0))
+            read.blocks(&main)
         })
         .unwrap_or_default();
-    let found = resolve(&blocks, host.as_str());
+    host_of(host.clone(), resolve(&blocks, host.as_str()))
+}
+
+/// `host` with what it resolved to, keeping only values the wire carries:
+/// none empty (`HostName ""`) and none longer than [`MAX_FIELD_BYTES`].
+fn host_of(host: SshDestination, found: Resolved) -> SshHost {
+    let fits = |value: &String| !value.is_empty() && value.len() <= MAX_FIELD_BYTES;
     SshHost {
-        host: host.clone(),
-        host_name: found.host_name.filter(|name| name.len() <= MAX_FIELD_BYTES),
-        user: found.user.filter(|user| user.len() <= MAX_FIELD_BYTES),
+        host,
+        host_name: found.host_name.filter(fits),
+        user: found.user.filter(fits),
         port: found.port,
     }
 }
@@ -184,38 +190,76 @@ struct Read<'a> {
 }
 
 impl Read<'_> {
-    /// `text`'s lines as keyword and arguments, with each `Include`
-    /// replaced by the lines of the files it names, in place: what follows
-    /// them in an included file is still under the block it was included in,
-    /// as OpenSSH reads it.
-    fn lines(&mut self, text: &str, depth: usize) -> Vec<(String, Vec<String>)> {
-        let mut lines = Vec::new();
+    /// `text`'s blocks, each `Include` read where it stands, as OpenSSH
+    /// reads one: what the included files say before their first `Host`
+    /// belongs to the block the `Include` is in, each block they open
+    /// applies only where that block does too, and the lines after the
+    /// `Include` belong to that block again.
+    fn blocks(&mut self, text: &str) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        self.read(text, 0, &[], &mut blocks);
+        blocks
+    }
+
+    /// Appends `text`'s blocks to `blocks`, each under `within`: the
+    /// blocks it was included in. Returns `false` once a bound is reached,
+    /// when nothing more is read.
+    fn read(
+        &mut self,
+        text: &str,
+        depth: usize,
+        within: &[Patterns],
+        blocks: &mut Vec<Block>,
+    ) -> bool {
+        let open = |patterns: Patterns| Block {
+            within: within.to_vec(),
+            patterns,
+            options: Vec::new(),
+        };
+        blocks.push(open(Patterns::All));
         for line in text.lines() {
             let Some((keyword, arguments)) = line_of(line) else {
                 continue;
             };
-            if keyword != "include" {
-                lines.push((keyword, arguments));
-                continue;
-            }
-            if depth >= MAX_INCLUDE_DEPTH {
-                continue;
-            }
-            for pattern in arguments {
-                let room = MAX_FILES.saturating_sub(self.files);
-                for included in self.source.include(&pattern, room) {
-                    if self.files >= MAX_FILES
-                        || self.bytes.saturating_add(included.len()) > SSH_CONFIG_BYTES
-                    {
-                        return lines;
+            match keyword.as_str() {
+                "host" => blocks.push(open(Patterns::Host(arguments))),
+                "match" => blocks.push(open(Patterns::Match)),
+                "include" => {
+                    if depth >= MAX_INCLUDE_DEPTH {
+                        continue;
                     }
-                    self.files += 1;
-                    self.bytes += included.len();
-                    lines.extend(self.lines(&included, depth + 1));
+                    let Some(current) = blocks.last().map(|block| block.patterns.clone()) else {
+                        continue;
+                    };
+                    let mut inner = within.to_vec();
+                    inner.push(current.clone());
+                    for pattern in arguments {
+                        let room = MAX_FILES.saturating_sub(self.files);
+                        for included in self.source.include(&pattern, room) {
+                            if self.files >= MAX_FILES
+                                || self.bytes.saturating_add(included.len()) > SSH_CONFIG_BYTES
+                            {
+                                return false;
+                            }
+                            self.files += 1;
+                            self.bytes += included.len();
+                            if !self.read(&included, depth + 1, &inner, blocks) {
+                                return false;
+                            }
+                        }
+                    }
+                    blocks.push(open(current));
+                }
+                _ => {
+                    if let (Some(block), Some(value)) =
+                        (blocks.last_mut(), arguments.into_iter().next())
+                    {
+                        block.options.push((keyword, value));
+                    }
                 }
             }
         }
-        lines
+        true
     }
 }
 
@@ -243,6 +287,8 @@ fn line_of(line: &str) -> Option<(String, Vec<String>)> {
                 quoted = !quoted;
                 any = true;
             }
+            // A word starting with `#` ends the line, as OpenSSH 8.7 on reads it.
+            '#' if !quoted && !any => break,
             character if character.is_whitespace() && !quoted => {
                 if any {
                     arguments.push(std::mem::take(&mut current));
@@ -262,7 +308,7 @@ fn line_of(line: &str) -> Option<(String, Vec<String>)> {
 }
 
 /// What a block applies to.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Patterns {
     /// Lines before the first `Host` or `Match`: every host.
     All,
@@ -274,33 +320,27 @@ enum Patterns {
 
 #[derive(Debug)]
 struct Block {
+    /// The blocks it was included in, outermost first: it applies only
+    /// where each of them does.
+    within: Vec<Patterns>,
     patterns: Patterns,
     options: Vec<(String, String)>,
 }
 
-fn blocks(lines: &[(String, Vec<String>)]) -> Vec<Block> {
-    let mut blocks = vec![Block {
-        patterns: Patterns::All,
-        options: Vec::new(),
-    }];
-    for (keyword, arguments) in lines {
-        match keyword.as_str() {
-            "host" => blocks.push(Block {
-                patterns: Patterns::Host(arguments.clone()),
-                options: Vec::new(),
-            }),
-            "match" => blocks.push(Block {
-                patterns: Patterns::Match,
-                options: Vec::new(),
-            }),
-            _ => {
-                if let (Some(block), Some(value)) = (blocks.last_mut(), arguments.first()) {
-                    block.options.push((keyword.clone(), value.clone()));
-                }
-            }
+impl Patterns {
+    fn applies(&self, alias: &str) -> bool {
+        match self {
+            Patterns::All => true,
+            Patterns::Host(patterns) => host_matches(patterns, alias),
+            Patterns::Match => false,
         }
     }
-    blocks
+}
+
+impl Block {
+    fn applies(&self, alias: &str) -> bool {
+        self.within.iter().all(|each| each.applies(alias)) && self.patterns.applies(alias)
+    }
 }
 
 #[derive(Default)]
@@ -316,12 +356,7 @@ fn resolve(blocks: &[Block], alias: &str) -> Resolved {
     let mut found = Resolved::default();
     let mut port_seen = false;
     for block in blocks {
-        let applies = match &block.patterns {
-            Patterns::All => true,
-            Patterns::Host(patterns) => host_matches(patterns, alias),
-            Patterns::Match => false,
-        };
-        if !applies {
+        if !block.applies(alias) {
             continue;
         }
         for (keyword, value) in &block.options {
@@ -400,7 +435,13 @@ mod tests {
         fn include(&self, pattern: &str, limit: usize) -> Vec<String> {
             self.included
                 .get(pattern)
-                .map(|files| files.iter().take(limit).map(|text| (*text).to_owned()).collect())
+                .map(|files| {
+                    files
+                        .iter()
+                        .take(limit)
+                        .map(|text| (*text).to_owned())
+                        .collect()
+                })
                 .unwrap_or_default()
         }
     }
@@ -470,27 +511,60 @@ mod tests {
     #[test]
     fn includes_are_read_in_place_and_bounded() {
         let mut config = files(
-            "Include ~/.orbstack/ssh/config\nHost box\n  Include box.d/*\nHost later\n",
+            "Include ~/.orbstack/ssh/config\nHost box\n  Include box.d/*\n  Port 2200\nHost later\n",
         );
-        config
-            .included
-            .insert("~/.orbstack/ssh/config", vec!["Host orb\n  HostName 127.0.0.1\n"]);
-        config.included.insert("box.d/*", vec!["  User ada\n", "Host inner\n"]);
+        config.included.insert(
+            "~/.orbstack/ssh/config",
+            vec!["Host orb\n  HostName 127.0.0.1\n"],
+        );
+        config.included.insert(
+            "box.d/*",
+            vec![
+                "  User ada\n",
+                "Host inner\n  HostName inner.lan\n  Port 22\n",
+            ],
+        );
         let hosts = suggestions(&config, &[]);
-        assert_eq!(named(&hosts), ["orb", "box", "inner", "later"]);
+        // What box.d says before its first Host is box's; its `Host inner`
+        // applies only where box does too, so `ssh inner` never reads it;
+        // and the lines after the Include are box's again.
+        assert_eq!(named(&hosts), ["orb", "box", "later"]);
         assert_eq!(hosts[1].user.as_deref(), Some("ada"));
+        assert_eq!(hosts[1].port, Some(2200));
+        assert_eq!(hosts[1].host_name, None);
         // An include of itself ends at the nesting bound.
         let mut looping = files("Include self\nHost a\n");
-        looping.included.insert("self", vec!["Include self\nHost b\n"]);
+        looping
+            .included
+            .insert("self", vec!["Include self\nHost b\n"]);
         let hosts = suggestions(&looping, &[]);
         assert_eq!(named(&hosts), ["b", "a"]);
     }
 
     #[test]
-    fn keyword_forms_quotes_and_case_are_read_as_ssh_reads_them() {
-        let config = files(
-            "HOST=\"spaced alias\" box\n\thostname=%h.lan\n  USER \"ada\"\n  port 0\n",
+    fn a_word_starting_with_a_hash_ends_the_line() {
+        let config = files("Host devbox  # work laptop\n  User # none\n  HostName \"#box\"\n");
+        let hosts = suggestions(&config, &[]);
+        assert_eq!(named(&hosts), ["devbox"]);
+        assert_eq!(hosts[0].user, None);
+        assert_eq!(hosts[0].host_name.as_deref(), Some("#box"));
+    }
+
+    #[test]
+    fn empty_values_and_a_block_that_excludes_its_own_alias_name_nothing() {
+        let config = files("Host box\n  HostName \"\"\n  User \"\"\nHost gone !gone\n");
+        let hosts = suggestions(&config, &[]);
+        assert_eq!(named(&hosts), ["box"]);
+        assert_eq!(
+            (hosts[0].host_name.as_deref(), hosts[0].user.as_deref()),
+            (None, None)
         );
+    }
+
+    #[test]
+    fn keyword_forms_quotes_and_case_are_read_as_ssh_reads_them() {
+        let config =
+            files("HOST=\"spaced alias\" box\n\thostname=%h.lan\n  USER \"ada\"\n  port 0\n");
         let hosts = suggestions(&config, &[]);
         // "spaced alias" is no destination; box is.
         assert_eq!(named(&hosts), ["box"]);

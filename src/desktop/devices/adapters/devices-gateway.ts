@@ -67,8 +67,11 @@ export interface DevicesRead {
   readonly more: boolean
   /** The SSH hosts conversations may run on. */
   readonly sshHosts: readonly DeviceSshHost[]
-  /** Where new conversations run; `null` is the hub. */
-  readonly defaultEnvironment: string | null
+  /**
+   * Where new conversations run; `null` is the hub. Absent from a hub that
+   * sets no machines up (it names no SSH hosts either): nothing to choose.
+   */
+  readonly defaultEnvironment?: string | null
 }
 
 /** The machines `~/.ssh/config` names, and each setup under way. */
@@ -171,7 +174,9 @@ export function devicesGateway(options: {
           workers,
           more: next !== undefined,
           sshHosts: first.sshHosts ?? [],
-          defaultEnvironment: first.defaultEnvironment ?? null,
+          ...(first.sshHosts !== undefined
+            ? { defaultEnvironment: first.defaultEnvironment ?? null }
+            : {}),
         }
       }),
     sshHosts: () => answer((client) => client.devices.sshHosts()),

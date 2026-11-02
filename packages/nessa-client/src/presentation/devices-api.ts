@@ -95,7 +95,12 @@ const STATES = new Set<string>(["online", "draining", "offline"])
 const MAX_DESTINATION = 253
 const MAX_SSH_HOSTS = 16
 const MAX_SUGGESTED = 32
-const CONNECT_STATES = new Set<string>(["installing", "restarting", "connected", "failed"])
+const CONNECT_STATES = new Set<string>([
+  "installing",
+  "restarting",
+  "connected",
+  "failed",
+])
 const CONNECT_REFUSALS = new Set<string>([
   "environment_unreachable",
   "environment_platform_unsupported",
@@ -118,7 +123,10 @@ export function devicesList(value: unknown): DevicesListResult {
     )
   )
     throw invalid()
-  if (Object.hasOwn(value, "defaultEnvironment") && !destination(value.defaultEnvironment))
+  if (
+    Object.hasOwn(value, "defaultEnvironment") &&
+    !destination(value.defaultEnvironment)
+  )
     throw invalid()
   const sshHosts = value.sshHosts
   if (

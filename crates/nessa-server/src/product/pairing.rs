@@ -254,7 +254,9 @@ fn linking_refusal(error: crate::device_pairing::application::LinkingError) -> P
         LinkingError::LinkingOff => PairingErrorCode::PairingLinkingOff,
         LinkingError::TunnelIncomplete => PairingErrorCode::PairingTunnelIncomplete,
         // Only an SSH host's change meets the bound; no pairing method makes one.
-        LinkingError::HostLimit => PairingErrorCode::PairingUnavailable,
+        LinkingError::HostLimit | LinkingError::InstallFailed => {
+            PairingErrorCode::PairingUnavailable
+        }
     }
 }
 

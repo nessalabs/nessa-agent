@@ -46,13 +46,13 @@ use crate::device_pairing::application::{
 };
 use crate::devices::application::{DeviceSettings, SetupFuture};
 use crate::mcp_servers::application::StoreError;
-use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
 use crate::tunnel::application::{
     CloudflareTunnel, TunnelMode, TunnelProvider, TunnelSetting, TunnelToken,
     DEFAULT_TUNNEL_INGRESS,
 };
 use crate::tunnel::infrastructure::files::TunnelFiles;
+use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use serde_json::{Map, Value};
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::watch;
@@ -87,9 +87,13 @@ enum Change {
     Tunnel(TunnelRequest),
     /// Add an SSH host to `sshHosts` (`devices.connectSsh`).
     SshHost(SshDestination),
-    /// Save the default device (`devices.setDefault`); `None` is this
-    /// machine. Read at each creation, so it never restarts anything.
-    DefaultDevice(Option<String>),
+    /// Save the default device (`devices.setDefault`), the saved one
+    /// `before` it; `None` is this machine. Read at each creation, so it
+    /// never restarts anything.
+    DefaultDevice {
+        to: Option<String>,
+        before: Option<String>,
+    },
 }
 
 impl Change {
@@ -100,8 +104,9 @@ impl Change {
             Self::SshHost(host) => LinkingSubject::SshHost {
                 host: host.as_str().to_owned(),
             },
-            Self::DefaultDevice(environment) => LinkingSubject::DefaultDevice {
-                environment: environment.clone(),
+            Self::DefaultDevice { to, before } => LinkingSubject::DefaultDevice {
+                environment: to.clone(),
+                before: before.clone(),
             },
         }
     }
@@ -110,7 +115,7 @@ impl Change {
             Self::Linking(enabled) => *enabled,
             Self::Tunnel(request) => request.enabled,
             Self::SshHost(_) => true,
-            Self::DefaultDevice(environment) => environment.is_some(),
+            Self::DefaultDevice { to, .. } => to.is_some(),
         }
     }
 }
@@ -163,7 +168,7 @@ impl ConfigLinking {
             Change::Tunnel(_) => self.running_tunnel.borrow().is_some(),
             Change::SshHost(host) => self.running_hosts.contains(host),
             // Read at each creation: whatever is saved is what runs.
-            Change::DefaultDevice(_) => true,
+            Change::DefaultDevice { .. } => true,
         }
     }
 
@@ -203,9 +208,7 @@ impl ConfigLinking {
             (Ok(_), Change::Linking(enabled)) => self.save(*enabled).await,
             (Ok(_), Change::Tunnel(request)) => self.save_tunnel(request).await,
             (Ok(_), Change::SshHost(host)) => self.save_ssh_host(host).await,
-            (Ok(_), Change::DefaultDevice(environment)) => {
-                self.save_default(environment.clone()).await
-            }
+            (Ok(_), Change::DefaultDevice { to, .. }) => self.save_default(to.clone()).await,
             (Err(error), _) => Err(*error),
         };
         let saved = match saved {
@@ -370,7 +373,10 @@ impl ConfigLinking {
                 .or_insert_with(|| Value::Array(Vec::new()))
                 .as_array_mut()
                 .ok_or(LinkingError::Unavailable)?;
-            if hosts.iter().any(|each| each.as_str() == Some(name.as_str())) {
+            if hosts
+                .iter()
+                .any(|each| each.as_str() == Some(name.as_str()))
+            {
                 return Ok(false);
             }
             if hosts.len() >= MAX_SSH_HOSTS {
@@ -633,7 +639,78 @@ impl ConfigLinking {
     }
 }
 
+impl ConfigLinking {
+    /// Whether `host` may be added now: refused busy while a restart is
+    /// held or the gateway is stopping, and at the bound unless the file
+    /// already names it.
+    async fn admits_ssh_host(&self, host: &SshDestination) -> Result<(), LinkingError> {
+        if !self.restart.serving() {
+            return Err(LinkingError::Busy);
+        }
+        let _lock = self.config.lock().await.map_err(refusal)?;
+        let config = self.config.clone();
+        let name = host.as_str().to_owned();
+        tokio::task::spawn_blocking(move || {
+            let document = config.document().map_err(refusal)?;
+            let hosts = document
+                .get("sshHosts")
+                .and_then(Value::as_array)
+                .map_or(&[][..], Vec::as_slice);
+            let named = hosts
+                .iter()
+                .any(|each| each.as_str() == Some(name.as_str()));
+            match named || hosts.len() < MAX_SSH_HOSTS {
+                true => Ok(()),
+                false => Err(LinkingError::HostLimit),
+            }
+        })
+        .await
+        .map_err(|_| LinkingError::Unavailable)?
+    }
+}
+
 impl DeviceSettings for ConfigLinking {
+    fn begin_ssh_host(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<(), LinkingError>> {
+        Box::pin(async move {
+            let change = Change::SshHost(host.clone());
+            self.record(&operation, &caller, &change, LinkingAuditPhase::Requested)
+                .await?;
+            if let Err(error) = self.admits_ssh_host(&host).await {
+                self.record(
+                    &operation,
+                    &caller,
+                    &change,
+                    LinkingAuditPhase::Refused(error),
+                )
+                .await?;
+                return Err(error);
+            }
+            Ok(())
+        })
+    }
+
+    fn ssh_host_not_installed(
+        &self,
+        caller: LinkingCaller,
+        operation: String,
+        host: SshDestination,
+    ) -> SetupFuture<'_, Result<(), LinkingError>> {
+        Box::pin(async move {
+            self.record(
+                &operation,
+                &caller,
+                &Change::SshHost(host),
+                LinkingAuditPhase::Refused(LinkingError::InstallFailed),
+            )
+            .await
+        })
+    }
+
     fn add_ssh_host(
         &self,
         caller: LinkingCaller,
@@ -641,9 +718,11 @@ impl DeviceSettings for ConfigLinking {
         host: SshDestination,
     ) -> SetupFuture<'_, Result<LinkingApply, LinkingError>> {
         Box::pin(async move {
+            // Asked for in `begin_ssh_host`, under the same operation.
             let applies = self
-                .apply(&operation, &caller, &Change::SshHost(host.clone()))
-                .await?;
+                .change(&operation, &caller, &Change::SshHost(host.clone()))
+                .await?
+                .applies;
             tracing::info!(host = host.as_str(), ?applies, principal = %caller.principal_id, "an SSH host was added from Devices");
             Ok(applies)
         })
@@ -652,12 +731,20 @@ impl DeviceSettings for ConfigLinking {
     fn set_default(
         &self,
         caller: LinkingCaller,
+        before: Option<String>,
         environment: Option<String>,
     ) -> SetupFuture<'_, Result<(), LinkingError>> {
         Box::pin(async move {
             let operation = uuid::Uuid::new_v4().to_string();
-            self.apply(&operation, &caller, &Change::DefaultDevice(environment.clone()))
-                .await?;
+            self.apply(
+                &operation,
+                &caller,
+                &Change::DefaultDevice {
+                    to: environment.clone(),
+                    before,
+                },
+            )
+            .await?;
             tracing::info!(?environment, principal = %caller.principal_id, "the default device changed from Devices");
             Ok(())
         })
@@ -1044,6 +1131,107 @@ mod tests {
 
     fn off_at(address: &str) -> String {
         format!(r#"{{"native":{{"enabled":false,"listenAddress":"{address}"}}}}"#)
+    }
+
+    fn ssh_hosts(files: &Files) -> Value {
+        let bytes = files.bytes.lock().unwrap().clone().unwrap();
+        serde_json::from_slice::<Value>(&bytes).unwrap()["sshHosts"].clone()
+    }
+
+    #[tokio::test]
+    async fn an_ssh_host_is_asked_for_before_its_install_and_saved_after() {
+        let files = files(Some(r#"{"sshHosts":["old"]}"#));
+        let linking = linking(files.clone(), false);
+        let box_host = SshDestination::new("box").unwrap();
+        let settings: &dyn DeviceSettings = &linking.linking;
+        settings
+            .begin_ssh_host(caller(), "op".into(), box_host.clone())
+            .await
+            .unwrap();
+        assert_eq!(linking.records(), [LinkingAuditPhase::Requested]);
+        assert_eq!(
+            ssh_hosts(&files),
+            serde_json::json!(["old"]),
+            "nothing saved yet"
+        );
+        let applies = settings
+            .add_ssh_host(caller(), "op".into(), box_host)
+            .await
+            .unwrap();
+        assert_eq!(applies, LinkingApply::Restarting);
+        assert_eq!(ssh_hosts(&files), serde_json::json!(["old", "box"]));
+        // One Requested for the whole operation, then its outcome.
+        assert_eq!(linking.records().len(), 2);
+        assert!(matches!(
+            linking.records()[1],
+            LinkingAuditPhase::Applied { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_ssh_host_is_refused_before_its_install_while_restarting_or_full() {
+        let full: Vec<String> = (0..MAX_SSH_HOSTS)
+            .map(|index| format!("h{index}"))
+            .collect();
+        let files = files(Some(&serde_json::json!({ "sshHosts": full }).to_string()));
+        let linking = linking(files.clone(), false);
+        let settings: &dyn DeviceSettings = &linking.linking;
+        let new = SshDestination::new("box").unwrap();
+        assert_eq!(
+            settings
+                .begin_ssh_host(caller(), "a".into(), new.clone())
+                .await,
+            Err(LinkingError::HostLimit)
+        );
+        // One already named is not over the bound.
+        settings
+            .begin_ssh_host(caller(), "b".into(), SshDestination::new("h0").unwrap())
+            .await
+            .unwrap();
+        linking.restart.stop();
+        assert_eq!(
+            settings
+                .begin_ssh_host(caller(), "c".into(), new.clone())
+                .await,
+            Err(LinkingError::Busy)
+        );
+        settings
+            .ssh_host_not_installed(caller(), "d".into(), new)
+            .await
+            .unwrap();
+        assert_eq!(
+            linking.records(),
+            [
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Refused(LinkingError::HostLimit),
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Requested,
+                LinkingAuditPhase::Refused(LinkingError::Busy),
+                LinkingAuditPhase::Refused(LinkingError::InstallFailed),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_default_device_is_saved_without_a_restart_and_removed_by_none() {
+        let files = files(Some(r#"{"sshHosts":["box"]}"#));
+        let linking = linking(files.clone(), false);
+        let settings: &dyn DeviceSettings = &linking.linking;
+        let saved = |files: &Files| {
+            let bytes = files.bytes.lock().unwrap().clone().unwrap();
+            serde_json::from_slice::<Value>(&bytes).unwrap()["defaultEnvironment"].clone()
+        };
+        settings
+            .set_default(caller(), None, Some("box".into()))
+            .await
+            .unwrap();
+        assert_eq!(saved(&files), "box");
+        settings
+            .set_default(caller(), Some("box".into()), None)
+            .await
+            .unwrap();
+        assert_eq!(saved(&files), Value::Null);
+        assert!(linking.restart.serving(), "nothing restarts");
     }
 
     #[tokio::test]

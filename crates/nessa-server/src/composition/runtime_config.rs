@@ -373,7 +373,6 @@ impl RuntimeConfig {
         config.session()?;
         config.limits()?;
         config.ssh_hosts()?;
-        config.default_environment()?;
         config.command_policy()?;
         config.advertised_address()?;
         Ok(config)
@@ -467,18 +466,21 @@ impl RuntimeConfig {
     }
 
     /// The saved default device: a paired environment's `peer:` name or an
-    /// SSH host `sshHosts` names. Anything else refuses the configuration.
-    pub fn default_environment(&self) -> Result<Option<String>, RunError> {
-        let Some(name) = &self.default_environment else {
-            return Ok(None);
-        };
-        let hosts = self.ssh_hosts()?;
+    /// SSH host `sshHosts` names. A default that names neither (a host
+    /// since taken out of `sshHosts` by hand) is warned of and read as this
+    /// machine, as a default that is not offered is at creation: it never
+    /// stops the gateway starting.
+    pub fn default_environment(&self) -> Option<String> {
+        let name = self.default_environment.as_ref()?;
+        let hosts = self.ssh_hosts().unwrap_or_default();
         if PeerEnvironment::parse(name).is_ok() || hosts.iter().any(|host| host.as_str() == name) {
-            return Ok(Some(name.clone()));
+            return Some(name.clone());
         }
-        Err(refused(format!(
-            "defaultEnvironment: {name:?} is neither in sshHosts nor a paired environment"
-        )))
+        tracing::warn!(
+            default = name.as_str(),
+            "defaultEnvironment names neither an SSH host in sshHosts nor a paired environment; new conversations run here"
+        );
+        None
     }
 
     pub fn session(&self) -> Result<SessionSettings, RunError> {

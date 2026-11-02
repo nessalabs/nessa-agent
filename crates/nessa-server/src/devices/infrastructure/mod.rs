@@ -9,6 +9,7 @@ mod ssh_config;
 
 pub(crate) use machine::SystemMachine;
 pub(crate) use sightings::FileSightings;
+#[cfg(unix)]
 pub(crate) use ssh_config::HomeSshConfig;
 
 use crate::devices::application::WallClock;
