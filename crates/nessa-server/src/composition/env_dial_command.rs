@@ -358,8 +358,10 @@ async fn reconcile_tunnel_secret(
         let pairing = open(address)?.through(relay.cloned());
         use crate::env_serve::application::EnvironmentPairing;
         let answer = pairing.ask().await;
-        pairing.shutdown().await;
-        if read_tunnel_secret_at(&root).is_some() {
+        // `ask` stores the secret on this owner. It still holds the
+        // directory lock, so the read opens the store only after the
+        // owner is gone.
+        if read_secret_after_release(pairing, &root).await.is_some() {
             return Ok(());
         }
         match answer {
@@ -385,6 +387,22 @@ async fn reconcile_tunnel_secret(
             }
         }
     }
+}
+
+/// The tunnel secret stored while `pairing` held the directory, read once
+/// that owner is gone.
+///
+/// `shutdown` stops the enrollment worker and leaves the store, and the
+/// store's exclusive lock, alive. A second store opened before the drop
+/// cannot see the file `ask` just wrote, so `env dial` would poll forever
+/// instead of serving.
+async fn read_secret_after_release(
+    pairing: FilePairingEnvironment,
+    root: &Path,
+) -> Option<[u8; 32]> {
+    pairing.shutdown().await;
+    drop(pairing);
+    read_tunnel_secret_at(root)
 }
 
 /// The tunnel secret stored under `root`/`pairing`, if the file is there.
@@ -638,14 +656,16 @@ fn clock() -> Arc<dyn Clock> {
 
 #[cfg(test)]
 mod tunnel_secret_gate {
-    use super::read_tunnel_secret_at;
+    use super::{read_secret_after_release, read_tunnel_secret_at};
     use nessa_auth::adapters::pairing::{FilePairingState, NativeIdentity};
     use nessa_auth::application::pairing::{ClientPendingStore, PrivateKeyMaterial};
     use nessa_auth::domain::pairing::{
         AttemptId, ConsentClass, ConsentIntentId, InvitationId, PublicIntent,
     };
     use nessa_auth::domain::{CredentialId, ResourceId};
+    use nessa_protocol::clock::Clock;
     use std::path::Path;
+    use std::sync::Arc;
     use zeroize::Zeroizing;
 
     fn intent() -> PublicIntent {
@@ -691,5 +711,53 @@ mod tunnel_secret_gate {
         store.save_tunnel_secret(&[9; 32]).unwrap();
         drop(store);
         assert_eq!(read_tunnel_secret_at(&path), Some([9; 32]));
+    }
+
+    struct Fixed;
+    impl Clock for Fixed {
+        fn elapsed_ms(&self) -> u64 {
+            0
+        }
+    }
+
+    /// `ask` stores the secret on the owner that still holds the directory
+    /// lock. `env dial` drops that owner and reads the secret, then serves.
+    /// Opening a second store while the owner is alive cannot see the file,
+    /// so the dial would poll forever.
+    #[tokio::test]
+    async fn env_dial_proceeds_to_serve_after_the_owner_recovers_the_secret() {
+        use crate::env_serve::infrastructure::FilePairingEnvironment;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("root");
+        nessa_local_storage::create_directory(&path).unwrap();
+        nessa_local_storage::create_directory_beneath(&path, Path::new("pairing")).unwrap();
+        let intent = intent();
+        let key = PrivateKeyMaterial::new(Zeroizing::new([4; 32]));
+        let pin = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([5; 32])))
+            .unwrap()
+            .public_spki();
+        {
+            let store = FilePairingState::open(&path, Path::new("pairing")).unwrap();
+            store.save_pending(&key, &pin, intent, None).unwrap();
+            store
+                .save_credential(
+                    &CredentialId::new("env-1").unwrap(),
+                    &ResourceId::new("receiver-1").unwrap(),
+                    intent,
+                )
+                .unwrap();
+            store.save_tunnel_secret(&[9; 32]).unwrap();
+        }
+        let pairing = FilePairingEnvironment::open(&path, "127.0.0.1:9", Arc::new(Fixed)).unwrap();
+        assert!(
+            read_tunnel_secret_at(&path).is_none(),
+            "the live owner holds the directory, so env dial cannot see the recovered secret"
+        );
+        assert_eq!(
+            read_secret_after_release(pairing, &path).await,
+            Some([9; 32]),
+            "env dial reads the secret once the owner is gone and goes on to serve"
+        );
     }
 }
