@@ -380,12 +380,16 @@ Experimental turns it on; the rail stands beside the workspace in
   below the controls on every host. The toggle stays at the bottom-left control
   edge, including when both side columns are closed, and a folded rail has a
   reserved slot beside "nessa Studio" in the
-  sidebar footer. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
+  sidebar footer. With the sidebar shown, Agents draws "nessa Studio" clear of
+  the toggle. Devices leaves that corner empty, and the toggle does not move.
+  _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
-  ⌥⌘S change nothing behind it. Its opaque view covers the workspace cards and
-  chat controls all the way to the top edge. One top sidebar toggle folds and
-  reopens the rail in Notes, Calendar, Browser and Files.
+  ⌥⌘S change nothing behind it. Its opaque view covers the workspace from the
+  rail's edge to the window's other edges, top included. The titlebar stays
+  above that view: its free room is the window's drag region, and its one
+  control folds and reopens the rail. A point just below the titlebar lands
+  in the view, not on a workspace card or chat control.
   _Check:_ `columns.mjs --only rail-view-inert`.
 - [ ] **Devices keeps its corner and titlebar for the window**: no "nessa
   Studio" in the bottom-left corner (its cards run under it), and a press in
