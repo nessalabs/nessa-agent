@@ -1,6 +1,6 @@
 //! Private requested/outcome records for ordinary runtime configuration edits.
 //! The same operation ID joins intent to publication, including uncertain writes.
-use crate::conversation::domain::{VmLifetime, VmLifetimeScope};
+use crate::conversation::domain::{SettingsScope, VmLifetime};
 use crate::workspaces::{
     application::{RuntimeAudit, RuntimeAuditEvent, RuntimePublication},
     domain::Failure,
@@ -56,8 +56,8 @@ impl RuntimeAudit for RuntimeSettingsAudit {
             ) => Some(choice(change.before)),
         };
         let target = match &change.scope {
-            VmLifetimeScope::Global => json!({"scope":"global"}),
-            VmLifetimeScope::Channel(channel) => {
+            SettingsScope::Global => json!({"scope":"global"}),
+            SettingsScope::Channel(channel) => {
                 json!({"scope":"channel","channelId":channel.as_str()})
             }
         };

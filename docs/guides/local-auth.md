@@ -436,8 +436,10 @@ its restart policy starts it again.
 
 Run several workers for one gateway, each on a volume of its own and paired
 with an invitation of its own, and create conversations on `peer:any`: the
-gateway puts each on the worker with the fewest agents running, and keeps it
-there while that worker serves. To replace a worker with no gap, start the new
+gateway puts each on the first worker in Devices › Thread order (config.json
+`pool`) that is online and not busy, the one with the fewest agents running
+among equals, and keeps it there while that worker serves. A channel can keep
+an order of its own; see [Worker pool preferences](../design/worker-pool-preferences.md). To replace a worker with no gap, start the new
 one on a new volume first, then stop the old one: draining, it tells the
 gateway at once, its leases end, and the next message to each of its
 conversations starts that conversation's agent on another worker, with new

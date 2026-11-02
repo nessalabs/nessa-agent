@@ -101,9 +101,14 @@ fn channel_request(params: &ChannelCreateParams) -> Option<ChannelRequest> {
     let path = |text: &str| ChannelPath::new(PathBuf::from(text)).ok();
     Some(ChannelRequest {
         execution: crate::conversation::domain::ChannelExecution {
+            // A coordinator runs in one known place; only threads go to
+            // the pool.
             coordinator: crate::conversation::domain::WorkspacePlacement::parse(
                 params.coordinator_placement.as_deref().unwrap_or("local"),
-            )?,
+            )
+            .filter(|placement| {
+                *placement != crate::conversation::domain::WorkspacePlacement::Pool
+            })?,
             threads: crate::conversation::domain::WorkspacePlacement::parse(
                 params.thread_placement.as_deref().unwrap_or("local"),
             )?,

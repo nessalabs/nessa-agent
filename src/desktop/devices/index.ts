@@ -7,4 +7,5 @@ export {
   type DevicesClient,
   type DevicesGateway,
 } from "./adapters/devices-gateway"
-export { DevicesProvider, DevicesView } from "./ui/devices-view"
+export { DevicesProvider, DevicesView, useDevicesGateway } from "./ui/devices-view"
+export { PoolOrder } from "./ui/pool-order"

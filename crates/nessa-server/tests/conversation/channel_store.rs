@@ -327,15 +327,22 @@ async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
 
 #[tokio::test]
 async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
-    for version in [1, 2] {
+    for version in [1, 2, 3] {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
         let path = private.join("channels.sqlite3");
         // Start from the actual old schema, rather than a second handwritten one.
         let current = DEFINITION;
-        let old = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
-        let old = if version == 1 {
+        let old = current[..current.find("-- A replacement is recorded").unwrap()]
+            .replace(", 'pool')", ")");
+        let old = if version == 3 {
+            format!(
+                "{old}{}",
+                &current[current.find("-- A replacement is recorded").unwrap()
+                    ..current.find("PRAGMA user_version").unwrap()]
+            )
+        } else if version == 1 {
             old.lines()
                 .filter(|line| {
                     !line.trim_start().starts_with("coordinator_placement")
@@ -373,6 +380,34 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         assert_eq!(
             store.channel_of(&main).await.unwrap(),
             Some(kept.id().clone())
+        );
+        // Every older file takes threads on the pool once upgraded.
+        let pooled = LocalChannelStore::open(&path).unwrap();
+        drop(pooled);
+        let check = Connection::open(&path).unwrap();
+        check
+            .execute(
+                "UPDATE channels SET thread_placement = 'pool' WHERE channel = ?1",
+                params![kept.id().as_str()],
+            )
+            .unwrap();
+        let violations: i64 = check
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0, "version {version}");
+        drop(check);
+        let store = LocalChannelStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .get(kept.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .execution()
+                .threads,
+            crate::conversation::domain::WorkspacePlacement::Pool
         );
         store.forget(&main).await.unwrap();
         assert_ne!(

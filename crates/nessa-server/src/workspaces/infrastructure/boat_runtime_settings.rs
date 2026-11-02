@@ -2,7 +2,7 @@
 //! bound, validation and atomic publication. No credential read/write occurs.
 use crate::{
     conversation::{
-        domain::{VmLifetime, VmLifetimeScope, VmLifetimeSettings},
+        domain::{SettingsScope, VmLifetime, VmLifetimeSettings},
         infrastructure::BoatRuntimeConfig,
     },
     mcp_servers::infrastructure::{ConfigJson, Published},
@@ -39,7 +39,7 @@ fn parsed(document: &Map<String, Value>) -> Result<BoatRuntimeConfig, Failure> {
 }
 fn edit(
     document: &mut Map<String, Value>,
-    scope: &VmLifetimeScope,
+    scope: &SettingsScope,
     choice: Option<VmLifetime>,
 ) -> Result<(), Failure> {
     let boat = document
@@ -48,7 +48,7 @@ fn edit(
         .as_object_mut()
         .ok_or(Failure::Storage)?;
     match scope {
-        VmLifetimeScope::Global => {
+        SettingsScope::Global => {
             if let Some(lifetime) = choice {
                 boat.insert(
                     "autoStopSeconds".into(),
@@ -58,7 +58,7 @@ fn edit(
                 boat.remove("autoStopSeconds");
             }
         }
-        VmLifetimeScope::Channel(channel) => {
+        SettingsScope::Channel(channel) => {
             let overrides = boat
                 .entry("channelAutoStopSeconds")
                 .or_insert_with(|| serde_json::json!({}))
@@ -79,7 +79,7 @@ fn edit(
 impl ConfigBoatRuntimeSettings {
     async fn apply(
         &self,
-        scope: VmLifetimeScope,
+        scope: SettingsScope,
         choice: Option<VmLifetime>,
         caller: RuntimeCaller,
     ) -> Result<VmLifetimeSettings, Failure> {
@@ -90,8 +90,8 @@ impl ConfigBoatRuntimeSettings {
             let mut document = this.config.document().map_err(|_| Failure::Storage)?;
             let before = parsed(&document)?;
             let before = match &scope {
-                VmLifetimeScope::Global => before.default_override(),
-                VmLifetimeScope::Channel(channel) => before.channel_override(channel),
+                SettingsScope::Global => before.default_override(),
+                SettingsScope::Channel(channel) => before.channel_override(channel),
             };
             let target = choice;
             let change = RuntimeChange {
@@ -146,7 +146,7 @@ impl ConfigBoatRuntimeSettings {
 }
 #[async_trait]
 impl RuntimeSettings for ConfigBoatRuntimeSettings {
-    async fn read(&self, scope: &VmLifetimeScope) -> Result<VmLifetimeSettings, Failure> {
+    async fn read(&self, scope: &SettingsScope) -> Result<VmLifetimeSettings, Failure> {
         let config = self.config.clone();
         let scope = scope.clone();
         tokio::task::spawn_blocking(move || {
@@ -158,7 +158,7 @@ impl RuntimeSettings for ConfigBoatRuntimeSettings {
     }
     async fn save(
         &self,
-        scope: VmLifetimeScope,
+        scope: SettingsScope,
         lifetime: Option<VmLifetime>,
         caller: RuntimeCaller,
     ) -> Result<VmLifetimeSettings, Failure> {

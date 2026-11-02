@@ -409,7 +409,14 @@ function Answer({ step, draft }: { step: ChannelStep; draft: ChannelDraft }) {
       return (
         <span>
           Main agent: <em>{draft.coordinatorPlacement === "boat" ? "Boat" : "Local"}</em>{" "}
-          · New threads: <em>{draft.threadPlacement === "boat" ? "Boat" : "Local"}</em>
+          · New threads:{" "}
+          <em>
+            {draft.threadPlacement === "boat"
+              ? "Boat"
+              : draft.threadPlacement === "pool"
+                ? "Any computer"
+                : "Local"}
+          </em>
         </span>
       )
     case "folder":
@@ -664,7 +671,11 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
             disabled={flow.creating}
             onChange={(event) => {
               const value = event.target.value
-              if (value === "local" || value === "boat")
+              if (
+                value === "local" ||
+                value === "boat" ||
+                (value === "pool" && key === "threadPlacement")
+              )
                 dispatch(draftChannel({ change: { [key]: value } }))
             }}
           >
@@ -672,6 +683,10 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
             <option value="boat" disabled={!boatReady}>
               {boatReady ? "Boat" : "Boat (not connected)"}
             </option>
+            {/* Only threads spread over computers: the main agent stays put. */}
+            {key === "threadPlacement" ? (
+              <option value="pool">Any computer</option>
+            ) : null}
           </select>
         </label>
       ))}

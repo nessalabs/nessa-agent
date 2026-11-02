@@ -2685,7 +2685,11 @@ SDK recovery/quota boundaries live under
 `nessa-sdk/tests/application/agent_execution/subagents/capacity/preparation_recovery.rs`.
 `conversation/infrastructure/ownership_audit.rs` persists coordinator transition
 evidence through the ordinary durable audit owner. Namespace
-`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop`.
+`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop` and
+`subagents.maxLiveThreads` (the live thread cap `owned_threads.rs` checks under
+the thread admission lock; see [Worker pool preferences](design/worker-pool-preferences.md)).
+The pool order lives in `conversation/infrastructure/pool_config.rs` (config.json
+`pool`), is saved by `pool_settings.rs` and read by `application/placement.rs`.
 The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
 `tests/conversation/parent_stop/confirmed_recovery.rs` kills a process between
 native cancel acknowledgement and turn settlement, retaining exact command authority.

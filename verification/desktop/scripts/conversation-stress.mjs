@@ -4128,6 +4128,14 @@ const steps = {
         )
         return
       }
+      // Devices › Thread order: with nothing ordered the lowest key would
+      // win a tie, so the person leaves that one out and the new
+      // conversation must go to the other.
+      const [leftOut] = [...workers].sort((x, y) => (x.name < y.name ? -1 : 1))
+      const ordered = await run.exclusive(() =>
+        setPoolInclusion(run, leftOut.name, false, failures),
+      )
+      if (!ordered) return
       const conversationId = randomUUID()
       await run.client.conversation.create({
         conversationId,
@@ -4158,6 +4166,13 @@ const steps = {
       }
       if (before.lease?.environment !== "peer" || before.lease?.host !== from.name)
         failures.push(`its lease runs on ${before.lease?.host}, not ${from.name}`)
+      if (from === leftOut)
+        failures.push(`the pool chose ${from.name}, which the person left out`)
+      // Let back in, it is where the conversation moves once its worker drains.
+      const back = await run.exclusive(() =>
+        setPoolInclusion(run, leftOut.name, true, failures),
+      )
+      if (!back) return
       // A person opens it and writes in it: it stays on the worker it is bound to.
       await openStressConversation(
         run.page,
@@ -7969,6 +7984,60 @@ async function pairFromWindow(run, failures) {
  * the side rail closed. Called with nothing else in flight
  * (`run.exclusive`).
  */
+/**
+ * Devices › Thread order, as a person uses it: the side rail's Devices,
+ * Thread order, then the computer's switch. Done once the gateway's own
+ * read of the pool says `environment` is let in or left out; the window is
+ * left on the main conversation.
+ */
+async function setPoolInclusion(run, environment, included, failures) {
+  const page = run.page
+  await setSideRail(page, true, failures)
+  if (failures.length) return false
+  await page.locator('[data-rail-item="devices"]').click()
+  await page.locator('[data-devices-action="pool"]').click({ timeout: 15_000 })
+  const row = page.locator(`[data-devices-pool-row="${environment}"]`)
+  if (!(await waitFor(async () => (await row.count()) === 1, 10_000))) {
+    failures.push(`Thread order lists no row for ${environment}`)
+    return false
+  }
+  if ((await row.getAttribute("data-included")) !== String(!included))
+    failures.push(`${environment} is already ${included ? "in" : "left out"}`)
+  await page.locator(`[data-devices-pool-include="${environment}"]`).click()
+  const saved = await waitFor(async () => {
+    const pool = await run.client.devices.pool()
+    return pool.defaultPreference.excluded.includes(environment) === !included
+      ? pool
+      : null
+  }, 10_000)
+  if (!saved) {
+    failures.push(`the pool never saved ${environment} ${included ? "in" : "left out"}`)
+    return false
+  }
+  if (
+    !(await waitFor(
+      async () => (await row.getAttribute("data-included")) === String(included),
+      5_000,
+    ))
+  )
+    failures.push(`Thread order still draws ${environment} as it was`)
+  if (run.evidence)
+    await page
+      .screenshot({
+        path: join(
+          run.evidence,
+          `pool-order-${run.engine}-${included ? "in" : "out"}.png`,
+        ),
+      })
+      .catch(() => {})
+  await page.locator('[data-devices-action="back"]').click()
+  // Back to the chats, and the rail off again as the run had it.
+  await page.locator('[data-rail-item="agents"]').click()
+  await setSideRail(page, false, failures)
+  await openStressConversation(run.page, run.main.id, run.main.title)
+  return failures.length === 0
+}
+
 async function reachFromDevices(run, failures) {
   const gateway = run.stack.gateway
   const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")

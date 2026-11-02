@@ -223,6 +223,10 @@ pub(crate) use workspaces::ThreadWorkspaces;
 
 mod workspace_runtime_config;
 pub(crate) use workspace_runtime_config::BoatRuntimeConfig;
+mod pool_config;
+pub(crate) use pool_config::PoolConfig;
+mod pool_settings;
+pub(crate) use pool_settings::ConfigPoolSettings;
 
 #[cfg(any(unix, test))]
 mod input_files;

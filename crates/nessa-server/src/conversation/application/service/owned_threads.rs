@@ -33,7 +33,7 @@ use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseEndCause, Le
 use nessa_sdk::domain::agent_execution::subagents::{
     AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, KnownMilestone,
     LifetimeCause, LifetimeState, OwnershipSnapshot, PhysicalFact, PolicyRead, SpawnBinding,
-    SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId,
+    SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId, MAX_READ_PAGE,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -42,6 +42,20 @@ use std::time::Duration;
 pub(super) struct Ownership {
     pub coordinator: OwnershipCoordinator,
     pub cascade: bool,
+    /// How many threads one agent may have at work at once; `None` bounds
+    /// none (`subagents.maxLiveThreads`, 0 or absent).
+    pub live_threads: Option<usize>,
+    /// Threads an agent made in this run and has not yet sent a message:
+    /// at work for the bound, though their agent is not open yet.
+    pub unstarted: std::sync::Mutex<std::collections::HashSet<ConversationId>>,
+}
+
+impl Ownership {
+    fn unstarted(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<ConversationId>> {
+        self.unstarted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// The factory's existing transfer slot retains the actual cleanup capability
@@ -119,11 +133,24 @@ impl ConversationService {
         coordinator: OwnershipCoordinator,
         cascade: bool,
     ) -> Result<(), ConversationError> {
+        self.bind_owned_threads_bounded(coordinator, cascade, None)
+    }
+
+    /// As [`Self::bind_owned_threads`], letting one agent have at most
+    /// `live_threads` of its threads at work at once (`None`: no bound).
+    pub fn bind_owned_threads_bounded(
+        &self,
+        coordinator: OwnershipCoordinator,
+        cascade: bool,
+        live_threads: Option<usize>,
+    ) -> Result<(), ConversationError> {
         self.inner
             .ownership
             .set(Ownership {
                 coordinator,
                 cascade,
+                live_threads,
+                unstarted: std::sync::Mutex::default(),
             })
             .map_err(|_| ConversationError::RequestConflict)
     }
@@ -160,13 +187,20 @@ impl ConversationService {
             channel: None,
         };
         let service = self.clone();
-        tokio::spawn(async move {
+        let made = id.clone();
+        let receipt = tokio::spawn(async move {
             service
                 .prepare_owned_thread(source, id, caller, preparation)
                 .await
         })
         .await
-        .map_err(|error| CreationFailure::TaskFault(CreationTaskFault::from_join_error(error)))?
+        .map_err(|error| CreationFailure::TaskFault(CreationTaskFault::from_join_error(error)))??;
+        if let Some(ownership) = self.inner.ownership.get() {
+            if ownership.live_threads.is_some() {
+                ownership.unstarted().insert(made);
+            }
+        }
+        Ok(receipt)
     }
 
     async fn prepare_owned_thread(
@@ -216,6 +250,13 @@ impl ConversationService {
             .coordinator
             .active_lifetime_for_session(&session)
             .ok_or(CreationFailure::Target(ConversationError::Unavailable))?;
+        // Counted under the thread admission lock, so two creations at once
+        // cannot both take the last place.
+        if let Some(limit) = ownership.live_threads {
+            if self.threads_at_work(ownership, &lifetime, limit).await >= limit {
+                return Err(CreationFailure::Target(ConversationError::ThreadLimit));
+            }
+        }
         let description = serde_json::to_string(&preparation)
             .map_err(|_| CreationFailure::Target(ConversationError::InvalidInput))?;
         let request = creation_request(
@@ -1140,7 +1181,8 @@ impl ConversationService {
             {
                 return Err(MutationFailure::Target(ConversationError::Unavailable));
             }
-            service
+            let started = target.clone();
+            let submitted = service
                 .submit_command_origin(
                     storage,
                     target,
@@ -1152,7 +1194,13 @@ impl ConversationService {
                     mode,
                     true,
                 )
-                .await
+                .await;
+            if submitted.is_ok() {
+                if let Some(ownership) = service.inner.ownership.get() {
+                    ownership.unstarted().remove(&started);
+                }
+            }
+            submitted
         })
         .await
         .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))?
@@ -1171,4 +1219,68 @@ fn creation_policy(mode: Option<ConversationApprovalMode>) -> ApprovalPolicy {
 pub(super) fn creation_request(principal: &str, surface: &str, action: &str) -> SpawnRequestId {
     let bytes = serde_json::to_vec(&(principal, surface, action)).expect("strings serialize");
     SpawnRequestId::new(format!("create-{:x}", Sha256::digest(bytes))).expect("digest identity")
+}
+
+impl ConversationService {
+    /// How many of `parent`'s open threads are at work now, counting no
+    /// further than `limit`: a thread whose agent is open and is running or
+    /// owes a turn, or has had none yet. A thread parked, closed, or done
+    /// with its work is not at work.
+    async fn threads_at_work(
+        &self,
+        ownership: &Ownership,
+        parent: &AgentLifetimeId,
+        limit: usize,
+    ) -> usize {
+        let mut at_work = 0;
+        let mut cursor = None;
+        loop {
+            let Ok(page) = ownership
+                .coordinator
+                .children(parent, cursor.as_ref(), MAX_READ_PAGE)
+            else {
+                // An unreadable family is counted full: refusing one
+                // creation is safer than going past the bound.
+                return limit;
+            };
+            for child in &page.children {
+                if child.state != LifetimeState::Open {
+                    continue;
+                }
+                let Ok(id) = ConversationId::new(child.session.as_str()) else {
+                    continue;
+                };
+                // Made and not yet given its first task counts too: an agent
+                // that makes threads first and sends to them after is
+                // bounded the same.
+                // One whose agent is open with a turn saved has started,
+                // however its first message came.
+                let working = match self.live(&id).await {
+                    Some(live) => {
+                        let started = live
+                            .agent
+                            .session_manager()
+                            .snapshot()
+                            .await
+                            .is_some_and(|snapshot| !snapshot.invocations.is_empty());
+                        if started {
+                            ownership.unstarted().remove(&id);
+                        }
+                        !live.agent.is_idle().await
+                    }
+                    None => false,
+                };
+                if working || ownership.unstarted().contains(&id) {
+                    at_work += 1;
+                    if at_work >= limit {
+                        return at_work;
+                    }
+                }
+            }
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => return at_work,
+            }
+        }
+    }
 }

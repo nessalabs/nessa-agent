@@ -76,7 +76,7 @@ impl BuiltInServer for ConversationTools {
         vec![
             json!({
                 "name": "create_thread",
-                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model and asks for tool permission normally.",
+                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model and asks for tool permission normally. environment \"peer:any\" lets the gateway pick a paired computer by the person's priority order and current load (see environments_list). When the configuration bounds how many threads one conversation may have at work, past it this answers thread_limit_reached: end your turn, and a thread's report wakes you to create the next.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -323,6 +323,10 @@ fn identity(source: &ConversationId, request: &str, purpose: &str) -> String {
     bytes.copy_from_slice(&digest[..16]);
     uuid::Uuid::from_bytes(bytes).to_string()
 }
+/// What `create_thread` answers when the agent already has as many threads
+/// at work as it may (`subagents.maxLiveThreads`).
+const THREAD_LIMIT: &str = "thread_limit_reached: this conversation already has as many threads at work as it may; end your turn and a thread's report wakes you, then create the next one";
+
 fn code(error: ConversationError) -> String {
     error_code(&error).as_str().into()
 }
@@ -405,6 +409,7 @@ async fn run(
                 )
                 .await
                 .map_err(|error| match error {
+                    CreationFailure::Target(ConversationError::ThreadLimit) => THREAD_LIMIT.into(),
                     CreationFailure::Target(error) => code(error),
                     CreationFailure::Conflict => "request_conflict".into(),
                     CreationFailure::Interrupted(_) => "command_unconfirmed".into(),

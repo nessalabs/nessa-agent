@@ -57,7 +57,7 @@ export interface ChannelDraft {
   readonly model: ModelRef
   readonly access: AccessMode
   readonly coordinatorPlacement: "local" | "boat"
-  readonly threadPlacement: "local" | "boat"
+  readonly threadPlacement: "local" | "boat" | "pool"
   readonly notes: string
   /** Absolute files and folders, in the order they were added, none twice. */
   readonly resources: readonly string[]
