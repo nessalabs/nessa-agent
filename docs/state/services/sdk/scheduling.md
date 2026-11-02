@@ -4,7 +4,7 @@ title: "Submission scheduling and recovery"
 kind: "statechart"
 status: "implemented"
 summary: "Nessa keeps each accepted input's original ID, content, caller and delivery mode."
-sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
+sourceRevision: "a831b60b01231b226826405540e86ac370194682"
 parent: "sdk"
 sources:
   - "crates/nessa-sdk/src/domain/agent_execution/executions/value_objects/scheduling.rs"
