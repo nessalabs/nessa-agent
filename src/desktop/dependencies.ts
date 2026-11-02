@@ -168,6 +168,8 @@ export function createDesktopDependencies(
     providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
     /** The host's Claude sign-in minting for Boat VMs, where it has one (`main.tsx`). */
     mintClaudeSignIn?: { available: () => Promise<boolean>; mint: () => Promise<string> }
+    /** A Boat sign-in beside a given `workspace`; the gateway's own is composed here. */
+    boatClaudeSignIn?: WorkspaceDependencies["boatClaudeSignIn"]
     /**
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
@@ -253,13 +255,15 @@ export function createDesktopDependencies(
     providerLoginAvailable: options.providerLoginAvailable,
     // Minted by the host, kept by the gateway the window's conversations are on.
     boatClaudeSignIn:
-      source && options.mintClaudeSignIn
+      options.boatClaudeSignIn ??
+      (source && options.mintClaudeSignIn
         ? boatClaudeSignIn({
             available: options.mintClaudeSignIn.available,
             mint: options.mintClaudeSignIn.mint,
-            save: async (token) => (await source.connected()).boat.saveClaudeSignIn({ token }),
+            save: async (token) =>
+              (await source.connected()).boat.saveClaudeSignIn({ token }),
           })
-        : undefined,
+        : undefined),
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,
