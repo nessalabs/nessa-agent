@@ -222,7 +222,7 @@ async fn finish_turn(
                         snapshot
                             .invocations
                             .into_iter()
-                            .find(|record| &record.request.execution_id == &turn)
+                            .find(|record| record.request.execution_id == turn)
                     })
                     .is_some_and(|record| {
                         matches!(
