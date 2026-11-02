@@ -157,6 +157,49 @@ pub trait CreationStorage: Send + Sync {
         request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>>;
+    /// Read this principal's retained creation receipts in original admission
+    /// order without opening requests or authorizing initialization. Concurrent
+    /// progress may be absent: reopen the original request lease and validate
+    /// its current binding/stage before using a receipt for recovery.
+    /// Retention and read cost follow the existing command history.
+    ///
+    /// # Errors
+    /// Returns a storage failure for unsupported observation, invalid identity,
+    /// corrupt history, contention or I/O. Failure proves no physical absence.
+    ///
+    /// # Cancellation
+    /// Dropping the caller admits no effect. Outstanding physical reads remain
+    /// owned by storage and are joined by its shutdown.
+    fn creations(&self, _principal: String) -> CreationFuture<'_, Vec<CreationReceipt>> {
+        Box::pin(async {
+            Err(CreationStorageError::Storage(StorageError::Corrupt(
+                "creation observation is not on this store".into(),
+            )))
+        })
+    }
+    /// Read this principal's retained mutation receipts in first durable
+    /// admission order. This observation opens no request and admits no effect.
+    /// Later progress preserves admission order. Creation-only stores refuse it.
+    /// Concurrent saves may be absent from this observation. Retention and read
+    /// cost follow the stored command history; no effect is admitted by a read.
+    ///
+    /// # Errors
+    /// Returns a storage failure for unsupported observation, invalid identity,
+    /// corrupt history, contention or I/O. Failure grants no command authority.
+    ///
+    /// # Cancellation
+    /// Dropping the caller grants no effect and does not release outstanding
+    /// physical read ownership; storage shutdown joins retained I/O.
+    fn mutations(
+        &self,
+        _principal: String,
+    ) -> CreationFuture<'_, Vec<super::mutation::MutationReceipt>> {
+        Box::pin(async {
+            Err(CreationStorageError::Storage(StorageError::Corrupt(
+                "mutation observation is not on this store".into(),
+            )))
+        })
+    }
 }
 
 /// Exclusive access to one principal request's immutable command history.

@@ -19,7 +19,7 @@ The encrypted inbox has two audit stores. `audit` records payload and cursor
 facts (`cloud_retention_gap`, `gap_accepted`, retention, connect, disconnect).
 `binding_audit` records generation facts (connect, disconnect, page commit,
 Settings selection). The cap is `auditRows` in
-[the relay contract](../../protocol/defaults/github-relay-contract.json). The
+[the relay contract](../../../protocol/defaults/github-relay-contract.json). The
 contract states the number. It does not excuse a path from it.
 
 `SqliteRelayStore::gap` inserts `cloud_retention_gap` into `audit`, then

@@ -1,0 +1,225 @@
+{
+  "frontend": "unchanged current-main production build; Playwright bundled WebKit",
+  "diagnostic": "First two original stress steps, with the actual Radix focus-scope unmount callback signature-checked, held, and released before input or after textarea focus. A 500 ms fallback bounds the diagnostic hold. The callback is not reimplemented. Field text/events are never written or retried by the diagnostic. Original fill and 10 second Send assertion remain.",
+  "inference": "This reproduces the original empty composer/disabled Send symptom through a real asynchronous focus-restoration interval. The original failed run did not capture input events, so its exact scheduling cannot be proven retrospectively. The guard completes menu focus restoration before starting the next field action.",
+  "cases": [
+    {
+      "case": "forced-after",
+      "ok": false,
+      "passed": 4,
+      "rows": 5,
+      "conversationId": "bd960e19-a070-449b-aca1-c32401a5f1a7",
+      "allOwnedProcessesReaped": true,
+      "events": [
+        {
+          "kind": "focusin",
+          "ms": 0,
+          "tag": "TEXTAREA"
+        },
+        {
+          "kind": "focusin",
+          "ms": 937,
+          "tag": "DIV"
+        },
+        {
+          "kind": "focusin",
+          "ms": 2379,
+          "tag": "DIV"
+        },
+        {
+          "kind": "focusin",
+          "ms": 2989,
+          "tag": "DIV"
+        },
+        {
+          "kind": "select-mode",
+          "ms": 2993
+        },
+        {
+          "kind": "hold-native-restore",
+          "ms": 3214
+        },
+        {
+          "kind": "focusin",
+          "ms": 3404,
+          "tag": "TEXTAREA"
+        },
+        {
+          "kind": "release",
+          "ms": 3405
+        },
+        {
+          "kind": "native-restore-before",
+          "ms": 3405
+        },
+        {
+          "kind": "focusin",
+          "ms": 3407,
+          "tag": "BUTTON"
+        },
+        {
+          "kind": "native-restore-after",
+          "ms": 3408
+        }
+      ],
+      "nativeCallback": "()=>{const _=new CustomEvent(Sm,FA);f.addEventListener(Sm,m),f.dispatchEvent(_),_.defaultPrevented||Ei(C??document.body,{select:!0}),f.removeEventListener(Sm,m),HA.remove(S)}"
+    },
+    {
+      "case": "forced-before",
+      "ok": true,
+      "passed": 5,
+      "rows": 5,
+      "conversationId": "1676fbf7-c82a-4292-98fb-cace5e3014fc",
+      "allOwnedProcessesReaped": true,
+      "events": [
+        {
+          "kind": "focusin",
+          "ms": 0,
+          "tag": "TEXTAREA"
+        },
+        {
+          "kind": "focusin",
+          "ms": 1176,
+          "tag": "DIV"
+        },
+        {
+          "kind": "focusin",
+          "ms": 3300,
+          "tag": "DIV"
+        },
+        {
+          "kind": "focusin",
+          "ms": 3989,
+          "tag": "DIV"
+        },
+        {
+          "kind": "select-mode",
+          "ms": 4002
+        },
+        {
+          "kind": "focusin",
+          "ms": 4239,
+          "tag": "DIV"
+        },
+        {
+          "kind": "hold-native-restore",
+          "ms": 4375
+        },
+        {
+          "kind": "release",
+          "ms": 4876
+        },
+        {
+          "kind": "native-restore-before",
+          "ms": 4877
+        },
+        {
+          "kind": "focusin",
+          "ms": 4880,
+          "tag": "BUTTON"
+        },
+        {
+          "kind": "native-restore-after",
+          "ms": 4883
+        },
+        {
+          "kind": "focusin",
+          "ms": 5301,
+          "tag": "TEXTAREA"
+        },
+        {
+          "kind": "input",
+          "ms": 5317,
+          "tag": "TEXTAREA",
+          "value": "stress permission r2 s1"
+        },
+        {
+          "kind": "focusin",
+          "ms": 6483,
+          "tag": "BUTTON"
+        }
+      ],
+      "nativeCallback": "()=>{const _=new CustomEvent(Sm,FA);f.addEventListener(Sm,m),f.dispatchEvent(_),_.defaultPrevented||Ei(C??document.body,{select:!0}),f.removeEventListener(Sm,m),HA.remove(S)}"
+    },
+    {
+      "case": "guarded-after",
+      "ok": true,
+      "passed": 5,
+      "rows": 5,
+      "conversationId": "75e6a8c0-d913-4cfb-a0e9-bb0e50fbaddd",
+      "allOwnedProcessesReaped": true,
+      "events": [
+        {
+          "kind": "focusin",
+          "ms": 0,
+          "tag": "TEXTAREA"
+        },
+        {
+          "kind": "focusin",
+          "ms": 1095,
+          "tag": "DIV"
+        },
+        {
+          "kind": "focusin",
+          "ms": 3617,
+          "tag": "DIV"
+        },
+        {
+          "kind": "focusin",
+          "ms": 4525,
+          "tag": "DIV"
+        },
+        {
+          "kind": "select-mode",
+          "ms": 4530
+        },
+        {
+          "kind": "focusin",
+          "ms": 4790,
+          "tag": "DIV"
+        },
+        {
+          "kind": "hold-native-restore",
+          "ms": 4883
+        },
+        {
+          "kind": "release",
+          "ms": 5384
+        },
+        {
+          "kind": "native-restore-before",
+          "ms": 5385
+        },
+        {
+          "kind": "focusin",
+          "ms": 5387,
+          "tag": "BUTTON"
+        },
+        {
+          "kind": "native-restore-after",
+          "ms": 5392
+        },
+        {
+          "kind": "focusin",
+          "ms": 5679,
+          "tag": "TEXTAREA"
+        },
+        {
+          "kind": "input",
+          "ms": 5685,
+          "tag": "TEXTAREA",
+          "value": "stress permission r2 s1"
+        },
+        {
+          "kind": "focusin",
+          "ms": 6713,
+          "tag": "BUTTON"
+        }
+      ],
+      "nativeCallback": "()=>{const _=new CustomEvent(Sm,FA);f.addEventListener(Sm,m),f.dispatchEvent(_),_.defaultPrevented||Ei(C??document.body,{select:!0}),f.removeEventListener(Sm,m),HA.remove(S)}"
+    }
+  ],
+  "runtimeSourceEquivalentTo": "f0694161150a6566647d9addf54949db30314591",
+  "gatewaySourceHead": "166386bc2ccd49ff950330c379aa8577057164f2",
+  "gatewaySha256": "e07df299d2d274b69466971febffb40b1799b01eab2ad0d7847c28c3afa4757f"
+}

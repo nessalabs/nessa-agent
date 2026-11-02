@@ -1,0 +1,151 @@
+warning: constant evaluation is taking a long time
+    --> crates/nessa-protocol/src/lease.rs:1048:9
+     |
+1048 | /         while at < source.len() {
+1049 | |             if source[at] != b'\r' {
+1050 | |                 hash = (hash ^ source[at] as u64).wrapping_mul(PRIME);
+...    |
+1053 | |         }
+     | |_________^ the const evaluator is currently interpreting this expression
+     |
+help: the constant being evaluated
+    --> crates/nessa-server/src/env/config.rs:51:9
+     |
+  51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  63 | / lease_protocol!(
+  64 | |     "../../../nessa-protocol/src/lease.rs",
+  65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+  66 | |     "../env_serve/mod.rs",
+...    |
+ 106 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+ 107 | | );
+     | |_- in this macro invocation
+     = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.89s
+   Doc-tests nessa_auth
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nessa_client_core
+
+running 6 tests
+test crates/nessa-client-core/src/pairing/client.rs - pairing::client::NativeRetryOutcome (line 69) - compile fail ... ok
+test crates/nessa-client-core/src/retained/device.rs - retained::device::RetainedEnrollmentStatus (line 51) - compile fail ... ok
+test crates/nessa-client-core/src/composition/error.rs - composition::error::CommandError (line 10) - compile fail ... ok
+test crates/nessa-client-core/src/pairing/client.rs - pairing::client::NativeRetryOutcome (line 76) - compile fail ... ok
+test crates/nessa-client-core/src/retained/device.rs - retained::device::RetainedEnrollmentStatus (line 57) - compile fail ... ok
+test crates/nessa-client-core/src/retained/saved.rs - retained::saved::RetainedTranscriptSnapshot (line 103) - compile fail ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+   Doc-tests nessa_device_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nessa_local_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nessa_protocol
+
+running 2 tests
+test crates/nessa-protocol/src/conversation/projection.rs - conversation::projection::Projection::view (line 1065) - compile fail ... ok
+test crates/nessa-protocol/src/conversation/projection.rs - conversation::projection::Projection (line 265) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests nessa_sdk
+
+running 62 tests
+test crates/nessa-sdk/src/application/agent_execution/agents/agent.rs - application::agent_execution::agents::agent::Agent::close_report (line 3073) - compile ... ok
+test crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs - application::agent_execution::agents::lifecycle::AttachmentAuditRecord (line 57) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs - application::agent_execution::agents::lifecycle::AttachmentAuditRecord (line 68) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs - application::agent_execution::agents::scheduling::Agent::enqueue (line 418) ... ok
+test crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs - application::agent_execution::agents::scheduling::Agent::reorder_queued (line 583) ... ok
+test crates/nessa-sdk/src/application/agent_execution/agents/agent.rs - application::agent_execution::agents::agent::Agent::prepare (line 1143) ... ok
+test crates/nessa-sdk/src/application/agent_execution/agents/error.rs - application::agent_execution::agents::error::AgentStartupStep (line 128) ... ok
+test crates/nessa-sdk/src/application/agent_execution/executions/question.rs - application::agent_execution::executions::question::AdmittedQuestion (line 21) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/hooks/invocation.rs - application::agent_execution::hooks::invocation::ToolRefusal (line 131) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/commands/creation.rs - application::agent_execution::commands::creation::CreationBinding (line 49) ... ok
+test crates/nessa-sdk/src/application/agent_execution/executions/controller.rs - application::agent_execution::executions::controller::ExecutionController::decline_review (line 268) ... ok
+test crates/nessa-sdk/src/application/agent_execution/permissions/approval.rs - application::agent_execution::permissions::approval::HookRefusal::new (line 216) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/permissions/audit.rs - application::agent_execution::permissions::audit::RefusedAsk::new (line 400) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/permissions/audit.rs - application::agent_execution::permissions::audit::ReviewDeclineRecord (line 178) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/permissions/audit.rs - application::agent_execution::permissions::audit::RefusedAsk::new (line 389) ... ok
+test crates/nessa-sdk/src/application/agent_execution/permissions/audit.rs - application::agent_execution::permissions::audit::ReviewDeclineRecord (line 183) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/hooks/invocation.rs - application::agent_execution::hooks::invocation::ToolRefusal (line 122) ... ok
+test crates/nessa-sdk/src/application/agent_execution/permissions/approval.rs - application::agent_execution::permissions::approval::HookRefusal::new (line 210) ... ok
+test crates/nessa-sdk/src/application/agent_execution/providers/open.rs - application::agent_execution::providers::open::ProviderOpenError (line 139) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/providers/ports.rs - application::agent_execution::providers::ports::AgentProvider::harness_host_identity (line 343) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/providers/session.rs - application::agent_execution::providers::session::ProviderSession (line 42) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/providers/operations.rs - application::agent_execution::providers::operations::ProviderOperationCapabilities (line 94) ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/events.rs - application::agent_execution::sessions::events (line 7) - compile ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/storage/save.rs - application::agent_execution::sessions::storage::save::SessionSaveBackend::Snapshot (line 22) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/storage/save.rs - application::agent_execution::sessions::storage::save::SessionSaveGeneration (line 46) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/providers/harness_host.rs - application::agent_execution::providers::harness_host::HarnessHostIdentity (line 112) ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/storage/save.rs - application::agent_execution::sessions::storage::save::SessionSaveGeneration (line 52) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/providers/identity.rs - application::agent_execution::providers::identity::ProviderIdentity::new (line 35) ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs - application::agent_execution::sessions::manager::SessionManager (line 220) ... ok
+test crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs - application::agent_execution::subagents::coordinator::OwnershipCoordinator::prepare_child (line 400) - compile ... ok
+test crates/nessa-sdk/src/domain/agent_execution/executions/aggregates/invocation_queue.rs - domain::agent_execution::executions::aggregates::invocation_queue::InvocationQueue (line 21) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/storage/save.rs - application::agent_execution::sessions::storage::save::SessionSaveGeneration::record (line 73) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/executions/value_objects/message.rs - domain::agent_execution::executions::value_objects::message::MessageChunk (line 46) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/storage/save.rs - application::agent_execution::sessions::storage::save::SessionSaveGeneration::snapshot (line 93) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/permissions/entities/permission_request.rs - domain::agent_execution::permissions::entities::permission_request::PermissionRequest (line 21) - compile fail ... ok
+test crates/nessa-sdk/src/application/agent_execution/sessions/transcript.rs - application::agent_execution::sessions::transcript::CommittedTranscript::validate_fact_count (line 52) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/permissions/entities/permission_request.rs - domain::agent_execution::permissions::entities::permission_request::PermissionRequest (line 27) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/permissions/entities/permission_request.rs - domain::agent_execution::permissions::entities::permission_request::PermissionRequest (line 33) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/permissions/entities/permission_request.rs - domain::agent_execution::permissions::entities::permission_request::PermissionRequest::state (line 133) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/permission.rs - domain::agent_execution::permissions::value_objects::permission::PermissionScope::view (line 103) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/permissions/entities/permission_request.rs - domain::agent_execution::permissions::entities::permission_request::PermissionRequest::state (line 142) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/permission.rs - domain::agent_execution::permissions::value_objects::permission::PermissionCancellationReason::view (line 428) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/executions/aggregates/invocation_queue.rs - domain::agent_execution::executions::aggregates::invocation_queue::InvocationQueue::new (line 57) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/app_message.rs - domain::agent_execution::prompts::value_objects::app_message::AppModelContext::new (line 148) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/carried_history.rs - domain::agent_execution::prompts::value_objects::carried_history::CarriedHistory::newest (line 138) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/builders/system_prompt_builder.rs - domain::agent_execution::prompts::builders::system_prompt_builder::SystemPromptBuilder (line 11) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/carried_history.rs - domain::agent_execution::prompts::value_objects::carried_history::CarriedTurn::clipped (line 63) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/note_context.rs - domain::agent_execution::prompts::value_objects::note_context::NoteContext::new (line 48) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/carried_history.rs - domain::agent_execution::prompts::value_objects::carried_history::CarriedTurn::new (line 31) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/prompt.rs - domain::agent_execution::prompts::value_objects::prompt::SystemPrompt::new (line 146) ... ok
+test crates/nessa-sdk/src/domain/agent_execution/tools/entities/tool_call.rs - domain::agent_execution::tools::entities::tool_call::ToolCall (line 16) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/tools/entities/tool_call.rs - domain::agent_execution::tools::entities::tool_call::ToolCall (line 25) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/tools/entities/tool_call.rs - domain::agent_execution::tools::entities::tool_call::ToolCall (line 34) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/tools/value_objects/tool.rs - domain::agent_execution::tools::value_objects::tool::ToolContent::view (line 655) - compile fail ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_message.rs - domain::agent_execution::prompts::value_objects::user_message::LinkedFile::new (line 131) ... ok
+test crates/nessa-sdk/src/infrastructure/session_storage/record.rs - infrastructure::session_storage::record::RecordStorage::watch_any_committed (line 143) - compile ... ok
+test crates/nessa-sdk/src/infrastructure/session_storage/record.rs - infrastructure::session_storage::record::RecordStorage::watch_committed (line 108) - compile ... ok
+test crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs - infrastructure::session_storage::record_source::NessaRecordSource::bounded_head (line 456) - compile ... ok
+test crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_message.rs - domain::agent_execution::prompts::value_objects::user_message::UserMessage::sent_by (line 331) ... ok
+test crates/nessa-sdk/src/infrastructure/session_storage/transcript.rs - infrastructure::session_storage::transcript::TranscriptFold::observe_source_head (line 211) ... ok
+test crates/nessa-sdk/src/infrastructure/session_storage/transcript.rs - infrastructure::session_storage::transcript::TranscriptFold::transaction (line 276) ... ok
+test crates/nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs - infrastructure::opencode_acp::sessions::binding::OpencodeAcpProvider::validate_policy (line 176) ... ok
+
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.47s
+
+   Doc-tests nessa_server
+
+running 4 tests
+test crates/nessa-server/src/attachments/application/ports.rs - attachments::application::ports::RemovedBlob (line 140) - compile fail ... ok
+test crates/nessa-server/src/attachments/application/ports.rs - attachments::application::ports::RetiredHold (line 87) - compile fail ... ok
+test crates/nessa-server/src/attachments/application/ports.rs - attachments::application::ports::Discard (line 69) - compile fail ... ok
+test crates/nessa-server/src/attachments/application/ports.rs - attachments::application::ports::Discard (line 64) - compile fail ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+   Doc-tests nessa_vault
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+local subreaper: reaped 0 adopted descendants; command status 0

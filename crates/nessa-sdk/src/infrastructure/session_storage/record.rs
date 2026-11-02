@@ -66,6 +66,9 @@ pub struct RecordStorage {
 }
 
 impl RecordStorage {
+    pub(super) fn command_path(&self) -> PathBuf {
+        self.options.path.clone()
+    }
     /// Verifies the private records directory. Composition calls
     /// [`Self::initialize`] before accepting conversations.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StorageError> {
@@ -805,6 +808,8 @@ mod tests {
             unreachable!("input helper constructs an accepted input")
         };
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
             request: ExecutionRequest {
                 user_message: UserMessage::text_only(PromptText::new("x".repeat(bytes)).unwrap()),
                 ..record.request.clone()
@@ -834,6 +839,9 @@ mod tests {
         scheduling: Vec<InvocationSchedulingEvent>,
     ) -> SessionChange {
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission,
             request: ExecutionRequest {
@@ -1166,6 +1174,9 @@ mod tests {
             .unwrap();
         let secret = "NESSA_ERASE_PRIVATE_INPUT_275";
         let input = InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -1500,6 +1511,9 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -2448,6 +2462,9 @@ mod tests {
         };
         let input = |execution_id: ExecutionId| {
             SessionChange::InputAccepted(Box::new(InvocationRecord {
+                decline: None,
+                cancellation_delivery: None,
+                resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {
@@ -3160,6 +3177,9 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("accepted").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
+            cancellation_delivery: None,
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {

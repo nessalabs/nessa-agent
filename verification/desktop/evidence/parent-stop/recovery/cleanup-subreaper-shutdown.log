@@ -1,0 +1,7 @@
+
+running 1 test
+test infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1597 filtered out; finished in 2.12s
+
+local subreaper: reaped 1 adopted descendants; command status 0

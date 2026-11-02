@@ -1,4 +1,5 @@
 //! Strict provider receipts. No SDK/SSH/MCP authority follows an unverified VM.
+use super::boat_receipt_diagnostics::{self as diagnostics, Diagnostic, Stage};
 use crate::workspaces::application::WorkspaceReceipt;
 use crate::workspaces::domain::{
     AdmissionRefusal, AdmissionRejection, BoatConnection, EnvironmentConfiguration,
@@ -8,6 +9,65 @@ use serde_json::Value;
 use workspace_sdk::boat_client::{
     Api, CreateSandboxRequest, CreateSandboxResponse, SandboxInfoResponse, SandboxState,
 };
+
+const SANDBOX_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "state",
+    "error",
+    "dataExpiredAt",
+    "stoppedAt",
+    "labels",
+    "health",
+    "healthReason",
+    "degradedSince",
+    "hydrated",
+    "hydratedAt",
+    "hydration",
+    "type",
+    "vcpu",
+    "memoryGB",
+    "billingMultiplier",
+    "machineProvider",
+    "url",
+    "ip",
+    "sshEndpoint",
+    "createdAt",
+    "updatedAt",
+    "archiveAfter",
+    "ttlSeconds",
+    "desktopAvailable",
+    "desktopUrl",
+    "snapshots",
+    "monitoring",
+    "snapshotAvailable",
+    "snapshotCompletedAt",
+    "snapshotVerifiedAt",
+    "lastSnapshotAttemptAt",
+    "lastSnapshotStatus",
+    "lastReboot",
+    "subdomain",
+    "team",
+    "createdBy",
+    "createdById",
+    "access",
+    "holdsCreatorLogins",
+    "visibility",
+    "wipePendingUntilRestart",
+    "setupStatus",
+    "setupError",
+    "environment",
+    "environmentVersion",
+    "stop",
+];
+
+fn invalid_receipt(diagnostic: Diagnostic) -> Failure {
+    diagnostic.emit();
+    Failure::AdmissionRejected(AdmissionRejection::new(
+        AdmissionRefusal::InvalidReceipt,
+        None,
+    ))
+}
 
 pub(super) async fn environment(
     api: &Api,
@@ -112,20 +172,26 @@ fn supported_state(sandbox: &workspace_sdk::boat_client::Sandbox) -> bool {
     sandbox.state != SandboxState::Unknown
 }
 
-async fn bounded_json(mut response: reqwest::Response) -> Result<Value, Failure> {
+async fn bounded_json(mut response: reqwest::Response, stage: Stage) -> Result<Value, Failure> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| Failure::Provider)? {
         if chunk.len() > 65_536 - bytes.len() {
-            return Err(Failure::AdmissionRejected(AdmissionRejection::new(
-                AdmissionRefusal::InvalidReceipt,
+            return Err(invalid_receipt(Diagnostic::field(
+                stage,
+                "body",
+                "unknown",
+                "too_large",
                 None,
             )));
         }
         bytes.extend_from_slice(&chunk);
     }
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-        Failure::AdmissionRejected(AdmissionRejection::new(
-            AdmissionRefusal::InvalidReceipt,
+        invalid_receipt(Diagnostic::field(
+            stage,
+            "body",
+            "unknown",
+            "malformed_json",
             None,
         ))
     })?;
@@ -166,7 +232,7 @@ pub(super) async fn create(
     if !response.status().is_success() {
         return Err(Failure::ProvisioningUncertain);
     }
-    let value = bounded_json(response)
+    let value = bounded_json(response, Stage::CreateBody)
         .await
         .map_err(|_| Failure::ProvisioningUncertain)?;
     // A ready response is an idempotent replay of an older VM. An unknown
@@ -198,33 +264,83 @@ pub(super) async fn create(
         })
         .ok_or(Failure::ProvisioningUncertain)?
         .to_owned();
-    let created: CreateSandboxResponse = match serde_json::from_value(value) {
-        Ok(created) => created,
-        Err(_) => {
-            return Ok(WorkspaceReceipt {
-                vm,
-                admission,
-                disposition,
-                refusal: Some(AdmissionRejection::new(
-                    AdmissionRefusal::InvalidReceipt,
-                    None,
-                )),
-            })
-        }
-    };
+    let created: CreateSandboxResponse =
+        match diagnostics::decode(&value, Stage::CreateDecode, SANDBOX_FIELDS) {
+            Ok(created) => created,
+            Err(diagnostic) => {
+                diagnostic.emit();
+                return Ok(WorkspaceReceipt {
+                    vm,
+                    admission,
+                    disposition,
+                    refusal: Some(AdmissionRejection::new(
+                        AdmissionRefusal::InvalidReceipt,
+                        None,
+                    )),
+                });
+            }
+        };
     let observation = observed(&created.sandbox);
-    let mut refusal = admission
-        .check(&observation)
-        .err()
-        .map(|cause| AdmissionRejection::new(cause, Some(observation.clone())));
+    let mut refusal = admission.check(&observation).err().map(|cause| {
+        let rejection = AdmissionRejection::new(cause, Some(observation.clone()));
+        if rejection.cause() == AdmissionRefusal::InvalidReceipt {
+            Diagnostic::opaque(
+                Stage::CreateValidation,
+                "sandbox",
+                "environment",
+                "invalid_identity",
+            )
+            .emit();
+        }
+        rejection
+    });
     if acknowledgement.is_none() || !supported_state(&created.sandbox) {
+        if acknowledgement.is_none() {
+            let field = if value.get("ok").and_then(Value::as_bool) != Some(true) {
+                "ok"
+            } else if value.get("type").and_then(Value::as_str) != Some("sandbox.created") {
+                "type"
+            } else {
+                "status"
+            };
+            Diagnostic::field(
+                Stage::CreateValidation,
+                "envelope",
+                field,
+                "invalid_acknowledgement",
+                value.get(field),
+            )
+            .emit();
+        } else {
+            Diagnostic::field(
+                Stage::CreateValidation,
+                "sandbox",
+                "state",
+                "unsupported_state",
+                value.get("sandbox").and_then(|s| s.get("state")),
+            )
+            .emit();
+        }
         refusal = Some(AdmissionRejection::new(
             AdmissionRefusal::InvalidReceipt,
             Some(observation),
         ));
     }
     if refusal.is_none() {
-        refusal = match check(http, api, connection, &vm, &admission, ttl_seconds).await {
+        let admitted = async {
+            if disposition == RefusalDisposition::RollbackNewVm {
+                wait_for_start(http, api, &vm).await?;
+            }
+            let found = check(http, api, connection, &vm, &admission, ttl_seconds).await?;
+            if disposition == RefusalDisposition::RollbackNewVm
+                && !found.sandbox.state.is_operable()
+            {
+                Diagnostic::opaque(Stage::InfoValidation, "sandbox", "state", "not_ready").emit();
+                return Err(Failure::Provider);
+            }
+            Ok(found)
+        };
+        refusal = match admitted.await {
             Ok(_) => None,
             Err(Failure::AdmissionRejected(rejection)) => Some(rejection),
             Err(_) => Some(AdmissionRejection::new(
@@ -241,14 +357,35 @@ pub(super) async fn create(
     })
 }
 
-/// The SDK's Sandbox decoder ignores unknown fields. Read the actual JSON once
-/// through the injected client so new credential/access fields cannot disappear.
-pub(super) async fn receipt(
-    http: &reqwest::Client,
-    api: &Api,
-    vm: &str,
-    maximum_ttl: Option<u32>,
-) -> Result<SandboxInfoResponse, Failure> {
+/// A fresh snapshot deployment may still be removing inherited credentials.
+/// Polling grants no workspace authority: the complete strict receipt and
+/// environment check still run afterwards. Replayed targets never enter here.
+async fn wait_for_start(http: &reqwest::Client, api: &Api, vm: &str) -> Result<(), Failure> {
+    tokio::time::timeout(std::time::Duration::from_secs(90), async {
+        loop {
+            let value = info(http, api, vm).await?;
+            match value
+                .get("sandbox")
+                .and_then(|s| s.get("state"))
+                .and_then(Value::as_str)
+            {
+                Some("init" | "provisioning" | "provisioned" | "cloning") => {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                // The final strict reader diagnoses malformed/unsupported states
+                // and rejects unsafe posture, including a wipe pending at ready.
+                _ => return Ok(()),
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        Diagnostic::opaque(Stage::InfoValidation, "sandbox", "state", "startup_timeout").emit();
+        Failure::Provider
+    })?
+}
+
+async fn info(http: &reqwest::Client, api: &Api, vm: &str) -> Result<Value, Failure> {
     let response = http
         .get(format!(
             "{}/sandboxes/{vm}",
@@ -265,92 +402,148 @@ pub(super) async fn receipt(
     if response.status() != reqwest::StatusCode::OK {
         return Err(Failure::Provider);
     }
-    let value = bounded_json(response).await?;
-    let envelope = value
-        .as_object()
-        .ok_or(Failure::AdmissionRejected(AdmissionRejection::new(
-            AdmissionRefusal::InvalidReceipt,
+    bounded_json(response, Stage::InfoBody).await
+}
+
+/// The SDK's Sandbox decoder ignores unknown fields. Read the actual JSON once
+/// through the injected client so new credential/access fields cannot disappear.
+pub(super) async fn receipt(
+    http: &reqwest::Client,
+    api: &Api,
+    vm: &str,
+    maximum_ttl: Option<u32>,
+) -> Result<SandboxInfoResponse, Failure> {
+    let value = info(http, api, vm).await?;
+    let envelope = value.as_object().ok_or_else(|| {
+        invalid_receipt(Diagnostic::field(
+            Stage::InfoValidation,
+            "body",
+            "envelope",
+            "expected_object",
+            Some(&value),
+        ))
+    })?;
+    let sandbox = value
+        .get("sandbox")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            invalid_receipt(Diagnostic::field(
+                Stage::InfoValidation,
+                "envelope",
+                "sandbox",
+                "expected_object",
+                value.get("sandbox"),
+            ))
+        })?;
+
+    let checks = [
+        (
+            envelope
+                .keys()
+                .any(|k| !matches!(k.as_str(), "ok" | "type" | "sandbox" | "giftLimitNotice")),
+            "envelope",
+            "unknown",
+            "unknown_field",
             None,
-        )))?;
-    let sandbox =
-        value
-            .get("sandbox")
-            .and_then(Value::as_object)
-            .ok_or(Failure::AdmissionRejected(AdmissionRejection::new(
-                AdmissionRefusal::InvalidReceipt,
-                None,
-            )))?;
-    let known = [
-        "id",
-        "name",
-        "state",
-        "error",
-        "dataExpiredAt",
-        "stoppedAt",
-        "labels",
-        "health",
-        "healthReason",
-        "degradedSince",
-        "hydrated",
-        "hydratedAt",
-        "hydration",
-        "type",
-        "vcpu",
-        "memoryGB",
-        "billingMultiplier",
-        "machineProvider",
-        "url",
-        "ip",
-        "sshEndpoint",
-        "createdAt",
-        "updatedAt",
-        "archiveAfter",
-        "ttlSeconds",
-        "desktopAvailable",
-        "desktopUrl",
-        "snapshots",
-        "monitoring",
-        "snapshotAvailable",
-        "snapshotCompletedAt",
-        "snapshotVerifiedAt",
-        "lastSnapshotAttemptAt",
-        "lastSnapshotStatus",
-        "lastReboot",
-        "subdomain",
-        "team",
-        "createdBy",
-        "createdById",
-        "access",
-        "holdsCreatorLogins",
-        "visibility",
-        "wipePendingUntilRestart",
-        "setupStatus",
-        "setupError",
-        "environment",
-        "environmentVersion",
-        "stop",
+        ),
+        (
+            value.get("ok") != Some(&Value::Bool(true)),
+            "envelope",
+            "ok",
+            "invalid_value",
+            value.get("ok"),
+        ),
+        (
+            value.get("type").and_then(Value::as_str) != Some("sandbox.info"),
+            "envelope",
+            "type",
+            "invalid_value",
+            value.get("type"),
+        ),
+        (
+            sandbox
+                .keys()
+                .any(|k| !SANDBOX_FIELDS.contains(&k.as_str())),
+            "sandbox",
+            "unknown",
+            "unknown_field",
+            None,
+        ),
+        (
+            sandbox.get("id").and_then(Value::as_str) != Some(vm),
+            "sandbox",
+            "id",
+            "identity_mismatch",
+            sandbox.get("id"),
+        ),
+        (
+            sandbox.get("access").and_then(Value::as_str) != Some("owner"),
+            "sandbox",
+            "access",
+            "invalid_value",
+            sandbox.get("access"),
+        ),
+        (
+            sandbox.get("team") != Some(&Value::Null),
+            "sandbox",
+            "team",
+            "expected_null",
+            sandbox.get("team"),
+        ),
+        (
+            sandbox.get("visibility") != Some(&Value::Null),
+            "sandbox",
+            "visibility",
+            "expected_null",
+            sandbox.get("visibility"),
+        ),
+        (
+            sandbox
+                .get("holdsCreatorLogins")
+                .and_then(Value::as_bool)
+                .is_none(),
+            "sandbox",
+            "holdsCreatorLogins",
+            "expected_boolean",
+            sandbox.get("holdsCreatorLogins"),
+        ),
+        (
+            sandbox.get("wipePendingUntilRestart") != Some(&Value::Bool(false)),
+            "sandbox",
+            "wipePendingUntilRestart",
+            "invalid_value",
+            sandbox.get("wipePendingUntilRestart"),
+        ),
+        (
+            sandbox.get("setupStatus") != Some(&Value::Null),
+            "sandbox",
+            "setupStatus",
+            "expected_null",
+            sandbox.get("setupStatus"),
+        ),
+        (
+            sandbox.get("setupError") != Some(&Value::Null),
+            "sandbox",
+            "setupError",
+            "expected_null",
+            sandbox.get("setupError"),
+        ),
     ];
-    if envelope
-        .keys()
-        .any(|k| !matches!(k.as_str(), "ok" | "type" | "sandbox" | "giftLimitNotice"))
-        || value.get("ok") != Some(&Value::Bool(true))
-        || value.get("type").and_then(Value::as_str) != Some("sandbox.info")
-        || sandbox.keys().any(|k| !known.contains(&k.as_str()))
-        || sandbox.get("id").and_then(Value::as_str) != Some(vm)
-        || sandbox.get("access").and_then(Value::as_str) != Some("owner")
-        || sandbox.get("team") != Some(&Value::Null)
-        || sandbox.get("visibility") != Some(&Value::Null)
-        || sandbox
-            .get("holdsCreatorLogins")
-            .and_then(Value::as_bool)
-            .is_none()
-        || sandbox.get("wipePendingUntilRestart") != Some(&Value::Bool(false))
-        || sandbox.get("setupStatus") != Some(&Value::Null)
-        || sandbox.get("setupError") != Some(&Value::Null)
-    {
-        return Err(Failure::AdmissionRejected(AdmissionRejection::new(
-            AdmissionRefusal::InvalidReceipt,
-            None,
+    if let Some((_, scope, field, problem, observed)) = checks.into_iter().find(|check| check.0) {
+        if field == "wipePendingUntilRestart" {
+            let startup_phase = match sandbox.get("state").and_then(Value::as_str) {
+                Some("ready" | "idle" | "running") => "operable",
+                Some("init" | "provisioning" | "provisioned" | "cloning") => "starting",
+                _ => "other",
+            };
+            tracing::warn!(startup_phase, "Boat credential-wipe receipt refused");
+        }
+        return Err(invalid_receipt(Diagnostic::field(
+            Stage::InfoValidation,
+            scope,
+            field,
+            problem,
+            observed,
         )));
     }
     // A finite choice is an upper bound. Boat may impose a shorter account
@@ -367,13 +560,17 @@ pub(super) async fn receipt(
             )));
         }
     }
-    let decoded: SandboxInfoResponse = serde_json::from_value(value).map_err(|_| {
-        Failure::AdmissionRejected(AdmissionRejection::new(
-            AdmissionRefusal::InvalidReceipt,
-            None,
-        ))
-    })?;
+    let decoded: SandboxInfoResponse =
+        diagnostics::decode(&value, Stage::InfoDecode, SANDBOX_FIELDS).map_err(invalid_receipt)?;
     if !supported_state(&decoded.sandbox) {
+        Diagnostic::field(
+            Stage::InfoValidation,
+            "sandbox",
+            "state",
+            "unsupported_state",
+            sandbox.get("state"),
+        )
+        .emit();
         return Err(Failure::AdmissionRejected(AdmissionRejection::new(
             AdmissionRefusal::InvalidReceipt,
             Some(observed(&decoded.sandbox)),
@@ -412,10 +609,17 @@ pub(super) async fn check(
     }
     let found = receipt(http, api, vm, maximum_ttl).await?;
     admitted.check(&observed(&found.sandbox)).map_err(|cause| {
-        Failure::AdmissionRejected(AdmissionRejection::new(
-            cause,
-            Some(observed(&found.sandbox)),
-        ))
+        let rejection = AdmissionRejection::new(cause, Some(observed(&found.sandbox)));
+        if rejection.cause() == AdmissionRefusal::InvalidReceipt {
+            Diagnostic::opaque(
+                Stage::InfoValidation,
+                "sandbox",
+                "environment",
+                "invalid_identity",
+            )
+            .emit();
+        }
+        Failure::AdmissionRejected(rejection)
     })?;
     Ok(found)
 }

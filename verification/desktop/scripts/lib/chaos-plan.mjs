@@ -64,7 +64,7 @@ export function knobsFrom(options = {}, env = process.env) {
  * (`scripts/mcp-test-server/scenarios/stress.mjs`): a reply, one review,
  * several reviews, a pause, a turn that runs until it is stopped, a failure,
  * a thread handed work, and a thread read with more reads than one
- * conversation may hold.
+ * conversation may hold, or owned descendants waiting for parent Stop.
  */
 export const ASKS = [
   "reply",
@@ -75,6 +75,7 @@ export const ASKS = [
   "fail",
   "delegate",
   "watch",
+  "parentStop",
 ]
 /** What a steering message asks: only turns that end on their own. */
 const STEERS = ["reply", "permission", "pause"]

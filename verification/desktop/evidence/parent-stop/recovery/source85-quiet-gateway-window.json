@@ -1,0 +1,151 @@
+{
+  "check": "gateway-window",
+  "ok": true,
+  "started": "2026-10-30T00:58:34.489Z",
+  "finished": "2026-10-30T00:59:08.680Z",
+  "target": {
+    "url": "http://127.0.0.1:38543/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "setup",
+      "seen": {
+        "title": "Wc5595458: reply with exactly that word and noth"
+      },
+      "timings": {
+        "gatewayMs": 308,
+        "devServerMs": 28845,
+        "agentTurnMs": 1382
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "handshake",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1,
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:44927/session",
+          "client": "nessa-panel",
+          "surface": {
+            "kind": "desktop",
+            "instance": "712e02c2-b949-419b-9d8f-57dbedf647f8"
+          },
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "lists",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 43,
+      "seen": {
+        "listed": true,
+        "status": null,
+        "sample": 0,
+        "asked": {
+          "load_gateway_endpoint": 1,
+          "load_surface_credential": 1
+        }
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "opens",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 114,
+      "seen": {
+        "messages": [
+          {
+            "role": "user",
+            "text": "Wc5595458: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ]
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "live",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1059,
+      "seen": {
+        "before": 2,
+        "messages": [
+          {
+            "role": "user",
+            "text": "Wc5595458: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "We790b87e: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ],
+        "reloaded": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "handshakes",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:44927/session",
+          "client": "nessa-panel",
+          "surface": {
+            "kind": "desktop",
+            "instance": "712e02c2-b949-419b-9d8f-57dbedf647f8"
+          },
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:38543/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

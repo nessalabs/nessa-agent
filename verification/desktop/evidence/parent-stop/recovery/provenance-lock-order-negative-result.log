@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10m 33s
+     Running unittests src/lib.rs (target/debug/deps/nessa_server-932258c131fc7793)
+
+running 1 test
+
+thread 'conversation::application::service::mutation::tests::parent_stop::owned_stop_export_and_submission_share_one_admission_order' (222468) panicked at crates/nessa-server/src/conversation/application/service/../../../../tests/conversation/parent_stop.rs:4236:13:
+owned Stop/export/ordinary submission form an admission cycle
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test conversation::application::service::mutation::tests::parent_stop::owned_stop_export_and_submission_share_one_admission_order ... FAILED
+
+failures:
+
+failures:
+    conversation::application::service::mutation::tests::parent_stop::owned_stop_export_and_submission_share_one_admission_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4522 filtered out; finished in 5.12s
+
+error: test failed, to rerun pass `-p nessa-server --lib`
+local subreaper: reaped 0 adopted descendants; command status 25856

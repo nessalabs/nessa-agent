@@ -12,6 +12,12 @@ Nessa does not implement provider OAuth or copy local provider login files.
 ## Ownership
 
 `workspaces` owns encrypted connection settings and durable allocation receipts.
+Receipt rejection diagnostics distinguish creation decoding, info validation,
+and info decoding using compiled field names and JSON kinds. Wipe refusals
+also classify startup as starting, operable or other; raw state strings are not
+logged. Provider values, arbitrary keys, decoder error messages and authentication
+data are not logged. Cold POST and ready GET responses are separate fixtures; diagnostics
+do not change admission, rollback ownership or cleanup confirmation.
 Its application ports separate settings, assignment storage and provider effects.
 Conversation placement owns which environment a thread uses. The conversation
 adapter composes workspace streams with the existing remote lease implementation.
@@ -48,7 +54,9 @@ sequenceDiagram
     User->>Gateway: Create channel thread
     Gateway->>Receipts: Persist creation intent
     Gateway->>Boat: Create VM with thread idempotency key
-    Boat-->>Gateway: VM identity
+    Boat-->>Gateway: VM identity, provisioning acknowledgement
+    Gateway->>Boat: Poll fresh VM startup (90 second bound)
+    Gateway->>Boat: Recheck environment and strict clean receipt
     Gateway->>Receipts: Persist assignment before preparing VM
     Gateway->>SDK: Open attached workspace on assigned VM
     SDK-->>Gateway: Workspace descriptor
@@ -77,6 +85,15 @@ sequenceDiagram
 | B14 | Local thread | Existing local environment | No Boat allocation |
 | B15 | Slow initial channel open | Client allows workspace preparation before agent exchange allowance | Await typed answer; never replay an uncertain mutation automatically |
 | B16 | Receipt persistence fails after create | Attempt provider deletion; retain unresolved intent | Accepted deletion alone is not confirmed cleanup |
+| B17 | Fresh creation acknowledgement names a starting VM | Poll that VM through startup for at most 90 seconds; no attached workspace, SSH, MCP or agent command yet | Preserve the named VM and rollback disposition on timeout or rejection |
+| B18 | Fresh VM becomes ready | Re-read dedicated environment and complete strict info receipt, including exact `wipePendingUntilRestart: false`, before admission | Ready alone never authorizes attachment; a pending wipe still refuses |
+
+Boat documents [asynchronous API readiness](https://docs.boat.dev/readiness) and
+[credential removal before a snapshot deploy can be used](https://docs.boat.dev/snapshots/templates).
+A cold creation response is not a final security receipt. Startup polling is
+read-only and bounded; it does not clear flags, restart a replayed VM, or infer
+cleanup from provider absence. No stop/resume is needed merely to wait for a new
+snapshot deployment. A ready VM with a pending wipe remains refused.
 
 The dedicated `nessa` Boat environment passes connected agent credentials, but
 not arbitrary secrets, sandbox credentials or GitHub credentials when created.
@@ -339,3 +356,71 @@ Each stop of a VM is recorded before Boat is asked (`workspace_stop_requested`)
 and once it answers (`workspace_stop_answered`, `accepted` or the failure's
 kind). Accepted means Boat took the stop: the VM archives after it, which an
 opening waits out.
+
+
+## Parent Stop integration worker refresh (#981)
+
+The following Dad5 receipt is historical. Its task snapshot was retired after
+fresh-clone qualification of the c516 replacement documented below.
+
+The worker for application source `22a8218b0ff2c392e911e07c75994f33e4896048`
+serves lease protocol `dad5afbc1bc5755f`. Its published image is
+`bsh_-6mHzeuFu3FWNbJWOe0IbXLXxhBcJPNOjq76Bk_nMGI`, snapshot
+`nessa-worker-dad5afbc-22a8218-linux-x64`. Both Linux x86_64 runtime binaries
+are present: `nessa` SHA256
+`9448ba2c2e6c01e6a7a41f23f32183ceae17918a279f4bfc9ddb8113873d019f`
+(146,162,512 bytes), and `nessa-mcp` SHA256
+`4684f72dd49d07c06ab76c168cb8165fab0d7ef6fde62414e00fe26c4c678e25`
+(5,243,680 bytes). The publisher used Rust/Cargo 1.99.1 and the stripped
+development profile with dependency opt-level=0, debug=0 and incremental=0.
+
+This is not an unmodified `cargo vendor` bundle. Vendoring omitted shared
+files used by pinned PTY revision
+`c68837e2b7bf1c9009e1a4587a1a58107ec0425c` and removed its external
+`build = "../../scripts/native/build.rs"` declaration from the normalized
+infrastructure manifest. The publisher restored those pinned inputs and the
+original declaration before building; application source, dependency revisions
+and acceptance rules were unchanged. The only vendor checksum change updated
+`files.Cargo.toml` to the restored manifest digest; checksum validation was not
+disabled. Independent comparison matched all 29 reported restored-file hashes,
+the original manifest, application source tree and Cargo.lock against the locked
+commits. The vendoring restoration is part of the
+build provenance, rather than an application or dependency-version patch.
+
+A fresh image clone verified the protocol, both checksums and byte lengths,
+executables and linked libraries, MCP initialization, supervisor provenance,
+and named build-source/credential-path exclusions plus recursive Claude-config
+auth-field checks. These are not an exhaustive secret scan or an independent
+secure-erasure attestation. All three owned publication
+VMs were confirmed absent after completed deletion. The publication used
+US$0.03031 and three VM creations; four creations remain within the existing
+seven-creation allowance. The one retained snapshot is within the account's
+included allowance. Old published images remain available.
+
+The [publication receipt](../../../verification/desktop/evidence/parent-stop/recovery/worker-release-receipt.json)
+records the artifact and cleanup facts. The normal shipping guard remains
+unchanged. This image publication does not claim the separate four-VM live
+Boat acceptance or earlier native/performance gates passed; those remain
+separate qualification records.
+
+### Current integrated worker: c516
+
+Source `66e064de4a6177454e22873314391d8956b5da79` integrates main `100d7aef`
+and serves protocol `c516606214ce8bc2`. Its verified image is
+`bsh_MF9Ppg9XWHyVD8qYw7Wv6mku_yJpX2lS-Dlj4-LZ27E`, snapshot
+`nessa-worker-c5166062-66e064d-linux-x64`. Both Linux binaries were freshly
+built using Rust/Cargo 1.99.1 and the same stripped development profile.
+The locked PTY support restoration and Cargo.lock are unchanged. The new
+[publication receipt](../../../verification/desktop/evidence/parent-stop/recovery/c516-worker-release-receipt.json)
+records both binary identities, fresh-clone checks and completed deletion
+operations for all three new publication VMs. Named credential/state exclusion
+checks do not establish an exhaustive secret scan or secure erasure.
+
+All six task publication VMs are absent. Cumulative usage is US$0.0624; six of
+ten authorized creations are used and four remain for the unchanged live
+verifier. The old Dad5 task snapshot was retired after replacement
+qualification; one task snapshot remains within the included allowance.
+The pin preserves the shipping guard. Live provider acceptance and the earlier
+native/performance gates remain separate; publication is not a merge-ready
+claim. No lifecycle transition changed, so no state diagram or unrelated state
+checkpoint changes for this artifact pin.

@@ -323,6 +323,9 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
                 ExecutionSessionId::new("provider-context").unwrap(),
             ),
             invocations: vec![InvocationRecord {
+                decline: None,
+                cancellation_delivery: None,
+                resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {

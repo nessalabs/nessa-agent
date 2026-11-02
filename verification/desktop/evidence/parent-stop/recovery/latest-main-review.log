@@ -1,0 +1,107 @@
+✔ usage-limit sends the selected harness's exact failure frame (973.311229ms)
+✔ a generic Claude-looking failure on Codex remains unclassified wire data (435.803786ms)
+✔ usage-limit is terminal and accepts no invented provider fields (14.866795ms)
+✔ parse rejects a scenario that is not a non-empty turn list (0.380604ms)
+✔ parse rejects a step the table does not have, and a branch that waits again (1.001553ms)
+✔ parse rejects a second turn with no when, which turnFor would never reach (5.223095ms)
+✔ parse rejects a later when that contains an earlier one (0.711979ms)
+✔ parse rejects two turns that match the same prompt, and an unknown answer (0.389018ms)
+✔ the window scenario parses, and the first named turn wins over the fallback (5.514743ms)
+✔ scenarioScript reads the window file's steps, which are the check's expected strings (4.369933ms)
+✔ branchFor follows the table: selection, a later cancel, and a withdrawn review (0.537148ms)
+✔ permission frames name the tool the way each harness does (0.534969ms)
+✔ text chunks share one message id, and a prompt the scenario does not answer fails (692.831109ms)
+✔ allow runs the branch's tool call; deny does not; a cancel beats a later allow (1534.485708ms)
+✔ end inside a branch ends the turn, and a branch that finishes runs the next step (869.113199ms)
+✔ an unusable permission answer fails the announced call (616.178875ms)
+✔ a tool step after a denial is a new call, and the denied call is failed (363.983227ms)
+✔ a withdrawn review with no branch ends cancelled, and one with a branch runs it (826.916612ms)
+✔ a failure after text fails the turn and keeps the text; wait-cancel ends cancelled (1053.694523ms)
+✔ a second prompt while one is waiting is refused, and the first still answers (512.930453ms)
+✔ codex allow carries no claude call id on the MCP call (382.542385ms)
+✔ text-reply answers any prompt with Ready, and show the server's app calls review_rows (0.781669ms)
+✔ a session in full access asks nothing: the permission runs its allow-once branch (442.075796ms)
+✔ a pause holds the turn, and a cancel during it ends the turn cancelled (482.362346ms)
+✔ a saved result fills later arguments and text, and a tool names its server (1.811309ms)
+✔ a saved call fills the next call's arguments through the real stand-in (405.176042ms)
+✔ a scenario tool selects its server in both ACP metadata and actual dispatch (1.643829ms)
+✔ the scripted process refuses an absent selected server instead of calling mcptest (442.617631ms)
+✔ a tool step with times makes that many calls at once and saves every result (477.090014ms)
+✔ a tool step with a title announces the call under it (506.771592ms)
+✔ the stress check's scenario is one the agent runs, its trace calling tools the server has (41.918469ms)
+✔ a turn that names the credentials is told the GitHub sign-in as fingerprints (1057.885221ms)
+✔ stress requests the actual harness's usage-limit frame (17.243156ms)
+✔ recursive Stop creates owned work through the selected server and waits for cancellation (2.361105ms)
+✔ native compact fixture keeps the actual command, without an MCP wrapper (11.552881ms)
+✔ only an acknowledged allow executes and completes the same native call (44.788494ms)
+✔ denial, cancellation and refusal do not execute the native command (42.873634ms)
+✔ native failure is not completed or followed by successful branch output (12.176949ms)
+✔ a cancelled outcome carrying an allow id still cannot execute (1.926624ms)
+✔ a late allow after caller cancellation and an unknown selection do not execute (15.165463ms)
+✔ a scenario cannot substitute an arbitrary command into this fixed fixture (0.745383ms)
+✔ compact fixtures respect each harness's reviewable request shape (10.586663ms)
+✔ compact preview coverage stays separate from the unchanged large-input workload (19.813364ms)
+✔ withdrawn queued history is not provider work (8.441057ms)
+✔ a new prompt restarts the selected parent even if cancelled without output (0.182761ms)
+✔ another native session's work does not restart this parent (2.085844ms)
+✔ new live, completed, or output-bearing history fails even without dispatch evidence (0.217889ms)
+✔ missing, malformed, incomplete, or replaced recordings cannot prove no restart (0.961701ms)
+✔ the same numbers and seed give the same plan, and another seed another (16.622912ms)
+✔ every required step appears as often as its number says (0.587608ms)
+✔ a failure is always followed by a reply, and a switch never picks the mode in force (40.469957ms)
+✔ no long conversation is planned when its number is 0 (0.340757ms)
+✔ numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one throws (1.051617ms)
+✔ parent Stop appears once by default and at the raised flag or environment count (10.280894ms)
+✔ handoffs run last of all, after every upgrade, whatever the seed (8.145127ms)
+✔ positive model steps retain default and raised counts, run last but for handoffs, and enter Ask (15.480159ms)
+✔ the legacy seed preserves the existing non-model work's relative order (0.34665ms)
+✔ webhook capture/no-send runs once by default and three times at the raised count (0.481725ms)
+✔ exact applied ACK confirms only the control action (12.854255ms)
+✔ expiry without an answer and lost ACK do not confirm disappearance (0.525337ms)
+✔ refusal after expiry stays refused after a late success frame (0.493078ms)
+✔ mismatched target fields cannot supply this answer (5.657621ms)
+✔ socket identity prevents response id reuse from confirming another socket (0.779626ms)
+✔ command identity and applied flag must match (1.762357ms)
+✔ duplicate exact commands cannot be hidden by either ACK (4.796294ms)
+✔ malformed command identities cannot acknowledge (0.378883ms)
+✔ other endpoints and malformed frames are ignored; disposal detaches listeners (0.3318ms)
+✔ a duplicate after ACK revokes confirmation before the review disappears (0.547528ms)
+✔ canonical wire parser rejects ambiguous and malformed ACKs (6.51476ms)
+✔ the step success gate rejects disappearance with expiry, lost ACK or a late duplicate (0.230905ms)
+✔ binary ACKs and extra receipt fields cannot confirm the browser command (1.891839ms)
+✔ response envelope identity must match even with the exact command receipt (0.219033ms)
+✔ refusal selection evidence consumes the published state rule (0.357501ms)
+ℹ tests 73
+ℹ suites 0
+ℹ pass 73
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12785.002016
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
++ actual - expected
+
+  {
+    after: 'usageLimit',
++   index: 7,
+    kind: 'reply'
+  }
+
+    at file:///workspace/nessa-981-current/[eval1]:30:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: { index: 7, kind: 'reply', after: 'usageLimit' },
+  expected: { kind: 'reply', after: 'usageLimit' },
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+Scratch probe correction: the first probe compared the whole follow-up step and omitted its legitimate generated index; source was not changed.
+PASS independent image/text ordering + per-harness typed limit + cancelled/generic outcomes + paste/Stop plan coexistence

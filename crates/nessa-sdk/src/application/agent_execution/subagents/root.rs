@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::{runtime::Handle, sync::oneshot};
 
 use super::{
-    coordinator::{mint_lifetime, Shared},
+    coordinator::{mint_lifetime, CleanupOwner, Shared},
     publication::{PublicationTarget, PublishedState},
     OwnershipFailure, PortFailure,
 };
@@ -69,7 +69,12 @@ async fn admit(
         let evidence = graph
             .open_root(session, lifetime.clone(), initiator)
             .map_err(OwnershipFailure::Domain)?;
-        shared.remember(Arc::downgrade(shared), lifetime.clone(), false);
+        shared.remember(
+            Arc::downgrade(shared),
+            lifetime.clone(),
+            false,
+            CleanupOwner::Attachment,
+        );
         let token = shared
             .publication
             .lock()

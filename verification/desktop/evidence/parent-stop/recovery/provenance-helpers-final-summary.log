@@ -1,0 +1,10 @@
+✔ a later legitimate rest announcement is retained without replacing moving evidence (0.087492ms)
+✔ the browser recorder captures delivery separately, ignores duplicate coordinates and releases resources (2.152695ms)
+ℹ tests 790
+ℹ suites 35
+ℹ pass 789
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 76993.492057

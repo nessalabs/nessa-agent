@@ -23,6 +23,7 @@ test("every required step appears as often as its number says", () => {
     knobs.pairedCatalogues,
   )
   assert.equal(count("stop"), knobs.stops)
+  assert.equal(count("parent-stop"), knobs.parentstops)
   assert.equal(count("fail"), knobs.fails)
   assert.equal(count("usageLimit"), knobs.usageLimits)
   assert.equal(count("restart"), knobs.restarts)
@@ -107,6 +108,15 @@ test("numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one
   assert.match(describe(plan(knobsFrom({}, {}))), /^1\. /)
 })
 
+test("parent Stop appears once by default and at the raised flag or environment count", () => {
+  const count = (knobs) =>
+    plan(knobs).filter((step) => step.kind === "parent-stop").length
+  assert.equal(count(knobsFrom({}, {})), 1)
+  assert.equal(count(knobsFrom({ parentstops: "3" }, {})), 3)
+  assert.equal(count(knobsFrom({}, { NESSA_STRESS_PARENTSTOPS: "4" })), 4)
+  assert.equal(count(knobsFrom({ parentstops: "0" }, {})), 0)
+})
+
 test("handoffs run last of all, after every upgrade, whatever the seed", () => {
   for (let seed = 0; seed < 50; seed += 1) {
     const steps = plan(knobsFrom({ seed: String(seed), handoffs: "2" }, {}))
@@ -147,6 +157,8 @@ test("the legacy seed preserves the existing non-model work's relative order", (
   const steps = plan(
     knobsFrom(
       {
+        parentstops: "0",
+        handoffs: "0",
         inputFiles: "0",
         backgroundTasks: "0",
         windows: "0",
@@ -182,7 +194,6 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         renames: "0",
         deletes: "0",
         usageLimits: "0",
-        handoffs: "0",
       },
       {},
     ),
@@ -253,4 +264,29 @@ test("selected stress preserves the full plan, knobs and step identities", () =>
   assert.throws(() => selectedPlan(knobs, "unknown"), /No planned stress step/)
   assert.throws(() => selectedPlan(knobs, ","), /No planned stress step/)
   assert.equal(selectedPlan({ ...knobs, passphrases: 3 }, "passphrase").length, 3)
+})
+
+test("selected Ask-only qualification filters that profile's plan without admitting Full", () => {
+  for (const seed of [1, 9, 42]) {
+    const knobs = knobsFrom({ seed: String(seed), switches: "9", parentstops: "3" }, {})
+    const before = structuredClone(knobs)
+    const complete = plan(knobs, "ask-only")
+    assert.deepEqual(selectedPlan(knobs, undefined, "ask-only"), complete)
+    assert.deepEqual(
+      selectedPlan(knobs, "refused-access,parent-stop,permission", "ask-only"),
+      complete.filter((step) =>
+        ["refused-access", "parent-stop", "permission"].includes(step.kind),
+      ),
+    )
+    assert.equal(selectedPlan(knobs, "refused-access", "ask-only").length, 9)
+    assert.throws(
+      () => selectedPlan(knobs, "switch", "ask-only"),
+      /No planned stress step/,
+    )
+    assert.deepEqual(knobs, before)
+  }
+  assert.throws(
+    () => selectedPlan(knobsFrom({}, {}), "parent-stop", "unknown"),
+    /scenario/,
+  )
 })
