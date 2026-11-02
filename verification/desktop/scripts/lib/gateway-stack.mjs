@@ -180,7 +180,13 @@ export async function startGatewayStack(
     throw new CannotRun(`--agent ${agent}: claude or codex`)
   const launch =
     scenario || scripted
-      ? scriptedLaunch(agent, { tool: scripted, scenario, evidence, nativeContext, model })
+      ? scriptedLaunch(agent, {
+          tool: scripted,
+          scenario,
+          evidence,
+          nativeContext,
+          model,
+        })
       : null
   const command = launch?.command ?? agentCommand(agent)
   if (others.length > 0 && !launch)
