@@ -1,8 +1,7 @@
 # Durable sessions and resume — implementation plan
 
 Status: #981 has merged. This branch implements #1164, #1003, #762 and #934.
-Verification evidence in the tree is the restoration README and one screenshot.
-Full logs stay with CI. The WebKit Show All timeout is #1249 and is not fixed here.
+Passing checks are in the tests. The WebKit Show All timeout is #1249 and is not fixed here.
 
 One branch (`codex/durable-sessions-resume`) and one PR cover all four issues.
 #1164 does not import #981's branch or change its worker or release pin.
@@ -227,8 +226,7 @@ atomicity.
 ### C13 conversation stress design
 
 The harness now extends the existing `drift` step and its `drifts` count.
-Its fixed/mutant/restored browser proof is recorded in the qualification packet;
-full-plan results remain separate. Preserve the current
+Browser proof stays with the CI run that executes that step. Preserve the current
 PATH/TMPDIR/staged-runtime restart and reply checks. Do not change Rust source,
 provider authorization, worker images or the #981 dependency to add this check.
 
