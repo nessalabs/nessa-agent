@@ -1,0 +1,16 @@
+starting a dev server of its own on port 36453…
+warmed 1296 modules in 7602 ms
+conversation ready: review_rows completed, in 1377 ms
+ok    setup
+ok    renders [chromium columns]
+ok    hidden [chromium columns]
+ok    allow [chromium columns]
+ok    deny [chromium columns]
+ok    release [chromium columns]
+ok    message [chromium columns]
+FAIL  context [chromium columns]
+        - the context update was answered ""
+ok    console [chromium columns]
+chromium columns: 23368 ms
+wrote /tmp/nessa-981-evidence/quiet-mcp-apps-gateway.json
+mcp-apps-gateway: 8/9 held

@@ -1,0 +1,177 @@
+{
+  "check": "mcp-apps-gateway",
+  "ok": false,
+  "started": "2026-10-30T00:59:50.659Z",
+  "finished": "2026-10-30T01:00:24.858Z",
+  "target": {
+    "url": "http://127.0.0.1:36453/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "setup",
+      "seen": {
+        "title": "Use the tools of the \"mcptest\" MCP server. If th"
+      },
+      "timings": {
+        "gatewayMs": 351,
+        "devServerMs": 8405,
+        "agentTurnMs": 1377
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "renders",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 441,
+      "seen": {
+        "state": "live",
+        "mode": "inline",
+        "heading": "Review rows (nessa-test)",
+        "origin": "null",
+        "url": "about:srcdoc",
+        "cards": 1,
+        "frames": 1,
+        "result": "{\"rows\":[1,2]}",
+        "proxyOrigin": "http://127.0.0.1:42713"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "hidden",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 21,
+      "seen": {
+        "noUi": "error: This app may not use that tool",
+        "withUi": "error: This app may not use that tool"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "allow",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 710,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 18,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row An app asks to run app_delete_row on mcptest $ app_delete_row {\"id\":2} Deny Allow"
+        },
+        "answer": "ok: Deleted row 2."
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "deny",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1189,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 18,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row An app asks to run app_delete_row on mcptest $ app_delete_row {\"id\":2} Deny Allow"
+        },
+        "answer": "error: The person declined this action"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "release",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2202,
+      "seen": {
+        "panelMode": "fullscreen",
+        "pointerMoves": 2,
+        "review": {
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "toolName": "app_delete_row"
+        },
+        "panelSaid": "pending",
+        "withdrawn": true,
+        "withdrawnMs": 19,
+        "cardGone": true,
+        "cardGoneAfterWithdrawnMs": 76,
+        "inlineState": "live",
+        "panelLive": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "message",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1625,
+      "seen": {
+        "before": "pending",
+        "pointerMoves": 1,
+        "inputStarted": true,
+        "allowed": true,
+        "tool": "review_rows",
+        "labelled": "Sent by review_rows, from mcptest",
+        "answer": "ok",
+        "arrived": 1,
+        "executionId": "app-86653692a355cfa8d98d479846d1da35",
+        "app": {
+          "executionId": "fe843219-8b22-459e-9762-0430dc1e1310",
+          "toolId": "toolu_scripted_9683ba09-b4a9-4aec-8b6d-13bf20be95ee",
+          "server": "mcptest",
+          "tool": "review_rows"
+        }
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "context",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 10336,
+      "seen": {
+        "answer": ""
+      },
+      "failures": ["the context update was answered \"\""],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "requestfailed: http://127.0.0.1:36453/browser/check net::ERR_ABORTED (aborted after a 204 response, #485)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

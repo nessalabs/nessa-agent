@@ -17,6 +17,9 @@
 //!                              |                   |-> shared bounded AuditObserver
 //!                              |-> cleanup joins physical result + bounded evidence slots
 //!                              |-> shared stop -> cleanup attempts / retained lease
+//!       |-> historical decline -> saved original preparation -> terminal edge
+//!                                |-> idempotent audit -> saved acknowledgement
+//!       |-> AgentCloseReport -> same close transaction cleanup + scheduling evidence
 //!                              |-> optional owned-lifetime seal read before admission
 //!       |-> event subscribers
 //! ```
@@ -40,6 +43,7 @@ mod agent;
 mod attachment;
 mod attachment_evidence;
 mod audit_observation;
+mod closing;
 mod coordination;
 mod error;
 mod error_limits;
@@ -57,13 +61,15 @@ pub use attachment::{
     AttachmentAuthorization, AttachmentCancellation, AttachmentFailure, AttachmentFailureCode,
     AttachmentPhase, AttachmentRequest, AttachmentStatus, AttachmentWait,
 };
+pub use closing::AgentCloseReport;
 pub use error::{
     AgentError, AgentFuture, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
     ProviderDiagnostic,
 };
 pub use initialization::AgentInitializationError;
-pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedLifetime};
-pub use resumption::{OwedTurn, Resumed};
+pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedCleanupScope, OwnedLifetime};
+pub(crate) use resumption::{decline_stop_is_owed, validate_saved_resumption};
+pub use resumption::{owed_turn_ids, resumed_turn_id, OwedTurn, Resumed};
 pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,
     SteeringDelivery, SteeringEvidence,

@@ -71,6 +71,40 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            let _threads = service.inner.thread_admission.clone().lock_owned().await;
+            service
+                .submit_command_origin(
+                    storage,
+                    id,
+                    caller,
+                    initiation,
+                    offers_remember,
+                    execution_id,
+                    message,
+                    mode,
+                    false,
+                )
+                .await
+        })
+        .await
+        .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))?
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn submit_command_origin(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        caller: ConversationCaller,
+        initiation: Initiation,
+        offers_remember: bool,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        from_agent: bool,
+    ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         self.submit_command_permitted(
             storage,
             id,
@@ -80,12 +114,13 @@ impl ConversationService {
             execution_id,
             message,
             mode,
+            from_agent,
             None,
         )
         .await
     }
 
-    /// Scheduled delivery transfers its selection lock into the supervised effect.
+    /// Transfers the existing scheduled admission owners into the supervised effect.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn submit_command_permitted(
         &self,
@@ -97,6 +132,7 @@ impl ConversationService {
         execution_id: String,
         message: SubmittedMessage,
         mode: SubmissionMode,
+        from_agent: bool,
         selection: Option<Arc<SubmissionPermit>>,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         let agent_source = match initiation.initiator() {
@@ -105,6 +141,21 @@ impl ConversationService {
         };
         let binding = submit_binding(&id, &caller, &execution_id, &message, mode, agent_source)
             .map_err(MutationFailure::Target)?;
+        let binding = if from_agent {
+            let mut digest = Sha256::new();
+            digest.update(b"nessa.gateway.agent-submit\0");
+            digest.update(binding.fingerprint());
+            MutationBinding::new(
+                binding.actor().clone(),
+                binding.operation(),
+                binding.target().clone(),
+                binding.turn_id().as_str(),
+                digest.finalize().into(),
+            )
+            .map_err(|_| MutationFailure::Target(ConversationError::InvalidInput))?
+        } else {
+            binding
+        };
         // Shape is refused before any stage. A deleted target is named before a
         // conflicting receipt, so the surface lets the conversation go.
         Self::canonical_user_message(
@@ -217,9 +268,9 @@ impl ConversationService {
         })
     }
 
-    /// Stop the named turn. A queued turn is withdrawn. The active turn is
-    /// cancelled without closing the attachment. A finished turn records
-    /// `AlreadyFinal` and sends nothing.
+    /// Stop the named turn: withdraw queued work or decline its owed
+    /// continuation, or cancel its active execution without closing the
+    /// attachment. A final turn with no owed continuation records `AlreadyFinal`.
     pub async fn stop_command(
         &self,
         storage: Arc<dyn CreationStorage>,
@@ -227,6 +278,11 @@ impl ConversationService {
         caller: ConversationCaller,
         execution_id: String,
     ) -> Result<MutationReceipt, MutationFailure<ConversationError>> {
+        if self.inner.ownership.get().is_some() {
+            return self
+                .stop_owned_command(storage, id, caller, execution_id)
+                .await;
+        }
         let binding = stop_binding(&id, &caller, &execution_id).map_err(MutationFailure::Target)?;
         ExecutionId::new(&execution_id)
             .map_err(|_| MutationFailure::Target(ConversationError::InvalidInput))?;
@@ -262,6 +318,16 @@ impl ConversationService {
         caller: ConversationCaller,
         binding: MutationBinding,
     ) -> Result<Option<MutationReceipt>, MutationFailure<ConversationError>> {
+        let binding = if binding.operation() == MutationOperation::Stop
+            && self.inner.ownership.get().is_some()
+        {
+            ensure_live(self, &id, &caller)
+                .await
+                .map_err(MutationFailure::Target)?;
+            self.selected_stop_lookup(storage.clone(), &binding).await?
+        } else {
+            binding
+        };
         let target = LookupTarget {
             service: self.clone(),
             id,
@@ -303,6 +369,7 @@ pub struct SubmittedCommand {
 
 /// Owns admission and selection ordering through detached scheduled submission.
 pub(super) struct SubmissionPermit {
+    pub(super) _threads: OwnedMutexGuard<()>,
     pub(super) _admission: OwnedRwLockReadGuard<()>,
     pub(super) _selection: OwnedMutexGuard<()>,
 }
@@ -398,11 +465,11 @@ impl MutationTarget for SubmitTarget {
     }
 }
 
-struct StopTarget {
-    service: ConversationService,
-    id: ConversationId,
-    caller: ConversationCaller,
-    execution_id: String,
+pub(super) struct StopTarget {
+    pub(super) service: ConversationService,
+    pub(super) id: ConversationId,
+    pub(super) caller: ConversationCaller,
+    pub(super) execution_id: String,
 }
 impl MutationTarget for StopTarget {
     type Error = ConversationError;
@@ -430,6 +497,15 @@ impl MutationTarget for StopTarget {
             // moment: asked again until it is one or ends, as in `effect`.
             let deadline = std::time::Instant::now() + MOVING_TURN_WAIT;
             loop {
+                if live
+                    .agent
+                    .owed_turns()
+                    .await
+                    .iter()
+                    .any(|owed| owed.execution_id() == &turn)
+                {
+                    return Ok(MutationPlan::Effect);
+                }
                 if live
                     .agent
                     .queued_ids()
@@ -501,6 +577,22 @@ impl MutationTarget for StopTarget {
             // the turn or the turn ends; at the deadline this refusal answers.
             let mut refused: Option<AgentError> = None;
             loop {
+                if let Some(owed) = live
+                    .agent
+                    .owed_turns()
+                    .await
+                    .into_iter()
+                    .find(|owed| owed.execution_id() == &turn)
+                {
+                    live.agent
+                        .decline_turn(&owed, actor.clone())
+                        .await
+                        .map_err(|error| {
+                            CreationInitializationFailure::Target(ConversationError::Agent(error))
+                        })?;
+                    service.wake_thread_reports(&id);
+                    return Ok(MutationOutcome::Withdrawn);
+                }
                 if live
                     .agent
                     .queued_ids()
@@ -616,7 +708,7 @@ async fn refuse_deleted(
     }
 }
 
-async fn ensure_live(
+pub(super) async fn ensure_live(
     service: &ConversationService,
     id: &ConversationId,
     caller: &ConversationCaller,
@@ -648,7 +740,7 @@ async fn turn_is_final(live: &super::LiveConversation, turn: &ExecutionId) -> Op
     )
 }
 
-fn submit_binding(
+pub(super) fn submit_binding(
     id: &ConversationId,
     caller: &ConversationCaller,
     execution_id: &str,
@@ -733,7 +825,7 @@ pub(super) fn submission_fingerprint(
     Ok(digest.finalize().into())
 }
 
-fn stop_binding(
+pub(super) fn stop_binding(
     id: &ConversationId,
     caller: &ConversationCaller,
     execution_id: &str,

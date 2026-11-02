@@ -1,0 +1,20 @@
+✔ the previous dev server is removed before Tauri may observe its port (32.137719ms)
+✔ desktop dev forwards literal Tauri arguments through the Node pnpm entry (245.196025ms)
+✔ desktop dev explains how to supply its Node pnpm entry (107.954327ms)
+✔ start waits for successful preflight before it starts the gateway (626.173173ms)
+✔ preflight performs the gateway build synchronously (0.874938ms)
+✔ release passes its named stage to the desktop build (116.776281ms)
+Preparing worktree (new branch 'feature/a')
+Preparing worktree (new branch 'feature/b')
+Preparing worktree (new branch 'legacy')
+Preparing worktree (new branch 'foreign-link')
+Preparing worktree (new branch 'remove-legacy')
+✔ manual worktrees use the remote default, own artifacts, and migrate legacy links safely (2375.574901ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2562.386611

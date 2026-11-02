@@ -1,0 +1,20 @@
+
+running 1 test
+test conversation::application::service::deletion_tests::a_lease_held_past_every_timed_try_is_left_for_the_next_start ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4522 filtered out; finished in 8.48s
+
+
+running 1 test
+test conversation::application::service::mutation::tests::a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4522 filtered out; finished in 0.14s
+
+
+running 1 test
+test conversation::application::service::mutation::tests::a_submit_admitted_before_retirement_does_not_hold_it_back ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4522 filtered out; finished in 0.06s
+
+ISOLATED_RESULTS [0, 0, 0]
+local subreaper: reaped 0 adopted descendants; command status 0

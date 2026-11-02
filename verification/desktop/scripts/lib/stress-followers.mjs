@@ -202,41 +202,82 @@ export class Follower {
     return true
   }
 
-  ended(what, end, lost) {
+  ended(what, end) {
     if (this.stopping && end.reason === "disconnected") return
     if (end.reason === "lagging") this.counts.lagging += 1
     if (end.reason === "disconnected" || end.reason === "source_closed")
       this.counts.resumed += 1
-    if (!RESUMED.has(end.reason)) {
+    if (!RESUMED.has(end.reason))
       this.fail(`${what} ended ${end.reason}${end.code ? ` (${end.code})` : ""}`)
-      return
-    }
-    lost()
+  }
+
+  /** One opening owns callbacks and its handle, including an end before its answer. */
+  async open(what, held, subscribe, conversationId) {
+    held.lost = false
+    return this.retry(
+      what,
+      async (client) => {
+        const token = {}
+        held.token = token
+        const current = () => held.token === token
+        const ended = (end) => {
+          if (!current()) return
+          held.token = null
+          held.subscription = null
+          held.lost = RESUMED.has(end.reason)
+          if (this.gone(conversationId)) {
+            held.lost = false
+            return
+          }
+          this.ended(what, end)
+        }
+        let subscription
+        try {
+          subscription = await subscribe(client, current, ended)
+        } catch (error) {
+          if (current()) {
+            held.token = null
+            held.lost = true
+          }
+          throw error
+        }
+        if (!current() || this.gone(conversationId)) {
+          if (current()) held.token = null
+          await subscription.close().catch(() => {})
+          return null
+        }
+        held.lost = false
+        held.subscription = subscription
+        return subscription
+      },
+      conversationId,
+    )
   }
 
   async openList() {
-    this.list.lost = false
-    this.list.subscription = await this.retry("the list", (client) =>
+    return this.open("the list", this.list, (client, current, ended) =>
       client.subscriptions.list({
         list: (list) => {
-          this.list.conversations = list.conversations.map((each) => each.conversationId)
+          if (current())
+            this.list.conversations = list.conversations.map(
+              (each) => each.conversationId,
+            )
         },
-        ended: (end) => this.ended("the list", end, () => (this.list.lost = true)),
+        ended,
       }),
     )
   }
 
   async openView() {
-    this.view.lost = false
     const after = this.view.frame?.cursor
-    this.view.subscription = await this.retry("the main view", (client) =>
+    return this.open("the main view", this.view, (client, current, ended) =>
       client.subscriptions.view(
         this.mainId,
         {
           view: (frame) => {
-            this.view.frame = frame
+            if (current()) this.view.frame = frame
           },
-          ended: (end) => this.ended("the main view", end, () => (this.view.lost = true)),
+          ended,
         },
         after ? { after } : {},
       ),
@@ -250,18 +291,15 @@ export class Follower {
       held = { ids: [], seen: new Set(), cursor: null, subscription: null, lost: false }
       this.events.set(conversationId, held)
     }
-    held.lost = false
-    // Only the stream opened last applies events; a stopped one is ignored.
-    const token = {}
-    held.token = token
-    const subscription = await this.retry(
+    return this.open(
       `events of ${conversationId}`,
-      (client) =>
+      held,
+      (client, current, ended) =>
         client.subscriptions.events(
           conversationId,
           {
             batch: (batch) => {
-              if (held.token !== token) return
+              if (!current()) return
               for (const event of batch.events) {
                 if (held.seen.has(event.id))
                   this.fail(`${conversationId}: event ${event.id} came twice`)
@@ -270,21 +308,12 @@ export class Follower {
               }
               held.cursor = batch.cursor
             },
-            ended: (end) => {
-              if (held.token !== token) return
-              if (this.gone(conversationId)) return
-              this.ended(`events of ${conversationId}`, end, () => {
-                held.lost = true
-                held.subscription = null
-              })
-            },
+            ended,
           },
           held.cursor ? { after: held.cursor } : { replay: true },
         ),
       conversationId,
     )
-    held.subscription = subscription
-    return subscription
   }
 
   /** Stop following `conversationId` for a moment, then follow it again from its cursor. */
@@ -307,6 +336,8 @@ export class Follower {
     // Only with every stream it keeps room for held, so the room it asks
     // past is the connection's real one.
     if (
+      this.list.lost ||
+      !this.list.subscription ||
       this.view.lost ||
       !this.view.subscription ||
       [...this.events.values()].some((each) => each.lost || !each.subscription)
@@ -316,6 +347,7 @@ export class Follower {
     const room = this.limits.conversationTargets - this.held()
     if (room < 0 || others.length < room + 1) return
     const client = this.client
+    const originalList = this.list.subscription
     const originalView = this.view.subscription
     const originals = [...this.events].map(([id, held]) => ({
       id,
@@ -330,8 +362,11 @@ export class Follower {
       !ended &&
       this.client === client &&
       client.connectionState.status === "connected" &&
+      !this.list.lost &&
+      this.list.subscription === originalList &&
       !this.view.lost &&
       this.view.subscription === originalView &&
+      this.events.size === originals.length &&
       originals.every(
         ({ id, held, subscription }) =>
           !this.deleted.has(id) &&
@@ -364,9 +399,10 @@ export class Follower {
           // against the list then. A stopping owner refuses current reads
           // as conversation_closed until cleanup is confirmed; the pool
           // step independently requires that conversation to reopen.
+          if (error?.code === "conversation_deleted" && this.deleted.has(others[n]))
+            return
           if (
             error?.code === "temporarily_unavailable" ||
-            error?.code === "conversation_deleted" ||
             error?.code === "conversation_closed" ||
             !isRefusal(error)
           )
@@ -385,14 +421,12 @@ export class Follower {
     }
   }
 
-  /**
-   * The room this follower keeps: one for the main view and one for each
-   * conversation it follows, held or not. A stream the gateway ended keeps
-   * its room until it is followed again, or filling the room in between
-   * would leave it nowhere to go.
-   */
+  /** Live conversation handles; list subscriptions use a separate allowance. */
   held() {
-    return this.events.size + 1
+    return (
+      Number(Boolean(this.view.subscription)) +
+      [...this.events.values()].filter((each) => each.subscription).length
+    )
   }
 
   async run() {
@@ -404,7 +438,8 @@ export class Follower {
           if (held.lost && !this.stopping) await this.follow(conversationId)
         // Fill this connection's room with conversations not followed yet.
         for (const id of this.list.conversations) {
-          if (this.stopping || this.held() >= this.limits.conversationTargets) break
+          if (this.stopping || this.events.size + 1 >= this.limits.conversationTargets)
+            break
           if (!this.events.has(id) && !this.deleted.has(id)) await this.follow(id)
         }
         const followed = [...this.events.keys()]
@@ -424,6 +459,7 @@ export class Follower {
     this.stopping = true
     await this.loop
     this.stopping = false
+    if (this.list.lost || !this.list.subscription) await this.openList()
     if (this.view.lost || !this.view.subscription) await this.openView()
     for (const [conversationId, held] of this.events)
       if (held.lost || !held.subscription) await this.follow(conversationId)

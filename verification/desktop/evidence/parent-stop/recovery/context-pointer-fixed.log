@@ -1,0 +1,10 @@
+starting a dev server of its own on port 36335…
+warmed 1296 modules in 5320 ms
+conversation ready: review_rows completed, in 1485 ms
+ok    setup
+ok    message [chromium columns]
+ok    context [chromium columns]
+ok    console [chromium columns]
+chromium columns: 10020 ms
+wrote /tmp/nessa-981-evidence/context-pointer-fixed.json
+mcp-apps-gateway: 4/4 held

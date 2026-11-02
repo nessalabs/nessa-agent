@@ -1,0 +1,8 @@
+  context: async (page) => {
+    const failures = []
+    const { app } = await appFrame(page, "inline")
+    await app.click(selectorFor.reviewControl("context"))
+    const answer = await output(app, "context")
+    if (answer !== "ok") failures.push(`the context update was answered "${answer}"`)
+    return { seen: { answer }, failures }
+  },

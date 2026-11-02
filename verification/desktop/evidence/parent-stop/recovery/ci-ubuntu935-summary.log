@@ -1,0 +1,57 @@
+Source: GitHub Actions run 40981242287, published head 93599d357336dad4ae86dba32ed33c28e54c8cb7
+Job: local-auth (ubuntu-22.04), completed failure
+https://github.com/nessalabs/nessa-agent/actions/runs/40981242287
+Selected excerpts only; embedded child-probe summaries are retained, not summed as independent full suites.
+2026-10-30T00:42:52.4738834Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:42:52.4751959Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:42:53.6865653Z test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+2026-10-30T00:42:53.8097064Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:42:54.4139215Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:42:54.4458326Z test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-10-30T00:42:54.4606804Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:47:58.6028005Z [nessa-vault audit] test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-30T00:47:58.9633887Z [nessa-local-storage nessa_local_storage] test result: ok. 41 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.43s
+2026-10-30T00:47:59.8669236Z [nessa-vault encrypted_file] test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+2026-10-30T00:47:59.9090258Z [nessa-local-storage retained_directory] test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+2026-10-30T00:47:59.9171626Z [nessa-local-storage windows_replacement] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:00.4549428Z [nessa-auth native_transport_failure_order] test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+2026-10-30T00:48:00.7573733Z [nessa-auth cedar_flow] test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-10-30T00:48:00.7579684Z [nessa-vault lifecycle] test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.57s
+2026-10-30T00:48:00.7590363Z [nessa-auth native_transport_key_update] test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+2026-10-30T00:48:00.7607919Z [nessa-auth origin] test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:00.7627070Z [nessa-auth owner_phone_consent_admission] test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-10-30T00:48:00.9466342Z [nessa-auth owner_phone_device_proof] test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:00.9480386Z [nessa-auth owner_phone_record] test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:02.0625428Z [nessa-auth pairing_domain] test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:02.1017091Z [nessa-local-storage windows_protected_directory] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:02.1217126Z [nessa-vault nessa_vault] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:02.3216874Z [nessa-auth revocation] test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+2026-10-30T00:48:10.1673151Z [nessa-auth nessa_auth] test result: ok. 216 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.66s
+2026-10-30T00:48:15.5858428Z [nessa-client-core nessa_client_core] test result: ok. 483 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.80s
+2026-10-30T00:48:16.9883256Z [nessa-sdk application] test result: ok. 718 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 6.60s
+2026-10-30T00:48:17.1238658Z [nessa-protocol phone_wire] test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-10-30T00:48:17.3578796Z [nessa-protocol owner_phone_consent_wire] test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:48:17.7476458Z [nessa-sdk domain] test result: ok. 273 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+2026-10-30T00:48:23.9435899Z [nessa-device-client nessa_device_client] test result: ok. 108 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.23s
+2026-10-30T00:48:31.9722621Z [nessa-protocol nessa_protocol] test result: ok. 198 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.10s
+2026-10-30T00:49:38.2386494Z [nessa-sdk infrastructure] test result: ok. 74 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 74.24s
+2026-10-30T00:49:38.2428640Z [nessa-server nessa-backup-verify] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:49:38.3967717Z [nessa-server backup_restore_plan] test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+2026-10-30T00:49:38.6970466Z [nessa-server backup_verifier] test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+2026-10-30T00:49:38.7011779Z [nessa-server nessa] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:49:38.7522066Z [nessa-server mcp_relay] test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+2026-10-30T00:49:38.7539517Z [nessa-server mcp_authorization_benchmark] test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:49:38.7549333Z [nessa-server nessa-backup-plan] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-30T00:49:38.8266370Z [nessa-server credential_registry_refusal] test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+2026-10-30T00:49:42.1340327Z [nessa-server env_serve_binary] test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.31s
+2026-10-30T00:50:03.2853805Z [nessa-server native_enrollment] test result: ok. 121 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.14s
+2026-10-30T00:50:03.4223214Z [nessa-server nessa_server] test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4517 filtered out; finished in 0.01s
+2026-10-30T00:50:03.4333330Z [nessa-server nessa_server] test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4517 filtered out; finished in 0.02s
+2026-10-30T00:50:12.6877221Z [nessa-server nessa_server] test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4517 filtered out; finished in 0.02s
+2026-10-30T00:50:58.0966560Z [nessa-sdk nessa_sdk] test result: ok. 1582 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out; finished in 145.97s
+2026-10-30T00:53:45.5218016Z [nessa-server nessa_server] test workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol ... FAILED
+2026-10-30T00:53:50.5189160Z [nessa-server nessa_server] ---- workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol stdout ----
+2026-10-30T00:53:50.5190164Z [nessa-server nessa_server] thread 'workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol' (36305) panicked at crates/nessa-server/src/workspaces/../../tests/workspaces/provider_contract.rs:28:5:
+2026-10-30T00:53:50.5190868Z [nessa-server nessa_server] publish and pin the credential-free worker for this lease protocol before shipping
+2026-10-30T00:53:50.5191850Z [nessa-server nessa_server]     workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol
+2026-10-30T00:53:50.5192633Z [nessa-server nessa_server] test result: FAILED. 4501 passed; 1 failed; 16 ignored; 0 measured; 0 filtered out; finished in 227.22s

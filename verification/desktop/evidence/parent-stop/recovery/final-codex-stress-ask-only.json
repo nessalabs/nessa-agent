@@ -1,0 +1,138 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-30T03:09:40.721Z",
+  "finished": "2026-10-30T03:12:42.909Z",
+  "target": {
+    "url": "http://127.0.0.1:34747/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "name": "001 refused-access",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 620,
+      "seen": {
+        "index": 1,
+        "kind": "refused-access",
+        "from": "ask",
+        "to": "full",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 938,
+      "seen": {
+        "index": 2,
+        "kind": "permission",
+        "answer": "deny",
+        "mode": "ask",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 parent-stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3282,
+      "seen": {
+        "index": 3,
+        "kind": "parent-stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3315,
+      "seen": {
+        "index": 4,
+        "kind": "delegate"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 parent-stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3362,
+      "seen": {
+        "index": 5,
+        "kind": "parent-stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "006 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3907,
+      "seen": {
+        "index": 6,
+        "kind": "await"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "007 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15115,
+      "seen": {
+        "index": 7,
+        "kind": "handoff"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 0,
+        "turns": 0
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:34747/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

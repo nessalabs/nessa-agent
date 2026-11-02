@@ -201,7 +201,7 @@ impl ScheduledCommandEvidence {
         &self.fingerprint
     }
 
-    fn binding(
+    pub(super) fn binding(
         &self,
         id: &ConversationId,
         execution: &str,
@@ -452,6 +452,15 @@ pub trait ScheduledMessageStore: Send + Sync {
     ) -> ConversationFuture<'_, bool>;
     /// The open row for one conversation, if it is scheduled or delivering.
     fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>>;
+    /// Read immutable automatic-command evidence for this exact conversation
+    /// and execution across all statuses, including deletion-scrubbed rows.
+    /// Absence or a row that never crossed submission returns `None`.
+    /// Missing required or malformed evidence is a typed failure, not absence.
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>>;
     /// Insert the row, or move its due time when it is still open, only while
     /// the draft's token is current: the preference revision is still enabled,
     /// and the history generation, agent, and model are still the ones stored.
@@ -1891,12 +1900,15 @@ impl ConversationService {
         {
             return DeliveredStep::Held;
         }
-        // Shared with model/agent changes; transferred to the supervised enqueue.
+        // Match person/report admission order before taking the selection lock.
+        // The same permit retains all guards through the detached enqueue.
+        let threads = self.inner.thread_admission.clone().lock_owned().await;
         let admission = self.inner.admission.clone().read_owned().await;
         if self.inner.retirement.get().is_some() {
             return DeliveredStep::Held;
         }
         let selection = Arc::new(SubmissionPermit {
+            _threads: threads,
             _admission: admission,
             _selection: self.inner.mode_changes.lock(&id).await,
         });
@@ -2148,6 +2160,7 @@ impl ConversationService {
                     ..Default::default()
                 },
                 super::SubmissionMode::Queue,
+                false,
                 Some(selection),
             )
             .await

@@ -1,0 +1,16 @@
+[nessa-server nessa_server] failures:
+[nessa-server nessa_server]
+[nessa-server nessa_server] ---- workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol stdout ----
+[nessa-server nessa_server]
+[nessa-server nessa_server] thread 'workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol' (253893) panicked at crates/nessa-server/src/workspaces/../../tests/workspaces/provider_contract.rs:28:5:
+[nessa-server nessa_server] publish and pin the credential-free worker for this lease protocol before shipping
+[nessa-server nessa_server]
+[nessa-server nessa_server]
+[nessa-server nessa_server] failures:
+[nessa-server nessa_server]     workspaces::provider_contract_tests::shipping_worker_covers_the_compiled_lease_protocol
+[nessa-server nessa_server]
+[nessa-server nessa_server] test result: FAILED. 4506 passed; 1 failed; 16 ignored; 0 measured; 0 filtered out; finished in 251.89s
+[nessa-server nessa_server]
+nessa-server nessa_server finished in 252.0s with exit 101
+nessa-server nessa_server exited with 101
+local subreaper: reaped 23 adopted descendants; command status 256

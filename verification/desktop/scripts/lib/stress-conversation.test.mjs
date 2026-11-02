@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { runInNewContext } from "node:vm"
+import { JSDOM } from "jsdom"
 
 import { css, selectorFor } from "./selectors.mjs"
 import {
   openStressConversation,
   selectedStressConversation,
+  chatIdentityTexts,
 } from "./stress-conversation.mjs"
 
 const title = "stress reply r1 aside s1"
@@ -241,4 +243,103 @@ test("missing, ambiguous or differently titled Home selection supplies no identi
     ],
   ])
     assert.equal(await selectedStressConversation(listedWindow(rows), title), null)
+})
+
+function modelPicker(groups, selected = 0) {
+  let opened = false,
+    chosen
+  const visited = []
+  const page = {
+    locator(selector) {
+      if (selector === css.modelProviderTab)
+        return {
+          count: async () => groups.length,
+          nth: (i) => ({
+            click: async () => {
+              selected = i
+              visited.push(i)
+            },
+          }),
+        }
+      assert.equal(selector, css.modelOption)
+      return {
+        first: () => ({ waitFor: async () => assert.equal(opened, true) }),
+        filter: ({ hasText }) => ({
+          count: async () =>
+            groups[selected].filter((name) => name.includes(hasText)).length,
+          click: async () => {
+            chosen = groups[selected].find((name) => name.includes(hasText))
+          },
+        }),
+      }
+    },
+  }
+  return {
+    page,
+    trigger: {
+      click: async () => {
+        opened = true
+      },
+    },
+    visited,
+    chosen: () => chosen,
+  }
+}
+test("Home selects the exact fixture across provider tabs, never the initial provider default", async () => {
+  const { selectStressModel } = await import("./stress-conversation.mjs")
+  const picker = modelPicker([["Claude Opus 5"], ["GPT-6 Astra", "GPT-5.6 Terra"]])
+  await selectStressModel(picker.page, picker.trigger, "GPT-5.6 Terra")
+  assert.equal(picker.chosen(), "GPT-5.6 Terra")
+  assert.deepEqual(picker.visited, [0, 1])
+})
+test("Home missing or ambiguous fixture models cannot fall back to another selection", async () => {
+  const { selectStressModel } = await import("./stress-conversation.mjs")
+  for (const groups of [
+    [["Claude Opus 5"], ["GPT-6 Astra"]],
+    [["GPT-5.6 Terra", "GPT-5.6 Terra duplicate"]],
+  ]) {
+    const picker = modelPicker(groups)
+    await assert.rejects(
+      selectStressModel(picker.page, picker.trigger, "GPT-5.6 Terra"),
+      /not uniquely offered/,
+    )
+    assert.equal(picker.chosen(), undefined)
+  }
+})
+
+test("rendered UUID and named chat pill retain the same awaited identity", () => {
+  const dom = new JSDOM(
+    `<p>Awaited ${intended}: Echo: reply</p><p>Awaited <button data-chat-pill="${intended}"><svg><title>Claude</title></svg>Friendly chat name</button>: Echo: reply</p>`,
+  )
+  try {
+    const lines = chatIdentityTexts([...dom.window.document.querySelectorAll("p")])
+    assert.deepEqual(lines, [
+      `Awaited ${intended}: Echo: reply`,
+      `Awaited ${intended}: Echo: reply`,
+    ])
+    assert.equal(
+      dom.window.document.querySelector("button").textContent,
+      "ClaudeFriendly chat name",
+      "the live DOM must remain untouched",
+    )
+  } finally {
+    dom.window.close()
+  }
+})
+
+test("a matching label cannot conceal the wrong target or substitute an earlier reply", () => {
+  const dom = new JSDOM(
+    `<p>Awaited <button data-chat-pill="${earlier}">${intended}</button>: Echo: reply</p><p>Awaited <button data-chat-pill="${intended}">Friendly chat name</button>: Echo: earlier reply</p><p>Awaited Friendly chat name: Echo: reply</p>`,
+  )
+  try {
+    const expected = `Awaited ${intended}: Echo: reply`
+    const lines = chatIdentityTexts([...dom.window.document.querySelectorAll("p")])
+    assert.equal(
+      lines.some((line) => line === expected),
+      false,
+    )
+    assert.ok(lines[0].includes(earlier))
+  } finally {
+    dom.window.close()
+  }
 })
