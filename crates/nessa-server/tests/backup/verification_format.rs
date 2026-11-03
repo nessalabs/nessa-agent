@@ -168,7 +168,7 @@ fn canonical_listings_keep_metadata_and_the_mac_offset() {
     assert_eq!(&raw[..read.canonical_len], sealed.manifest().canonical());
     assert_eq!(read.mac, *sealed.mac());
     assert_eq!(read.listing.captured_at_ms(), 123);
-    assert_eq!(read.listing.stores().len(), 22);
+    assert_eq!(read.listing.stores().len(), WRITER_INVENTORY.len());
     let first = &read.listing.stores()[0];
     assert_eq!(first.store(), StoreKind::CanonicalRecords);
     assert_eq!(first.watermark().as_str(), "cut cursor/é");
