@@ -3,7 +3,8 @@ id: desktop-conversation-sharing
 title: Share a conversation and revoke its grant
 kind: statechart
 status: implemented
-summary: A share dialog captures a conversation and opening, while the window retains in-flight grant changes until their outcomes and fresh reads settle.
+summary: A share dialog captures a conversation and opening, while the window
+  retains in-flight grant changes until their outcomes and fresh reads settle.
 parent: desktop-workspace
 sourceRevision: "0b8019cf45f99b285f10c41199875d474492c6d1"
 sources:
@@ -32,8 +33,23 @@ diagramDetails:
   - diagram: 0
     node: Settled
     section: Acknowledgement and fresh read
+model:
+  spec: tla/services/desktop/workspace/conversation-sharing.tla
+  config: tla/services/desktop/workspace/conversation-sharing.cfg
+modelCheck:
+  sourceRevision: "0b8019cf45f99b285f10c41199875d474492c6d1"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:31.878Z
+  config: tla/services/desktop/workspace/conversation-sharing.cfg
+  modelDigest: af985c41cdb4e6ac86d240c8d5a1c29cefa38c30f78a522b6f0c6b889061b4d6
+  states: 26
+  held:
+    - PendingHoldsForm
+    - RereadBeforeEdit
+    - ClosedHasNoForm
+  broke: []
+  unchecked: []
 ---
-
 # Share a conversation and revoke its grant
 
 A conversation's Share dialog lists its existing grants and offers eligible linked devices. It can grant Read, Comment or Drive, with Drive tool constraints. The gateway decides what the current owner may grant; a local role choice is not authority.
@@ -101,3 +117,15 @@ The [D1–D12 design table](../../../../design/read-grants.md#dialog-state-and-o
 flowchart LR
     Devices[Pair and revoke linked devices]
 ```
+
+## Bounded rule model
+
+Two dialog openings share one window-wide mutation slot. Close/reopen cannot admit a second mutation; settlement requires a fresh grants read before editing. Partial grants/choices read failure, grant revision conflicts, confirm targeting and draft basis are excluded from this bound and retain the source/test contract described above. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

@@ -109,3 +109,7 @@ flowchart TB
 - [Select a model, approval preset, or reasoning effort](select-a-model-approval-preset-or-reasoning-effort.md)
 - [Turn Stop and attachment cleanup have different owners](stop-cancels-owned-work-and-confirms-process-cleanup.md)
 - [The first agent launch is warmed in the background](the-first-agent-launch-is-warmed-in-the-background.md)
+
+## Model coverage
+
+Component index. This page groups independent owners; its component arrows are not a lifecycle or a model proof. Open the feature pages for exact checked scope and exclusions.

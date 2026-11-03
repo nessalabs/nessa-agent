@@ -15,8 +15,21 @@ sources:
   - "src/panel/ui/app.tsx"
   - "src/panel/ui/use-file-attachments-readying.test.ts"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/attachments/AttachmentDestination.tla
+  config: tla/services/gateway/attachments/AttachmentDestination.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:53.069Z
+  config: tla/services/gateway/attachments/AttachmentDestination.cfg
+  modelDigest: c8107533025ecd60c4062cd562ddcd64d3834d9751ffaf9c80c96d6b80bd9c22
+  states: 22
+  held:
+    - OriginalConversation
+    - CapturedIdentity
+  broke: []
+  unchecked: []
 ---
-
 # Wait for a cloud file without attaching it to another tab
 
 A cloud-backed image may need time to become readable. Nessa remembers the conversation that requested it and shows that read as pending. It cannot send that conversation's draft until the read finishes.
@@ -46,3 +59,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src-tauri/src/attachments/readiness.rs) · [Related source](../../../../../src-tauri/src/attachments/readiness/icloud.rs) · [Related tests](../../../../../src/panel/ui/use-file-attachments-races.test.ts)
+
+## Bounded rule model
+
+Owns one host batch's captured conversation and resource-store lifetime. Switching tabs does not retarget completion; replacement store or removed conversation refuses it. Native batch capacity, filesystem hydration, timeout and picker/drop matching are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src/panel/ui/use-file-attachments.ts`.

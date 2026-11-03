@@ -49,3 +49,7 @@ OAuth non-secret records, sealed tokens and authorization audit use
 [bounded physical adapter work](../storage/README.md#physical-adapter-work).
 Physical ordering preserves the AuthorizationOwner's generation, reply and
 settlement authority; session closure alone does not establish secret deletion.
+
+## Model coverage
+
+Component index. This page groups independent owners; its component arrows are not a lifecycle or a model proof. Open the feature pages for exact checked scope and exclusions.

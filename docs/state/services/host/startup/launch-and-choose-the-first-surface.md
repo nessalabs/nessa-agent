@@ -13,8 +13,21 @@ sources:
   - "index.html"
   - "src/startup/ui/startup-refused.test.ts"
 diagramLinks: {}
+model:
+  spec: tla/services/host/startup/HostComposition.tla
+  config: tla/services/host/startup/HostComposition.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:07.332Z
+  config: tla/services/host/startup/HostComposition.cfg
+  modelDigest: 22932d13c33519ace0af84259b157192a5dbf5916331598a6c046e170bb5b1a0
+  states: 9
+  held:
+    - RequiredBeforeGateway
+    - RefusalSurface
+  broke: []
+  unchecked: []
 ---
-
 # launch and choose the first surface
 
 The native host first assembles the dependencies required to start Nessa. If that fails, it opens a refusal screen with retry or quit instead of continuing with a partly assembled app.
@@ -43,3 +56,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src-tauri/src/startup.rs) · [Related source](../../../../../src-tauri/src/main.rs) · [Related tests](../../../../../src/startup/ui/startup-refused.test.ts)
+
+## Bounded rule model
+
+Owns required host composition refusal before starting dependent services and choosing refusal versus product surface. Platform show/focus outcomes, tray degradation, frontend failed-status fallback and process restart are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src-tauri/src/startup.rs`, `src-tauri/src/main.rs`.

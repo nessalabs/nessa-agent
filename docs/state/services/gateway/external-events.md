@@ -33,8 +33,22 @@ diagramDetails:
   - diagram: 1
     node: Dispatched
     section: Execution and cancellation
+model:
+  spec: tla/services/gateway/ExternalEvent.tla
+  config: tla/services/gateway/ExternalEvent.cfg
+modelCheck:
+  sourceRevision: "7763614c1998cc428a9b6043cbe1ab10cebe6ec4"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:58.073Z
+  config: tla/services/gateway/ExternalEvent.cfg
+  modelDigest: 05af005c72748b4c44a8ad0c6a003f6dd10b2fe50934b7c5f40767a6e73fe319
+  states: 12
+  held:
+    - OneEventIdentity
+    - AckIsDispatch
+  broke: []
+  unchecked: []
 ---
-
 # External event admission
 
 A signed HTTP event can queue one turn in an existing conversation. The binding
@@ -147,3 +161,7 @@ owner changed. The corrected Windows test and later head need hosted qualificati
 Linux runs are not Windows evidence.
 This page reviews the source commit named above. The gateway index change is
 navigation only; unrelated state pages were not re-audited.
+
+## Bounded rule model
+
+Owns fixed binding/event request identity, current access check before each submit or replay and dispatch receipt distinct from turn completion. HMAC validation, bounded ingress slots and durable command lease internals are external shared owners. This optional router remains unmounted in production. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/external_events/application/admission.rs`.

@@ -3,7 +3,8 @@ id: "desktop-workspace-open-resize-expand-and-restore-the-right-panel"
 title: "open, resize, expand and restore the right panel"
 kind: "statechart"
 status: "implemented"
-summary: "The right panel belongs to the chat in front and docks when another view opens."
+summary: "The right panel belongs to the chat in front and docks when another
+  view opens."
 parent: "desktop-workspace"
 sourceRevision: "c5432f75638030f8dfa3941db7a3c8626522be1a"
 sources:
@@ -21,8 +22,23 @@ sources:
   - "src/desktop/workspace/ui/layouts/layouts.test.tsx"
   - "verification/desktop/scripts/conversation-stress.mjs"
 diagramLinks: {}
+model:
+  spec: tla/services/desktop/workspace/open-resize-expand-and-restore-the-right-panel.tla
+  config: tla/services/desktop/workspace/open-resize-expand-and-restore-the-right-panel.cfg
+modelCheck:
+  sourceRevision: "c5432f75638030f8dfa3941db7a3c8626522be1a"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:38.093Z
+  config: tla/services/desktop/workspace/open-resize-expand-and-restore-the-right-panel.cfg
+  modelDigest: 8f65239794d99e3abbd5f112ae835e12a00893197c9c5b4e25b60694b7413235
+  states: 18
+  held:
+    - PerChatOwnership
+    - FrontOwned
+    - OneAppPerChat
+  broke: []
+  unchecked: []
 ---
-
 # open, resize, expand and restore the right panel
 
 The right panel is a column beside the panes, in both workspace layouts. Its
@@ -75,3 +91,15 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/workspace/ui/chrome/right-panel.tsx) · [Related source](../../../../../src/desktop/model/right-panel.ts) · [Related tests](../../../../../src/desktop/workspace/ui/layouts/layouts.test.tsx)
+
+## Bounded rule model
+
+Two chats and two MCP App widgets check per-chat tab ownership and replacement of the previous app tab. Switching chat restores only its own widget selection. Multiple other-plugin tabs, close-neighbor order, resize/maximize geometry, keyboard focus and app bridge teardown are separate contracts; the app mount owner models teardown. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

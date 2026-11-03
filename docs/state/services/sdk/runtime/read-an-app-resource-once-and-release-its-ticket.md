@@ -46,3 +46,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/conversation/application/mcp_apps.rs) · [Related source](../../../../../crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs) · [Related tests](../../../../../crates/nessa-server/tests/mcp_servers/resource_tickets.rs)
+
+## Model coverage
+
+Shared owner model: [mcp-resource-tickets](../../mcp/resource-tickets.md). One-use resource consumption before audit-gated delivery.
+
+HTML integrity verification, origin parsing and other file/image tickets are excluded. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

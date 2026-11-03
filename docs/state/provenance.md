@@ -126,6 +126,72 @@ Boat tests were run in this documentation/tooling refresh. Those remain separate
 qualification gates. No other lifecycle page received a new behavior checkpoint;
 older pages and historical risk reports keep their prior scope.
 
+## App-wide feature modeling (2026-11-02)
+
+The expanded feature pass uses the same frozen application source,
+`77a6b620af4d94b234294f6d273fd74b3dfb44c7`. The committed model/tooling source
+is `acaeaa68317434b47b7dc8870bd0e172fa66422d`; the verification and feature-map
+guides record that source checkpoint. GPT-6.1 Sol subagents reviewed desktop and
+extensions, gateway and host, and runtime/core ownership in parallel. Integration
+review added backup, peer, tunnel, environment and source-bound thread-tool maps.
+The final source-directory comparison also added Drive and environment-tool
+admission as owners distinct from remote host leases.
+
+The [feature map](feature-verification.md) accounts for 167 pages: 96 directly
+modeled owners, 33 journeys with explicit shared-owner scope, 20 component/feature
+indexes, five value/representation contracts, eight guides and five external
+source boundaries. There are no unassigned stateful pages. These are coverage
+**dispositions**, not a claim that every feature's implementation is proved.
+Partial page reviews retain historical checkpoints and identify their newly
+reviewed source scope in the model section. No root checkpoint is inherited.
+
+New maps include voice, provider sign-in, channel creation, question flights,
+devices, focus/layout/window/persistence ownership, child preparation and closure,
+permission rules, history restoration/erasure, subscription/registration lifetimes,
+backup export/quarantine, peer and environment lifetimes, pairing, captured parent
+Stop and source-bound tools. Database migration and installed-runtime reclamation
+sentences were corrected against source. The [source-observed ordering questions](gaps.md)
+remain questions; no runtime defect or product correction is claimed.
+
+The rich-text investigation read the app's exact pinned UI source,
+`a32191c26ee27c2d8159ab6498a0f0530a93e3ea`. It corrected the earlier blanket
+render-after-fence description: a quiet preview can render behind the generating
+surface while a fence is still open. Effect-scoped cancellation, queue deadlines
+and promise-owned quarantine follow that pinned implementation. Eight actual
+queue-helper tests passed after isolated TypeScript transpilation; that does not
+qualify React mounting, SVG output, browsers or unrelated sibling packages.
+
+Executed with Node 24.22.1 on macOS 26.3 and the same pinned renderer/TLC described
+in the initial refresh:
+
+| Check | Observed result |
+| --- | --- |
+| Canonical catalog and feature coverage | 167 accepted pages, zero issues and zero unmodeled stateful pages |
+| Complete positive corpus | 96 models passed all 303 configured invariant checks; no broken or unchecked rule |
+| Exploration size | 3,543 states across independent models; largest individual model 376, below the 2,000-state bound |
+| Repeatable negative controls | All 106 finite safety weakenings broke their expected invariants; no unchecked rule |
+| Script tests with renderer/TLC integration enabled | Nine passed, zero failed or skipped |
+| Bare Node script tests without renderer setup | Seven passed, two integration tests explicitly skipped |
+| Independent model/source review | Corrected restore receipt/digest/spend correlation, timeout narrowing, source-permit retirement and peer intent ordering; final parent and new-tool owner reviews reported no actionable finding |
+| Local browser pass | Chrome 156.0.8078.74 opened all 167 pages and rendered 203 diagram figures without page or diagram errors |
+| Formatting and whitespace | Prettier and `git diff --check` passed |
+
+[Committed probe evidence](../../verification/state-models/probe-results.json)
+records all baselines, matching model digests and expected rule violations. The
+digests were recorded from the unchanged frozen files after the combined run,
+checked against canonical saved positive records and state counts. The command
+now records them directly for future runs. Saved page results were written only
+by the canonical checker. The mutants ran in temporary directories and did not
+replace source models or authored positive records.
+
+The combined corpus checks independent bounded abstractions, not one exhaustive
+whole-application state space. Real providers, native OS behavior, cryptography,
+cloud provisioning, full conversation stress/chaos and product Rust suites were
+not rerun locally for this documentation expansion. The earlier CI result belongs
+to its earlier PR head; a fresh push requires its own CI result. Model guards are
+not generated production authorization rules. The canonical source, Cedar policies
+and runtime owners remain authoritative.
+
 ## Choose a user flow
 
 | What the person does | Follow this map | Boundaries to inspect for bugs |

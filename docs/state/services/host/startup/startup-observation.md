@@ -3,7 +3,8 @@ id: gateway-startup-observation
 title: Observe gateway startup and retry
 kind: statechart
 status: implemented
-summary: The surface subscribes before reading a startup snapshot and rejects older revisions and results from retired lifetimes.
+summary: The surface subscribes before reading a startup snapshot and rejects
+  older revisions and results from retired lifetimes.
 parent: host-startup
 sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
 sources:
@@ -35,8 +36,22 @@ diagramDetails:
       to: Stopped
       label: Stop / retire lifetime and remove listener
     section: Stop and restart
+model:
+  spec: tla/services/host/startup/StartupObservation.tla
+  config: tla/services/host/startup/StartupObservation.cfg
+modelCheck:
+  sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:11.117Z
+  config: tla/services/host/startup/StartupObservation.cfg
+  modelDigest: d2be145d076fda011af799cf387faef0a427128e3c82a2c71cb36a34213a8242
+  states: 11
+  held:
+    - RevisionBound
+    - HostHasEvidence
+  broke: []
+  unchecked: []
 ---
-
 # Observe gateway startup and retry
 
 The surface reads the native host's startup projection. Subscribing first prevents a slow snapshot from replacing a newer event. A revision describes host progress; a separate local lifetime identifies the subscription whose results may still affect this surface.
@@ -96,3 +111,7 @@ An old snapshot or retry with a numerically larger host revision still cannot up
 The [ordering regressions](../../../../../src/startup/application/gateway-startup-ordering.test.ts) cover old results settling after replacement, Strict Mode subscription order, repeated start/stop, all host projection states, retry recovery and newer evidence before failure. The [existing monitor tests](../../../../../src/startup/application/gateway-startup.test.ts) cover failure display, revision recovery and explicit retry.
 
 The checkpoint covers the committed monitor implementation and port inspected, not native service reconciliation. That commit also contains the new ordering tests. Browser rendering of these charts and actual application E2E results are recorded separately in the [coverage inventory](../../../user-flow-coverage.md).
+
+## Bounded rule model
+
+Owns subscribe-before-snapshot, revision monotonic acceptance and preserving delivered events against snapshot failure in one lifetime. Retired callbacks cannot observe after stop. Restart, equal-revision repaint after local errors and retry command effects are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src/startup/application/gateway-startup.ts`.

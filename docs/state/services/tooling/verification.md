@@ -5,11 +5,13 @@ kind: guide
 status: reference
 summary: Choose catalog, model, scripted, browser and provider checks by the behavior they exercise.
 parent: tooling
-sourceRevision: "722095a8cd973890701e0fd83890d6af548000f8"
+sourceRevision: "acaeaa68317434b47b7dc8870bd0e172fa66422d"
 sources:
   - package.json
   - scripts/state-docs/check.mjs
   - scripts/state-docs/check.test.mjs
+  - scripts/state-docs/coverage.mjs
+  - scripts/state-docs/coverage.test.mjs
   - verification/README.md
   - verification/desktop/CHECKLIST.md
   - verification/desktop/scripts/run-all.mjs
@@ -34,13 +36,20 @@ but no Java. Model checking needs its verified cache, installed only with the
 explicit `--install` flag. A normal run does not rewrite pages; `--write` saves
 finished findings, including broken and unchecked rules.
 
-The initial models cover [one-use app resources](../mcp/resource-tickets.md#bounded-rule-model)
-and [cleanup reopening](../sdk/cleanup.md#bounded-rule-model). Their pages name
-abstractions and omissions. They are safety checks; they do not prove eventual
-progress, provider termination, crash durability or correspondence to code.
-Other atlas pages currently have no linked executable model. New models belong
-under `docs/state/tla/` and are discovered through the owning page's frontmatter,
-without adding a second model list to the runner.
+The [feature verification map](../../feature-verification.md) accounts for every
+feature page across app surfaces, host, gateway, SDK, auth, client, storage and
+remote integrations. Each directly modeled owner states its source mapping and
+abstraction. Shared-owner links identify the covered portion without claiming
+that a backend model proves an entire UI journey. These are safety checks;
+they do not prove eventual progress, physical provider termination or a complete
+correspondence between the program and its models.
+
+`pnpm docs:state:coverage` fails unmapped stateful features. It distinguishes
+indexes, contracts, reference material and explicit external sibling boundaries.
+It is a map-completeness check, not a model pass. Run
+`pnpm docs:state:coverage && pnpm docs:state:models` for both checks. Linked
+models are discovered from the owning pages under `docs/state/tla/`, without
+adding a parallel model list to the runner.
 
 ## Current repository entry points
 
@@ -77,7 +86,9 @@ use the repository's normal setup and the prerequisites of their owning guide.
 | `pnpm verify:desktop:drag` | Dragging interactions and measurements. |
 | `pnpm verify:desktop:focus` | Focus routing and keyboard behavior. |
 | `pnpm verify:desktop:responsive` | Responsive browser layouts. |
+| `pnpm docs:state:coverage` | Account for direct/shared model owners and expose unmapped stateful features. |
 | `pnpm docs:state:check` | State catalog, source links, diagrams and model-file references. |
+| `pnpm docs:state:probes` | Pass each original model, then falsify expected rules with finite safety weakenings. |
 | `pnpm docs:state:models` | Linked TLC models; optional explicit install and save flags. |
 | `pnpm docs:state:test` | Command behavior, synthetic catalogs and opt-in real TLC controls. |
 

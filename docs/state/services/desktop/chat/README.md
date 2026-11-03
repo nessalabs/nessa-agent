@@ -62,3 +62,11 @@ flowchart TB
 - [Rename a tab and inspect conversation details](rename-a-tab-and-inspect-conversation-details.md)
 - [Send and manage follow-ups](send-and-manage-follow-ups.md)
 - [Stop active and queued work](stop-active-and-queued-work.md)
+
+## Model coverage
+
+Disposition: component index. Navigation and ownership index, not an independent runtime state machine.
+
+Excluded: Each linked feature retains its own model and source scope.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

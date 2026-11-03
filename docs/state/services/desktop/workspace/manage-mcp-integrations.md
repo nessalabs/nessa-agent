@@ -3,7 +3,8 @@ id: desktop-mcp-integration-management
 title: Manage MCP integrations
 kind: statechart
 status: implemented
-summary: Settings reads stored MCP servers, submits revision-bound changes and rereads uncertain outcomes; inspection has its own request owner.
+summary: Settings reads stored MCP servers, submits revision-bound changes and
+  rereads uncertain outcomes; inspection has its own request owner.
 parent: desktop-workspace
 sourceRevision: "54eada082563badb344bf0fb23c85c318f024b2a"
 sources:
@@ -28,8 +29,24 @@ diagramDetails:
   - diagram: 1
     node: Inspecting
     section: Inspection and retirement
+model:
+  spec: tla/services/desktop/workspace/manage-mcp-integrations.tla
+  config: tla/services/desktop/workspace/manage-mcp-integrations.cfg
+modelCheck:
+  sourceRevision: "54eada082563badb344bf0fb23c85c318f024b2a"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:36.241Z
+  config: tla/services/desktop/workspace/manage-mcp-integrations.cfg
+  modelDigest: 24236c4ced1feb49005655651917a82a78f04f81442187ea43be311fc9213c62
+  states: 11
+  held:
+    - PendingIdentity
+    - CompletionIdentity
+    - SlotMeaning
+    - NoFuturePublication
+  broke: []
+  unchecked: []
 ---
-
 # Manage MCP integrations
 
 Settings → Connections → MCP servers manages the gateway's stored MCP server configuration. Add, edit, enable, remove, remote authorization and inspection are separate actions from opening an MCP App inside a conversation. A sample window without a gateway shows a pending entry rather than pretending to save configuration.
@@ -87,3 +104,15 @@ A running inspection cannot be dismissed through Close in this reducer. Its sequ
 ## Evidence and execution limits
 
 [Reducer cases](../../../../../src/desktop/settings/model/mcp-servers.test.ts) cover administrative ordering, revisions, kept values, duplicate names and outcomes. [Gateway tests](../../../../../src/desktop/settings/adapters/mcp-servers-gateway.test.ts) cover typed translation; [rendered-tab tests](../../../../../src/desktop/settings/ui/integrations-tab.test.tsx) cover controls and focus. This documents implemented behavior; it does not add a new settings regression suite or establish live remote-consent/native-process behavior. The gateway-backed MCP Apps pass exercises a different journey and is not management E2E evidence.
+
+## Bounded rule model
+
+Two request sequences model the reducer request slot and refusal of late responses. List, save, remove and authorize share sequencing, not backend semantics. Duplicate-name groups, revision conflicts, OAuth, inspection concurrency, form parsing and stored configuration are source contracts outside this bound. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

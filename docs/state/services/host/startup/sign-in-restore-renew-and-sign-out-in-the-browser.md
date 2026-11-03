@@ -18,8 +18,21 @@ sources:
   - "crates/nessa-server/src/browser_session/domain/value_objects/lifetime.rs"
   - "crates/nessa-server/tests/browser_session/persistence.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/host/startup/BrowserLogout.tla
+  config: tla/services/host/startup/BrowserLogout.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:10.490Z
+  config: tla/services/host/startup/BrowserLogout.cfg
+  modelDigest: e4a5696d2ea184aab7c89149dccc4a04741332e377c66938b0ca209b6084f8c5
+  states: 5
+  held:
+    - LocalTeardownFirst
+    - AcknowledgedLogout
+  broke: []
+  unchecked: []
 ---
-
 # sign in, restore, renew, and sign out in the browser
 
 Browser sign-in establishes a server-backed session cookie. The page does not keep the gateway token in local or session storage. Reload can restore the session while it remains valid.
@@ -57,3 +70,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/composition/browser.tsx) · [Related source](../../../../../src/session/adapters/client/browser-auth.ts) · [Related tests](../../../../../src/session/adapters/client/browser-auth.test.ts)
+
+## Bounded rule model
+
+Owns browser sign-out ordering and retained retry intent after an unconfirmed request. Restore consumes pending intent before restoring access. Login replacement, server expiry/renewal, origin verification and revocation are separate server contracts excluded here. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src/session/application/browser-session.ts`, `src/session/adapters/client/browser-auth.ts`.

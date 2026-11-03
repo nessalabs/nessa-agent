@@ -20,11 +20,28 @@ sources:
   - "crates/nessa-server/tests/conversation/application.rs"
   - "crates/nessa-server/tests/conversation/launch_configuration.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/effort.rs"
-  - "crates/nessa-sdk/tests/application/agent_execution/providers/operation_capabilities.rs"
+  - "crates/nessa-sdk/tests/application/agent_execution/providers/operation_cap\
+    abilities.rs"
   - "crates/nessa-sdk/docs/agent_execution/agent.md"
 diagramLinks: {}
+model:
+  spec: tla/services/sdk/Configuration.tla
+  config: tla/services/sdk/Configuration.cfg
+modelCheck:
+  sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:19.169Z
+  config: tla/services/sdk/Configuration.cfg
+  modelDigest: ccae4542b0ef3adf1f8599d22af229e088c691e687379a2e160fa76ecd497eda
+  states: 11
+  held:
+    - TypeOK
+    - SelectionNeedsAck
+    - NextTurnPreservesActive
+    - SendNeedsSourceView
+  broke: []
+  unchecked: []
 ---
-
 # select a model, approval preset, or reasoning effort
 
 A conversation can change to a supported model on the same provider session. The gateway keeps the existing context and commits the provider's acknowledged model and approval preset together. The provider states whether the choice affects subsequent responses or the next turn.
@@ -66,3 +83,11 @@ An applied model change invalidates the causal usage limit and reconciles its [s
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/conversation/application/service.rs) · [Related source](../../../../../crates/nessa-server/src/conversation/infrastructure/mode_audit.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/application.rs)
+
+## Model coverage
+
+Direct model: One same-provider acknowledged configuration change; selected versus active-turn binding and desktop reconciliation before send.
+
+The finite model checks safety only. Model journal identity/persistence implementation, cross-provider handoff, approval journal and SDK effort capability validation are independent contracts; no product effort-control claim. Terminal states may stutter; no eventual completion or implementation proof is claimed.
+
+This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.

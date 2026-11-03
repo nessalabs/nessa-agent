@@ -70,3 +70,11 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/widgets/application/registry.ts) · [Related source](../../../../../src/desktop/widgets/ui/plugin.ts) · [Related tests](../../../../../src/desktop/widgets/application/registry.test.ts)
+
+## Model coverage
+
+Disposition: shared owner model. The app mount and per-chat panel own the modeled view lifetime. [desktop-mcp-app-view](mcp-app-view-lifecycle.md) [desktop-workspace-open-resize-expand-and-restore-the-right-panel](open-resize-expand-and-restore-the-right-panel.md)
+
+Excluded: Plugin host-table projection, escape-stack priority and non-app widget availability are pure contracts; window navigation and mount migration remain unmodeled.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

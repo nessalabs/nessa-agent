@@ -221,3 +221,13 @@ entry points. The [refresh evidence](provenance.md#state-verification-refresh-20
 records catalog and finite-model results, plus the bounded parent-Stop correction.
 It does not replace the historical product acceptance evidence above or claim
 that the other runtime suites were rerun.
+
+
+## App-wide owner and model inventory (2026-11-02)
+
+The [feature verification map](feature-verification.md) now accounts for every
+page in the expanded atlas. It separates 96 direct model owners from 33 journeys
+that share specific owners, and keeps contracts/indexes/reference dependencies
+outside the formal-pass count. The [current evidence](provenance.md#app-wide-feature-modeling-2026-11-02)
+records all 96 positive checks and 106 expected failing controls. This model
+coverage is separate from the historical product/browser qualification above.

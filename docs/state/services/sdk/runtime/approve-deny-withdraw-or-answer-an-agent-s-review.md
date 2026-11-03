@@ -58,3 +58,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../crates/nessa-sdk/src/application/agent_execution/permissions/answer.rs) · [Related source](../../../../../crates/nessa-sdk/src/application/agent_execution/permissions/approval.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/acp/contracts/permissions/answers.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-reviews](../reviews.md). Exact review consumption and audit-before-write with withdrawal.
+
+Tool execution is not implied by response delivery; question choice shape and Cedar policy remain contracts. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

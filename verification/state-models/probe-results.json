@@ -1,0 +1,2476 @@
+{
+  "ok": true,
+  "checker": "tlc-1.7.4",
+  "date": "2026-11-03T03:00:51.577Z",
+  "models": 96,
+  "baselines": [
+    {
+      "document": "auth-admission",
+      "state": "passed",
+      "states": 11,
+      "modelDigest": "0d7d237eaff914ae0a815d446a37a2e9d6a292a2f7cf9826bf2f4076037ec400",
+      "held": [
+        "TypeOK",
+        "AdmissionNeedsCoherentAccess"
+      ]
+    },
+    {
+      "document": "auth-credential",
+      "state": "passed",
+      "states": 5,
+      "modelDigest": "2a74e85eaaa99c6e9d6313a680f8a33ecc10c41cd5d40837ce3a4fb9aeb30b1a",
+      "held": [
+        "TypeOK",
+        "BearerReturnedOnce",
+        "ReceiptRequiresOriginal",
+        "RevocationHasOriginalFact"
+      ]
+    },
+    {
+      "document": "auth-registry-refusal",
+      "state": "passed",
+      "states": 7,
+      "modelDigest": "aaf1a8f2207b1252635862a09eb7e2f15961e364d494a56390e381709bad5514",
+      "held": [
+        "TypeOK",
+        "RefusalPreserves",
+        "UnsafeLockBeforeRead",
+        "RecordedNeedsAudit"
+      ]
+    },
+    {
+      "document": "client-commands",
+      "state": "passed",
+      "states": 31,
+      "modelDigest": "69220872d33c6c7eb83a1ebf824de0d3bbf3e4ed7eb7038f5c834089cb7e8b74",
+      "held": [
+        "TypeOK",
+        "ReplyNeedsCurrentWire",
+        "RefusalBeforeEffect",
+        "UnknownNotSettled"
+      ]
+    },
+    {
+      "document": "client-connection",
+      "state": "passed",
+      "states": 15,
+      "modelDigest": "e84267900dfb82fa1c9c0e23fba26857fabebe48eb42d749a4c53ee5fbb736d3",
+      "held": [
+        "TypeOK",
+        "NoResurrection",
+        "NoDeadAdoption",
+        "BoundedAttempts"
+      ]
+    },
+    {
+      "document": "client-event-registration",
+      "state": "passed",
+      "states": 13,
+      "modelDigest": "e2533618b23eea7e4836b2339138c2da9353cce151e635e9d642d92edf37da27",
+      "held": [
+        "TypeOK",
+        "StaleNeverRemovesReplacement",
+        "ReinstallCurrent",
+        "ReplacementSurvivesOldHandle"
+      ]
+    },
+    {
+      "document": "client-subscriptions",
+      "state": "passed",
+      "states": 17,
+      "modelDigest": "18dfd92c83e0e260bf92d53604ed5e22203a109711f3b5478974d99cc357ab9c",
+      "held": [
+        "TypeOK",
+        "AbortedOpenClosedBeforeNext",
+        "NoBufferedAfterAbort",
+        "CloseAfterHandle"
+      ]
+    },
+    {
+      "document": "desktop-chat-close-switch-reopen-and-restore-tabs",
+      "state": "passed",
+      "states": 4,
+      "modelDigest": "c2457f1440514a1b828b55a37a5e58ac1cfbd8e53ae57cf577395391b3b54a49",
+      "held": [
+        "FreshLocalLifetime",
+        "SelectionLive",
+        "AllocatorBound"
+      ]
+    },
+    {
+      "document": "desktop-chat-compose-and-send-the-first-message",
+      "state": "passed",
+      "states": 313,
+      "modelDigest": "50aaaca3d7511adb0c6ab1dc4b196d2175fce1e89af61515fa82770b869c53a2",
+      "held": [
+        "ObservationBound",
+        "StaleCallbackPreservesReplacement"
+      ]
+    },
+    {
+      "document": "desktop-chat-recover-a-refused-or-unconfirmed-send",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "e72ae74dd66cdeb6325b828b767231be4953408075f58d36c0e2eea1f5e4aeac",
+      "held": [
+        "StableRetry",
+        "ReceiptMeaning"
+      ]
+    },
+    {
+      "document": "desktop-chat-rename-a-tab-and-inspect-conversation-details",
+      "state": "passed",
+      "states": 55,
+      "modelDigest": "648276471204e15c5d5a76ed2be6cb932fd4f08ae4b93ae4cc639fb98c83060b",
+      "held": [
+        "EditedTitleRetained",
+        "OtherTabUnchanged",
+        "EmptyNoRename"
+      ]
+    },
+    {
+      "document": "desktop-conversation-sharing",
+      "state": "passed",
+      "states": 26,
+      "modelDigest": "af985c41cdb4e6ac86d240c8d5a1c29cefa38c30f78a522b6f0c6b889061b4d6",
+      "held": [
+        "PendingHoldsForm",
+        "RereadBeforeEdit",
+        "ClosedHasNoForm"
+      ]
+    },
+    {
+      "document": "desktop-create-channel",
+      "state": "passed",
+      "states": 41,
+      "modelDigest": "b8dbc46d99e6e67b24182966617871fbcad92b1f810a468ee50ef10010023d16",
+      "held": [
+        "NavigationOwner",
+        "NavigationListed"
+      ]
+    },
+    {
+      "document": "desktop-devices-dashboard",
+      "state": "passed",
+      "states": 16,
+      "modelDigest": "3bb525bbe3f889010202a3486a82e872a426b327186657bfbf846f7beb50d4cf",
+      "held": [
+        "NoRetiredPublication",
+        "HubEvidence"
+      ]
+    },
+    {
+      "document": "desktop-workspace-fold-reveal-and-resize-side-columns",
+      "state": "passed",
+      "states": 14,
+      "modelDigest": "ea4c22a8c63c903096bf7ac642eddf5b41d97d50e59611b4c4d1bb9af1ce2b7e",
+      "held": [
+        "HiddenStaysHidden",
+        "FitPreservesChoice",
+        "ManualChoiceImmediate",
+        "RoomRestores"
+      ]
+    },
+    {
+      "document": "desktop-workspace-follow-focus-and-route-keyboard-actions",
+      "state": "passed",
+      "states": 144,
+      "modelDigest": "edb8834ea79f9cfef2768ae9a22783168e852d8a6929907d2fd777075ea53020",
+      "held": [
+        "TargetRechecked",
+        "DeliberateFocusWins",
+        "RetirementTerminal"
+      ]
+    },
+    {
+      "document": "desktop-linked-devices",
+      "state": "passed",
+      "states": 32,
+      "modelDigest": "a02a5ef3f73c35041ab5f6180be0a1ddae1500aee7923a239a7b811e093f0c83",
+      "held": [
+        "ExactKeyApproval",
+        "RestartObserved"
+      ]
+    },
+    {
+      "document": "desktop-workspace-load-browse-and-resynchronize-the-workspace",
+      "state": "passed",
+      "states": 16,
+      "modelDigest": "be51bb64f77de58c56e3255660a4d176d275706d09095cacffffca00d8c896e3",
+      "held": [
+        "RemovalFence",
+        "RevisionBound"
+      ]
+    },
+    {
+      "document": "desktop-mcp-integration-management",
+      "state": "passed",
+      "states": 11,
+      "modelDigest": "24236c4ced1feb49005655651917a82a78f04f81442187ea43be311fc9213c62",
+      "held": [
+        "PendingIdentity",
+        "CompletionIdentity",
+        "SlotMeaning",
+        "NoFuturePublication"
+      ]
+    },
+    {
+      "document": "desktop-mcp-app-view",
+      "state": "passed",
+      "states": 19,
+      "modelDigest": "dd6ffe2d44f4a8a05e38fecf2c3082c21051f640fa8388437fd4dfab30e6013c",
+      "held": [
+        "TerminalReleased",
+        "NoEarlyTell",
+        "InlineCannotTeardown"
+      ]
+    },
+    {
+      "document": "desktop-workspace-open-dismiss-and-reopen-the-desktop-window",
+      "state": "passed",
+      "states": 74,
+      "modelDigest": "a3548b58e03d02dd1f1602043d77d2d338c2ea845da4637bcfc42b27d14b14f7",
+      "held": [
+        "DockBeforeFocus",
+        "ReopenOrQuit",
+        "DockRemovalAfterHide",
+        "DockBeforeShow"
+      ]
+    },
+    {
+      "document": "desktop-workspace-open-resize-expand-and-restore-the-right-panel",
+      "state": "passed",
+      "states": 18,
+      "modelDigest": "8f65239794d99e3abbd5f112ae835e12a00893197c9c5b4e25b60694b7413235",
+      "held": [
+        "PerChatOwnership",
+        "FrontOwned",
+        "OneAppPerChat"
+      ]
+    },
+    {
+      "document": "desktop-workspace-open-split-resize-and-close-panes",
+      "state": "passed",
+      "states": 18,
+      "modelDigest": "3c8434014c42e69528967fa5d5d0cf11488143258d1aacc8b8d0b86a283d974a",
+      "held": [
+        "UniqueItems",
+        "FocusExists",
+        "RefusalUnchanged"
+      ]
+    },
+    {
+      "document": "desktop-permission-rule-revocation",
+      "state": "passed",
+      "states": 37,
+      "modelDigest": "f1bcc9bd46d25600284e2d487154892a9313c90d14262c092225768ac1337b65",
+      "held": [
+        "RereadMeaning",
+        "RetainedMeaning",
+        "NoEarlySuccess"
+      ]
+    },
+    {
+      "document": "desktop-workspace-personalize-the-home-header-and-composer",
+      "state": "passed",
+      "states": 78,
+      "modelDigest": "1846f477bda98ae8c4fea8a8858e945a0ef79d3264eabfc95ffc7d4976449dff",
+      "held": [
+        "ChoiceOutranksInitialRead",
+        "PaletteCurrentImage",
+        "PersistedVersionExists"
+      ]
+    },
+    {
+      "document": "desktop-provider-sign-in",
+      "state": "passed",
+      "states": 10,
+      "modelDigest": "0b2cf68f1d32d1373f5559c21fef2a2fc085ef9871d66c27604bcd68c7c7f768",
+      "held": [
+        "RecoveryCausality"
+      ]
+    },
+    {
+      "document": "desktop-question-flights",
+      "state": "passed",
+      "states": 7,
+      "modelDigest": "4491a8ef5dc523eac07806f8b506a1fa1493df030169e7eaab597bb185d17d91",
+      "held": [
+        "NoConflictingJoin",
+        "EmptyReleased"
+      ]
+    },
+    {
+      "document": "desktop-workspace-resize-and-refit-the-panel-across-displays",
+      "state": "passed",
+      "states": 45,
+      "modelDigest": "71954894949e30317bce5950540a271462bffe47441dd1140de6d94ab4596fd1",
+      "held": [
+        "OnlyValidLengths",
+        "InvalidPreservesFallback",
+        "RetiredNoPublication"
+      ]
+    },
+    {
+      "document": "desktop-settings-action-owners",
+      "state": "passed",
+      "states": 46,
+      "modelDigest": "c98657e87a19ea06b16edbf6571df91f0860c98bf9f5786679675809d8636074",
+      "held": [
+        "NativePublication",
+        "GrantReplay"
+      ]
+    },
+    {
+      "document": "desktop-workspace-summon-or-dismiss-the-floating-panel",
+      "state": "passed",
+      "states": 7,
+      "modelDigest": "45fc4657112022a31a69e01f3d1cec32582bec994beb7dbba44be316dac123e8",
+      "held": [
+        "OnePressedEdge",
+        "ReleaseNoToggle"
+      ]
+    },
+    {
+      "document": "desktop-workspace-switch-the-floating-panel-s-surface",
+      "state": "passed",
+      "states": 40,
+      "modelDigest": "45889e4fc317bfb9122a76ebad214650a37dc76c9fd18ddf5d37d625280e8b57",
+      "held": [
+        "LateListenerNoToggle",
+        "NoRetiredInvocation",
+        "ResolvedRetiredRemoved"
+      ]
+    },
+    {
+      "document": "desktop-voice-call",
+      "state": "passed",
+      "states": 21,
+      "modelDigest": "f494d97936f0ff791d7e677b3fc3338fcf3c0bddc733e862b31a8dd5d3014919",
+      "held": [
+        "CurrentConnection",
+        "NoReleasedConnection",
+        "PublicationIdentity"
+      ]
+    },
+    {
+      "document": "desktop-window-preferences",
+      "state": "passed",
+      "states": 57,
+      "modelDigest": "8fbae88c5c107134b450caed9c4a203e22ec2a7d1ec3b88120182dd5e750761b",
+      "held": [
+        "LocalWriteFailureStillApplies",
+        "OtherKeyIgnored"
+      ]
+    },
+    {
+      "document": "endpoint-discovery",
+      "state": "passed",
+      "states": 10,
+      "modelDigest": "87f141fdb06388f2adf5590ab2860b547202a4661dbdb1f79c0a921ec628081f",
+      "held": [
+        "TypeOK",
+        "VerifiedIdentity"
+      ]
+    },
+    {
+      "document": "gateway-agent-thread-tools",
+      "state": "passed",
+      "states": 50,
+      "modelDigest": "d84d5ca84505cf23960620a7ed5330b6a51ecd1dbdcfaaded8986791eea1d163",
+      "held": [
+        "TypeOK",
+        "EffectHasAuthority",
+        "NoCapabilityAfterObservedStop",
+        "CallerLossKeepsOwnedAdmission",
+        "SourcePermitEndsAtAuthorization"
+      ]
+    },
+    {
+      "document": "gateway-attachments-attach-files-with-the-picker-or-clipboard",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "c7da9257ca57c4a8ba74052fcc8c58874828f1536a6570d7e5f9ae5f2e269725",
+      "held": [
+        "SingleUse",
+        "ReadSpendsBeforeIO"
+      ]
+    },
+    {
+      "document": "gateway-attachments-have-a-large-or-unfamiliar-image-normalized-and-kept-once",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "478ecea34c084aab1cd633647af4934a8d7bf6ad2e61b6efb0ccdcdf06a39ed4",
+      "held": [
+        "AuditBeforeConfirm",
+        "ConversationOwnsHold",
+        "ReplacementSurvivesOldUndo"
+      ]
+    },
+    {
+      "document": "gateway-attachments-open-a-link-without-replacing-the-app",
+      "state": "passed",
+      "states": 168,
+      "modelDigest": "12582752f4f78be6b522a0bd014f2d1b9e770f82a2b566bc21128a9d5e8e50d0",
+      "held": [
+        "OnlyWebToOpener",
+        "KeepExternalOutOfWebview",
+        "NoticeHasFailureIdentity",
+        "RetiredNoticeCannotPublish",
+        "AcceptanceNotFailure"
+      ]
+    },
+    {
+      "document": "gateway-attachments-paste-text-or-code-and-inspect-the-full-pasted-payload",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "ae02f644e1c4649b0e20d6c15f78780cf8900843c8a69233ba63421766c447a7",
+      "held": [
+        "ViewerRetainsPayload",
+        "SendUsesPayload"
+      ]
+    },
+    {
+      "document": "gateway-attachments-preview-or-remove-a-draft-attachment",
+      "state": "passed",
+      "states": 5,
+      "modelDigest": "cf055d4dc314c86498f6927ad9f4f3b8833493d13c6c8845418eb0768e4403ac",
+      "held": [
+        "RetainWhileNeeded",
+        "ReleasedRevokesURL"
+      ]
+    },
+    {
+      "document": "gateway-attachments-read-rich-text-code-math-and-diagrams-in-a-message",
+      "state": "passed",
+      "states": 376,
+      "modelDigest": "5c70d9bea5e9309d68fb0efcd11db8df3d803764f416c9d9bb5114f39ce43328",
+      "held": [
+        "NoIncompleteReveal",
+        "NoStaleReveal",
+        "QuarantineOwnsRenderer",
+        "RetiredNoPublication",
+        "CurrentRenderWinsFailure",
+        "PublicationIdentity"
+      ]
+    },
+    {
+      "document": "gateway-attachments-send-a-non-image-file-by-path-and-approve-its-read",
+      "state": "passed",
+      "states": 4,
+      "modelDigest": "cb5e8af9c31e38f54e07a827082ebc0dd3f02ba62fb3db3b08521ff5f7a11d02",
+      "held": [
+        "EvidenceBeforeDispatch",
+        "NamingDoesNotRead"
+      ]
+    },
+    {
+      "document": "gateway-attachments-send-an-uploaded-file-from-the-phone",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "52c5cd5378f9377b062ef4907c8ca89a9008d99e4c035bfe9ba22dd5c939472c",
+      "held": [
+        "AskBeforeEffect",
+        "LeaseIdentity",
+        "OutcomeBeforeDone"
+      ]
+    },
+    {
+      "document": "gateway-attachments-understand-an-attachment-refusal-and-choose-a-useful-recovery",
+      "state": "passed",
+      "states": 52,
+      "modelDigest": "8e8d14684747ce389a54e2046c2ec4e4a057bd9cd529d0ac6bbfba3bd0191287",
+      "held": [
+        "AnsweredAttemptStaysClear",
+        "DismissDoesNotResolveFact",
+        "RetiredScopeCannotShowNotice"
+      ]
+    },
+    {
+      "document": "gateway-attachments-upload-an-image-and-retry-a-failed-upload",
+      "state": "passed",
+      "states": 22,
+      "modelDigest": "95925314601b3fcd93e8629461e9d9277176014006f112c1b52d70ed184c2433",
+      "held": [
+        "CapturedTarget",
+        "NoStageWithoutHash"
+      ]
+    },
+    {
+      "document": "gateway-attachments-wait-for-a-cloud-file-without-attaching-it-to-another-tab",
+      "state": "passed",
+      "states": 22,
+      "modelDigest": "c8107533025ecd60c4062cd562ddcd64d3834d9751ffaf9c80c96d6b80bd9c22",
+      "held": [
+        "OriginalConversation",
+        "CapturedIdentity"
+      ]
+    },
+    {
+      "document": "gateway-background-tasks",
+      "state": "passed",
+      "states": 40,
+      "modelDigest": "bf7f3451b8fba8f0fdf472d62eb7abb4369849262b2b900ce8b459c882219238",
+      "held": [
+        "OutcomeBeforeDelivery",
+        "InterruptedIsUncertain",
+        "BoundedRevision"
+      ]
+    },
+    {
+      "document": "gateway-backup-export",
+      "state": "passed",
+      "states": 10,
+      "modelDigest": "66ebc6ffbd95d11483603bd6bbcfcd6ab3bd71f8885940f36854386c1bf4e1ef",
+      "held": [
+        "TypeOK",
+        "AckRequiresCompleteCut",
+        "ReadingReleasesAdmission"
+      ]
+    },
+    {
+      "document": "gateway-backup-restore",
+      "state": "passed",
+      "states": 244,
+      "modelDigest": "e25ce0794c82537eba2def63e1044980fe00f1c0d329a408fa28cabb16114944",
+      "held": [
+        "TypeOK",
+        "AcceptanceHasCurrentProof",
+        "DurabilityRequiresPublication"
+      ]
+    },
+    {
+      "document": "gateway-channel-workspaces",
+      "state": "passed",
+      "states": 6,
+      "modelDigest": "52b91a34108496c685fd0488dc2443a7cab48a270019ed343b8f27cc9b37b637",
+      "held": [
+        "OneTarget",
+        "VerifyBeforeAuthority",
+        "RefusalIsTerminal"
+      ]
+    },
+    {
+      "document": "gateway-conversation",
+      "state": "passed",
+      "states": 22,
+      "modelDigest": "7707bcc10c23280ec4dbe36ead9be3b22d787ac83226df608c5f6ad946226306",
+      "held": [
+        "ErasurePrerequisites",
+        "UnknownIsNotAbsent",
+        "AbsentMeaning"
+      ]
+    },
+    {
+      "document": "gateway-device-pairing",
+      "state": "passed",
+      "states": 82,
+      "modelDigest": "4eefef4b87862cc0bc346604bead81a68c40db0243b754583d647b8d5acd6212",
+      "held": [
+        "ExactApprovedKey",
+        "ActiveNeedsCurrentReceiver",
+        "FreshPublication",
+        "ApprovalIsNotActivation"
+      ]
+    },
+    {
+      "document": "gateway-drive-tool-admission",
+      "state": "passed",
+      "states": 80,
+      "modelDigest": "0803246c9ecf207cc200749eb2b1fb6f3ce25e80947902953d07e62281a181e2",
+      "held": [
+        "SaveUsesHeldRevision",
+        "NativeSteerRechecksRevision",
+        "ToolEffectHasDecisionAudit"
+      ]
+    },
+    {
+      "document": "gateway-environment-leases",
+      "state": "passed",
+      "states": 72,
+      "modelDigest": "d13314c96290d55265aa7000d1e27f624669bb550b7d7bb2e5de458c2fefb36c",
+      "held": [
+        "TypeOK",
+        "RunningNeedsGrant",
+        "TermsNeverWiden",
+        "UncertainKeepsOwner",
+        "ReleasedIsConfirmed"
+      ]
+    },
+    {
+      "document": "gateway-environment-tools",
+      "state": "passed",
+      "states": 224,
+      "modelDigest": "0a89ac599ab181fb7c63dfa154718261812696c5a86824bc3ab2b38cfcdbf3fa",
+      "held": [
+        "GrantedTermsDoNotWiden",
+        "SaveIssueBeforeRun",
+        "ArtifactRecordHasVerifiedHold"
+      ]
+    },
+    {
+      "document": "gateway-external-events",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "05af005c72748b4c44a8ad0c6a003f6dd10b2fe50934b7c5f40767a6e73fe319",
+      "held": [
+        "OneEventIdentity",
+        "AckIsDispatch"
+      ]
+    },
+    {
+      "document": "gateway-github-reads",
+      "state": "passed",
+      "states": 15,
+      "modelDigest": "1e51020021ee7a90265b81d2fe7e21c9d34d7f716c39922c21f2f96888b81976",
+      "held": [
+        "CapturedIdentity",
+        "RefusalHasNoAnswer"
+      ]
+    },
+    {
+      "document": "local-vault",
+      "state": "passed",
+      "states": 28,
+      "modelDigest": "6c12a5711659d2c0d1b85e7984cb8e9699e6a9c601361219161797177b5a435f",
+      "held": [
+        "LiveOwner",
+        "GenerationFence",
+        "VerifiedKey"
+      ]
+    },
+    {
+      "document": "gateway-parent-stop",
+      "state": "passed",
+      "states": 132,
+      "modelDigest": "8bf7bb7811527a2428c54a70abdc9b2dbf6ef3827ad116031cd0c5cefc5d6ab2",
+      "held": [
+        "ExactCapturedEffects",
+        "RootBeforeEffect",
+        "ReceiptBeforeDecline",
+        "NoLifetimeSeal"
+      ]
+    },
+    {
+      "document": "gateway-peer-gateways",
+      "state": "passed",
+      "states": 11,
+      "modelDigest": "87734a0a5d2c33f37cf806914eab31eb5ff86381378115867881d37046f4fdb4",
+      "held": [
+        "TypeOK",
+        "MutationHasIntent",
+        "SuccessHasBothRecords",
+        "OtherPeerUninterrupted",
+        "CommandCannotRaceSelectedRead",
+        "PreemptionNeedsIntent"
+      ]
+    },
+    {
+      "document": "gateway-record-reads",
+      "state": "passed",
+      "states": 8,
+      "modelDigest": "f55de688f55c858e0f52a8c5fc42da3ecdbc9f5cecbe2240b0837d9c8b93f065",
+      "held": [
+        "RetainedUntilJoin",
+        "ReleaseBeforeSend"
+      ]
+    },
+    {
+      "document": "gateway-tunnel-connectivity",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "1cbb52c1e363e1808425ca9f90c0df09ede5c0ac72d9f74a921304e695831c2e",
+      "held": [
+        "TypeOK",
+        "ForwardingIsNotAuthority",
+        "NoRetryAfterDrain",
+        "DrainStopsPublication"
+      ]
+    },
+    {
+      "document": "gateway-webhook-admission",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "6e4cd10a32505a1dcf59c947f84b8858740af94ed1d1b49eca1e49c8b833de4c",
+      "held": [
+        "PartialOrder",
+        "CheckedOwnsFences",
+        "NoCancelledPost"
+      ]
+    },
+    {
+      "document": "gateway-webhook-foundation",
+      "state": "passed",
+      "states": 78,
+      "modelDigest": "d28e71068baa7dee53e8a95f7df9eda6ed22221d1e6574faced59cb142fb5a7f",
+      "held": [
+        "AttemptBound",
+        "TimestampShape",
+        "RetryBudget"
+      ]
+    },
+    {
+      "document": "gateway-webhook-issuance",
+      "state": "passed",
+      "states": 7,
+      "modelDigest": "5c4fb959ef98bbd891751cd8d19af5658d1061deca7bfbf33f9caa3304341783",
+      "held": [
+        "ReservationBeforeIssue",
+        "NoStoppedInstall",
+        "NoBearerResult"
+      ]
+    },
+    {
+      "document": "gateway-webhook-outbox",
+      "state": "passed",
+      "states": 14,
+      "modelDigest": "503f5d28aa1697fdb612925ae66c7b5ead22e11814ae0e7686f8dcd1cb3448c0",
+      "held": [
+        "PersistBeforePost",
+        "KnownBeforeTerminal",
+        "OneAttempt"
+      ]
+    },
+    {
+      "document": "github-webhooks",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "e9d0a854c98cc8dcce21588fdb423646b0f3fba329297d2870e6120882b138b1",
+      "held": [
+        "PrivateRead",
+        "AtomicCursor"
+      ]
+    },
+    {
+      "document": "github-relay-live-selection",
+      "state": "passed",
+      "states": 6,
+      "modelDigest": "c09dfc380bd5a9d27bbd672bccd144225b924288e1e8a01135d19c8275d5c5f6",
+      "held": [
+        "DeletionEvidence",
+        "FailedLeavesPrior"
+      ]
+    },
+    {
+      "document": "host-startup-bootstrap-and-diagnose-access-through-the-cli",
+      "state": "passed",
+      "states": 22,
+      "modelDigest": "ed4afac84b1efda2b748b31d18fcd0be3d3c3386fdffac27aeed93997a8b4944",
+      "held": [
+        "LifetimeCapped",
+        "NoExpiredIssue"
+      ]
+    },
+    {
+      "document": "host-startup-complete-setup-choose-an-agent-and-learn-the-shortcut",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "35bc8671544dd1fb9743eae3c7f3ebac8ec88fe44c95e0734403216e03370488",
+      "held": [
+        "PickerHasReadyChoice",
+        "CompletionHasChoice"
+      ]
+    },
+    {
+      "document": "host-startup-launch-and-choose-the-first-surface",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "22932d13c33519ace0af84259b157192a5dbf5916331598a6c046e170bb5b1a0",
+      "held": [
+        "RequiredBeforeGateway",
+        "RefusalSurface"
+      ]
+    },
+    {
+      "document": "host-startup-recover-or-update-the-managed-gateway",
+      "state": "passed",
+      "states": 6,
+      "modelDigest": "f73dc3598786063e43542913987b1c902a36c1db0e08acf934ee0f89f2b0e9f0",
+      "held": [
+        "PlanBeforeCopy",
+        "ReadyNotSettlement",
+        "RefusedDoesNotCopy"
+      ]
+    },
+    {
+      "document": "runtime-download",
+      "state": "passed",
+      "states": 24,
+      "modelDigest": "2e77586f0f7f0a360098cdc00de81dc1d2a21bf962cf360e14d4bee1fc095cdd",
+      "held": [
+        "FreshOffers",
+        "NoDisposedPublication"
+      ]
+    },
+    {
+      "document": "host-startup-save-provider-credentials-and-download-a-runtime",
+      "state": "passed",
+      "states": 13,
+      "modelDigest": "8076cfdf4b9e0b6aa25c34057d1ab2df087747af73186785f3c8355bb294b752",
+      "held": [
+        "IntentBeforeEffect",
+        "HonestAcknowledgement"
+      ]
+    },
+    {
+      "document": "surface-session-supervision",
+      "state": "passed",
+      "states": 6,
+      "modelDigest": "4673e0706db4f0eef0b6d9c64a05d665d87cf77a4803a03afdf60534ce3e0697",
+      "held": [
+        "PublishedOnlyOwned",
+        "RetiredHandleCleared"
+      ]
+    },
+    {
+      "document": "host-startup-sign-in-restore-renew-and-sign-out-in-the-browser",
+      "state": "passed",
+      "states": 5,
+      "modelDigest": "e4a5696d2ea184aab7c89149dccc4a04741332e377c66938b0ca209b6084f8c5",
+      "held": [
+        "LocalTeardownFirst",
+        "AcknowledgedLogout"
+      ]
+    },
+    {
+      "document": "gateway-startup-observation",
+      "state": "passed",
+      "states": 11,
+      "modelDigest": "d2be145d076fda011af799cf387faef0a427128e3c82a2c71cb36a34213a8242",
+      "held": [
+        "RevisionBound",
+        "HostHasEvidence"
+      ]
+    },
+    {
+      "document": "mcp-resource-tickets",
+      "state": "passed",
+      "states": 8,
+      "modelDigest": "5e9e87d8db068284736cc33515e2701a280487e710a12425eb7c3727a930d88b",
+      "held": [
+        "TypeOK",
+        "AtMostOnce",
+        "HoldingMatchesPhase",
+        "DeliveryRequiresConsumption",
+        "PendingCannotRedeem"
+      ]
+    },
+    {
+      "document": "mcp-sessions",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "8899c729db6a01708279645cb598e03d5796bbd9d0802a525c3aa8ee0b3f6039",
+      "held": [
+        "TypeOK",
+        "NoOpenAfterRevoke",
+        "PhysicalReleaseAfterLogicalClose"
+      ]
+    },
+    {
+      "document": "sdk-attachment",
+      "state": "passed",
+      "states": 11,
+      "modelDigest": "c12991d5ad9a81b25dacdbc998ce66abe0fd77e78068eec0044047655d3c960b",
+      "held": [
+        "TypeOK",
+        "ReadyNeedsCurrent",
+        "ReadyNeedsEvidence",
+        "StoppedNeverReady"
+      ]
+    },
+    {
+      "document": "sdk-child-preparation",
+      "state": "passed",
+      "states": 18,
+      "modelDigest": "a49bcc048047fd4f5676eebb8e39fad5fa7e278622a9f899274abf76ab8ad1c9",
+      "held": [
+        "TypeOK",
+        "FactoryAfterAudit",
+        "TaskNeedsReady",
+        "ReadyDurable"
+      ]
+    },
+    {
+      "document": "sdk-cleanup",
+      "state": "passed",
+      "states": 18,
+      "modelDigest": "cf8ca4efc6127a2cfec52c5888d3922c9524af25f0ce10a0ccb0111dfddb0157",
+      "held": [
+        "TypeOK",
+        "ReopenRequiresRelease",
+        "ReopenRequiresAudit",
+        "ReopenRequiresRetirement",
+        "ReopenRequiresFinalization"
+      ]
+    },
+    {
+      "document": "sdk-history-erasure",
+      "state": "passed",
+      "states": 7,
+      "modelDigest": "3935a603235c9ecfc2d89e7802021fb98beb11a0d3b8c9828989a4e9f80d252d",
+      "held": [
+        "TypeOK",
+        "AccessAfterErasure",
+        "AcknowledgedNewIncarnation",
+        "OneResetIdentity"
+      ]
+    },
+    {
+      "document": "sdk-history-restoration",
+      "state": "passed",
+      "states": 14,
+      "modelDigest": "57ca686ce366b5486ccf20f7b90322a712921cc5cd56992f1a1e4faf04ab73e9",
+      "held": [
+        "TypeOK",
+        "PreparedNeedsCommittedTail",
+        "ResumeExactProvider"
+      ]
+    },
+    {
+      "document": "sdk-history",
+      "state": "passed",
+      "states": 15,
+      "modelDigest": "86b52eee8a919e72acaee778acc0ba9c20b33af8e47e218a60ccfcc7ae162013",
+      "held": [
+        "TypeOK",
+        "NoInventedCommit",
+        "AcknowledgedHasExactBinding",
+        "NoDuplicatePhysicalAppend"
+      ]
+    },
+    {
+      "document": "sdk-ownership",
+      "state": "passed",
+      "states": 27,
+      "modelDigest": "befdbb7cddf9ebef059f5be5ab00ed8c5d1a00e444db890e0f5eea8e737c2a8f",
+      "held": [
+        "TypeOK",
+        "NoUnreservedStart",
+        "CompletionNeedsRelease",
+        "PublicationNeedsCompletion"
+      ]
+    },
+    {
+      "document": "sdk-permission-rules",
+      "state": "passed",
+      "states": 11,
+      "modelDigest": "e93dd2b918a81114e8fb07608d4d9f7709368b14f8f7138ac6e9be431ed028a6",
+      "held": [
+        "TypeOK",
+        "RuleRequiresPolicy",
+        "ConsumedClearsNotice",
+        "DeliveryFailureKeepsRule",
+        "CancelledClearsNotice"
+      ]
+    },
+    {
+      "document": "sdk-reviews",
+      "state": "passed",
+      "states": 10,
+      "modelDigest": "10e856e83ffea8c911be2bf935abc6d88b6d310fbfa3c5396e50535bebb175c9",
+      "held": [
+        "TypeOK",
+        "ExactReview",
+        "WriteNeedsSelection",
+        "CancelledNotConsumed"
+      ]
+    },
+    {
+      "document": "sdk-runtime-install-or-replace-a-pinned-agent-runtime",
+      "state": "passed",
+      "states": 12,
+      "modelDigest": "15ad1e2be6d473430ede7d3cc40f21f3bc8f3d079b728278dafff8fca2e9393e",
+      "held": [
+        "TypeOK",
+        "PublicationNeedsPin",
+        "NoReclaimLiveUse",
+        "ReclaimedNeedsRelease"
+      ]
+    },
+    {
+      "document": "sdk-runtime-select-a-model-approval-preset-or-reasoning-effort",
+      "state": "passed",
+      "states": 11,
+      "modelDigest": "ccae4542b0ef3adf1f8599d22af229e088c691e687379a2e160fa76ecd497eda",
+      "held": [
+        "TypeOK",
+        "SelectionNeedsAck",
+        "NextTurnPreservesActive",
+        "SendNeedsSourceView"
+      ]
+    },
+    {
+      "document": "sdk-runtime-the-first-agent-launch-is-warmed-in-the-background",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "a526160e9e85408fd86d53750820caefd152b3bdf11ca5b757a75864580a5ea0",
+      "held": [
+        "TypeOK",
+        "CompletionNeedsRelease",
+        "RetainedNotPrepared"
+      ]
+    },
+    {
+      "document": "sdk-runtime-usage-limit-continuation",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "827f83bc18d33adba3fc6fd6437c4fc21a50441afed7432c572b44bc88db972f",
+      "held": [
+        "TypeOK",
+        "SubmissionNeedsFence",
+        "CancellationBeforeEffect",
+        "DeliveryNeedsAttempt",
+        "FenceNeedsLease"
+      ]
+    },
+    {
+      "document": "sdk-scheduling",
+      "state": "passed",
+      "states": 81,
+      "modelDigest": "c8d24f3319ec656576a94c09f1437d02733f642e6100c02706aff4be528ba614",
+      "held": [
+        "TypeOK",
+        "FallbackNeedsNonConsumption",
+        "DispatchNeedsDurability",
+        "ReceiptNeedsRetirement",
+        "UnknownDoesNotQueue",
+        "RecoveryNeedsExactIdentity",
+        "InjectedNotSecondInvocation"
+      ]
+    },
+    {
+      "document": "storage-database",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "525053da7619f316a4022ca4edfbea6af6c4ae1e7079e8dc35a1f274abe353d6",
+      "held": [
+        "TypeOK",
+        "NoPartialVersion",
+        "OpenRequiresVersion",
+        "RefusalPreserves",
+        "StagedRequiresValidation"
+      ]
+    },
+    {
+      "document": "storage-publication",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "96b85adc702f02cdb90dd74bf53127b8ed060538a77406b35bd9e874689960bc",
+      "held": [
+        "TypeOK",
+        "RenameDisarmsReservation",
+        "NoNewerRemoval",
+        "AcknowledgementDoesNotErase"
+      ]
+    },
+    {
+      "document": "tooling-runtime",
+      "state": "passed",
+      "states": 9,
+      "modelDigest": "4c92bc6a8f29fedf420e3be0f4af3d5604d49a3632ed57c7cbe2af92a5c239f1",
+      "held": [
+        "TypeOK",
+        "NoStaleSuccess",
+        "PublicationNeedsVerification",
+        "CompleteNeedsOutput"
+      ]
+    }
+  ],
+  "probes": 106,
+  "completed": 106,
+  "results": [
+    {
+      "document": "desktop-mcp-app-view",
+      "name": "AppMount safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "InlineCannotTeardown"
+      ],
+      "broke": [
+        "InlineCannotTeardown"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-create-channel",
+      "name": "ChannelOpening safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NavigationOwner"
+      ],
+      "broke": [
+        "NavigationOwner"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-fold-reveal-and-resize-side-columns",
+      "name": "ColumnChoice safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "FitPreservesChoice"
+      ],
+      "broke": [
+        "FitPreservesChoice"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-chat-compose-and-send-the-first-message",
+      "name": "ComposerObservation safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "StaleCallbackPreservesReplacement"
+      ],
+      "broke": [
+        "StaleCallbackPreservesReplacement"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-open-dismiss-and-reopen-the-desktop-window",
+      "name": "DesktopWindowOrdering safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "DockBeforeShow"
+      ],
+      "broke": [
+        "DockBeforeShow"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-linked-devices",
+      "name": "DeviceApprovalDisplay safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ExactKeyApproval"
+      ],
+      "broke": [
+        "ExactKeyApproval"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-devices-dashboard",
+      "name": "DevicesMount safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoRetiredPublication"
+      ],
+      "broke": [
+        "NoRetiredPublication"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-follow-focus-and-route-keyboard-actions",
+      "name": "FocusLanding safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "TargetRechecked"
+      ],
+      "broke": [
+        "TargetRechecked"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-personalize-the-home-header-and-composer",
+      "name": "HeaderImageOwnership safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ChoiceOutranksInitialRead"
+      ],
+      "broke": [
+        "ChoiceOutranksInitialRead",
+        "PaletteCurrentImage"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-chat-rename-a-tab-and-inspect-conversation-details",
+      "name": "LocalTabTitle safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "EditedTitleRetained"
+      ],
+      "broke": [
+        "EditedTitleRetained"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-mcp-integration-management",
+      "name": "McpSettingsRequest safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoFuturePublication"
+      ],
+      "broke": [
+        "NoFuturePublication"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-open-a-link-without-replacing-the-app",
+      "name": "NativeLinkHandoff safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "OnlyWebToOpener"
+      ],
+      "broke": [
+        "OnlyWebToOpener"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-open-split-resize-and-close-panes",
+      "name": "PaneAdmission safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "UniqueItems"
+      ],
+      "broke": [
+        "UniqueItems"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-resize-and-refit-the-panel-across-displays",
+      "name": "PanelSizePublication safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RetiredNoPublication"
+      ],
+      "broke": [
+        "RetiredNoPublication"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-summon-or-dismiss-the-floating-panel",
+      "name": "PanelToggle safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "OnePressedEdge"
+      ],
+      "broke": [
+        "OnePressedEdge"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-provider-sign-in",
+      "name": "ProviderRecovery safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RecoveryCausality"
+      ],
+      "broke": [
+        "RecoveryCausality"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-question-flights",
+      "name": "QuestionFlights safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoConflictingJoin"
+      ],
+      "broke": [
+        "NoConflictingJoin"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-read-rich-text-code-math-and-diagrams-in-a-message",
+      "name": "RichTextRendering safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PublicationIdentity"
+      ],
+      "broke": [
+        "PublicationIdentity",
+        "RetiredNoPublication"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-permission-rule-revocation",
+      "name": "RuleRevocation safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RereadMeaning"
+      ],
+      "broke": [
+        "RereadMeaning"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-settings-action-owners",
+      "name": "SettingsActionOwners safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "GrantReplay"
+      ],
+      "broke": [
+        "GrantReplay"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-conversation-sharing",
+      "name": "SharingDialog safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PendingHoldsForm"
+      ],
+      "broke": [
+        "PendingHoldsForm"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-window-preferences",
+      "name": "StoredPreference safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "LocalWriteFailureStillApplies"
+      ],
+      "broke": [
+        "LocalWriteFailureStillApplies"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-chat-recover-a-refused-or-unconfirmed-send",
+      "name": "SubmissionRecovery safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "StableRetry"
+      ],
+      "broke": [
+        "StableRetry"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-switch-the-floating-panel-s-surface",
+      "name": "SurfaceSubscription safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoRetiredInvocation"
+      ],
+      "broke": [
+        "NoRetiredInvocation"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-chat-close-switch-reopen-and-restore-tabs",
+      "name": "TabLifetimes safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "FreshLocalLifetime"
+      ],
+      "broke": [
+        "FreshLocalLifetime",
+        "SelectionLive"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-voice-call",
+      "name": "VoiceGeneration safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "CurrentConnection"
+      ],
+      "broke": [
+        "CurrentConnection",
+        "NoReleasedConnection"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-open-resize-expand-and-restore-the-right-panel",
+      "name": "WidgetPanel safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PerChatOwnership"
+      ],
+      "broke": [
+        "PerChatOwnership",
+        "FrontOwned"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "desktop-workspace-load-browse-and-resynchronize-the-workspace",
+      "name": "WorkspaceRevision safety weakening",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RemovalFence"
+      ],
+      "broke": [
+        "RemovalFence"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "host-startup-save-provider-credentials-and-download-a-runtime",
+      "name": "Write a provider key without acknowledged intent",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "IntentBeforeEffect"
+      ],
+      "broke": [
+        "IntentBeforeEffect"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-background-tasks",
+      "name": "Finish continuation delivery before a task outcome exists",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "OutcomeBeforeDelivery"
+      ],
+      "broke": [
+        "OutcomeBeforeDelivery"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-upload-an-image-and-retry-a-failed-upload",
+      "name": "Retarget an upload when the active tab changes",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "CapturedTarget"
+      ],
+      "broke": [
+        "CapturedTarget"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "runtime-download",
+      "name": "Keep stale runtime offers after an uncertain installation",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "FreshOffers"
+      ],
+      "broke": [
+        "FreshOffers"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "github-webhooks",
+      "name": "Read an inbox after a denied policy decision",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PrivateRead"
+      ],
+      "broke": [
+        "PrivateRead"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-webhook-foundation",
+      "name": "Allow a sixth delivery attempt",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AttemptBound"
+      ],
+      "broke": [
+        "AttemptBound"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-webhook-admission",
+      "name": "Acquire a grant without its credential fence",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PartialOrder",
+        "CheckedOwnsFences"
+      ],
+      "broke": [
+        "PartialOrder",
+        "CheckedOwnsFences"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-webhook-issuance",
+      "name": "Issue a credential before reserving its intent",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ReservationBeforeIssue"
+      ],
+      "broke": [
+        "ReservationBeforeIssue"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-webhook-outbox",
+      "name": "POST without durable Sending ownership",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PersistBeforePost"
+      ],
+      "broke": [
+        "PersistBeforePost"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-record-reads",
+      "name": "Release capacity while a timed out source is still running",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RetainedUntilJoin"
+      ],
+      "broke": [
+        "RetainedUntilJoin"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-channel-workspaces",
+      "name": "Grant workspace authority without verification",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "VerifyBeforeAuthority"
+      ],
+      "broke": [
+        "VerifyBeforeAuthority"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-github-reads",
+      "name": "Return an answer on a refused read",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RefusalHasNoAnswer"
+      ],
+      "broke": [
+        "RefusalHasNoAnswer"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "local-vault",
+      "name": "Publish an unlocked key after its owner closes",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "LiveOwner"
+      ],
+      "broke": [
+        "LiveOwner"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-attach-files-with-the-picker-or-clipboard",
+      "name": "Redeem one native ticket twice",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "SingleUse"
+      ],
+      "broke": [
+        "SingleUse"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "surface-session-supervision",
+      "name": "Keep a usable handle while reconnecting",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PublishedOnlyOwned"
+      ],
+      "broke": [
+        "PublishedOnlyOwned"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-startup-observation",
+      "name": "Publish host state without delivered observation evidence",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "HostHasEvidence"
+      ],
+      "broke": [
+        "HostHasEvidence"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "host-startup-complete-setup-choose-an-agent-and-learn-the-shortcut",
+      "name": "Select an agent without a ready report",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PickerHasReadyChoice"
+      ],
+      "broke": [
+        "PickerHasReadyChoice"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-have-a-large-or-unfamiliar-image-normalized-and-kept-once",
+      "name": "Confirm a hold without acknowledged creation audit",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AuditBeforeConfirm"
+      ],
+      "broke": [
+        "AuditBeforeConfirm"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-wait-for-a-cloud-file-without-attaching-it-to-another-tab",
+      "name": "Attach a completed read to the currently selected tab",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "OriginalConversation"
+      ],
+      "broke": [
+        "OriginalConversation"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "host-startup-sign-in-restore-renew-and-sign-out-in-the-browser",
+      "name": "Keep local access while server logout is pending",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "LocalTeardownFirst"
+      ],
+      "broke": [
+        "LocalTeardownFirst"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "host-startup-launch-and-choose-the-first-surface",
+      "name": "Start a gateway without required host composition",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RequiredBeforeGateway"
+      ],
+      "broke": [
+        "RequiredBeforeGateway"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-conversation",
+      "name": "Erase local history before deletion audit acknowledges",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ErasurePrerequisites"
+      ],
+      "broke": [
+        "ErasurePrerequisites"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-external-events",
+      "name": "Dispatch the same event identity twice",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "OneEventIdentity",
+        "AckIsDispatch"
+      ],
+      "broke": [
+        "OneEventIdentity",
+        "AckIsDispatch"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "github-relay-live-selection",
+      "name": "Remove selected events without deletion evidence",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "DeletionEvidence"
+      ],
+      "broke": [
+        "DeletionEvidence"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-send-a-non-image-file-by-path-and-approve-its-read",
+      "name": "Dispatch a named path before durable naming evidence",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "EvidenceBeforeDispatch"
+      ],
+      "broke": [
+        "EvidenceBeforeDispatch"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-send-an-uploaded-file-from-the-phone",
+      "name": "Place an uploaded file before recording Asked evidence",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AskBeforeEffect"
+      ],
+      "broke": [
+        "AskBeforeEffect"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-preview-or-remove-a-draft-attachment",
+      "name": "Release local bytes while draft or preview still needs them",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RetainWhileNeeded"
+      ],
+      "broke": [
+        "RetainWhileNeeded"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "host-startup-recover-or-update-the-managed-gateway",
+      "name": "Start deferred copying without a durable plan",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PlanBeforeCopy"
+      ],
+      "broke": [
+        "PlanBeforeCopy"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "host-startup-bootstrap-and-diagnose-access-through-the-cli",
+      "name": "Choose the wider requested or caller credential lifetime",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "LifetimeCapped"
+      ],
+      "broke": [
+        "LifetimeCapped"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-device-pairing",
+      "name": "remove canonical current holding guard",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ActiveNeedsCurrentReceiver"
+      ],
+      "broke": [
+        "ActiveNeedsCurrentReceiver"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-device-pairing",
+      "name": "remove fresh publication admission",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "FreshPublication"
+      ],
+      "broke": [
+        "FreshPublication"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-device-pairing",
+      "name": "remove exact approved key guard",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ExactApprovedKey"
+      ],
+      "broke": [
+        "ExactApprovedKey"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-parent-stop",
+      "name": "remove root digest restoration guard",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ExactCapturedEffects"
+      ],
+      "broke": [
+        "ExactCapturedEffects"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-parent-stop",
+      "name": "decline attempted without confirmed receipt",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ReceiptBeforeDecline"
+      ],
+      "broke": [
+        "ReceiptBeforeDecline"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-paste-text-or-code-and-inspect-the-full-pasted-payload",
+      "name": "retarget viewer to another tab",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ViewerRetainsPayload"
+      ],
+      "broke": [
+        "ViewerRetainsPayload"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-attachments-understand-an-attachment-refusal-and-choose-a-useful-recovery",
+      "name": "dismiss attempt clears independent draft fact",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "DismissDoesNotResolveFact"
+      ],
+      "broke": [
+        "DismissDoesNotResolveFact"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-drive-tool-admission",
+      "name": "Steer after saving without rechecking the current grant revision",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NativeSteerRechecksRevision"
+      ],
+      "broke": [
+        "NativeSteerRechecksRevision"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-drive-tool-admission",
+      "name": "Run a granted tool without acknowledged decision audit",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ToolEffectHasDecisionAudit"
+      ],
+      "broke": [
+        "ToolEffectHasDecisionAudit"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-environment-tools",
+      "name": "Accept wider timeout or foreign sandbox from the remote command grant",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "GrantedTermsDoNotWiden"
+      ],
+      "broke": [
+        "GrantedTermsDoNotWiden"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-environment-tools",
+      "name": "Invoke a granted command before saving CommandIssued",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "SaveIssueBeforeRun"
+      ],
+      "broke": [
+        "SaveIssueBeforeRun",
+        "ArtifactRecordHasVerifiedHold"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-drive-tool-admission",
+      "name": "Save a Drive turn under a replaced grant revision",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "SaveUsesHeldRevision"
+      ],
+      "broke": [
+        "SaveUsesHeldRevision",
+        "ToolEffectHasDecisionAudit"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-environment-tools",
+      "name": "Keep and record unverified artifact bytes",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ArtifactRecordHasVerifiedHold"
+      ],
+      "broke": [
+        "ArtifactRecordHasVerifiedHold"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-attachment",
+      "name": "Publish a fenced attachment candidate as ready",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ReadyNeedsCurrent"
+      ],
+      "broke": [
+        "ReadyNeedsCurrent"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-scheduling",
+      "name": "Dispatch accepted input before save acknowledgement",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "DispatchNeedsDurability"
+      ],
+      "broke": [
+        "DispatchNeedsDurability"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-reviews",
+      "name": "Consume a review without its exact validation",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ExactReview"
+      ],
+      "broke": [
+        "ExactReview"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-history",
+      "name": "Acknowledge a save before its physical fact exists",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoInventedCommit"
+      ],
+      "broke": [
+        "NoInventedCommit"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-runtime-usage-limit-continuation",
+      "name": "Commit a continuation fence after losing its lease",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "FenceNeedsLease"
+      ],
+      "broke": [
+        "FenceNeedsLease"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-runtime-select-a-model-approval-preset-or-reasoning-effort",
+      "name": "Send before the acknowledged selection is reconciled",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "SendNeedsSourceView"
+      ],
+      "broke": [
+        "SendNeedsSourceView"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "auth-admission",
+      "name": "Admit a session after the access lifetime fails",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AdmissionNeedsCoherentAccess"
+      ],
+      "broke": [
+        "AdmissionNeedsCoherentAccess"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "auth-credential",
+      "name": "Issue the same credential command and bearer again",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "BearerReturnedOnce"
+      ],
+      "broke": [
+        "BearerReturnedOnce"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "client-connection",
+      "name": "Adopt a replacement already terminated",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoDeadAdoption"
+      ],
+      "broke": [
+        "NoDeadAdoption"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "client-commands",
+      "name": "Settle a new wire request with an old reply",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ReplyNeedsCurrentWire"
+      ],
+      "broke": [
+        "ReplyNeedsCurrentWire"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "mcp-sessions",
+      "name": "Register an upstream session after grant revocation",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoOpenAfterRevoke"
+      ],
+      "broke": [
+        "NoOpenAfterRevoke"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "storage-publication",
+      "name": "Remove an origin reservation replaced by a newer identity",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoNewerRemoval"
+      ],
+      "broke": [
+        "NoNewerRemoval"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "storage-database",
+      "name": "Stage an upgrade without integrity validation",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "StagedRequiresValidation"
+      ],
+      "broke": [
+        "StagedRequiresValidation"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "endpoint-discovery",
+      "name": "Verify discovery despite a mismatched process identity",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "VerifiedIdentity"
+      ],
+      "broke": [
+        "VerifiedIdentity"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-runtime-install-or-replace-a-pinned-agent-runtime",
+      "name": "Reclaim a runtime while its predecessor use is live",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "NoReclaimLiveUse"
+      ],
+      "broke": [
+        "NoReclaimLiveUse"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "tooling-runtime",
+      "name": "Complete runtime assembly before output verification",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "CompleteNeedsOutput"
+      ],
+      "broke": [
+        "CompleteNeedsOutput"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-ownership",
+      "name": "Complete an ownership close before resource release",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "CompletionNeedsRelease"
+      ],
+      "broke": [
+        "CompletionNeedsRelease"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-runtime-the-first-agent-launch-is-warmed-in-the-background",
+      "name": "Save warmup completion before its audit acknowledgement",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "CompletionNeedsRelease"
+      ],
+      "broke": [
+        "CompletionNeedsRelease"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "auth-registry-refusal",
+      "name": "Reuse unsafe-lock refusal after registry bytes were read",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "UnsafeLockBeforeRead"
+      ],
+      "broke": [
+        "UnsafeLockBeforeRead"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-child-preparation",
+      "name": "Publish a prepared child before its durable acknowledgement",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ReadyDurable"
+      ],
+      "broke": [
+        "ReadyDurable",
+        "TaskNeedsReady"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-history-restoration",
+      "name": "Resume history without a matching provider identity",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ResumeExactProvider"
+      ],
+      "broke": [
+        "ResumeExactProvider"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-permission-rules",
+      "name": "Remember a scoped rule without host policy allowance",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "RuleRequiresPolicy"
+      ],
+      "broke": [
+        "RuleRequiresPolicy"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-history-erasure",
+      "name": "Acknowledge erase reconciliation before the new incarnation exists",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AcknowledgedNewIncarnation"
+      ],
+      "broke": [
+        "AcknowledgedNewIncarnation",
+        "AccessAfterErasure"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "client-subscriptions",
+      "name": "Admit the next abandoned-target subscription before cleanup",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AbortedOpenClosedBeforeNext"
+      ],
+      "broke": [
+        "AbortedOpenClosedBeforeNext"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "client-event-registration",
+      "name": "Let an old unsubscribe remove a replacement registration",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ReplacementSurvivesOldHandle"
+      ],
+      "broke": [
+        "ReplacementSurvivesOldHandle"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "mcp-resource-tickets",
+      "name": "Redeem a consumed ticket a second time",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AtMostOnce"
+      ],
+      "broke": [
+        "AtMostOnce",
+        "DeliveryRequiresConsumption"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "sdk-cleanup",
+      "name": "Reopen after a failed cleanup audit",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ReopenRequiresAudit"
+      ],
+      "broke": [
+        "ReopenRequiresAudit"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-backup-export",
+      "name": "Acknowledge an export before its cut is complete",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AckRequiresCompleteCut"
+      ],
+      "broke": [
+        "AckRequiresCompleteCut"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-backup-restore",
+      "name": "Accept an older retained receipt generation",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AcceptanceHasCurrentProof"
+      ],
+      "broke": [
+        "AcceptanceHasCurrentProof"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-backup-restore",
+      "name": "Accept a changed journal under an older digest",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AcceptanceHasCurrentProof"
+      ],
+      "broke": [
+        "AcceptanceHasCurrentProof"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-backup-restore",
+      "name": "Accept a previously spent stage",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "AcceptanceHasCurrentProof"
+      ],
+      "broke": [
+        "AcceptanceHasCurrentProof"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-agent-thread-tools",
+      "name": "Mint source capability after a denied policy result",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "EffectHasAuthority"
+      ],
+      "broke": [
+        "EffectHasAuthority"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-agent-thread-tools",
+      "name": "Keep source admission charged through target dispatch",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "SourcePermitEndsAtAuthorization"
+      ],
+      "broke": [
+        "SourcePermitEndsAtAuthorization"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-peer-gateways",
+      "name": "Interrupt a peer read before command intent audit",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "PreemptionNeedsIntent"
+      ],
+      "broke": [
+        "PreemptionNeedsIntent"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-environment-leases",
+      "name": "Use wider grant timeout instead of narrowing to the request",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "TermsNeverWiden"
+      ],
+      "broke": [
+        "TermsNeverWiden"
+      ],
+      "unchecked": []
+    },
+    {
+      "document": "gateway-tunnel-connectivity",
+      "name": "Dispatch based on tunnel reachability without native admission",
+      "ok": true,
+      "state": "broke",
+      "expected": [
+        "ForwardingIsNotAuthority"
+      ],
+      "broke": [
+        "ForwardingIsNotAuthority"
+      ],
+      "unchecked": []
+    }
+  ],
+  "digestEvidence": "Recorded from the unchanged frozen models after the combined run; checked against their canonical positive records and baseline state counts."
+}

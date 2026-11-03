@@ -33,3 +33,7 @@ flowchart TB
 
 - [Runtime and release assembly](tooling-runtime.md)
 - [Verification commands and model evidence](verification.md)
+
+## Model coverage
+
+Component index. This page groups independent owners; its component arrows are not a lifecycle or a model proof. Open the feature pages for exact checked scope and exclusions.

@@ -42,3 +42,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/conversation/model/content.ts) · [Related source](../../../../../src/conversation/ui/message-images.tsx) · [Related tests](../../../../../src/conversation/ui/message-content.test.ts)
+
+## Model coverage
+
+The shared model on [gateway-attachments-preview-or-remove-a-draft-attachment](preview-or-remove-a-draft-attachment.md) owns this journey's modeled slice. Local retained preview ownership only; reopened reference projection is a pure data contract and does not fetch bytes. This is scoped design evidence, not whole-journey or implementation verification. The existing source checkpoint is retained.

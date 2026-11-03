@@ -79,3 +79,11 @@ its existing states because explicit discard is a separate operation.
 ## Further reading
 
 [Source](../../../../../crates/nessa-sdk/src/infrastructure/session_storage/record.rs) · [Related source](../../../../../crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/session_storage.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-history](../history.md). Uncertain exact save reconciliation before committed history.
+
+Provider resume, handoff construction, reset erasure and complete replay validation are outside this save model. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.
+
+The distinct preparation/read-side owner is modeled in [history preparation and restoration](../history-restoration.md). It checks retained flush, complete/aborted tail validation and record-only versus provider-resume authority. Byte framing, erasure and actual provider behavior remain outside that model.

@@ -8,7 +8,8 @@ parent: "sdk-runtime"
 sources:
   - "crates/nessa-server/src/agent_install/application/install.rs"
   - "crates/nessa-server/src/agent_install/domain/release_selection.rs"
-  - "crates/nessa-server/src/agent_install/domain/value_objects/pinned_release.rs"
+  - "crates/nessa-server/src/agent_install/domain/value_objects/pinned_release.\
+    rs"
   - "crates/nessa-server/src/agent_install/domain/entities/install_attempt.rs"
   - "crates/nessa-server/src/agent_install/infrastructure/delivery/journal.rs"
   - "crates/nessa-server/src/agent_install/infrastructure/managed_runtimes.rs"
@@ -21,10 +22,26 @@ sources:
   - "crates/nessa-server/tests/agent_install/managed_runtimes.rs"
   - "crates/nessa-server/tests/agent_install/reclamation.rs"
   - "crates/nessa-server/tests/agent_install/runtime_reclamation.rs"
-  - "crates/nessa-sdk/tests/infrastructure/acp/sessions/executable_use_cleanup.rs"
+  - "crates/nessa-sdk/tests/infrastructure/acp/sessions/executable_use_cleanup.\
+    rs"
 diagramLinks: {}
+model:
+  spec: tla/services/sdk/RuntimeInstall.tla
+  config: tla/services/sdk/RuntimeInstall.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:18.545Z
+  config: tla/services/sdk/RuntimeInstall.cfg
+  modelDigest: 15ad1e2be6d473430ede7d3cc40f21f3bc8f3d079b728278dafff8fca2e9393e
+  states: 12
+  held:
+    - TypeOK
+    - PublicationNeedsPin
+    - NoReclaimLiveUse
+    - ReclaimedNeedsRelease
+  broke: []
+  unchecked: []
 ---
-
 # install or replace a pinned agent runtime
 
 Installation downloads and publishes the agent version Nessa has tested. Launch resolves the current installed version; an old printed path is not a promise that it remains safe to use.
@@ -52,3 +69,13 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../crates/nessa-server/src/agent_install/application/install.rs) · [Related source](../../../../../crates/nessa-server/src/agent_install/domain/release_selection.rs) · [Related tests](../../../../../crates/nessa-server/tests/agent_install/install.rs)
+
+## Model coverage
+
+Direct model: One pinned runtime install with verified bytes, durable preparation, publication and predecessor use-release before physical reclamation.
+
+The finite model checks safety only. Download signatures, platform unpacking, executable path leases, delivery receipt recovery and multi-version SQL are source contracts; process exit alone is not release. Terminal states may stutter; no eventual completion or implementation proof is claimed.
+
+This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.
+
+The model's Reclaimed terminal means physical predecessor reclamation, not the API reporting installation success. An installed runtime can be returned while a cleanup obligation is durably deferred, with reclamation warnings; the Published model state permits that outcome. A live or uncertain predecessor use still prevents physical reclamation.

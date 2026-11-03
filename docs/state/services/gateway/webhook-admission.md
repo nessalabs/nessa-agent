@@ -3,7 +3,9 @@ id: gateway-webhook-admission
 title: Outbound webhook admission
 kind: feature
 status: mixed
-summary: Registered principal reads and sends use fresh Auth, exact grant epochs and Cedar under retained physical ownership; no receiver authority is fabricated.
+summary: Registered principal reads and sends use fresh Auth, exact grant epochs
+  and Cedar under retained physical ownership; no receiver authority is
+  fabricated.
 sourceRevision: "c790639702213d79bad32aaa148e2744ca7a9d1d"
 parent: gateway
 sources:
@@ -41,8 +43,23 @@ diagramDetails:
   - diagram: 0
     node: Refused
     section: Failures and recovery
+model:
+  spec: tla/services/gateway/WebhookAdmission.tla
+  config: tla/services/gateway/WebhookAdmission.cfg
+modelCheck:
+  sourceRevision: "c790639702213d79bad32aaa148e2744ca7a9d1d"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:02.397Z
+  config: tla/services/gateway/WebhookAdmission.cfg
+  modelDigest: 6e4cd10a32505a1dcf59c947f84b8858740af94ed1d1b49eca1e49c8b833de4c
+  states: 12
+  held:
+    - PartialOrder
+    - CheckedOwnsFences
+    - NoCancelledPost
+  broke: []
+  unchecked: []
 ---
-
 # Outbound webhook admission
 
 This page covers principal sharing and authority admission for [outbound webhook delivery](webhook-foundation.md).
@@ -331,3 +348,7 @@ is not a claim that their platform/browser cohorts ran here. All 295 webhook tes
 including the three full retention controls, and required seven-package all-target
 Clippy passed. Whole-feature independent review and exact-head CI/platform/browser
 and default/raised stress acceptance remain pending.
+
+## Bounded rule model
+
+Owns credential-before-grant fence acquisition, checked admission, absolute expiry recheck and permanent cancellation. Credential/principal/tenant/audience and exact grant epoch comparisons are represented by successful gate actions; Cedar policy contents and physical metadata joins remain outside this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/application/admission.rs`.

@@ -24,8 +24,23 @@ sources:
   - verification/desktop/scripts/vault.mjs
 diagramLinks: {}
 diagramDetails: []
+model:
+  spec: tla/services/gateway/VaultOpening.tla
+  config: tla/services/gateway/VaultOpening.cfg
+modelCheck:
+  sourceRevision: "5f45a5e66d10046fd15eae95f6ebc8f4fd87dd56"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:59.301Z
+  config: tla/services/gateway/VaultOpening.cfg
+  modelDigest: 6c12a5711659d2c0d1b85e7984cb8e9699e6a9c601361219161797177b5a435f
+  states: 28
+  held:
+    - LiveOwner
+    - GenerationFence
+    - VerifiedKey
+  broke: []
+  unchecked: []
 ---
-
 # Local vault
 
 New setup and passphrase changes ask for at least fifteen characters and refuse
@@ -110,3 +125,7 @@ process protections and same-format passphrase change preserve the encrypted for
 The gateway remains trusted with the full decrypted map. Rollback protection,
 independently authenticated audit history and full same-user isolation require
 separate architectural work. See the [vault security boundary](../../../../crates/nessa-vault/README.md#security-boundary).
+
+## Bounded rule model
+
+Owns conditional unlock publication against the actual live connection and explicit-lock generation. Derived key success alone does not unlock. Passphrase strength, rate limits, create durability, passphrase replacement and encrypted entry mutation require separate contracts and are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-vault/src/application/vault.rs`.

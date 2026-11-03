@@ -3,7 +3,8 @@ id: sdk-runtime-usage-limit-continuation
 title: Usage limits and scheduled continuation
 kind: statechart
 status: implemented
-summary: A usage limit ends the turn; an enabled gateway preference may schedule one later continuation.
+summary: A usage limit ends the turn; an enabled gateway preference may schedule
+  one later continuation.
 sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: sdk-runtime
 sources:
@@ -13,8 +14,25 @@ sources:
   - crates/nessa-server/src/conversation/infrastructure/scheduled_messages.rs
   - docs/design/usage-limit-continuation.md
 diagramLinks: {}
+model:
+  spec: tla/services/sdk/UsageContinuation.tla
+  config: tla/services/sdk/UsageContinuation.cfg
+modelCheck:
+  sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:20.404Z
+  config: tla/services/sdk/UsageContinuation.cfg
+  modelDigest: 827f83bc18d33adba3fc6fd6437c4fc21a50441afed7432c572b44bc88db972f
+  states: 9
+  held:
+    - TypeOK
+    - SubmissionNeedsFence
+    - CancellationBeforeEffect
+    - DeliveryNeedsAttempt
+    - FenceNeedsLease
+  broke: []
+  unchecked: []
 ---
-
 # Usage limits and scheduled continuation
 
 A recognized provider usage limit ends the current turn. It does not use ordinary SDK failure backoff to keep retrying that blocked work. With the gateway preference enabled and a future reset time, the conversation service can save one later continuation for that causal turn. The preference defaults off.
@@ -53,3 +71,11 @@ The diagram follows one continuation row, not the preference command or the runn
 ## Further reading
 
 [Scheduling owner](../../../../../crates/nessa-server/src/conversation/application/service/scheduled_messages.rs) · [Durable row adapter](../../../../../crates/nessa-server/src/conversation/infrastructure/scheduled_messages.rs) · [Design and evidence](../../../../design/usage-limit-continuation.md)
+
+## Model coverage
+
+Direct model: One eligible causal schedule, cancellation versus leased submit fence, retained command identity and interrupted outcome.
+
+The finite model checks safety only. Preference defaults, real clock/reset classification, multiple causal turns, payload scrubbing, lease expiry SQL and ordinary admission policy are outside this model. Terminal states may stutter; no eventual completion or implementation proof is claimed.
+
+This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.

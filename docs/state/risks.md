@@ -35,6 +35,19 @@ This page keeps earlier findings and their evidence. R1–R5 were corrected in t
 | R5 | A stalled readiness fetch or JSON body left Check again disabled. One ten-second deadline now covers both stages and releases Retry. | [Adapter](../../src/onboarding/adapters/agents.test.ts), [onboarding](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx) and browser checks covered delayed responses. This was a controlled stall, not a production outage. |
 | R6 | A stale empty tab was suspected of stopping another surface's work. Automatic close requires exact complete_empty, while both built-in stores report prepared empty sessions as complete. Closing therefore detaches. | [Projection](../../crates/nessa-server/tests/conversation/projection.rs) and [tab controls](../../src/conversation/adapters/store/attachments.test.ts) falsified the suspected path for both built-in stores. Custom producers of complete_empty remain a separate question. No product fix was made. |
 
+## App-wide model review observations (2026-11-02)
+
+The feature sweep found two source-observed ordering questions, recorded as
+[G16 and G17](gaps.md). Header-image writes and clears independently await
+IndexedDB opening; their stored effect ordering was not measured. Panel size
+publication rejects unmounted callbacks, but an initial read can still arrive
+after a newer resize within the same mount. The bounded models retain these
+possibilities rather than asserting latest-gesture-wins behavior.
+
+These are static-source observations, not reproduced runtime defects. The
+model guard-removal controls test the authored abstractions, not injected bugs
+in the app. Historical R1–R6 evidence is unchanged.
+
 ## Useful failure checks
 
 These are investigation prompts, not confirmed defects:

@@ -45,3 +45,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-server/src/conversation/application/service.rs) · [Related tests](../../../../../crates/nessa-server/tests/attachments/application.rs)
+
+## Model coverage
+
+The shared model on [gateway-conversation](../conversation.md) owns this journey's modeled slice. Tombstone-before-cleanup and audit-before-local erasure only; independent ticket withdrawal, multi-hold cleanup aggregation and audit failure ordering remain excluded. This is scoped design evidence, not whole-journey or implementation verification. The existing source checkpoint is retained.

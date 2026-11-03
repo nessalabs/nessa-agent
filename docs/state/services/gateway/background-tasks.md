@@ -3,7 +3,8 @@ id: gateway-background-tasks
 title: Background tasks
 kind: statechart
 status: implemented
-summary: A local command can outlive its calling agent turn and resume that conversation with its outcome.
+summary: A local command can outlive its calling agent turn and resume that
+  conversation with its outcome.
 parent: gateway
 sourceRevision: "138755acfbc78c58c00fa6feaeefe38d170d5f85"
 sources:
@@ -26,8 +27,23 @@ diagramDetails:
   - diagram: 1
     node: Waiting
     section: Returning the result to the model
+model:
+  spec: tla/services/gateway/BackgroundTask.tla
+  config: tla/services/gateway/BackgroundTask.cfg
+modelCheck:
+  sourceRevision: "138755acfbc78c58c00fa6feaeefe38d170d5f85"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:53.689Z
+  config: tla/services/gateway/BackgroundTask.cfg
+  modelDigest: bf7f3451b8fba8f0fdf472d62eb7abb4369849262b2b900ce8b459c882219238
+  states: 40
+  held:
+    - OutcomeBeforeDelivery
+    - InterruptedIsUncertain
+    - BoundedRevision
+  broke: []
+  unchecked: []
 ---
-
 # Background tasks
 
 An agent can start a local shell command and continue without waiting for it.
@@ -130,3 +146,7 @@ shutdown, deletion with queued export, and interrupted restart. The conversation
 Shepherd command with a scripted harness through the production MCP relay and
 checks the existing waterfall and internal continuation in Chromium and WebKit.
 Native remote execution and process adoption after a gateway crash are excluded.
+
+## Bounded rule model
+
+Owns one admitted task's first stop, immutable terminal outcome, interrupted cleanup uncertainty and one-way continuation disposition. Process execution, capacity admission, persistence CAS and delivery deduplication remain separate unmodeled boundaries. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/domain/background_task/lifecycle.rs`.

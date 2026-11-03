@@ -3,7 +3,8 @@ id: desktop-linked-devices
 title: Pair, approve and revoke a linked device
 kind: statechart
 status: implemented
-summary: Settings shows the gateway's pairing state, approves the exact displayed device key, and rereads after uncertain changes.
+summary: Settings shows the gateway's pairing state, approves the exact
+  displayed device key, and rereads after uncertain changes.
 parent: desktop-workspace
 sourceRevision: "b14bdf40fc17117dba10024a3a9bd190d28cc990"
 sources:
@@ -43,8 +44,22 @@ diagramDetails:
   - diagram: 3
     node: Rereading
     section: Revoke and recover uncertainty
+model:
+  spec: tla/services/desktop/workspace/linked-devices.tla
+  config: tla/services/desktop/workspace/linked-devices.cfg
+modelCheck:
+  sourceRevision: "b14bdf40fc17117dba10024a3a9bd190d28cc990"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:34.993Z
+  config: tla/services/desktop/workspace/linked-devices.cfg
+  modelDigest: a02a5ef3f73c35041ab5f6180be0a1ddae1500aee7923a239a7b811e093f0c83
+  states: 32
+  held:
+    - ExactKeyApproval
+    - RestartObserved
+  broke: []
+  unchecked: []
 ---
-
 # Pair, approve and revoke a linked device
 
 Settings → Connections → Linked devices shows the gateway's current linking state. Pair a device asks for a short-lived code; a claimed request shows a fingerprint for approval or denial. Device access is then managed separately from which conversations it may read.
@@ -158,3 +173,17 @@ flowchart LR
     Sharing[Share a conversation with a linked device]
     Authority[Identity and access authority]
 ```
+
+## Bounded rule model
+
+Two displayed keys cover fingerprint-gated approval of the captured key. A linking restart settles only after the old connection dropped. Invitation expiry, modal secret retention, cancel-before-refresh, activation retry and credential revocation are separate gateway/UI contracts and not checked by this abstraction. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
+
+Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
+
+The gateway [pairing owner](../../gateway/device-pairing.md) separately models approval versus activation with current receiver proof. The desktop key-display/restart model does not certify activation or credential cleanup.

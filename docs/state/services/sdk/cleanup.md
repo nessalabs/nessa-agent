@@ -33,7 +33,7 @@ diagramLinks: {}
 modelCheck:
   sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
   checker: tlc-1.7.4
-  date: 2026-11-02T19:18:46.975Z
+  date: 2026-11-03T02:48:14.194Z
   config: tla/services/sdk/Cleanup.cfg
   modelDigest: cf8ca4efc6127a2cfec52c5888d3922c9524af25f0ce10a0ccb0111dfddb0157
   states: 18

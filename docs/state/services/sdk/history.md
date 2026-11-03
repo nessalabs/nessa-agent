@@ -16,18 +16,37 @@ sources:
   - "crates/nessa-sdk/src/application/agent_execution/agents/resumption.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/authorship.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/handoffs.rs"
-  - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/carried_history.rs"
-  - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/agent_source.rs"
+  - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/carried_\
+    history.rs"
+  - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/agent_source.\
+    rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/handoffs.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/executions/prompt_content.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/snapshot/records.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/sessions/manager.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/handoffs.rs"
   - "crates/nessa-sdk/tests/infrastructure/session_storage/authorship.rs"
-  - "crates/nessa-sdk/tests/application/agent_execution/agents/streaming_persistence.rs"
+  - "crates/nessa-sdk/tests/application/agent_execution/agents/streaming_persis\
+    tence.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/sdk/History.tla
+  config: tla/services/sdk/History.cfg
+modelCheck:
+  sourceRevision: "50bef867f45f9cb99fa27d798210e8e6a1dfe901"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:16.058Z
+  config: tla/services/sdk/History.cfg
+  modelDigest: 86b52eee8a919e72acaee778acc0ba9c20b33af8e47e218a60ccfcc7ae162013
+  states: 15
+  held:
+    - TypeOK
+    - NoInventedCommit
+    - AcknowledgedHasExactBinding
+    - NoDuplicatePhysicalAppend
+  broke: []
+  unchecked: []
 ---
-
 # Committed history and restoration
 
 Nessa shows live output while saving conversation records in small batches. Reopening reconstructs history from the records that were successfully saved.
@@ -112,3 +131,15 @@ The checkpoint records source review, not platform or browser qualification.
 ## Further reading
 
 [Source](../../../../crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs) · [Related source](../../../../crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs) · [Related tests](../../../../crates/nessa-sdk/tests/application/agent_execution/agents/streaming_persistence.rs)
+
+## Model coverage
+
+Direct model: One retained save generation and one physical fact; exact retry reconciliation separates durable bytes from acknowledged semantic history.
+
+The finite model checks safety only. Full record framing/hash chains, abort-tail preparation, authorship agreement, reset/erasure, provider resume protocol and historical handoffs are source contracts outside this finite save model. Terminal states may stutter; no eventual completion or implementation proof is claimed.
+
+This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.
+
+The distinct preparation/read-side owner is modeled in [history preparation and restoration](history-restoration.md). It checks retained flush, complete/aborted tail validation and record-only versus provider-resume authority. Byte framing, erasure and actual provider behavior remain outside that model.
+
+[History erasure](history-erasure.md) separately owns reset-incarnation recovery and retired-content cleanup before later load/save.

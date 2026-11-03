@@ -3,7 +3,8 @@ id: gateway-webhook-foundation
 title: Outbound webhook foundation
 kind: feature
 status: mixed
-summary: Delivery values and a bounded signed HTTPS adapter are built; gateway registration, durable replay and grant coordination remain unimplemented.
+summary: Delivery values and a bounded signed HTTPS adapter are built; gateway
+  registration, durable replay and grant coordination remain unimplemented.
 sourceRevision: "b8568beee166680a45a192222da468234933411d"
 parent: gateway
 sources:
@@ -34,8 +35,23 @@ diagramDetails:
   - diagram: 1
     node: Expired
     section: One deadline across preparation and POST
+model:
+  spec: tla/services/gateway/WebhookDelivery.tla
+  config: tla/services/gateway/WebhookDelivery.cfg
+modelCheck:
+  sourceRevision: "b8568beee166680a45a192222da468234933411d"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:03.020Z
+  config: tla/services/gateway/WebhookDelivery.cfg
+  modelDigest: d28e71068baa7dee53e8a95f7df9eda6ed22221d1e6574faced59cb142fb5a7f
+  states: 78
+  held:
+    - AttemptBound
+    - TimestampShape
+    - RetryBudget
+  broke: []
+  unchecked: []
 ---
-
 # Outbound webhook foundation
 
 Nessa has delivery values, exact signed message encoding, and a bounded HTTPS
@@ -194,3 +210,7 @@ restart. A source checkpoint records review scope, not test execution or deploym
 The separate [durable outbox checkpoint](webhook-outbox.md) describes later
 persistence work. This navigation link does not advance this page's historical
 source review checkpoint or claim runtime composition.
+
+## Bounded rule model
+
+Owns immutable delivery phase guards, exact grant epoch, bounded attempts, due-time gate and retained first timestamp presence. Five attempts are modeled; actual millisecond arithmetic, transport reservation and signatures are excluded. Sending recovery is Unknown, represented by Observe without safe retry inference. This is the value owner; mounted composition is documented by the later outbox and admission pages. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs`.

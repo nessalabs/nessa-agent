@@ -27,8 +27,22 @@ sources:
   - "src-tauri/tests/gateway/infrastructure/generation.rs"
 diagramLinks:
   Monitor: gateway-startup-observation
+model:
+  spec: tla/services/host/startup/GatewayDeferredStage.tla
+  config: tla/services/host/startup/GatewayDeferredStage.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:07.982Z
+  config: tla/services/host/startup/GatewayDeferredStage.cfg
+  modelDigest: f73dc3598786063e43542913987b1c902a36c1db0e08acf934ee0f89f2b0e9f0
+  states: 6
+  held:
+    - PlanBeforeCopy
+    - ReadyNotSettlement
+    - RefusedDoesNotCopy
+  broke: []
+  unchecked: []
 ---
-
 # recover or update the managed gateway
 
 The native host starts or reconciles the configured gateway. It reports starting, ready or failed. Ready requires a matching service process and live gateway identity, rather than just an HTTP response.
@@ -80,3 +94,7 @@ Desktop host arbitration and its ordering evidence are owned by
 [desktop host ownership](../../../../design/desktop-host-ownership.md). A second
 participating macOS host is refused before lifecycle recovery and shared writes;
 native installed-app acceptance remains separate.
+
+## Bounded rule model
+
+Owns deferred runtime publication: durable plan before Ready and copy launch; Ready can precede physical publication settlement, and failed completion restores startup failure. This narrow model excludes complete service identity reconciliation, retirement cleanup, OS service registration and stale-attempt CAS. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src-tauri/src/gateway/application/service.rs`.

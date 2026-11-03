@@ -3,7 +3,8 @@ id: "host-startup-bootstrap-and-diagnose-access-through-the-cli"
 title: "bootstrap and diagnose access through the CLI"
 kind: "operation"
 status: "implemented"
-summary: "The CLI can diagnose an existing gateway, issue access tokens and perform explicit local setup or recovery."
+summary: "The CLI can diagnose an existing gateway, issue access tokens and
+  perform explicit local setup or recovery."
 parent: "host-startup"
 sources:
   - "docs/guides/local-auth.md"
@@ -19,8 +20,21 @@ sources:
   - "crates/nessa-server/tests/credential_registry_refusal.rs"
   - "scripts/smoke-auth.mjs"
 diagramLinks: {}
+model:
+  spec: tla/services/host/startup/CliTokenLifetime.tla
+  config: tla/services/host/startup/CliTokenLifetime.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:06.126Z
+  config: tla/services/host/startup/CliTokenLifetime.cfg
+  modelDigest: ed4afac84b1efda2b748b31d18fcd0be3d3c3386fdffac27aeed93997a8b4944
+  states: 22
+  held:
+    - LifetimeCapped
+    - NoExpiredIssue
+  broke: []
+  unchecked: []
 ---
-
 # bootstrap and diagnose access through the CLI
 
 The CLI can diagnose an existing gateway, issue access tokens and perform explicit local setup or recovery. Starting the server does not silently create or replace its identity.
@@ -50,3 +64,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../guides/local-auth.md) · [Related source](../../../../../crates/nessa-server/src/cli/entrypoint/arguments.rs) · [Related tests](../../../../../crates/nessa-server/tests/cli/application.rs)
+
+## Bounded rule model
+
+Owns browser-token lifetime selection capped by the authenticated caller expiry and refusal when already expired. Current time is one and expiries range one through three. Offline credential recovery, exclusive locks, gateway identity and secret disclosure are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/cli/application/commands.rs`.

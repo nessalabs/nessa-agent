@@ -3,14 +3,16 @@ id: "gateway-record-reads"
 title: "Bounded physical history reads"
 kind: "operation"
 status: "mixed"
-summary: "An authorized reader can page through saved conversation records without starting an agent."
+summary: "An authorized reader can page through saved conversation records
+  without starting an agent."
 sourceRevision: "85277a20a24ca5a0bb1bf8dcdb59593de3ec8577"
 parent: "gateway"
 sources:
   - "crates/nessa-server/src/product/socket.rs"
   - "crates/nessa-server/src/product/record_read/dispatch.rs"
   - "crates/nessa-server/src/conversation/application/record_read/read.rs"
-  - "crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs"
+  - "crates/nessa-server/src/conversation/infrastructure/record_read/operation.\
+    rs"
   - "crates/nessa-server/src/conversation/application/record_read/principal.rs"
   - "crates/nessa-server/src/conversation/infrastructure/record_read/source.rs"
   - "crates/nessa-server/src/conversation/infrastructure/record_scope.rs"
@@ -20,8 +22,22 @@ sources:
   - "crates/nessa-server/tests/webhooks/infrastructure/source.rs"
   - "crates/nessa-client-core/tests/protected/deadline_stream.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/RecordReadOwnership.tla
+  config: tla/services/gateway/RecordReadOwnership.cfg
+modelCheck:
+  sourceRevision: "85277a20a24ca5a0bb1bf8dcdb59593de3ec8577"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:01.168Z
+  config: tla/services/gateway/RecordReadOwnership.cfg
+  modelDigest: f55de688f55c858e0f52a8c5fc42da3ecdbc9f5cecbe2240b0837d9c8b93f065
+  states: 8
+  held:
+    - RetainedUntilJoin
+    - ReleaseBeforeSend
+  broke: []
+  unchecked: []
 ---
-
 # Bounded physical history reads
 
 An authorized reader can page through saved conversation records without starting an agent. Nessa limits both the number of records and the bytes in each response.
@@ -120,3 +136,7 @@ their previous source revisions.
 ## Further reading
 
 [Source](../../../../crates/nessa-server/src/product/socket.rs) · [Related source](../../../../crates/nessa-server/src/product/record_read/dispatch.rs) · [Related tests](../../../../crates/nessa-client-core/tests/protected/deadline_stream.rs)
+
+## Bounded rule model
+
+Owns paired read capacity transfer, timeout retention until physical source join and writer release before network send. Fresh receiver access, exact physical scope, result byte bounds and unmounted principal read use case are excluded from these ownership invariants. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/record_read/read.rs`, `crates/nessa-server/src/conversation/infrastructure/record_read/operation.rs`, `crates/nessa-server/src/product/record_read/dispatch.rs`.

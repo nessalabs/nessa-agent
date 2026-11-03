@@ -27,8 +27,21 @@ sources:
   - "crates/nessa-server/tests/attachments/wire.rs"
   - "crates/nessa-server/tests/attachments/gateway.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/attachments/DraftUpload.tla
+  config: tla/services/gateway/attachments/DraftUpload.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:52.444Z
+  config: tla/services/gateway/attachments/DraftUpload.cfg
+  modelDigest: 95925314601b3fcd93e8629461e9d9277176014006f112c1b52d70ed184c2433
+  states: 22
+  held:
+    - CapturedTarget
+    - NoStageWithoutHash
+  broke: []
+  unchecked: []
 ---
-
 # Upload an image and retry a failed upload
 
 Adding an image starts a transfer for the captured conversation. Nessa keeps the local original for preview and uses the gateway's returned reference for sending.
@@ -61,3 +74,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/panel/ui/use-attachment-uploads.ts) · [Related source](../../../../../src/panel/application/upload-image.ts) · [Related tests](../../../../../src/panel/application/upload-image.test.ts)
+
+## Bounded rule model
+
+Owns a single placement's captured conversation, hash-before-stage and removal refusal before staging. Active-tab changes cannot retarget this upload. Gateway ticket, normalization, hold confirmation, retries and queue bounds are excluded from this local operation model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src/panel/application/upload-image.ts`, `src/panel/ui/use-attachment-uploads.ts`.

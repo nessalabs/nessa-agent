@@ -3,11 +3,13 @@ id: "gateway-attachments-send-an-uploaded-file-from-the-phone"
 title: "Send an uploaded file from the phone"
 kind: "flow"
 status: "implemented"
-summary: "Original file references survive sending and recovery; verified paths belong to one execution environment."
+summary: "Original file references survive sending and recovery; verified paths
+  belong to one execution environment."
 sourceRevision: "beca8c80d864590857174c7227b5930de48cb994"
 parent: "gateway-attachments"
 sources:
-  - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/uploaded_file.rs"
+  - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/uploaded\
+    _file.rs"
   - "crates/nessa-sdk/src/application/agent_execution/providers/session.rs"
   - "crates/nessa-sdk/src/infrastructure/acp/sessions/binding.rs"
   - "crates/nessa-sdk/tests/infrastructure/acp/contracts/input_files.rs"
@@ -25,8 +27,23 @@ sources:
   - "crates/nessa-server/tests/conversation/input_files.rs"
   - "crates/nessa-server/tests/conversation/ssh_artifacts.rs"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/attachments/InputFilePlacement.tla
+  config: tla/services/gateway/attachments/InputFilePlacement.cfg
+modelCheck:
+  sourceRevision: "beca8c80d864590857174c7227b5930de48cb994"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:51.189Z
+  config: tla/services/gateway/attachments/InputFilePlacement.cfg
+  modelDigest: 52c5cd5378f9377b062ef4907c8ca89a9008d99e4c035bfe9ba22dd5c939472c
+  states: 12
+  held:
+    - AskBeforeEffect
+    - LeaseIdentity
+    - OutcomeBeforeDone
+  broke: []
+  unchecked: []
 ---
-
 # Send an uploaded file from the phone
 
 This follows one accepted execution with original uploaded-file references.
@@ -100,3 +117,7 @@ and scripted SFTP channel; it does not claim a live SSH daemon or model service.
 
 [Delivery design](../../../../design/phone-file-uploads.md) ·
 [Reference-only history](reopen-a-message-and-understand-its-reference-only-attachments.md)
+
+## Bounded rule model
+
+Owns asked-before-placement evidence, retained execution lease identity and outcome ownership after waiter loss. Original uploaded references do not become execution paths. Exact hold verification, local/remote filesystem safety, deadline and provider dispatch correlation are excluded. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/application/input_files.rs`.

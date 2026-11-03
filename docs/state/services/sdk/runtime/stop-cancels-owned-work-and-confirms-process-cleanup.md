@@ -169,3 +169,9 @@ PID namespace, including its intentionally unreaped zombies.
 ## Further reading
 
 [Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-server/src/conversation/application/provider_sessions.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/process.rs)
+
+## Model coverage
+
+Shared owner model: [sdk-cleanup](../cleanup.md). Fence admission, retire owners, and separate physical release from audit and finalization.
+
+Whole parent/child lifetime coordination is separately modeled in sdk-ownership; OS process termination is not proven. This relationship applies only to the stated scope, not every step of this journey. This scoped mapping retains earlier source checkpoints and is not executed implementation-test evidence.

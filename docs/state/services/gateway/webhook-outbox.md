@@ -3,7 +3,9 @@ id: gateway-webhook-outbox
 title: Durable outbound webhook state
 kind: feature
 status: mixed
-summary: Private intents, canonical cursors and causal delivery outcomes compose with owned product commands and signed sending; acknowledgement and retained cleanup stay distinct.
+summary: Private intents, canonical cursors and causal delivery outcomes compose
+  with owned product commands and signed sending; acknowledgement and retained
+  cleanup stay distinct.
 sourceRevision: "4b33de21f7fd68df83e308de4134ef1dda82f01f"
 parent: gateway
 sources:
@@ -84,8 +86,23 @@ diagramDetails:
   - diagram: 0
     node: Refused
     section: Failures and recovery
+model:
+  spec: tla/services/gateway/WebhookOutbox.tla
+  config: tla/services/gateway/WebhookOutbox.cfg
+modelCheck:
+  sourceRevision: "4b33de21f7fd68df83e308de4134ef1dda82f01f"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:04.252Z
+  config: tla/services/gateway/WebhookOutbox.cfg
+  modelDigest: 503f5d28aa1697fdb612925ae66c7b5ead22e11814ae0e7686f8dcd1cb3448c0
+  states: 14
+  held:
+    - PersistBeforePost
+    - KnownBeforeTerminal
+    - OneAttempt
+  broke: []
+  unchecked: []
 ---
-
 # Durable outbound webhook state
 
 The private outbox keeps each selected record's delivery identity, exact bytes,
@@ -716,3 +733,7 @@ the corrected complete webhook suite passes295/295 without retention exclusions.
 An independent affected review covers the time/identity relationship and existing
 timestamp-substitution/ABA controls. This source checkpoint does not establish a
 corrected remote platform or browser-stress pass.
+
+## Bounded rule model
+
+Owns one attempt's durable Sending publication before POST, retained observation before outcome callbacks and cold unresolved Sending becoming Unknown. It deliberately excludes queue selection, cursor resets, retention cleanup, retries and registration stop histories; these are separate safety obligations, not proved by this model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs`, `crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs`.

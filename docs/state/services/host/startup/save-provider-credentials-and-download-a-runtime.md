@@ -3,7 +3,8 @@ id: "host-startup-save-provider-credentials-and-download-a-runtime"
 title: "save provider credentials and download a runtime"
 kind: "operation"
 status: "implemented"
-summary: "A provider API key lets an external agent authenticate; it is different from the token used to access Nessa's gateway."
+summary: "A provider API key lets an external agent authenticate; it is
+  different from the token used to access Nessa's gateway."
 parent: "host-startup"
 sources:
   - "protocol/defaults/agent-credentials.json"
@@ -21,8 +22,21 @@ sources:
   - "src/onboarding/ui/agent-downloads.test.tsx"
 diagramLinks:
   Download: runtime-download
+model:
+  spec: tla/services/host/startup/CredentialSave.tla
+  config: tla/services/host/startup/CredentialSave.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:48:09.235Z
+  config: tla/services/host/startup/CredentialSave.cfg
+  modelDigest: 8076cfdf4b9e0b6aa25c34057d1ab2df087747af73186785f3c8355bb294b752
+  states: 13
+  held:
+    - IntentBeforeEffect
+    - HonestAcknowledgement
+  broke: []
+  unchecked: []
 ---
-
 # save provider credentials and download a runtime
 
 A provider API key lets an external agent authenticate; it is different from the token used to access Nessa's gateway. Native setup can save Claude and OpenCode keys on macOS. Codex sign-in remains external, and the other native secure-store adapter is unavailable.
@@ -70,3 +84,7 @@ flowchart LR
 ## Further reading
 
 [Source](../../../../../protocol/defaults/agent-credentials.json) · [Related source](../../../../../src/composition/browser-gate.tsx) · [Related tests](../../../../../src/onboarding/ui/agent-api-key-form.test.tsx)
+
+## Bounded rule model
+
+Owns target agreement, intent-before-store ordering and independent outcome acknowledgement. Uncertain is not refusal or confirmed write. Runtime downloads use their separate owner model. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `src-tauri/src/agent_credentials/application/save_api_key.rs`.

@@ -26,16 +26,47 @@ diagramDetails:
     node: Revoked
     section: Revoked credential
   - diagram: 0
-    edge: { from: Unrevoked, to: Revoked, label: 'explicit revoke [time >= issuance] / keep first revocation' }
+    edge:
+      {
+        from: Unrevoked,
+        to: Revoked,
+        label: 'explicit revoke [time >= issuance] / keep first revocation'
+      }
     section: Explicit revocation
   - diagram: 0
-    edge: { from: Unrevoked, to: Revoked, label: 'supersede / clamp time and name replacement' }
+    edge:
+      {
+        from: Unrevoked,
+        to: Revoked,
+        label: 'supersede / clamp time and name replacement'
+      }
     section: Supersession
   - diagram: 0
-    edge: { from: Revoked, to: Revoked, label: 'repeated revoke / return no new transition' }
+    edge:
+      {
+        from: Revoked,
+        to: Revoked,
+        label: 'repeated revoke / return no new transition'
+      }
     section: Repeated revocation
+model:
+  spec: tla/services/auth/CredentialReceipt.tla
+  config: tla/services/auth/CredentialReceipt.cfg
+modelCheck:
+  sourceRevision: "d883b0ed6544c112f441ae1de73f443c7306280f"
+  checker: tlc-1.7.4
+  date: 2026-11-03T02:47:25.658Z
+  config: tla/services/auth/CredentialReceipt.cfg
+  modelDigest: 2a74e85eaaa99c6e9d6313a680f8a33ecc10c41cd5d40837ce3a4fb9aeb30b1a
+  states: 5
+  held:
+    - TypeOK
+    - BearerReturnedOnce
+    - ReceiptRequiresOriginal
+    - RevocationHasOriginalFact
+  broke: []
+  unchecked: []
 ---
-
 # Credential lifecycle and access
 
 A credential is a way to prove who is asking for access. This chart shows whether its record has been revoked; that means that access has been withdrawn.
@@ -158,3 +189,11 @@ CI remain separate unfinished work. The first expiry observation belongs to the
 ## Further reading
 
 [Source](../../../../crates/nessa-auth/src/domain/models.rs) · [Related source](../../../../crates/nessa-auth/src/domain/transition.rs)
+
+## Model coverage
+
+Direct model: One issuance command receipt, bearer returned once, first revocation retained and replay returning current metadata without issuing again.
+
+The finite model checks safety only. Requested-time clamping, immutable fact decoder identity/order, audit durability, supersession identity and credential/member policy are documented source contracts, not checked here. Terminal states may stutter; no eventual completion or implementation proof is claimed.
+
+This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.

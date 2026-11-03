@@ -42,3 +42,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/workspace/model/session-search.ts) · [Related source](../../../../../src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx) · [Related tests](../../../../../src/desktop/workspace/model/session-search.test.ts)
+
+## Model coverage
+
+Disposition: shared owner model. The switcher uses the shared focusAfterPaint cancellation and target recheck owner after a pick. Reopening or pointer movement cancels the pending handoff. Search matching, ranked rows, clamped selection and modal key routing are pure contracts in session-search.ts and quick-switcher.tsx. Session placement uses the pane owner; the switcher does not independently authorize a backend operation. See [desktop-workspace-follow-focus-and-route-keyboard-actions](follow-focus-and-route-keyboard-actions.md).
+
+Settings and switcher UI appearance were not browser-checked. These models check bounded owner decisions and do not execute React or native platform effects.
