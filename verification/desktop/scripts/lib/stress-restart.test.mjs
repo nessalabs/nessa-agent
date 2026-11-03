@@ -279,6 +279,38 @@ for (const cause of [
   })
 }
 
+test("a live workspace read without a reported success owns nothing", async () => {
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    f.fail(f.socket())
+    const ws = f.socket()
+    request(ws)
+    response(ws)
+    assert.equal(await f.observer.readable(10_000), true)
+  })
+  assert.equal(f.lines.harmless.length, 0)
+  assert.equal(f.lines.errors.length, 1)
+  f.observer.dispose()
+})
+
+test("a live workspace read reported as success owns the refused line", async () => {
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    f.fail(f.socket())
+    const ws = f.socket()
+    request(ws)
+    response(ws)
+    const failures = []
+    const before = failures.length
+    if (!(await f.observer.readable(10_000))) failures.push("unread")
+    return failures.length === before
+  })
+  assert.deepEqual(f.lines.errors, [])
+  assert.equal(f.lines.harmless.length, 1)
+  assert.match(f.lines.harmless[0], /owned gateway restart; session reconnected/)
+  f.observer.dispose()
+})
+
 test("older identical text keeps every occurrence failed", async () => {
   const f = fixture()
   f.consoleError()

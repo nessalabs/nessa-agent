@@ -58,7 +58,21 @@ the matching console line, a replacement socket, and a successful browser
 workspace read. That restart's callback returned `undefined`, so the strict
 observer correctly refused to reclassify its line. The next verified restart
 encountered the identical earlier line and correctly refused to reclassify
-either copy. The observer and its error patterns remain unchanged. The tunnel
-step now returns success only after its retained provider state and browser
-read hold. A focused tunnel run passed 5/5 in each browser engine with the
-strict console result. Full-run regression verification remains in progress.
+either copy. The observer and its error patterns remain unchanged.
+
+The tunnel restart keeps its address, process, and browser-read checks inside
+`restartConsole.during` and returns success only when they hold. That return
+is the attribution. A reproduction, not left in the step, held the gateway
+down until Chromium logged `net::ERR_CONNECTION_REFUSED`. The tunnel step held
+either way. Without the return the console result failed, 4/5. With the return
+the same line was `owned gateway restart; session reconnected`, 5/5.
+
+On the step as it is committed, the default Chromium plan (`--inputFiles 0`,
+seed 1) held 64/64. Four connection-refused lines were owned; none failed.
+Two tunnel cycles and two restart cycles, with every other count at zero,
+held 7/7. A deliberate `console.error` outside the observation failed the
+console result, 4/5, and was not rewritten as owned. The observer's patterns
+are unchanged. Deleting the return does not fail the default plan on a fast
+machine, because the browser may not log the refusal inside that window; the
+caller lock is the check that the observation still returns its verified
+result. The overview-budget row above is not part of this verification.
