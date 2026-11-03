@@ -463,7 +463,9 @@ fn ordinary_enqueue_winning_after_resume_settlement_keeps_its_origin() {
 
 /// Decline that records NotResumed before successor admission is the only
 /// decision. The paused source save lets the pre-polled decline waiter take
-/// the scheduler before resume admits anything.
+/// the scheduler before resume admits anything. Resume must join that attempt.
+/// Re-locking as soon as the save finishes barges ahead of the waiter and
+/// queues a successor.
 #[test]
 fn decline_winning_before_successor_admission_leaves_no_successor() {
     let release_at_idle = Arc::new(Mutex::new(None::<oneshot::Sender<()>>));

@@ -102,26 +102,17 @@ the representation is settled.
 
 ## After #981: resumption linearization (#1003)
 
-Implemented. A decline that persists `NotResumed` or its preparation before
-successor admission is the decision: `resume_turn` returns `NotOwed` and does
-not enqueue. Resume yields once after source settlement so a decline already
-waiting on the scheduler can record that decision before admission. Admission
-re-checks the persisted source under the scheduler lock. Holding that lock
-from settlement through admission would hide this race and let resume win it.
-A second ownership graph loses because the scheduler and the saved history
-already decide the turn.
-
-Inspect the merged scheduler and cancellation design again before edits. Keep
-source settlement, owed-turn decision and successor admission under the existing
-decision owner, rather than releasing the scheduler between decision and
-accept_work. Avoid recursive acquisition when extracting the already-owned
-admission path. Persisted evidence, not a caller's successful wait, decides the
-winner. `resume_turn_at` currently calls private `accept_work` directly, whereas
-public enqueue supervises owned admission. A scheduler-lock extraction alone
-does not establish caller-loss safety: transfer one owned task over source
-settlement, successor save and receipt publication, or preserve a resumable
-source if cancellation precedes that transfer. Force caller drop at both source
-and successor saves. Do not hold an application lock across unrelated provider work.
+Implemented. A decline that persists `NotResumed` before successor admission
+is the decision: `resume_turn` returns `NotOwed` and does not enqueue. Source
+settlement releases the scheduler so a decline already in flight can take it.
+That decline records its preparation and the `NotResumed` edge before it
+releases the scheduler. Resume joins that attempt, then admission re-checks
+the persisted source under the scheduler lock and holds that lock through the
+successor save. One yield is not that decision: the resuming task can otherwise
+lock again and queue a successor before the waiting decline runs. Holding the
+scheduler from settlement through admission would hide that waiter and let
+resume win. A second ownership graph loses because the scheduler and the saved
+history already decide the turn.
 
 | Row | Ordering | Expected regression |
 | --- | --- | --- |
