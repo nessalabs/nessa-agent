@@ -102,7 +102,7 @@ fn wire(status: &LoginsStatus) -> WireStatus {
     }
 }
 
-fn caller(session: &AuthenticatedSession) -> LoginCaller {
+pub(super) fn caller(session: &AuthenticatedSession) -> LoginCaller {
     let context = session.context();
     LoginCaller {
         organization_id: context.organization_id().as_str().to_owned(),

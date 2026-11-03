@@ -294,12 +294,12 @@ pub(super) async fn product_state(
     };
     #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
+    // One store per agent's saved login, shared by everything that reads
+    // or writes it (issue #1260).
+    let login_stores = crate::logins::infrastructure::login_stores(&vault.vault);
     #[cfg(unix)]
     let claude_sign_ins = Arc::new(VaultClaudeSignIns(
-        crate::logins::infrastructure::login_store(
-            &vault.vault,
-            nessa_protocol::agents::AgentId::Claude,
-        ),
+        login_stores[&nessa_protocol::agents::AgentId::Claude].clone(),
     ));
     #[cfg(unix)]
     let workspace_service = Arc::new(
@@ -317,12 +317,11 @@ pub(super) async fn product_state(
                     libc::geteuid()
                 }),
                 relay_program: std::env::current_exe().map_err(setup_error)?,
-                claude_sign_ins: claude_sign_ins.clone(),
+                claude_sign_ins,
             }),
             Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
-            claude_sign_ins,
         )
         .with_image(worker_image()),
     );
@@ -430,7 +429,8 @@ pub(super) async fn product_state(
     #[cfg(not(unix))]
     let login_changed: Arc<dyn Fn(nessa_protocol::agents::AgentId) + Send + Sync> =
         Arc::new(|_| {});
-    let saved_logins = super::logins::compose(namespace, vault.vault.clone(), login_changed)?;
+    let saved_logins =
+        super::logins::compose(namespace, vault.vault.clone(), login_stores, login_changed)?;
     // A leftover plaintext sign-in is removed before agents start, whether or
     // not the vault is unlocked. A failed delete stops startup; the file is
     // not left in place and treated as signed out.

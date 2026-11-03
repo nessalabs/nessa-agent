@@ -6,7 +6,6 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use super::local_auth::{conversation_root, SystemClock};
 use crate::core::RunError;
-use crate::logins::infrastructure::login_store;
 use crate::logins::{
     application::SavedLoginsService,
     domain::devices_entry,
@@ -16,21 +15,19 @@ use crate::secrets::{SecretStore, VaultSecret};
 use nessa_protocol::agents::AgentId;
 use nessa_vault::application::Vault;
 
-/// The saved logins in `vault`, audited under `namespace`.
+/// The saved logins kept in `logins` (one store per agent, from
+/// `login_stores`) with the switches in `vault`, audited under `namespace`.
 ///
 /// # Errors
 /// The policy bundle does not validate.
 pub(super) fn compose(
     namespace: &Path,
     vault: Arc<Vault>,
+    logins: BTreeMap<AgentId, Arc<dyn SecretStore>>,
     changed: Arc<dyn Fn(AgentId) + Send + Sync>,
 ) -> Result<Arc<SavedLoginsService>, RunError> {
     let policy = CedarLoginPolicyEvaluator::new()
         .map_err(|_| RunError::Agent("the saved-login policy bundle does not validate".into()))?;
-    let logins: BTreeMap<AgentId, Arc<dyn SecretStore>> = AgentId::ALL
-        .iter()
-        .map(|agent| (*agent, login_store(&vault, *agent)))
-        .collect();
     Ok(Arc::new(
         SavedLoginsService::new(
             logins,

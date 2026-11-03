@@ -1,7 +1,7 @@
 //! Boat's adapter uses the real vault's encryption and unlock-generation fence.
 use crate::workspaces::{
     application::{ClaudeSignIns, Settings},
-    domain::{BoatConnection, ClaudeSignIn, Failure},
+    domain::{BoatConnection, Failure},
     infrastructure::{VaultClaudeSignIns, VaultSettings},
 };
 use nessa_vault::{
@@ -94,13 +94,9 @@ async fn a_claude_sign_in_is_the_saved_claude_login_and_an_older_entry_moves_the
             credential: "fixture-credential".into(),
         },
     );
-    let login = crate::logins::infrastructure::login_store(&vault, AgentId::Claude);
+    let login = crate::logins::infrastructure::login_stores(&vault)[&AgentId::Claude].clone();
     let sign_ins = VaultClaudeSignIns(login.clone());
-    let token = |value: &str| ClaudeSignIn::new(value.into()).unwrap();
-    assert!(matches!(
-        sign_ins.save(token("sk-ant-oat01-locked")).await,
-        Err(Failure::Locked)
-    ));
+    assert!(matches!(sign_ins.read().await, Err(Failure::Locked)));
     vault.create(&session.lease(), passphrase(), &[]).unwrap();
     assert!(sign_ins.read().await.unwrap().is_none());
     // What an earlier build saved for Boat is found, and kept as the saved
@@ -122,7 +118,7 @@ async fn a_claude_sign_in_is_the_saved_claude_login_and_an_older_entry_moves_the
             .as_slice(),
         b"sk-ant-oat01-older"
     );
-    sign_ins.save(token("sk-ant-oat01-second")).await.unwrap();
+    login.write(b"sk-ant-oat01-second").unwrap();
     let encrypted = std::fs::read(root.path().join("vault/entries.enc")).unwrap();
     assert!(!encrypted
         .windows(b"sk-ant-oat01".len())

@@ -109,10 +109,4 @@ impl ClaudeSignIns for VaultClaudeSignIns {
         .await
         .map_err(|_| Failure::Storage)?
     }
-    async fn save(&self, sign_in: ClaudeSignIn) -> Result<(), Failure> {
-        let store = self.0.clone();
-        tokio::task::spawn_blocking(move || store.write(sign_in.as_bytes()).map_err(unavailable))
-            .await
-            .map_err(|_| Failure::Storage)?
-    }
 }

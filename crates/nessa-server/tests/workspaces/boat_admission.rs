@@ -885,7 +885,4 @@ impl crate::workspaces::application::ClaudeSignIns for NoSignIn {
     async fn read(&self) -> Result<Option<crate::workspaces::domain::ClaudeSignIn>, Failure> {
         Ok(None)
     }
-    async fn save(&self, _: crate::workspaces::domain::ClaudeSignIn) -> Result<(), Failure> {
-        Ok(())
-    }
 }

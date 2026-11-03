@@ -126,9 +126,9 @@ Boat gives a VM made from the pinned image share code none of the owner's
 logins, so Claude in it is refused until a sign-in is supplied (ADR 501, #1246).
 **Authenticate** on the refusal card has the desktop host run `claude
 setup-token` in the background and hands its token to `boat.saveClaudeSignIn`.
-The gateway keeps it as the saved Claude login, the vault entry
-`login.claude` that Settings › Saved logins shows and every other machine is
-handed too (#1260): one entry, whichever wrote it. A `boat.claude-sign-in`
+The gateway saves it through Saved logins as the Claude login, the vault
+entry `login.claude` that Settings › Saved logins shows and every other
+machine is handed too (#1260), recorded in the logins audit. A `boat.claude-sign-in`
 an earlier build kept is moved there when first read. `boat.disconnect`
 forgets only the connection; the login is removed from Saved logins. Every serve of a Boat VM reads
 it afresh and writes it as the first line of `env serve`'s standard input,
