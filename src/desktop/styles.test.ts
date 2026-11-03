@@ -698,6 +698,30 @@ it("says !important in the workspace's stylesheets only where a rule waits on it
   })
 })
 
+it("judges a short home by the room below the title row, not the pane's box", () => {
+  // The pane runs up behind its title row. A query on the pane counts that
+  // row as room, so a 640px window — a 640px pane — keeps the large scene.
+  const panes = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const bodyRule = panes.indexOf("container: workspace-pane-body / size")
+  const body = panes
+    .slice(
+      panes.lastIndexOf(".workspace-pane-body:has(> .workspace-pane-home) {", bodyRule),
+    )
+    .split("}")[0]
+  expect(body).toContain("container: workspace-pane-body / size")
+  const home = readFileSync(
+    new URL("./workspace/ui/panes/conversation.css", import.meta.url),
+    "utf8",
+  )
+  expect(home).toContain(
+    "@container workspace-pane-body (width < 640px) or (height < 640px)",
+  )
+  expect(home).not.toContain("@container workspace-pane (width < 640px)")
+})
+
 it("quiets a short pane's composer at the height the pane limits name", () => {
   // A container query cannot read a property: the stylesheet repeats the limit.
   const sheet = readFileSync(
