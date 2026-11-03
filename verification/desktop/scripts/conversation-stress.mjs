@@ -4535,10 +4535,7 @@ const steps = {
       const offered = await offers(run, (environments) =>
         workers.every((each) => environments.includes(each.name)),
       )
-      // SSH hosts an earlier step connected come before it; among the
-      // computers, the pool is offered first.
-      const peers = offered?.filter((name) => name.startsWith("peer:")) ?? []
-      if (peers[0] !== POOL) {
+      if (computers(offered)[0] !== POOL) {
         failures.push(
           `the gateway offers ${JSON.stringify(offered)}, not ${POOL} before both workers`,
         )
@@ -4635,7 +4632,7 @@ const steps = {
         (environments) =>
           !environments.includes(from.name) && environments.includes(to.name),
       )
-      if (!left || left[0] !== POOL)
+      if (!left || computers(left)[0] !== POOL)
         failures.push(`after the drain the gateway offers ${JSON.stringify(left)}`)
       // The gateway's view of it, once the drain's end of its lease is
       // there. A view asked while the gateway closes the agent that lease
@@ -8866,6 +8863,12 @@ async function switchTunnel(run, enabled, failures) {
   })
   return held
 }
+
+/**
+ * The computers among what the gateway offers, in its order (the pool
+ * first): SSH hosts an earlier step connected are offered before them.
+ */
+const computers = (offered) => offered?.filter((name) => name.startsWith("peer:")) ?? []
 
 const offers = (run, holds) =>
   waitFor(async () => {
