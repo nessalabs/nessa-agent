@@ -84,7 +84,7 @@ export function crossBuildHostBuilds({ root, environment, run }) {
     return undefined
   }
   try {
-    run("cargo", ["zigbuild", "--version"], { cwd: root, stdio: "ignore" })
+    run("cargo", ["zigbuild", "--help"], { cwd: root, stdio: "ignore" })
   } catch {
     throw new Error(
       "A local build carries the Linux `nessa` Boat VMs run, cross-built with cargo-zigbuild. " +
