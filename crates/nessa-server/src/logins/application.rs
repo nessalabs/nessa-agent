@@ -10,7 +10,9 @@ use nessa_protocol::{agents::AgentId, lease::Login};
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
 use uuid::Uuid;
 
-use super::domain::{DeviceSwitches, InvalidSwitches};
+use serde::{Deserialize, Serialize};
+
+use super::domain::{DeviceSwitches, InvalidSwitches, MAX_SWITCHED_ON};
 use crate::secrets::{SecretStore, SecretUnavailable};
 
 /// Who asked, as every record names them.
@@ -169,12 +171,10 @@ impl SavedLoginsService {
             None => Ok(DeviceSwitches::default()),
             // A list this build cannot read switches nothing on, and the
             // next switch turned writes a list it can.
-            Some(bytes) => Ok(
-                DeviceSwitches::decode(&bytes).unwrap_or_else(|InvalidSwitches| {
-                    tracing::error!("the saved-login device switches are unreadable; none is on");
-                    DeviceSwitches::default()
-                }),
-            ),
+            Some(bytes) => Ok(decode_switches(&bytes).unwrap_or_else(|InvalidSwitches| {
+                tracing::error!("the saved-login device switches are unreadable; none is on");
+                DeviceSwitches::default()
+            })),
         }
     }
 
@@ -287,7 +287,7 @@ impl SavedLoginsService {
             Some(&caller),
             LoginEvent::SwitchRequested { peer, on },
         )?;
-        if let Err(problem) = self.devices.write(&next.encode()) {
+        if let Err(problem) = self.devices.write(&encode_switches(&next)) {
             self.record_failure(
                 &operation_id,
                 &caller,
@@ -358,4 +358,36 @@ impl SavedLoginsService {
         .ok()
         .map(|()| login)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredSwitches {
+    on: Vec<String>,
+}
+
+/// The bytes the `login.devices` vault entry holds for `switches`.
+#[must_use]
+pub fn encode_switches(switches: &DeviceSwitches) -> Vec<u8> {
+    serde_json::to_vec(&StoredSwitches {
+        on: switches.on().map(PeerEnvironment::name).collect(),
+    })
+    .unwrap_or_default()
+}
+
+/// Read back what [`encode_switches`] wrote.
+///
+/// # Errors
+/// [`InvalidSwitches`] for anything else.
+pub fn decode_switches(bytes: &[u8]) -> Result<DeviceSwitches, InvalidSwitches> {
+    let stored: StoredSwitches = serde_json::from_slice(bytes).map_err(|_| InvalidSwitches)?;
+    if stored.on.len() > MAX_SWITCHED_ON {
+        return Err(InvalidSwitches);
+    }
+    let peers = stored
+        .on
+        .iter()
+        .map(|name| PeerEnvironment::parse(name).map_err(|_| InvalidSwitches))
+        .collect::<Result<Vec<_>, _>>()?;
+    DeviceSwitches::from_peers(peers)
 }

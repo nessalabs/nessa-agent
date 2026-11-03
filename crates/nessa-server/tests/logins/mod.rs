@@ -13,8 +13,8 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::application::{
-    AuditUnavailable, LoginAudit, LoginCaller, LoginEvent, LoginFacts, LoginPolicyEvaluator,
-    LoginRecord, LoginsError, SavedLoginsService, Withheld,
+    decode_switches, encode_switches, AuditUnavailable, LoginAudit, LoginCaller, LoginEvent,
+    LoginFacts, LoginPolicyEvaluator, LoginRecord, LoginsError, SavedLoginsService, Withheld,
 };
 use super::domain::{DeviceSwitches, InvalidSwitches, MAX_SWITCHED_ON};
 use super::infrastructure::{cedar::CedarLoginPolicyEvaluator, DurableLoginAudit};
@@ -261,10 +261,7 @@ async fn a_device_switch_is_kept_in_the_vault_and_recorded() {
         .unwrap();
     let stored = fixture.devices.value.lock().unwrap().clone().unwrap();
     assert_eq!(
-        DeviceSwitches::decode(&stored)
-            .unwrap()
-            .on()
-            .collect::<Vec<_>>(),
+        decode_switches(&stored).unwrap().on().collect::<Vec<_>>(),
         [&peer(1)]
     );
     let status = fixture
@@ -454,12 +451,12 @@ fn the_switch_list_reads_back_only_what_it_wrote() {
         .unwrap()
         .switched(peer(1), true)
         .unwrap();
-    let bytes = switches.encode();
+    let bytes = encode_switches(&switches);
     assert_eq!(
         serde_json::from_slice::<Value>(&bytes).unwrap(),
         serde_json::json!({"on": [peer(1).name(), peer(2).name()]})
     );
-    assert_eq!(DeviceSwitches::decode(&bytes), Ok(switches));
+    assert_eq!(decode_switches(&bytes), Ok(switches));
     let twice = serde_json::json!({"on": [peer(1).name(), peer(1).name()]}).to_string();
     for bad in [
         "{}".to_owned(),
@@ -468,7 +465,7 @@ fn the_switch_list_reads_back_only_what_it_wrote() {
         twice,
     ] {
         assert_eq!(
-            DeviceSwitches::decode(bad.as_bytes()),
+            decode_switches(bad.as_bytes()),
             Err(InvalidSwitches),
             "{bad}"
         );

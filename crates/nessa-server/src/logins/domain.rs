@@ -3,7 +3,6 @@
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use nessa_vault::domain::EntryName;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// The vault entry an agent's saved login is kept in: one per agent, so no
@@ -41,12 +40,6 @@ pub struct DeviceSwitches(BTreeSet<PeerEnvironment>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidSwitches;
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Stored {
-    on: Vec<String>,
-}
-
 impl DeviceSwitches {
     /// Whether `peer` is switched on.
     #[must_use]
@@ -77,28 +70,17 @@ impl DeviceSwitches {
         Ok(Self(next))
     }
 
-    /// The bytes the vault entry holds.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        serde_json::to_vec(&Stored {
-            on: self.0.iter().map(PeerEnvironment::name).collect(),
-        })
-        .unwrap_or_default()
-    }
-
-    /// Read back what [`Self::encode`] wrote.
+    /// Switches with exactly `peers` on.
     ///
     /// # Errors
-    /// [`InvalidSwitches`] for anything else.
-    pub fn decode(bytes: &[u8]) -> Result<Self, InvalidSwitches> {
-        let stored: Stored = serde_json::from_slice(bytes).map_err(|_| InvalidSwitches)?;
-        if stored.on.len() > MAX_SWITCHED_ON {
-            return Err(InvalidSwitches);
-        }
+    /// [`InvalidSwitches`] when a machine is named twice or there are more
+    /// than [`MAX_SWITCHED_ON`].
+    pub fn from_peers(
+        peers: impl IntoIterator<Item = PeerEnvironment>,
+    ) -> Result<Self, InvalidSwitches> {
         let mut on = BTreeSet::new();
-        for name in stored.on {
-            let peer = PeerEnvironment::parse(&name).map_err(|_| InvalidSwitches)?;
-            if !on.insert(peer) {
+        for peer in peers {
+            if !on.insert(peer) || on.len() > MAX_SWITCHED_ON {
                 return Err(InvalidSwitches);
             }
         }
