@@ -16,8 +16,94 @@ import {
   type RealtimeTransport,
 } from "../application/ports"
 
+/** How long `check` watches the call's audio for. */
+const CHECK_MS = 1_000
+
+/** A level the microphone counts as sound at, above a quiet room's hiss. */
+const SOUND_LEVEL = 0.02
+
+/** Audio bytes the call has sent so far, from the peer's own statistics. */
+async function audioBytesSent(peer: RTCPeerConnection): Promise<number> {
+  let sent = 0
+  for (const report of (await peer.getStats()).values()) {
+    const stat = report as { type?: string; kind?: string; bytesSent?: number }
+    if (stat.type === "outbound-rtp" && stat.kind === "audio") sent += stat.bytesSent ?? 0
+  }
+  return sent
+}
+
 /** How long the data channel has to open after the answer. */
 const OPEN_TIMEOUT_MS = 15_000
+
+/**
+ * How long macOS has to answer for the microphone. WebKit's request has no
+ * limit of its own: unanswered, a call would say "Connecting…" forever.
+ */
+const MICROPHONE_TIMEOUT_MS = 20_000
+
+/** Where a call that failed to connect got to, each with what to tell the person. */
+type Stage = "setup" | "offer" | "answer" | "open"
+
+const failed: Record<Stage, string> = {
+  setup: "Couldn’t set up the call’s audio on this Mac. Try again.",
+  offer: "Couldn’t reach OpenAI to connect the call. Check the connection and try again.",
+  answer: "OpenAI didn’t accept the call. Try again.",
+  open: "OpenAI accepted the call but never opened it. Try again.",
+}
+
+const microphoneRefused =
+  "Nessa can’t use the microphone. Allow it in System Settings › Privacy & Security › Microphone."
+
+const microphoneUnanswered =
+  "macOS didn’t answer for the microphone. Check System Settings › Privacy & Security › Microphone, then try again."
+
+/**
+ * The microphone, asked for once with a time limit. A stream that arrives
+ * after the limit, or after the call ended, is stopped as it arrives.
+ */
+function askMicrophone(signal: AbortSignal): Promise<MediaStream> {
+  return new Promise<MediaStream>((resolve, reject) => {
+    let late = false
+    const giveUp = (sentence: string) => {
+      late = true
+      clearTimeout(timer)
+      signal.removeEventListener("abort", aborted)
+      reject(new TransportRefused(sentence))
+    }
+    const aborted = () => giveUp("Couldn’t connect the call. Try again.")
+    // A call ended before it asked never asks.
+    if (signal.aborted)
+      return reject(new TransportRefused("Couldn’t connect the call. Try again."))
+    const timer = setTimeout(() => giveUp(microphoneUnanswered), MICROPHONE_TIMEOUT_MS)
+    signal.addEventListener("abort", aborted, { once: true })
+    let asked: Promise<MediaStream>
+    try {
+      asked = navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      })
+    } catch (error) {
+      // No microphone at all in this web view.
+      console.warn("Voice: the microphone can’t be asked for", error)
+      return giveUp(microphoneRefused)
+    }
+    asked.then(
+      (stream) => {
+        if (late) {
+          for (const track of stream.getTracks()) track.stop()
+          return
+        }
+        clearTimeout(timer)
+        signal.removeEventListener("abort", aborted)
+        resolve(stream)
+      },
+      (error: unknown) => {
+        if (late) return
+        console.warn("Voice: the microphone was refused", error)
+        giveUp(microphoneRefused)
+      },
+    )
+  })
+}
 
 function meter(context: AudioContext, stream: MediaStream): () => number {
   const analyser = context.createAnalyser()
@@ -35,26 +121,15 @@ function meter(context: AudioContext, stream: MediaStream): () => number {
 export function webrtcTransport(): RealtimeTransport {
   return {
     async connect(call: VoiceCall, signal: AbortSignal): Promise<RealtimeConnection> {
-      const refused = () => new TransportRefused("Couldn’t connect the call. Try again.")
       const audio = new Audio()
       audio.autoplay = true
       let microphone: MediaStream
       try {
-        microphone = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        })
-      } catch {
-        throw new TransportRefused(
-          "Nessa can’t use the microphone. Allow it in System Settings › Privacy & Security › Microphone.",
-        )
-      }
-      if (signal.aborted) {
-        for (const track of microphone.getTracks()) track.stop()
-        throw refused()
+        microphone = await askMicrophone(signal)
+      } catch (error) {
+        throw error instanceof TransportRefused
+          ? error
+          : new TransportRefused(microphoneRefused)
       }
       // Everything below is let go of by `release`, which owns the microphone
       // from here on: a constructor that throws still stops it.
@@ -78,14 +153,19 @@ export function webrtcTransport(): RealtimeTransport {
         return true
       }
       let opened = false
+      let answered = false
       const aborted = () => release()
       signal.addEventListener("abort", aborted)
       let channel: RTCDataChannel
+      let stage: Stage = "setup"
       try {
         const connection = new RTCPeerConnection()
         peer = connection
         const meters = new AudioContext()
         context = meters
+        // A context made away from a click starts suspended, and its meters
+        // then read silence. A call is reason enough to run it.
+        void meters.resume().catch(() => {})
         input = meter(meters, microphone)
         connection.addEventListener("track", (event) => {
           const [stream] = event.streams
@@ -96,6 +176,7 @@ export function webrtcTransport(): RealtimeTransport {
         for (const track of microphone.getTracks()) connection.addTrack(track, microphone)
         channel = connection.createDataChannel("oai-events")
         channel.addEventListener("message", (message) => {
+          answered = true
           try {
             const event: unknown = JSON.parse(String(message.data))
             if (
@@ -122,6 +203,7 @@ export function webrtcTransport(): RealtimeTransport {
         })
         const offer = await connection.createOffer()
         await connection.setLocalDescription(offer)
+        stage = "offer"
         const response = await fetch(call.callUrl, {
           method: "POST",
           body: offer.sdp,
@@ -131,10 +213,12 @@ export function webrtcTransport(): RealtimeTransport {
           },
           signal: AbortSignal.any([signal, AbortSignal.timeout(OPEN_TIMEOUT_MS)]),
         })
+        stage = "answer"
         if (!response.ok) throw new Error(`call refused (${response.status})`)
         const answer = await response.text()
         if (released) throw new Error("ended while connecting")
         await connection.setRemoteDescription({ type: "answer", sdp: answer })
+        stage = "open"
         await new Promise<void>((resolve, reject) => {
           if (channel.readyState === "open") return resolve()
           const timer = setTimeout(() => reject(new Error("timed out")), OPEN_TIMEOUT_MS)
@@ -156,9 +240,14 @@ export function webrtcTransport(): RealtimeTransport {
           )
         })
         if (released) throw new Error("ended while connecting")
-      } catch {
+      } catch (error) {
+        // An ended call is not a failure to tell anyone about.
+        const ended = signal.aborted
         release()
-        throw refused()
+        if (!ended) console.warn(`Voice: the call failed at ${stage}`, error)
+        throw new TransportRefused(
+          ended ? "Couldn’t connect the call. Try again." : failed[stage],
+        )
       }
       opened = true
       return {
@@ -174,6 +263,25 @@ export function webrtcTransport(): RealtimeTransport {
         },
         setSpeaker: (on) => {
           audio.muted = !on
+        },
+        check: async () => {
+          const live = peer
+          if (released || !live)
+            return { answered, audioSent: false, microphoneSound: false }
+          // A statistics read that fails says nothing either way.
+          const before = await audioBytesSent(live).catch(() => null)
+          let loudest = 0
+          const until = Date.now() + CHECK_MS
+          while (Date.now() < until) {
+            loudest = Math.max(loudest, input())
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          }
+          const after = await audioBytesSent(live).catch(() => null)
+          return {
+            answered,
+            audioSent: before === null || after === null ? null : after > before,
+            microphoneSound: context?.state === "running" ? loudest >= SOUND_LEVEL : null,
+          }
         },
         close: () => void release(),
       }

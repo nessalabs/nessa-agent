@@ -171,10 +171,7 @@ export const Conversation = memo(function Conversation({
 
 /** The window's call, above the composer, when it talks to this conversation. */
 function ConversationVoice({ sessionId }: { sessionId: string }) {
-  const agent = useWorkspaceSelector(
-    (state) => entry(state.workspace.transcripts, sessionId)?.agent,
-  )
-  return <VoiceDock sessionId={sessionId} agent={agent} />
+  return <VoiceDock sessionId={sessionId} />
 }
 
 /** The docked composer, showing the model the session's next message is sent with. */
