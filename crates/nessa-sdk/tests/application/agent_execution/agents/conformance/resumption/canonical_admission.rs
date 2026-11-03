@@ -460,3 +460,65 @@ fn ordinary_enqueue_winning_after_resume_settlement_keeps_its_origin() {
             drop(queued);
         });
 }
+
+/// Decline that records NotResumed before successor admission is the only
+/// decision. The paused source save lets the pre-polled decline waiter take
+/// the scheduler before resume admits anything.
+#[test]
+fn decline_winning_before_successor_admission_leaves_no_successor() {
+    let release_at_idle = Arc::new(Mutex::new(None::<oneshot::Sender<()>>));
+    let checkpoint = release_at_idle.clone();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .on_thread_park(move || {
+            if let Some(release) = checkpoint.lock().unwrap().take() {
+                release
+                    .send(())
+                    .expect("resume is waiting on its source save");
+            }
+        })
+        .build()
+        .unwrap()
+        .block_on(async {
+            let saved = cut_off_while_running("decline-wins").await;
+            let (agent, _backend, storage, _hold) = restore_holding(saved).await;
+            let owed = agent.owed_turns().await.remove(0);
+            let (entered, release) = storage.pause_next_save();
+            let resuming = tokio::spawn({
+                let agent = agent.clone();
+                let owed = owed.clone();
+                async move { agent.resume_turn(&owed, resumer()).await }
+            });
+            bounded(entered).await.unwrap();
+            let declining = tokio::spawn({
+                let agent = agent.clone();
+                let owed = owed.clone();
+                async move { agent.decline_turn(&owed, resumer()).await }
+            });
+            *release_at_idle.lock().unwrap() = Some(release);
+            let (resumed, declined) = bounded(async { tokio::join!(resuming, declining) }).await;
+            assert!(
+                matches!(resumed.unwrap(), Ok(Resumed::NotOwed)),
+                "a decline that landed first leaves resume with nothing to admit"
+            );
+            declined.unwrap().unwrap();
+            let history = storage.snapshot().invocations;
+            assert_eq!(history.len(), 1, "decline finality admits no successor");
+            assert!(history[0].decline.is_some());
+            assert!(history[0]
+                .scheduling
+                .iter()
+                .any(|edge| edge.cause == SchedulingCause::NotResumed));
+            assert!(resumed_turn_id(&history, owed.execution_id()).is_none());
+            bounded(agent.close(actor())).await.unwrap();
+
+            let reopened = MemoryStorage::default();
+            reopened.0.lock().unwrap().snapshot = Some(storage.snapshot());
+            let (restored, _, restored_storage) = workflow_from_storage(reopened).await;
+            assert!(restored.owed_turns().await.is_empty());
+            assert_eq!(restored_storage.snapshot().invocations.len(), 1);
+            let again = restored.owed_turns().await;
+            assert!(again.is_empty());
+            bounded(restored.close(actor())).await.unwrap();
+        });
+}

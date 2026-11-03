@@ -163,7 +163,7 @@ export const KNOBS = {
   },
   pools: {
     default: 1,
-    what: "times a conversation placed on any worker moves to another when its worker drains",
+    what: "times a conversation placed on any worker goes where Devices › Thread order lets it (one worker left out there, then let back in) and moves to another when its worker drains",
   },
   devices: {
     default: 1,
@@ -175,7 +175,7 @@ export const KNOBS = {
   },
   drifts: {
     default: 1,
-    what: "gateway restarts with a changed agent PATH and TMPDIR, then a send to the existing conversation completes",
+    what: "gateway restarts with a changed agent PATH and TMPDIR, then a send completes; a focused Claude context with old history also survives a fingerprint change and cold restart before its first input",
   },
   upgrades: {
     default: 1,

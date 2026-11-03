@@ -25,6 +25,9 @@ diagramLinks:
   Extensions: "extensions"
   Tooling: "tooling"
   Journeys: "user-flow-coverage"
+  GitHubRelay: "github-webhooks"
+  Environment: "gateway-environment-leases"
+  Peers: "gateway-peer-gateways"
 ---
 
 # Nessa system
@@ -56,6 +59,9 @@ flowchart TB
     Credentials[Agent credential values]
     Extensions[Extensions and UI integration]
     Tooling[Developer and release tooling]
+    GitHubRelay[Optional hosted GitHub relay]
+    Environment[Remote environment lease worker]
+    Peers[Paired peer gateways]
     Host -->|mounts surfaces| Desktop
     Host -->|manages release gateway| Gateway
     Desktop -->|product commands| Client
@@ -70,6 +76,9 @@ flowchart TB
     Gateway -->|configured secrets| Credentials
     Extensions -->|host integration| Desktop
     Tooling -->|build artifacts| Host
+    Gateway -->|bounded remote work leases| Environment
+    Gateway -->|authorized peer record reads| Peers
+    GitHubRelay -->|opt-in retained events| Gateway
 ```
 
 ## Opening Nessa and sending a message
@@ -132,6 +141,20 @@ The browser connects to an existing gateway using its browser session. The nativ
 | MCP Apps and external UI package boundaries | [Extensions and UI](services/extensions/README.md) |
 | Runtime assembly and release operations | [Tooling](services/tooling/README.md) |
 
+## Feature ownership and model coverage
+
+The [feature verification map](feature-verification.md) accounts for the feature
+pages across chat, desktop workspace, native startup, attachments, agent execution,
+authentication, storage, devices, remote environments, backups and GitHub events.
+Each stateful owner has a linked bounded model or an explicit shared-owner scope.
+Component maps, pure value contracts and external reference packages keep separate
+dispositions. The model mapping is recomputed by `pnpm docs:state:coverage`.
+
+The [gateway](services/gateway/README.md) now also maps backup export and restore,
+peer connections, environment leases, tunnels and source-bound agent thread tools.
+Those operations retain their own admission, identity and cleanup boundaries.
+A component-map arrow is a dependency, not a claim that two owners settle together.
+
 ## Which source do these pages describe?
 
 Individual pages record `sourceRevision` when their behavior is reviewed against
@@ -140,8 +163,10 @@ ID under Sources and provenance. Pages without it have no recorded checkpoint;
 the system root does not make its children current. The [checkpoint contract](authoring.md#source-review-checkpoint)
 explains how to maintain it and compare it with a failing checkout.
 
-The [latest bounded audit](provenance.md#mainline-lifecycle-refresh-2026-10-23)
-records its source and scope. Its reviewed behavior pages carry that source
+The [latest verification refresh](provenance.md#integrated-main-qualification-2026-11-02)
+records its source, checked lifecycle pages and exclusions. The earlier
+[mainline audit](provenance.md#mainline-lifecycle-refresh-2026-10-23) retains its
+historical scope. Its reviewed behavior pages carry that source
 revision; unrelated historical pages remain unmarked. A checkpoint records a
 source review, not a runtime test result.
 
@@ -161,6 +186,8 @@ Start with the [user journey inventory](user-flow-coverage.md) to follow goals i
 - [Repository sweep](inventory.md): what was inspected and where state is owned.
 - [Gaps and improvements](gaps.md): evidence-backed limits and next work.
 - [Authoring and maintenance](authoring.md): document contract and statechart notation.
+- [Verification commands](services/tooling/verification.md): catalog, TLC, browser and provider evidence.
+- [Feature verification map](feature-verification.md): every feature page, model owner and explicit coverage boundary.
 - [Risk evidence](risks.md): existing reproductions, corrections and exclusions.
 - [Flow-map provenance](provenance.md): historical baselines, contributing PRs and original inspection limits.
 

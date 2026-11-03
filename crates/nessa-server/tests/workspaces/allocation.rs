@@ -1,6 +1,6 @@
 //! Allocation is tested through the application ports with controllable provider
 //! admission. No real account or secret is used in these ordering fixtures.
-use crate::conversation::domain::{ChannelId, VmLifetime, VmLifetimeScope, VmLifetimeSettings};
+use crate::conversation::domain::{ChannelId, SettingsScope, VmLifetime, VmLifetimeSettings};
 use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
 use crate::workspaces::infrastructure::{ConfigBoatRuntimeSettings, RuntimeSettingsAudit};
 use crate::workspaces::{application::*, domain::*};
@@ -97,17 +97,17 @@ impl Settings for Config {
 }
 #[async_trait]
 impl RuntimeSettings for Config {
-    async fn read(&self, scope: &VmLifetimeScope) -> Result<VmLifetimeSettings, Failure> {
+    async fn read(&self, scope: &SettingsScope) -> Result<VmLifetimeSettings, Failure> {
         Ok(match scope {
-            VmLifetimeScope::Global => VmLifetimeSettings::global(VmLifetime::Unlimited),
-            VmLifetimeScope::Channel(channel) => {
+            SettingsScope::Global => VmLifetimeSettings::global(VmLifetime::Unlimited),
+            SettingsScope::Channel(channel) => {
                 VmLifetimeSettings::for_channel(channel.clone(), VmLifetime::Unlimited, None)
             }
         })
     }
     async fn save(
         &self,
-        _: VmLifetimeScope,
+        _: SettingsScope,
         _: Option<VmLifetime>,
         _: RuntimeCaller,
     ) -> Result<VmLifetimeSettings, Failure> {
@@ -117,7 +117,7 @@ impl RuntimeSettings for Config {
 struct WrongRuntimeScope;
 #[async_trait]
 impl RuntimeSettings for WrongRuntimeScope {
-    async fn read(&self, _: &VmLifetimeScope) -> Result<VmLifetimeSettings, Failure> {
+    async fn read(&self, _: &SettingsScope) -> Result<VmLifetimeSettings, Failure> {
         Ok(VmLifetimeSettings::for_channel(
             ChannelId::from_random([2; 10]),
             VmLifetime::from_seconds(Some(14_400)).unwrap(),
@@ -126,7 +126,7 @@ impl RuntimeSettings for WrongRuntimeScope {
     }
     async fn save(
         &self,
-        _: VmLifetimeScope,
+        _: SettingsScope,
         _: Option<VmLifetime>,
         _: RuntimeCaller,
     ) -> Result<VmLifetimeSettings, Failure> {
@@ -378,12 +378,12 @@ async fn config_default_and_channel_override_reach_admitted_creation_and_existin
     let finite = VmLifetime::from_seconds(Some(14_400)).unwrap();
     let channel = ChannelId::from_random([1; 10]);
     settings
-        .save(VmLifetimeScope::Global, Some(finite), caller())
+        .save(SettingsScope::Global, Some(finite), caller())
         .await
         .unwrap();
     settings
         .save(
-            VmLifetimeScope::Channel(channel.clone()),
+            SettingsScope::Channel(channel.clone()),
             Some(VmLifetime::Unlimited),
             caller(),
         )
@@ -409,16 +409,12 @@ async fn config_default_and_channel_override_reach_admitted_creation_and_existin
         vec![finite, VmLifetime::Unlimited]
     );
     settings
-        .save(
-            VmLifetimeScope::Global,
-            Some(VmLifetime::Unlimited),
-            caller(),
-        )
+        .save(SettingsScope::Global, Some(VmLifetime::Unlimited), caller())
         .await
         .unwrap();
     settings
         .save(
-            VmLifetimeScope::Channel(channel.clone()),
+            SettingsScope::Channel(channel.clone()),
             Some(finite),
             caller(),
         )

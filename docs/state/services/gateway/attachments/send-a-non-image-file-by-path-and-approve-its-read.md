@@ -8,7 +8,8 @@ parent: "gateway-attachments"
 sources:
   - "docs/adr/done/0013-files-by-path-not-by-payload.md"
   - "src/conversation/model/attachments.ts"
-  - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_message.rs"
+  - "crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_mes\
+    sage.rs"
   - "packages/nessa-client/src/presentation/conversation-api.ts"
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-server/src/conversation/infrastructure/file_link_audit.rs"
@@ -18,8 +19,21 @@ sources:
   - "crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_link_attacks.rs"
   - "src/panel/ui/use-file-attachments-picker.test.ts"
 diagramLinks: {}
+model:
+  spec: tla/services/gateway/attachments/LinkedFileEvidence.tla
+  config: tla/services/gateway/attachments/LinkedFileEvidence.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:28:09.640Z
+  config: tla/services/gateway/attachments/LinkedFileEvidence.cfg
+  modelDigest: cb5e8af9c31e38f54e07a827082ebc0dd3f02ba62fb3db3b08521ff5f7a11d02
+  states: 4
+  held:
+    - EvidenceBeforeDispatch
+    - NamingDoesNotRead
+  broke: []
+  unchecked: []
 ---
-
 # Send a non-image file by path and approve its read
 
 A native file attachment sends its absolute path, not its contents. Nessa checks the path's shape but does not open the file, check its existence or restrict it to the workspace at this step.
@@ -50,3 +64,7 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../adr/done/0013-files-by-path-not-by-payload.md) · [Related source](../../../../../src/conversation/model/attachments.ts) · [Related tests](../../../../../crates/nessa-server/tests/conversation/linked_files.rs)
+
+## Bounded rule model
+
+Owns durable path-naming evidence before submission. The model intentionally has no file-read action: path attachment does not prove permission, existence or read. LinkedFile path syntax is a pure contract; actual agent read and approval belong to the SDK/tool permission owner. This finite abstraction checks safety only. It does not execute or verify the implementation, promise eventual completion, or qualify external effects. Existing source checkpoints and historical test receipts retain their earlier scope. The scoped model review inspected `crates/nessa-server/src/conversation/infrastructure/file_link_audit.rs`, `crates/nessa-server/src/conversation/application/service.rs`.

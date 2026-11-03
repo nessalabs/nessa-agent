@@ -80,7 +80,7 @@ impl BuiltInServer for EnvironmentTools {
             json!({
                 "name": "environments_list",
                 "title": "List environments",
-                "description": "List where this conversation could work: `here`, this gateway's own machine, and each SSH host or paired environment this turn may use. Says which one the agent runs in, which ones `run` may run commands on for whoever started this turn, and whether a connection to each is open now. Reaches nothing to answer.",
+                "description": "List where this conversation could work: `here`, this gateway's own machine, and each SSH host or paired environment this turn may use. Says which one the agent runs in, which ones `run` may run commands on for whoever started this turn, and whether a connection to each is open now. For each connected paired computer, `load` gives its processor and memory use in percent, the agents it runs, its `poolPlace` for `peer:any` work (1 first; absent when left out) and whether it is `busy` (the pool passes a busy computer over while another is not). Reaches nothing to answer.",
                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
                 "annotations": {"readOnlyHint": true, "openWorldHint": false},
             }),
@@ -551,6 +551,13 @@ fn listing(listed: &[EnvironmentListing]) -> Value {
                 "reachable": environment.reachable,
                 "commands": environment.commands,
                 "current": environment.current,
+                "load": environment.load.map(|load| json!({
+                    "cpuPercent": load.cpu_percent,
+                    "memoryPercent": load.memory_percent,
+                    "agents": load.agents,
+                    "poolPlace": load.pool_place,
+                    "busy": load.busy,
+                })),
             })
         })
         .collect();

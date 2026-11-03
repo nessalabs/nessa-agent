@@ -6,7 +6,7 @@ use super::{socket::failure, state::ProductRouteState};
 use crate::{
     conversation::{
         application::ConversationError,
-        domain::{ChannelId, VmLifetime, VmLifetimeScope},
+        domain::{ChannelId, SettingsScope, VmLifetime},
     },
     workspaces::{
         application::{RuntimeCaller, Workspaces},
@@ -146,7 +146,7 @@ async fn runtime_dispatch(
         (params.channel_id, None)
     };
     let scope = match channel {
-        None => VmLifetimeScope::Global,
+        None => SettingsScope::Global,
         Some(channel) => {
             let Ok(channel) = ChannelId::new(&channel) else {
                 return failure(&frame.id, "invalid_request");
@@ -167,7 +167,7 @@ async fn runtime_dispatch(
                     },
                 );
             }
-            VmLifetimeScope::Channel(channel)
+            SettingsScope::Channel(channel)
         }
     };
     let result = match selection {

@@ -122,6 +122,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a tool review nobody answers in this many seconds is denied and the agent goes on without the tool; a read inside the workspace is allowed after 8 seconds instead (ADR 141)",
         },
         Limit {
+            id: "agent.live_threads",
+            tier: "configured",
+            owner: "config.json subagents.maxLiveThreads",
+            meaning: "an agent's create_thread while this many of its threads are at work, or made and not yet given work, is refused thread_limit_reached; the agent ends its turn and a thread's report wakes it. 0, the default, bounds none",
+        },
+        Limit {
             id: "organization.leases",
             tier: "configured",
             owner: "config.json limits.organizationLeases",
@@ -576,6 +582,7 @@ pub(crate) fn effective_json(
     limits: &OperationalLimits,
     session: &SessionSettings,
     review_wait: Duration,
+    live_threads: Option<usize>,
 ) -> serde_json::Value {
     let mut values = BTreeMap::new();
     let mut put = |id: &str, value: u64| {
@@ -608,6 +615,7 @@ pub(crate) fn effective_json(
         limits.agent_idle().map_or(0, |idle| idle.as_secs()),
     );
     put("agent.review_wait_seconds", review_wait.as_secs());
+    put("agent.live_threads", live_threads.map_or(0, count));
     put(
         "organization.leases",
         limits.organization_leases().map_or(0, count),
@@ -783,7 +791,7 @@ fn value_of(id: &str, values: &serde_json::Map<String, serde_json::Value>) -> St
 /// The catalogue rendered as the committed `docs/limits.md`.
 #[cfg(test)]
 fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
-    let values = match effective_json(limits, session, crate::composition::REVIEW_WAIT) {
+    let values = match effective_json(limits, session, crate::composition::REVIEW_WAIT, None) {
         serde_json::Value::Object(values) => values,
         _ => serde_json::Map::new(),
     };
@@ -886,7 +894,7 @@ mod tests {
     fn effective_values_follow_the_owners() {
         let limits = OperationalLimits::default();
         let session = SessionSettings::default();
-        let document = effective_json(&limits, &session, crate::composition::REVIEW_WAIT);
+        let document = effective_json(&limits, &session, crate::composition::REVIEW_WAIT, None);
         let values = document.as_object().expect("object");
         assert_eq!(
             values.get("server.requests").and_then(|v| v.as_u64()),

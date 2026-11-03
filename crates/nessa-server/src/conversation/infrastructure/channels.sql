@@ -18,7 +18,7 @@ CREATE TABLE channels (
     resources TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     coordinator_placement TEXT NOT NULL DEFAULT 'local' CHECK (coordinator_placement IN ('local', 'boat')),
-    thread_placement TEXT NOT NULL DEFAULT 'local' CHECK (thread_placement IN ('local', 'boat')),
+    thread_placement TEXT NOT NULL DEFAULT 'local' CHECK (thread_placement IN ('local', 'boat', 'pool')),
     UNIQUE (organization_id, owner_id, request_id)
 ) STRICT;
 CREATE TABLE channel_conversations (
@@ -35,4 +35,4 @@ CREATE TABLE channel_coordinator_replacements (
     cause TEXT NOT NULL CHECK (cause = 'coordinator_conversation_erased'),
     UNIQUE (channel, generation)
 ) STRICT;
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;

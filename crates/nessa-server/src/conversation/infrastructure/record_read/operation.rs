@@ -18,7 +18,10 @@ use tokio::runtime::Handle;
 /// `docs/design/bounded-terminal-discovery.md`.
 pub(crate) const DISCOVERY_STEPS_PER_READ: usize = 128;
 /// How long one admitted read keeps making discovery calls while it holds a
-/// global read permit and its socket's record slot (row S5).
+/// global read permit and its socket's record slot (row S5). The clock starts
+/// when the first discovery call is about to run, after the read has a worker
+/// and has looked up the stream. Time spent waiting for that worker is not
+/// discovery.
 pub(crate) const READ_WORK_BUDGET: Duration = Duration::from_millis(200);
 
 /// One physical operation and when its discovery calls must stop.
@@ -28,7 +31,11 @@ pub(super) struct ReadWork {
     pub(super) steps: usize,
     /// Asked before every call after the first: true once the read's budget
     /// has passed, its waiter is gone, or read worker shutdown has started.
+    /// A test may hold the worker inside this callback until that is true.
     pub(super) stopped: Box<dyn Fn() -> bool + Send>,
+    /// The same end, without a test hold. An occupied cache waits on this
+    /// so the hold at a real step boundary is not also the wait for an owner.
+    pub(super) budget_elapsed: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 pub(super) fn execute(
@@ -50,17 +57,35 @@ pub(super) fn execute(
         operation,
         steps,
         stopped,
+        budget_elapsed,
     } = work;
+    let wait_storage = storage.clone();
+    let wait_budget = Arc::clone(&budget_elapsed);
     let value = match operation {
-        RecordReadOperation::Head => discover(steps, &*stopped, || source.bounded_head(&observed))
-            .map(|head| {
-                RecordReadValue::Head(RecordHead {
-                    scope: observed,
-                    head,
-                })
-            }),
+        RecordReadOperation::Head => discover(
+            steps,
+            &*stopped,
+            &*budget_elapsed,
+            || source.bounded_head(&observed),
+            || wait_storage.wait_for_discovery_release(&identity, &*wait_budget),
+        )
+        .map(|head| {
+            RecordReadValue::Head(RecordHead {
+                scope: observed,
+                head,
+            })
+        }),
         RecordReadOperation::Page(page) => {
-            discover(steps, &*stopped, || source.bounded_page(&page)).map(RecordReadValue::Page)
+            let wait_storage = storage.clone();
+            let wait_budget = Arc::clone(&budget_elapsed);
+            discover(
+                steps,
+                &*stopped,
+                &*budget_elapsed,
+                || source.bounded_page(&page),
+                || wait_storage.wait_for_discovery_release(&identity, &*wait_budget),
+            )
+            .map(RecordReadValue::Page)
         }
     };
     // The final SDK source drop joins its internal worker
@@ -73,19 +98,36 @@ pub(super) fn execute(
 /// `stopped`. The first call is always made, so every read advances; the SDK
 /// keeps every step's progress, so a later read resumes where this one stopped.
 /// The first refusal ends the read.
+///
+/// [`RecordReadStatus::Occupied`] did no validation. It does not count as one
+/// of `steps`. `wait_for_owner` blocks until a checked-out entry comes back
+/// or the read's budget elapses; `budget_elapsed` is that flag without the
+/// step-boundary test hold `stopped` may include.
 fn discover<T>(
     steps: usize,
     stopped: &dyn Fn() -> bool,
+    budget_elapsed: &dyn Fn() -> bool,
     mut call: impl FnMut() -> Result<RecordReadStatus<T>, SourceError>,
+    mut wait_for_owner: impl FnMut(),
 ) -> Result<T, RecordReadError> {
     let mut exhausted = true;
-    for step in 0..steps {
+    let mut step = 0;
+    loop {
         if step > 0 && stopped() {
             exhausted = false;
             break;
         }
-        if let RecordReadStatus::Ready(value) = call().map_err(source_error)? {
-            return Ok(value);
+        if step >= steps {
+            break;
+        }
+        match call().map_err(source_error)? {
+            RecordReadStatus::Ready(value) => return Ok(value),
+            RecordReadStatus::Preparing => step += 1,
+            RecordReadStatus::Occupied if budget_elapsed() => {
+                exhausted = false;
+                break;
+            }
+            RecordReadStatus::Occupied => wait_for_owner(),
         }
     }
     // The step loop ended because it ran out, not because the read was asked
@@ -113,5 +155,73 @@ fn source_error(error: SourceError) -> RecordReadError {
         SourceError::InvalidRequest => RecordReadError::InvalidRequest,
         SourceError::IdentityChanged => RecordReadError::IdentityChanged,
         SourceError::OversizedRecord => RecordReadError::RecordTooLarge,
+    }
+}
+
+#[cfg(test)]
+mod discover_steps {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn occupied_answers_do_not_spend_discovery_steps() {
+        let calls = AtomicUsize::new(0);
+        let waits = AtomicUsize::new(0);
+        let found = discover(
+            2,
+            &|| false,
+            &|| false,
+            || {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                if call < 5 {
+                    Ok(RecordReadStatus::Occupied)
+                } else {
+                    Ok(RecordReadStatus::Ready(7_u64))
+                }
+            },
+            || {
+                waits.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .expect("the read reaches the head");
+        assert_eq!(found, 7);
+        assert_eq!(waits.load(Ordering::SeqCst), 5);
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn an_elapsed_budget_stops_on_occupied_without_burning_the_step_count() {
+        let calls = AtomicUsize::new(0);
+        let error = discover(
+            128,
+            &|| true,
+            &|| true,
+            || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(RecordReadStatus::<u64>::Occupied)
+            },
+            || panic!("the budget has elapsed; the read must not wait"),
+        )
+        .expect_err("still occupied when the budget elapses");
+        assert!(matches!(error, RecordReadError::SourcePreparing));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_real_preparing_answer_still_spends_one_step() {
+        let calls = AtomicUsize::new(0);
+        let error = discover(
+            2,
+            &|| false,
+            &|| false,
+            || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(RecordReadStatus::<u64>::Preparing)
+            },
+            || panic!("a validation step is not an occupied cache"),
+        )
+        .expect_err("two steps are the whole budget");
+        assert!(matches!(error, RecordReadError::SourcePreparing));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

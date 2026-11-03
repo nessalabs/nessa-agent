@@ -71,3 +71,11 @@ Initial reads and asks ignore results after their request identity retires. Sour
 ## Evidence and execution limits
 
 [Settings tests](../../../../../src/desktop/settings/ui/review-notice-rows.test.tsx) cover unsupported access, explicit Allow, replay for an already waiting review, native-host delegation and blocked copy. [Notice-owner tests](../../../../../src/desktop/workspace/adapters/gateway/review-notices.test.ts) cover snapshot and notifier behavior. The row regressions now also cover API coalescing, rejected/not-asked retry, stale completion, remount and source replacement. Real OS/browser prompt display and ordinary production rebinding remain unverified. [Action-owner evidence](settings-action-owners.md) records the controlled cases; MCP App review or iframe checks do not establish permission enablement.
+
+## Model coverage
+
+Disposition: shared owner model. The notice-prompt region owns pending permission and current-source replay. [desktop-settings-action-owners](settings-action-owners.md)
+
+Excluded: Notifier deduplication, OS display and notice-click routing remain outside the model.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

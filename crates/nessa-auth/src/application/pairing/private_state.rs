@@ -318,4 +318,13 @@ pub trait ClientPendingStore: Send + Sync {
         intent: PublicIntent,
         expected: Option<PublicIntent>,
     ) -> Result<(), PrivateStateError>;
+    /// Keep the tunnel secret the gateway issued with the active credential.
+    /// The default keeps nothing; a file store overrides it.
+    fn save_tunnel_secret(&self, _secret: &[u8; 32]) -> Result<(), PrivateStateError> {
+        Ok(())
+    }
+    /// The tunnel secret saved beside the credential, if any.
+    fn load_tunnel_secret(&self) -> Result<Option<[u8; 32]>, PrivateStateError> {
+        Ok(None)
+    }
 }

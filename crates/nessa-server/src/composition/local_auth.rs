@@ -433,6 +433,7 @@ pub(super) async fn product_state(
                         stop_children_on_parent_stop: settings
                             .subagents
                             .stop_children_on_parent_stop,
+                        live_threads: settings.subagents.live_threads(),
                         #[cfg(unix)]
                         workspace_service: workspace_service.clone(),
                         #[cfg(unix)]
@@ -631,7 +632,10 @@ pub(super) async fn product_state(
     )));
     let native = match native {
         Some((prepared, commands, peers)) => {
-            product = product.with_pairing(Arc::new(commands)).with_peers(peers);
+            product = product
+                .with_pairing(Arc::new(commands))
+                .with_peers(peers)
+                .with_tunnel_secrets(prepared.tunnel_secrets());
             let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,
@@ -833,6 +837,7 @@ type PairedWorkers = (
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
     stop_children_on_parent_stop: bool,
+    live_threads: Option<usize>,
     #[cfg(unix)]
     workspace_service: Arc<Workspaces>,
     #[cfg(unix)]
@@ -1199,6 +1204,7 @@ async fn conversations(
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
         stop_children_on_parent_stop,
+        live_threads,
         workspace_service,
         workspace_audit,
         read_work_budget,
@@ -1548,6 +1554,33 @@ async fn conversations(
         organization,
     )?;
     let environment = environment.with_workspaces(workspace_environments);
+    // Which paired computers the pool tries first and which it leaves out,
+    // kept in config.json beside every other ordinary setting.
+    let environment = {
+        let namespace = directory
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
+        let config = Arc::new(ConfigJson::new(
+            Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
+                namespace,
+            ))),
+            ConfigCheck {
+                limit: super::runtime_config::MAX_CONFIG_BYTES,
+                parses: Box::new(|bytes| {
+                    super::runtime_config::RuntimeConfig::parse(bytes).is_ok()
+                }),
+            },
+            Arc::new(RuntimeClock::new()),
+        ));
+        let settings = crate::conversation::infrastructure::ConfigPoolSettings::new(
+            config,
+            root.join("audit").join("pool-settings"),
+            Arc::new(SystemClock),
+            Arc::new(Uuid::new_v4),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+        environment.with_pool_settings(Arc::new(settings))
+    };
     let dependencies = ConversationDependencies {
         input_files: Some(Arc::new(
             crate::conversation::application::InputFileDelivery {
@@ -1684,7 +1717,7 @@ async fn conversations(
         .await
         .map_err(|error| RunError::Agent(error.to_string()))?;
     service
-        .bind_owned_threads(ownership, stop_children_on_parent_stop)
+        .bind_owned_threads_bounded(ownership, stop_children_on_parent_stop, live_threads)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let ownership_snapshot = OwnershipStore::read(ownership_store.as_ref())
         .await

@@ -6,6 +6,7 @@ unrelated future systems.
 
 | Document | Status and purpose |
 | --- | --- |
+| [Durable sessions and resume](../durable-sessions-resume.md) | #1164, #1003, #762 and #934 on one branch after #981 |
 | [Ownership and consolidation](consolidation.md) | Implemented ownership, naming decisions, and operational boundaries |
 | [Runtime classes and sequences](runtime-classes-and-sequences.md) | Proposed conversation coordinator and durable-event design supplement to ADR 0008 |
 | [SDK runtime shape](sdk-shape.md) | Nessa server ownership and proposed conversation delivery contract |

@@ -31,3 +31,11 @@ Read-only verification commands used were `git log --merges --format='%h %s'`, s
 ## Further reading
 
 [Source](../../../../../src/desktop/dependencies.ts) · [Related source](../../../../../src-tauri/src/desktop_window.rs)
+
+## Model coverage
+
+Disposition: shared owner model. Thread report admission is the backend evidence boundary. [gateway-agent-thread-tools](../../gateway/agent-thread-tools.md)
+
+Excluded: This does not model GitHub merge truth or independently verify contribution claims; UI report projection and polling are excluded.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

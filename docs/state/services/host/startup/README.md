@@ -93,3 +93,7 @@ flowchart TB
 - [Recover or update the managed gateway](recover-or-update-the-managed-gateway.md)
 - [Save provider credentials and download a runtime](save-provider-credentials-and-download-a-runtime.md)
 - [Sign in, restore, renew, and sign out in the browser](sign-in-restore-renew-and-sign-out-in-the-browser.md)
+
+## Model coverage
+
+This component index routes to the feature owners. Their finite models check only the safety slices stated on each owner page; no single aggregate application lifecycle is claimed. Source checkpoints do not inherit to child pages.

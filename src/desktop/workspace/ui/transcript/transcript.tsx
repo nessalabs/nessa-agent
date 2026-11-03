@@ -172,6 +172,10 @@ export const Transcript = memo(function Transcript({
     )
   const titleRef = useRef<HTMLHeadingElement>(null)
   const pinned = useRef(true)
+  // The scroll position last treated as the reader's. A resize that leaves it
+  // there is the answer growing under someone still at the end. A resize that
+  // finds it moved is a scroll the listener has not recorded yet.
+  const scrollAt = useRef<number | null>(null)
   // Messages there when the conversation first showed stay put; later ones rise
   // into place. Messages already on screen before it loaded — sent while it was
   // read — stay put too, and so do earlier turns loaded above them.
@@ -208,16 +212,25 @@ export const Transcript = memo(function Transcript({
     }
     const onScroll = () => {
       pinned.current = measure() < pinnedWithin
+      scrollAt.current = scroller.scrollTop
     }
     // A tool disclosure holds the end still for its own motion, then the
     // distance decides whether a later growth follows (`tool-disclosure.ts`).
     const stopWatchingDisclosure = watchToolDisclosure(scroller, () => {
       if (!active) return
       pinned.current = measure() < pinnedWithin
+      scrollAt.current = scroller.scrollTop
     })
     const observer = new ResizeObserver(() => {
       if (!active) return
+      // Growth keeps scrollTop put and only lengthens the distance to the
+      // end, so the listener's last answer still says whether to follow. A
+      // scroll moves scrollTop first and reports it later: decide from where
+      // the reader is now, or the growth pulls them back.
+      if (scrollAt.current !== null && scroller.scrollTop !== scrollAt.current)
+        pinned.current = distanceFromEnd(scroller) < pinnedWithin
       followTranscriptEnd(scroller, pinned.current)
+      scrollAt.current = scroller.scrollTop
       measure()
     })
     observer.observe(scroller)
@@ -250,6 +263,7 @@ export const Transcript = memo(function Transcript({
     const settle = () => {
       returning.current = null
       pinned.current = true
+      scrollAt.current = scroller.scrollTop
     }
     // The stylesheet's duration, zero under reduced motion (`adapters/motion.ts`).
     const duration = durationToken(scroller, "--desktop-slow")

@@ -1,8 +1,9 @@
 //! Read one namespace into the writer inventory.
 //!
 //! Admission is held only while each store is pinned: a SQLite read snapshot
-//! for a database, a copy of a small file, or an open descriptor and its
-//! length for a directory, JSONL, or relay file. Bodies of those descriptors
+//! for a database, including `conversations/channels.sqlite3`, a copy of a
+//! small file, or an open descriptor and its length for a directory, JSONL,
+//! or relay file. Bodies of those descriptors
 //! are read after admission is released, and only up to the length recorded
 //! at the pin. The device outbox and the environment outbox are read during
 //! that pin. Secret paths are fingerprinted.
@@ -27,7 +28,8 @@ use super::credentials::{read_credentials, CredentialRead, CredentialReadError};
 use super::jsonl::jsonl_cut;
 use super::sensitivity::path_sensitivity;
 use super::snapshot::{
-    DeferredStream, SnapshotCopy, SqliteSnapshot, PUBLIC_FILE_LIMIT, SESSION_EXPORT_LIMIT,
+    DatabaseImage, DeferredStream, SnapshotCopy, SqliteSnapshot, PUBLIC_FILE_LIMIT,
+    SESSION_EXPORT_LIMIT,
 };
 use crate::backup::application::{
     capture_export, Authenticator, CopiedStore, DeletionLogStore, ExportClock, ExportFailure,
@@ -86,6 +88,9 @@ pub async fn capture_namespace(
         }),
         Box::new(GrantRows {
             facts: facts.clone(),
+        }),
+        Box::new(ChannelFile {
+            path: namespace.join("conversations").join("channels.sqlite3"),
         }),
         Box::new(NotesFile {
             files: canonical.clone(),
@@ -674,6 +679,107 @@ impl PinnedStore for CanonicalPin {
             }
         }
     }
+}
+
+struct ChannelFile {
+    path: PathBuf,
+}
+
+#[async_trait]
+impl ExportSource for ChannelFile {
+    fn kind(&self) -> StoreKind {
+        StoreKind::Channels
+    }
+
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        // A read snapshot, same as the other SQLite stores. The image is
+        // copied after admission is released.
+        Ok(Box::new(ChannelPin::open(&self.path).await?))
+    }
+}
+
+struct ChannelPin {
+    state: ChannelPinState,
+}
+
+enum ChannelPinState {
+    Absent,
+    Open(SqliteSnapshot),
+    Failed,
+}
+
+impl ChannelPin {
+    async fn open(path: &Path) -> Result<Self, ()> {
+        // A symlink is not the channel database. Following it would publish
+        // a file outside this namespace.
+        let state = match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == ErrorKind::NotFound => ChannelPinState::Absent,
+            Err(_) => ChannelPinState::Failed,
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                ChannelPinState::Failed
+            }
+            Ok(_) => {
+                let path = path.to_path_buf();
+                let opened = tokio::task::spawn_blocking(move || SqliteSnapshot::open(&path))
+                    .await
+                    .map_err(|_| ())?;
+                match opened {
+                    Ok(snapshot) => ChannelPinState::Open(snapshot),
+                    Err(()) => ChannelPinState::Failed,
+                }
+            }
+        };
+        Ok(Self { state })
+    }
+}
+
+#[async_trait]
+impl PinnedStore for ChannelPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        let state = std::mem::replace(&mut self.state, ChannelPinState::Failed);
+        match state {
+            ChannelPinState::Absent => absent(StoreKind::Channels),
+            ChannelPinState::Failed => skipped_file(StoreKind::Channels, "channels.sqlite3"),
+            ChannelPinState::Open(snapshot) => {
+                let copied = tokio::task::spawn_blocking(move || snapshot.database_image())
+                    .await
+                    .map_err(|_| ())?;
+                match copied {
+                    Ok(DatabaseImage::Ready(bytes)) => publish_channel_image(bytes),
+                    Ok(DatabaseImage::Bounded) => finish(
+                        StoreKind::Channels,
+                        "bounded",
+                        vec![],
+                        vec![SkippedRecord::new(
+                            StoreKind::Channels,
+                            "channels.sqlite3",
+                            SkipReason::Bounded,
+                        )
+                        .map_err(|_| ())?],
+                    ),
+                    Err(()) => skipped_file(StoreKind::Channels, "channels.sqlite3"),
+                }
+            }
+        }
+    }
+}
+
+fn publish_channel_image(bytes: Vec<u8>) -> Result<SourceCut, ()> {
+    let watermark = crate::backup::domain::Fingerprint::of(&bytes).hex();
+    if content_is_secret(&bytes) {
+        let mut records = Vec::new();
+        let mut skipped = Vec::new();
+        withhold(
+            StoreKind::Channels,
+            "channels.sqlite3",
+            bytes,
+            &mut records,
+            &mut skipped,
+        );
+        return finish(StoreKind::Channels, &watermark, records, skipped);
+    }
+    let record = public(StoreKind::Channels, "channels.sqlite3", bytes)?;
+    finish(StoreKind::Channels, &watermark, vec![record], vec![])
 }
 
 struct NotesFile {

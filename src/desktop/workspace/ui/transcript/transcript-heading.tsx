@@ -11,7 +11,7 @@ import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
 import { tooltip } from "../../../ui/tooltip"
 
 /** Where a channel says its sessions run, until a lease says where one does. */
-export type Placement = "local" | "boat"
+export type Placement = "local" | "boat" | "pool"
 
 /**
  * Where the agent runs, in words, always: this computer, Boat, an SSH host
@@ -27,9 +27,11 @@ export function placeNote(
     return conversationLeasePlace(lease)
   return placement === "boat"
     ? conversationLeasePlace({ environment: "boat" })
-    : placement === "local"
-      ? conversationLeasePlace({ environment: "here" })
-      : undefined
+    : placement === "pool"
+      ? "Any computer"
+      : placement === "local"
+        ? conversationLeasePlace({ environment: "here" })
+        : undefined
 }
 
 /**

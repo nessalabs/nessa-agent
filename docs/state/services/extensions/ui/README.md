@@ -59,3 +59,11 @@ flowchart TB
 - [Open a tool's MCP App and interact with its host](open-a-tool-s-mcp-app-and-interact-with-its-host.md)
 - [Replay or render an agent stream in the workshop or a consumer app](replay-or-render-an-agent-stream-in-the-workshop-or-a-consumer-app.md)
 - [See an MCP tool's result and discover its view](see-an-mcp-tool-s-result-and-discover-its-view.md)
+
+## Model coverage
+
+Disposition: component index. Navigation and ownership index, not an independent runtime state machine.
+
+Excluded: Each linked feature retains its own model and source scope.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.

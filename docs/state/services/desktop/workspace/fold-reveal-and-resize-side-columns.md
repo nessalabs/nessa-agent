@@ -16,9 +16,26 @@ sources:
   - "src/desktop/model/edge-peek.test.ts"
   - "src/desktop/adapters/use-edge-peek.test.tsx"
   - "verification/desktop/scripts/responsive.mjs"
+  - src/desktop/model/side-column.ts
+  - src/desktop/model/side-column.test.ts
 diagramLinks: {}
+model:
+  spec: tla/services/desktop/workspace/fold-reveal-and-resize-side-columns.tla
+  config: tla/services/desktop/workspace/fold-reveal-and-resize-side-columns.cfg
+modelCheck:
+  checker: tlc-1.7.4
+  date: 2026-11-03T03:27:50.503Z
+  config: tla/services/desktop/workspace/fold-reveal-and-resize-side-columns.cfg
+  modelDigest: ea4c22a8c63c903096bf7ac642eddf5b41d97d50e59611b4c4d1bb9af1ce2b7e
+  states: 14
+  held:
+    - HiddenStaysHidden
+    - FitPreservesChoice
+    - ManualChoiceImmediate
+    - RoomRestores
+  broke: []
+  unchecked: []
 ---
-
 # fold, reveal, and resize side columns
 
 Side columns can be resized or folded to make room for the workspace. Reveal brings a folded column back into view without permanently changing the layout.
@@ -62,3 +79,13 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/workspace/application/usecases/navigation.ts) · [Related source](../../../../../src/desktop/workspace/model/window-fit.ts) · [Related tests](../../../../../src/desktop/workspace/application/usecases/navigation.test.ts)
+
+## Model coverage
+
+Disposition: direct model. The bounded rule model section names this owner, its guarded transitions and the finite design checked. Pure value parsing and geometry stay with the linked source contracts. No claim is made that a checked design is an implementation proof.
+
+The source owner and regression intent were traced at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`; older page checkpoints are retained where the wider journey was only partially re-reviewed. No browser or application-test execution is claimed.
+
+## Bounded rule model
+
+The SideColumn owner is shared by workspace columns and Settings sidebar. User choice and automatic folding are separate facts: a fit never changes chosen visibility, room restores only a chosen-open column, and a manual show clears folding immediately until the next geometry fit. Dragging beyond the snap threshold is modeled as another Choose event; exact widths, the 40-pixel threshold and sidebar-before-list fitting are geometry contracts tested in window-fit and side-column suites. The model checks design safety, not the implementation. It asserts no liveness and abstracts transport timing into nondeterministic completion order. Regression sources are evidence of intended behavior; this documentation change does not claim their execution.

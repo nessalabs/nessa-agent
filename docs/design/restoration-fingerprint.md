@@ -70,7 +70,7 @@ session id.
 | S2 | matches | differs | any | any | `IdentityMismatch`. Nothing is launched. The snapshot is unchanged. |
 | S3 | matches | matches | matches | yes | The saved native session is resumed. |
 | S4 | matches | matches | matches | no | A new native session is opened. `ProviderContext` records it. The fingerprint is unchanged. |
-| S5 | matches | matches | differs | no | `ProviderIdentityChanged` is saved, then a new native session is opened and recorded. This is the existing path for a context that lives on another worker. |
+| S5 | matches | matches | differs | no | A new native session is opened. SessionManager saves `ProviderIdentityChanged` and its context ID plus admission watermark together after open. |
 | S6 | matches | matches | differs | yes | The saved native session is not resumed. A new one is opened. `ProviderIdentityChanged` and the new `ProviderContext` are one save, after the new session exists. |
 
 S6 is the row that used to refuse with `storage-identity` and strand the
@@ -89,13 +89,15 @@ belongs to the previous context.
 2. S1 and S2 launch nothing and write nothing. A test that changes the
    provider name or the model and then prepares fails with
    `IdentityMismatch`, and the snapshot is the one from before the call.
-3. S6 does not write the new fingerprint before the new native session id
+3. S5 and S6 do not write the new fingerprint before the new native session id
    exists. A crash between `prepare` and that save leaves the durable
    identity and context as they were, so the next open takes S6 again
    instead of S3 under the new fingerprint with the old session.
-4. S5 still writes `ProviderIdentityChanged` in `prepare`. A crash there is
-   safe because `restores_saved_context` stays false, so the next open does
-   not resume the other worker's session.
+4. SessionManager captures the fresh context's admission watermark in that
+   same save. It excludes only prior terminal work; queued admission during
+   opening remains counted after settlement. An unused Claude context may be
+   replaced on cold reopening; a used context requires exact native restoration.
+   Provider errors and missing observations cannot authorize reset.
 5. The composer shows the conversation record's model (`selection`), including
    when no provider is attached. `wire_view` puts that model on the view.
    The desktop reads it. It does not substitute the catalogue default.
@@ -115,6 +117,13 @@ belongs to the previous context.
    absolute path. Changing `--profile staging` or `--config
    /profiles/staging.toml` is S6. It also changes the launch fingerprint.
    Only a path in `staged_runtime_arguments` is left out.
+
+The atomic fingerprint/context statement above describes SessionManager's
+publication path. Raw semantic storage producers retain responsibility for their
+publication grouping; a checkpoint cannot prove a grouping absent from retained
+history. Context ID and watermark are one required value in every storage path.
+See [durable sessions and resume](durable-sessions-resume.md) for the #1164 ordering
+regressions and the dependent work planned separately.
 
 ## Alternatives
 

@@ -264,6 +264,17 @@
 }
 
 /*
+ * The home's room, under the title row, and only while a new session's home
+ * is in it. The pane's box runs up behind that row, so a query on the pane
+ * would count the row as room the scene can use (`conversation.css`). A
+ * conversation or a widget's window has no home, and stays an ordinary flex
+ * column.
+ */
+.workspace-pane-body:has(> .workspace-pane-home) {
+  container: workspace-pane-body / size;
+}
+
+/*
  * A pane clips what it holds, and with no edge of its own that clip would show
  * as a line wherever a shadow reached it. So the composer's lift stays inside
  * the least room a pane leaves round it: 6px, in the shortest pane

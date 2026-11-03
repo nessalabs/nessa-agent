@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! cloudflared ── ws://127.0.0.1:port/native ──▶ TunnelIngress
-//!   a tunnel permit, or closed unread
+//!   the device's tunnel secret, or 401 and no permit
+//!   a tunnel permit, or 503
 //!   the upgrade on /native within UPGRADE_DEADLINE, or refused
 //!   a loopback pair: one end ──▶ TunneledAccept ──▶ the native listener
 //!                    the other end ◀── bridge ──▶ the WebSocket
@@ -13,15 +14,21 @@
 //! Arrows are the order each connection goes through. Nothing here reads
 //! what crosses: past the upgrade it is the native TLS, and the listener
 //! checks the key it proves before anything else.
+use super::super::application::DeviceTunnelSecrets;
 use crate::device_pairing::infrastructure::{
     Accepted, EnrollmentAccept, NativeEnrollmentConnections, TunnelPermit,
 };
 use nessa_client_core::tunnel::{bridge, loopback_pair, websocket_config};
-use nessa_protocol::tunnel::TUNNEL_PATH;
-use std::{io, net::TcpStream as StdStream, sync::Arc, time::Duration};
+use nessa_protocol::tunnel::{TunnelSecret, TUNNEL_PATH, TUNNEL_SECRET_HEADER};
+use std::{
+    io,
+    net::TcpStream as StdStream,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, watch},
+    sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
 };
 use tokio_tungstenite::tungstenite::{
@@ -31,6 +38,10 @@ use tokio_tungstenite::tungstenite::{
 
 /// How long a connection has to finish its WebSocket upgrade.
 const UPGRADE_DEADLINE: Duration = Duration::from_secs(10);
+/// Sockets that have not yet presented a secret. Separate from the tunnel
+/// permit pool: a stranger who never finishes the upgrade cannot pile up
+/// tasks, and a matched secret still takes a tunnel permit only after it matches.
+const PREAUTH_CAPACITY: usize = 4;
 /// How long making the loopback pair may take.
 const PAIR_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -60,6 +71,7 @@ impl TunnelAdmission<TunnelPermit> for NativeEnrollmentConnections {
 pub(crate) struct TunnelIngress<P = TunnelPermit> {
     listener: TcpListener,
     admission: Arc<dyn TunnelAdmission<P>>,
+    secrets: Arc<dyn DeviceTunnelSecrets>,
     joined: mpsc::Sender<Tunneled<P>>,
 }
 
@@ -69,11 +81,13 @@ impl<P: Send + 'static> TunnelIngress<P> {
     pub(crate) fn new(
         listener: TcpListener,
         admission: Arc<dyn TunnelAdmission<P>>,
+        secrets: Arc<dyn DeviceTunnelSecrets>,
         joined: mpsc::Sender<Tunneled<P>>,
     ) -> Self {
         Self {
             listener,
             admission,
+            secrets,
             joined,
         }
     }
@@ -84,6 +98,7 @@ impl<P: Send + 'static> TunnelIngress<P> {
     /// never ends the gateway.
     pub(crate) async fn serve(self, mut stop: watch::Receiver<bool>) {
         let mut bridges = JoinSet::new();
+        let preauth = Arc::new(Semaphore::new(PREAUTH_CAPACITY));
         loop {
             let accepted = tokio::select! {
                 biased;
@@ -103,13 +118,18 @@ impl<P: Send + 'static> TunnelIngress<P> {
                     continue;
                 }
             };
-            // Full: closed unread, before anything is spent on it (row T4).
-            let Some(permit) = self.admission.admit() else {
+            // A socket that has not presented a secret holds a pre-auth slot,
+            // not a tunnel permit. With none free the socket is closed and no
+            // task is spawned. The secret is still checked before a permit.
+            let Ok(slot) = preauth.clone().try_acquire_owned() else {
+                drop(stream);
                 continue;
             };
+            let admission = self.admission.clone();
+            let secrets = self.secrets.clone();
             let joined = self.joined.clone();
             bridges.spawn(async move {
-                if let Err(error) = take(stream, permit, joined).await {
+                if let Err(error) = take(stream, admission, secrets, joined, slot).await {
                     tracing::debug!(%error, "tunnel connection refused");
                 }
             });
@@ -119,21 +139,38 @@ impl<P: Send + 'static> TunnelIngress<P> {
 
 /// Upgrade one connection, pair it, hand one end to the listener and bridge
 /// the other until either side ends.
-async fn take<P>(
+#[allow(clippy::result_large_err)]
+async fn take<P: Send>(
     stream: tokio::net::TcpStream,
-    permit: P,
+    admission: Arc<dyn TunnelAdmission<P>>,
+    secrets: Arc<dyn DeviceTunnelSecrets>,
     joined: mpsc::Sender<Tunneled<P>>,
+    slot: OwnedSemaphorePermit,
 ) -> io::Result<()> {
     stream.set_nodelay(true)?;
+    // Filled only after the secret matches, and before the upgrade response
+    // is written. Dropped if the upgrade then fails, so the permit is not kept.
+    let held: Arc<Mutex<Option<P>>> = Arc::new(Mutex::new(None));
+    let held_in = held.clone();
     let upgrade = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
-        only_native,
+        move |request: &Request, response: Response| {
+            admit_request(request, response, &secrets, &admission, &held_in)
+        },
         Some(websocket_config()),
     );
     let websocket = tokio::time::timeout(UPGRADE_DEADLINE, upgrade)
         .await
         .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let permit = held
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+        .ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied))?;
+    // Authentication and the upgrade are done. The tunnel permit bounds the
+    // open session; this slot is only for a handshake that has not finished.
+    drop(slot);
     let (ours, theirs) = loopback_pair(PAIR_DEADLINE).await?;
     joined
         .send(Tunneled {
@@ -146,15 +183,64 @@ async fn take<P>(
     Ok(())
 }
 
-/// The upgrade answers only [`TUNNEL_PATH`]; anything else is a 404 (row T5).
+/// `/native` with the secret in the header, or `/native/<secret>` when the
+/// client cannot set a header. The header wins when both are present.
+/// Anything else is 404. A missing or unknown secret is 401 and takes no
+/// permit. A known secret with a full pool is 503 and takes no permit.
 #[allow(clippy::result_large_err)]
-fn only_native(request: &Request, response: Response) -> Result<Response, ErrorResponse> {
-    if request.uri().path() == TUNNEL_PATH {
-        return Ok(response);
+fn admit_request<P>(
+    request: &Request,
+    response: Response,
+    secrets: &Arc<dyn DeviceTunnelSecrets>,
+    admission: &Arc<dyn TunnelAdmission<P>>,
+    held: &Mutex<Option<P>>,
+) -> Result<Response, ErrorResponse> {
+    let presented = presented_secret(request)?;
+    if !secrets.accepts(&presented) {
+        return Err(refused(StatusCode::UNAUTHORIZED));
     }
+    let Some(permit) = admission.admit() else {
+        return Err(refused(StatusCode::SERVICE_UNAVAILABLE));
+    };
+    *held.lock().unwrap_or_else(|error| error.into_inner()) = Some(permit);
+    Ok(response)
+}
+
+/// The secret on this upgrade, or the status that refuses it.
+#[allow(clippy::result_large_err)]
+fn presented_secret(request: &Request) -> Result<[u8; 32], ErrorResponse> {
+    let path = request.uri().path();
+    let from_path = if path == TUNNEL_PATH {
+        None
+    } else if let Some(rest) = path.strip_prefix(TUNNEL_PATH) {
+        let rest = rest
+            .strip_prefix('/')
+            .filter(|rest| !rest.is_empty() && !rest.contains('/'));
+        let Some(rest) = rest else {
+            return Err(refused(StatusCode::NOT_FOUND));
+        };
+        Some(rest)
+    } else {
+        return Err(refused(StatusCode::NOT_FOUND));
+    };
+    if let Some(value) = request.headers().get(TUNNEL_SECRET_HEADER) {
+        let Ok(text) = value.to_str() else {
+            return Err(refused(StatusCode::UNAUTHORIZED));
+        };
+        return TunnelSecret::decode(text)
+            .map(|secret| *secret.expose())
+            .ok_or_else(|| refused(StatusCode::UNAUTHORIZED));
+    }
+    from_path
+        .and_then(TunnelSecret::decode)
+        .map(|secret| *secret.expose())
+        .ok_or_else(|| refused(StatusCode::UNAUTHORIZED))
+}
+
+fn refused(status: StatusCode) -> ErrorResponse {
     let mut refused = ErrorResponse::new(None);
-    *refused.status_mut() = StatusCode::NOT_FOUND;
-    Err(refused)
+    *refused.status_mut() = status;
+    refused
 }
 
 /// The listening socket and the connections that came through the tunnel,

@@ -250,18 +250,22 @@ pub struct ChannelDefaults {
 }
 
 /// Where the channel's coordinator or worker threads execute. These choices
-/// are independent; Local is the existing path.
+/// are independent; Local is the existing path. Pool (any paired computer,
+/// in the order the pool's preferences give, Boat as overflow) is offered
+/// for worker threads only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WorkspacePlacement {
     #[default]
     Local,
     Boat,
+    Pool,
 }
 impl WorkspacePlacement {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "local" => Some(Self::Local),
             "boat" => Some(Self::Boat),
+            "pool" => Some(Self::Pool),
             _ => None,
         }
     }
@@ -269,6 +273,7 @@ impl WorkspacePlacement {
         match self {
             Self::Local => "local",
             Self::Boat => "boat",
+            Self::Pool => "pool",
         }
     }
 }
@@ -425,8 +430,8 @@ impl Channel {
             self.name.as_str(),
             self.folder.path.as_str()
         );
-        if self.execution.coordinator == WorkspacePlacement::Boat
-            || self.execution.threads == WorkspacePlacement::Boat
+        if self.execution.coordinator != WorkspacePlacement::Local
+            || self.execution.threads != WorkspacePlacement::Local
         {
             text.push_str(" On a remote environment, the channel's local folder and resource paths belong to the gateway, not your VM. Work in your actual environment workspace; access local files only through explicitly approved connections.");
         }

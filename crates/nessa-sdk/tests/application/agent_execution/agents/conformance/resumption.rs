@@ -6,6 +6,8 @@ use nessa_sdk::application::agent_execution::{
         owed_turn_ids, resumed_turn_id, AttachmentFailureCode, AttachmentPhase, OwedTurn, Resumed,
     },
     executions::TurnResumption,
+    providers::{CleanupReport, CloseOutcome, ExecutionReport},
+    sessions::InvocationCancellationEvent,
 };
 use nessa_sdk::domain::agent_execution::executions::Resumption;
 
@@ -111,6 +113,125 @@ async fn a_turn_cut_off_mid_run_is_continued_by_one_successor() {
             successor: successor.clone()
         }]
     );
+    assert!(agent.owed_turns().await.is_empty());
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+/// A restarted watch can already hold the person's stop, saved before the
+/// scheduling edge. Recovery records that edge and does not continue the turn.
+fn capture_stop(snapshot: &mut SessionSnapshot, id: &str, cause: SchedulingCause) {
+    let record = snapshot
+        .invocations
+        .iter_mut()
+        .find(|record| record.request.execution_id.as_str() == id)
+        .expect("execution");
+    assert!(
+        matches!(
+            record.scheduling.last().map(|edge| edge.stage),
+            Some(InvocationStage::Queued | InvocationStage::Running)
+        ),
+        "the stop was captured before its scheduling edge"
+    );
+    assert!(record.result.is_none());
+    record.local_cancellation = Some(InvocationCancellationEvent {
+        cause,
+        actor: matches!(cause, SchedulingCause::SessionClosed).then(actor),
+    });
+    record.provider_report = Some(ExecutionReport::cancelled_locally(
+        CleanupReport::confirmed(CloseOutcome { forced: false }),
+    ));
+}
+
+async fn resumed_watch_stopped_before_its_edge() -> (SessionSnapshot, ExecutionId) {
+    let saved = cut_off_while_running("watch").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let owed = agent.owed_turns().await.remove(0);
+    let Resumed::Continued(_) = agent.resume_turn(&owed, resumer()).await.unwrap() else {
+        panic!("the cut-off watch is resumed")
+    };
+    bounded(backend.dispatched.notified()).await;
+    let mut snapshot = storage.snapshot();
+    let successor = snapshot.invocations[1].request.execution_id.clone();
+    capture_stop(
+        &mut snapshot,
+        successor.as_str(),
+        SchedulingCause::TurnStopped,
+    );
+    bounded(agent.close(actor())).await.unwrap();
+    (snapshot, successor)
+}
+
+#[tokio::test]
+async fn a_resumed_watch_stopped_before_its_edge_is_not_continued() {
+    let (snapshot, successor) = resumed_watch_stopped_before_its_edge().await;
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(snapshot.clone());
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let owed = agent.owed_turns().await;
+    assert_eq!(
+        owed.iter()
+            .map(|turn| turn.execution_id().clone())
+            .collect::<Vec<_>>(),
+        vec![successor.clone()],
+        "the stopped watch is unfinished until its scheduling edge is recorded"
+    );
+    assert!(
+        matches!(
+            agent.resume_turn(&owed[0], resumer()).await.unwrap(),
+            Resumed::NotOwed
+        ),
+        "a person's stop is not continued"
+    );
+    assert!(
+        backend.executions.lock().unwrap().is_empty(),
+        "resume admits no successor"
+    );
+    let history = storage.snapshot();
+    assert_eq!(history.invocations.len(), 2);
+    let stopped = history
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == successor)
+        .unwrap();
+    assert_eq!(
+        stopped.scheduling.last().unwrap().cause,
+        SchedulingCause::TurnStopped
+    );
+    assert_eq!(
+        stopped.scheduling.last().unwrap().stage,
+        InvocationStage::Cancelled
+    );
+    assert!(agent.owed_turns().await.is_empty());
+    bounded(agent.close(actor())).await.unwrap();
+
+    let again = MemoryStorage::default();
+    again.0.lock().unwrap().snapshot = Some(storage.snapshot());
+    let (reopened, reopened_backend, _, _hold) = restore_holding(again).await;
+    assert!(
+        reopened.owed_turns().await.is_empty(),
+        "a second restart does not owe the stopped watch"
+    );
+    assert!(reopened_backend.executions.lock().unwrap().is_empty());
+    bounded(reopened.close(actor())).await.unwrap();
+
+    let declined = MemoryStorage::default();
+    declined.0.lock().unwrap().snapshot = Some(snapshot);
+    let (agent, backend, storage, _hold) = restore_holding(declined).await;
+    let turn = agent.owed_turns().await.remove(0);
+    agent.decline_turn(&turn, resumer()).await.unwrap();
+    assert!(backend.executions.lock().unwrap().is_empty());
+    let stopped = storage
+        .snapshot()
+        .invocations
+        .into_iter()
+        .find(|record| record.request.execution_id == successor)
+        .unwrap();
+    assert_eq!(
+        stopped.scheduling.last().unwrap().cause,
+        SchedulingCause::TurnStopped,
+        "decline records the captured stop and does not replace it"
+    );
+    assert!(stopped.decline.is_none());
     assert!(agent.owed_turns().await.is_empty());
     bounded(agent.close(actor())).await.unwrap();
 }

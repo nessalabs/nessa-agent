@@ -418,6 +418,14 @@
       "params": null,
       "grant": "credential.manage"
     },
+    "devices.pool": {
+      "params": "DevicesPoolParams",
+      "grant": "credential.manage"
+    },
+    "devices.setPool": {
+      "params": "DevicesSetPoolParams",
+      "grant": "credential.manage"
+    },
     "boat.runtimeSettings": {
       "params": "BoatRuntimeReadParams",
       "grant": "credential.manage"

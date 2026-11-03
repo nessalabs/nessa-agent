@@ -3739,6 +3739,7 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
                 reachable: Some(true),
                 commands: false,
                 current: true,
+                load: None,
             },
             EnvironmentListing {
                 name: "devbox".into(),
@@ -3746,6 +3747,7 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
                 reachable: Some(true),
                 commands: true,
                 current: false,
+                load: None,
             },
         ]
     );

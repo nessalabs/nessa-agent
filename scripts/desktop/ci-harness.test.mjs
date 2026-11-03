@@ -79,7 +79,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   }
   assert.match(
     workflow,
-    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault -- --check/,
+    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -- --check/,
   )
   assert.equal(
     root.scripts.architecture,
@@ -91,17 +91,17 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // limit (#366). The package list is one build; the runner overlaps binaries.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.doesNotMatch(
     workflow,
-    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\b/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\b/,
   )
   // Both Windows partitions compile the same package graph; the remaining
   // partition owns dependency crates' tests, including the vault's regressions.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
@@ -110,7 +110,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(
     workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-vault --all-targets -- -D warnings/,
+    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault --all-targets -- -D warnings/,
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.

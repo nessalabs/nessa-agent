@@ -77,3 +77,7 @@ flowchart TB
 ## R2/R4 regression execution
 
 Historical controlled regressions reproduced a silent second URL drop and a send during a pending native image read. The fixes retain the first read, refuse the second gesture and block the affected draft until its read settles. See [the risk register](../../../risks.md) for the executed cases, negative controls and environment limits.
+
+## Model coverage
+
+This component index routes to the feature owners. Their finite models check only the safety slices stated on each owner page; no single aggregate application lifecycle is claimed. Source checkpoints do not inherit to child pages.

@@ -5,6 +5,8 @@ import {
   type DeviceMachine,
   type DeviceWorker,
   type DevicesListResult,
+  type DevicesPool,
+  type PoolPreference,
 } from "../generated/product.js"
 
 /** The hub's devices: the machine the gateway runs on and its workers. */
@@ -18,6 +20,19 @@ export type DevicesApi = {
    * a snapshot; read again to follow them.
    */
   list(after?: string): Promise<DevicesListResult>
+  /**
+   * Where new `peer:any` threads go: the Nessa default, `channelId`'s own
+   * preference when it has one, and when a computer counts as busy.
+   */
+  pool(channelId?: string): Promise<DevicesPool>
+  /**
+   * Save the Nessa default (no `channelId`) or a channel's own preference;
+   * `undefined` empties the default, or makes the channel follow it again.
+   */
+  setPool(
+    preference: PoolPreference | undefined,
+    channelId?: string,
+  ): Promise<DevicesPool>
 }
 
 export function createDevicesApi(session: RpcRequester): DevicesApi {
@@ -29,7 +44,78 @@ export function createDevicesApi(session: RpcRequester): DevicesApi {
           after === undefined ? {} : { after },
         ),
       ),
+    pool: async (channelId) =>
+      devicesPool(
+        await session.request(
+          ProductMethod.DevicesPool,
+          channelId === undefined ? {} : { channelId },
+        ),
+      ),
+    setPool: async (preference, channelId) =>
+      devicesPool(
+        await session.request(ProductMethod.DevicesSetPool, {
+          ...(channelId === undefined ? {} : { channelId }),
+          ...(preference === undefined
+            ? { mode: "default" }
+            : { mode: "custom", preference }),
+        }),
+      ),
   }
+}
+
+const MAX_POOL_ENTRIES = 64
+const MAX_CHANNEL_ID = 128
+
+/** Reads a `devices.pool` or `devices.setPool` answer, refusing anything off its schema. */
+export function devicesPool(value: unknown): DevicesPool {
+  const invalid = () => new TypeError("Invalid pool preferences")
+  if (
+    !isRecord(value) ||
+    !onlyKeys(
+      value,
+      ["defaultPreference", "busyCpuPercent", "busyMemoryPercent"],
+      ["channelId", "channelOverride"],
+    ) ||
+    (Object.hasOwn(value, "channelId") &&
+      (typeof value.channelId !== "string" ||
+        value.channelId.length === 0 ||
+        value.channelId.length > MAX_CHANNEL_ID)) ||
+    !percent(value.busyCpuPercent) ||
+    !percent(value.busyMemoryPercent)
+  )
+    throw invalid()
+  return {
+    ...(Object.hasOwn(value, "channelId")
+      ? { channelId: value.channelId as string }
+      : {}),
+    defaultPreference: preferenceOf(value.defaultPreference),
+    ...(Object.hasOwn(value, "channelOverride")
+      ? { channelOverride: preferenceOf(value.channelOverride) }
+      : {}),
+    busyCpuPercent: value.busyCpuPercent as number,
+    busyMemoryPercent: value.busyMemoryPercent as number,
+  }
+}
+
+function preferenceOf(value: unknown): PoolPreference {
+  const names = (list: unknown): list is string[] =>
+    Array.isArray(list) &&
+    list.length <= MAX_POOL_ENTRIES &&
+    list.every((name) => typeof name === "string" && ENVIRONMENT.test(name))
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, ["order", "excluded"], []) ||
+    !names(value.order) ||
+    !names(value.excluded) ||
+    new Set([...value.order, ...value.excluded]).size !==
+      value.order.length + value.excluded.length
+  )
+    throw new TypeError("Invalid pool preferences")
+  return { order: [...value.order], excluded: [...value.excluded] }
+}
+
+function percent(value: unknown): boolean {
+  return count(value, 100) && (value as number) >= 1
 }
 
 const MACHINE_KEYS = [

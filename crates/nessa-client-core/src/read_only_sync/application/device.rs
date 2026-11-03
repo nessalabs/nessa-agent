@@ -177,6 +177,12 @@ impl ClientPendingStore for PurgeBeforeEnd {
     ) -> Result<(), PrivateStateError> {
         self.store.save_pending(key, gateway_pin, intent, expected)
     }
+    fn save_tunnel_secret(&self, secret: &[u8; 32]) -> Result<(), PrivateStateError> {
+        self.store.save_tunnel_secret(secret)
+    }
+    fn load_tunnel_secret(&self) -> Result<Option<[u8; 32]>, PrivateStateError> {
+        self.store.load_tunnel_secret()
+    }
 }
 
 /// Whether a read failure is the gateway refusing this device's authority, so

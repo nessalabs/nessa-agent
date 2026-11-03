@@ -380,12 +380,16 @@ Experimental turns it on; the rail stands beside the workspace in
   below the controls on every host. The toggle stays at the bottom-left control
   edge, including when both side columns are closed, and a folded rail has a
   reserved slot beside "nessa Studio" in the
-  sidebar footer. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
+  sidebar footer. With the sidebar shown, Agents draws "nessa Studio" clear of
+  the toggle. Devices leaves that corner empty, and the toggle does not move.
+  _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
-  ⌥⌘S change nothing behind it. Its opaque view covers the workspace cards and
-  chat controls all the way to the top edge. One top sidebar toggle folds and
-  reopens the rail in Notes, Calendar, Browser and Files.
+  ⌥⌘S change nothing behind it. Its opaque view covers the workspace from the
+  rail's edge to the window's other edges, top included. The titlebar stays
+  above that view: its free room is the window's drag region, and its one
+  control folds and reopens the rail. A point just below the titlebar lands
+  in the view, not on a workspace card or chat control.
   _Check:_ `columns.mjs --only rail-view-inert`.
 - [ ] **Devices keeps its corner and titlebar for the window**: no "nessa
   Studio" in the bottom-left corner (its cards run under it), and a press in
@@ -967,7 +971,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   against the menus and chips beside it.
 - [ ] **Send from a new session arrives in its transcript.** _Check:_ `smoke.mjs` (`send`).
 - [ ] **A new session's home takes its pane's shape.** In a pane under 640px
-  either way its composer docks at the foot as the conversation's beside it
+  wide, or whose room below the title row is under 640px tall, its composer
+  docks at the foot as the conversation's beside it
   (same distance from the foot, inset and height, ± 1.5 px), with the
   greeting on and turned off; the header stays as a band from the top of the
   pane (72–150px of picture or scene) with its Customize control — in the
@@ -1673,6 +1678,18 @@ says why where the conversations would be.
   and preserve the30-second discovery deadline and three-client/24-create load.
   _Check:_ `lib/stress-conversation.test.mjs` and both-engine default and raised
   `conversation-stress.mjs` runs (#1026).
+- [ ] **An unused new Claude context survives a cold restart after old history.**
+  In a dedicated channel coordinator selected as Claude through the real UI,
+  retain a completed exchange, change its native fingerprint, then restart again
+  before any new input. Fresh outer audit identities and focused native request
+  traces prove publication and zero new admission; the missing unused ID is
+  replaced rather than resumed. The next UI Send completes exactly once while
+  that pane retains the old prompt/reply, with no prompt replay. The fixture
+  limits native-history checks to this canonical workspace. Restore the isolated
+  baseline configuration with an actual restart before later steps.
+  _Check:_ `conversation-stress.mjs`'s `drift` step (`drifts`, default and raised
+  count), Chromium and WebKit; `lib/stress-native-context.test.mjs` and the
+  scripted agent's focused native-history transport tests (#1164).
 - [ ] **Stress restart errors belong to the planned gateway outage.** Install
   socket observation before navigation. Only exact owned `/session` refusal/reset
   console occurrences during the action, corroborated by actual socket errors,

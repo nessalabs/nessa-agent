@@ -124,3 +124,25 @@ flowchart TB
 - [Summon or dismiss the floating panel](summon-or-dismiss-the-floating-panel.md)
 - [Switch the floating panel's surface](switch-the-floating-panel-s-surface.md)
 - [Trace verified pull-request contributions](trace-verified-pull-request-contributions.md)
+
+## Model coverage
+
+Disposition: component index. Navigation and ownership index, not an independent runtime state machine.
+
+Excluded: Each linked feature retains its own model and source scope.
+
+Source review scope: owner entry points and relevant regression declarations were inventoried against frozen source `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. Existing source checkpoints are retained where this was a partial review. A model result establishes bounded design safety only. Browser appearance and interaction were not checked.
+
+## Additional current owners
+
+- [Talk to a conversation by voice](voice-call.md)
+- [Create a channel](create-a-channel.md)
+- [Recover provider sign-in](provider-sign-in.md)
+- [Join an answer already being sent](question-answer-flights.md)
+- [Inspect devices and add a computer](devices-dashboard.md)
+
+The current composition also supplies GitHub, Boat, vault and voice-key settings rows. Backend connection, encrypted credential and workspace placement owners remain under Gateway. Settings search is a catalogue contract; the catalogue alone does not prove every row has a working effect. Separate provider login is an external flow and does not clear an authentication refusal.
+
+- [Keep a local window preference](window-preferences.md)
+
+- [Keep the reader position when a transcript grows](transcript-scroll.md)

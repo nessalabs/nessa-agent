@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { createDevicesApi, devicesList } from "./devices-api.js"
+import { createDevicesApi, devicesList, devicesPool } from "./devices-api.js"
 
 const machine = {
   hostname: "build-box",
@@ -88,5 +88,54 @@ describe("devices.list", () => {
     ]
     for (const value of bad)
       expect(() => devicesList(value), JSON.stringify(value)).toThrow()
+  })
+})
+
+describe("devices.pool", () => {
+  const other = `peer:${"cd".repeat(32)}`
+  const pool = {
+    channelId: "ch_aaaaaaaaaa",
+    defaultPreference: { order: [environment], excluded: [] },
+    channelOverride: { order: [], excluded: [other] },
+    busyCpuPercent: 90,
+    busyMemoryPercent: 85,
+  }
+
+  it("reads a channel's pool and saves or clears its own preference", async () => {
+    const asked: unknown[] = []
+    const api = createDevicesApi({
+      request: async (method: string, params: unknown) => {
+        asked.push([method, params])
+        return pool
+      },
+    } as never)
+    expect(await api.pool("ch_aaaaaaaaaa")).toEqual(pool)
+    await api.setPool({ order: [other], excluded: [] }, "ch_aaaaaaaaaa")
+    await api.setPool(undefined)
+    expect(asked).toEqual([
+      ["devices.pool", { channelId: "ch_aaaaaaaaaa" }],
+      [
+        "devices.setPool",
+        {
+          channelId: "ch_aaaaaaaaaa",
+          mode: "custom",
+          preference: { order: [other], excluded: [] },
+        },
+      ],
+      ["devices.setPool", { mode: "default" }],
+    ])
+  })
+
+  it("refuses an answer off its schema", () => {
+    for (const value of [
+      null,
+      { ...pool, busyCpuPercent: 0 },
+      { ...pool, busyMemoryPercent: 101 },
+      { ...pool, extra: true },
+      { ...pool, defaultPreference: { order: ["peer:xyz"], excluded: [] } },
+      { ...pool, defaultPreference: { order: [environment], excluded: [environment] } },
+      { ...pool, channelOverride: { order: [] } },
+    ])
+      expect(() => devicesPool(value), JSON.stringify(value)).toThrow()
   })
 })

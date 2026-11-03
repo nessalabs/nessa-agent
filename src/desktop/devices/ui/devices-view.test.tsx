@@ -10,6 +10,7 @@ import type {
   DevicesRead,
   WorkerPairing,
 } from "../adapters/devices-gateway"
+import type { DevicesPool } from "@nessa/client"
 import { DevicesProvider, DevicesView } from "./devices-view"
 import {
   commands,
@@ -92,7 +93,23 @@ function pairing(phase: WorkerPairing["phase"], claimed = false): WorkerPairing 
 
 function fakeGateway(overrides: Partial<DevicesGateway> = {}) {
   const calls: string[] = []
+  let order: DevicesPool = {
+    defaultPreference: { order: [], excluded: [] },
+    busyCpuPercent: 90,
+    busyMemoryPercent: 90,
+  }
   const gateway: DevicesGateway = {
+    pool: async () => (calls.push("pool"), { ok: true, value: order }),
+    setPool: async (preference) => {
+      calls.push(`setPool ${JSON.stringify(preference)}`)
+      order = {
+        ...order,
+        defaultPreference: preference
+          ? { order: [...preference.order], excluded: [...preference.excluded] }
+          : { order: [], excluded: [] },
+      }
+      return { ok: true, value: order }
+    },
     pollMs: 5_000,
     list: async () => (calls.push("list"), { ok: true, value: listed }),
     cloud: async () => ({ ok: true, value: "connected" }),
@@ -599,4 +616,39 @@ it("writes the address each route dials", () => {
   expect(hubAddress("Saurav’s Mac Studio", "tailscale")).toBe("sauravs-mac-studio:47650")
   expect(hubAddress("studio.local", "network")).toBe("studio.local:47650")
   expect(commands("h:1", "C")).toEqual(["nessa env enroll h:1 C", "nessa env dial h:1"])
+})
+
+it("orders the computers new threads go to, and leaves one out", async () => {
+  const { gateway, calls } = fakeGateway()
+  const { host, root } = await mount(gateway)
+  await act(async () =>
+    (host.querySelector('[data-devices-action="pool"]') as HTMLElement).click(),
+  )
+  await act(async () => {})
+  const rows = () =>
+    [...host.querySelectorAll("[data-devices-pool-row]")].map(
+      (row) =>
+        `${row.getAttribute("data-devices-pool-row")?.slice(5, 7)}:${row.getAttribute("data-included")}`,
+    )
+  // Nothing ordered yet: the list's own order, everyone in.
+  expect(rows()).toEqual(["ab:true", "cd:true"])
+  const gaming = `peer:${"cd".repeat(32)}`
+  const build = `peer:${KEY}`
+  await act(async () =>
+    (host.querySelector(`[data-devices-pool-up="${gaming}"]`) as HTMLElement).click(),
+  )
+  expect(rows()).toEqual(["cd:true", "ab:true"])
+  expect(calls.at(-1)).toBe(
+    `setPool ${JSON.stringify({ order: [gaming, build], excluded: [] })}`,
+  )
+  await act(async () =>
+    (
+      host.querySelector(`[data-devices-pool-include="${gaming}"]`) as HTMLElement
+    ).click(),
+  )
+  expect(rows()).toEqual(["ab:true", "cd:false"])
+  expect(calls.at(-1)).toBe(
+    `setPool ${JSON.stringify({ order: [build], excluded: [gaming] })}`,
+  )
+  await act(async () => root.unmount())
 })
