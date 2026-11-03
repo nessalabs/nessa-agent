@@ -45,6 +45,7 @@ import {
   McpServersProvider,
   NativeHooksProvider,
   PermissionRulesProvider,
+  SavedLoginsProvider,
   VoiceKeyProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
@@ -257,13 +258,17 @@ createRoot(container).render(
                                       avatar={githubAvatar}
                                     >
                                       <VoiceKeyProvider gateway={dependencies.voiceKey}>
-                                        <VoiceProvider controller={voice}>
-                                          <DesktopWindow
-                                            hostKind={host.kind}
-                                            browserSurface={host.kind === "browser"}
-                                            inspectable={import.meta.env.DEV}
-                                          />
-                                        </VoiceProvider>
+                                        <SavedLoginsProvider
+                                          gateway={dependencies.savedLogins}
+                                        >
+                                          <VoiceProvider controller={voice}>
+                                            <DesktopWindow
+                                              hostKind={host.kind}
+                                              browserSurface={host.kind === "browser"}
+                                              inspectable={import.meta.env.DEV}
+                                            />
+                                          </VoiceProvider>
+                                        </SavedLoginsProvider>
                                       </VoiceKeyProvider>
                                     </GithubProvider>
                                   </BoatProvider>

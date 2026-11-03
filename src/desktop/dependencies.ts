@@ -61,6 +61,9 @@ import {
 } from "./voice"
 import {
   githubGateway,
+  savedLoginsGateway,
+  type SavedLoginsClient,
+  type SavedLoginsGateway,
   linkedDevicesGateway,
   mcpServersGateway,
   nativeHooksGateway,
@@ -144,6 +147,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly voice: VoiceGateway | undefined
   /** The saved voice key, for Settings; absent without a gateway. */
   readonly voiceKey: VoiceKeyGateway | undefined
+  /** The agents' saved logins, for Settings and Devices; absent without a gateway. */
+  readonly savedLogins: SavedLoginsGateway | undefined
   readonly vault: VaultSource | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
@@ -266,6 +271,7 @@ export function createDesktopDependencies(
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     voice: source ? voiceGateway(() => source.connected()) : undefined,
     voiceKey: source ? voiceKeyGateway(() => source.connected()) : undefined,
+    savedLogins: source ? savedLoginsGateway(() => source.connected()) : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
     sharing: source
@@ -313,6 +319,7 @@ export function createDesktopDependencies(
 type WindowGatewayClient = GatewayClient &
   DevicesClient &
   VoiceClient &
+  SavedLoginsClient &
   GithubClient & { readonly vault: VaultApi; readonly boat: BoatApi } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
