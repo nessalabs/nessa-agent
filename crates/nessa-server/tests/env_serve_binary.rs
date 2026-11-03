@@ -208,7 +208,9 @@ fn a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger() {
                 sandbox: Sandbox::HarnessDefault,
                 timeout_ms: None,
                 lease_ms: None,
-                takes_login: false,
+                // Served over SSH with no grants written: this gateway already logs in
+                // as the host's account, so the host takes its saved logins.
+                takes_login: true,
             },
         }
     );
