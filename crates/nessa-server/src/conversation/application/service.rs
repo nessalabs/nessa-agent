@@ -1766,12 +1766,24 @@ impl ConversationService {
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
+        // `here` names this machine outright. A conversation the person
+        // starts outside a channel, naming no place, runs on the default
+        // device while it is offered; a child an agent starts, and one in a
+        // channel, keep to where they were asked to run.
+        let default_place = (requested.environment.is_none() && channel.is_none() && !new_only)
+            .then(|| service.inner.environment.default_place())
+            .flatten();
+        let requested_place = match requested.environment.as_deref() {
+            Some(nessa_sdk::domain::agent_execution::leases::EnvironmentRef::HERE) => None,
+            Some(name) => Some(name),
+            None => channel_environment.or(default_place.as_deref()),
+        };
         service
             .inner
             .environment
             .place(
                 &id,
-                requested.environment.as_deref().or(channel_environment),
+                requested_place,
                 channel.as_ref().map(|channel| channel.id()),
             )
             .await?;

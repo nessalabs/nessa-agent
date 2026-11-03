@@ -165,6 +165,10 @@ export const KNOBS = {
     default: 1,
     what: "times a paired worker is shown in the side rail's Devices with its machine in one list beside the cloud, opened, Boat's page opened, offered by Add device's computer commands, and kept as offline with when it was last seen once it stops",
   },
+  sshHosts: {
+    default: 1,
+    what: "times machines in the hub's ~/.ssh/config are suggested in Devices (git servers left out), one connected from its pill (Nessa installed over a stand-in ssh, the gateway restarted in place) and starred as the default device, where a chat started with no place then runs",
+  },
   tunnels: {
     default: 1,
     what: "times the web tunnel is turned on in Settings, kept across a gateway restart, dialed through by a paired worker, and turned off",
@@ -300,6 +304,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
   add(knobs.devices, () => ({ kind: "devices" }))
+  add(knobs.sshHosts, () => ({ kind: "ssh" }))
   add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))

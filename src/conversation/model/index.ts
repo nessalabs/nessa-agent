@@ -5,6 +5,8 @@ export {
   conversationHistoryEmpty,
   conversationSelectionOpen,
   linksFilesHere,
+  chosenEnvironment,
+  HERE,
   type AssistantTurn,
   type BusyConversation,
   type AgentFeatures,

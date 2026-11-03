@@ -1,9 +1,16 @@
 /**
  * Devices, the side rail's page for the hub's machines: the hub itself, then
- * one list of every other device — the computers that run agents for it, the
- * cloud it falls back to, and the phones and apps linked to it — each saying
- * what it is underneath its name. A computer or the cloud opens its own page;
- * "Add device" asks which kind and adds it here.
+ * one list of every other device — the computers that run agents for it,
+ * the SSH hosts it runs them on, the cloud it falls back to, and the phones
+ * and apps linked to it — each saying what it is underneath its name. A
+ * computer or the cloud opens its own page; "Add device" asks which kind
+ * and adds it here.
+ *
+ * A star on the hub, a computer or an SSH host makes it the default device:
+ * where a new chat runs, from this window or a phone, when it names none.
+ * Under the list, the machines the hub's `~/.ssh/config` names are
+ * suggested; Connect on one installs Nessa there over SSH and adds it, and
+ * the hub starts again to serve it.
  *
  * Everything shown is what the gateway last answered, read again every
  * `pollMs` while the page is open; nothing is kept once it closes.
@@ -12,11 +19,13 @@ import { Button } from "@nessa-ui/react/button"
 import { DeviceFigure, type DeviceFigureKind } from "@nessa-ui/react/device-figure"
 import { LoadingText } from "@nessa-ui/react/loading-text"
 import { Meter } from "@nessa-ui/react/meter"
+import { Star } from "lucide-react"
 import {
   createContext,
   useContext,
   useEffect,
   useId,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
@@ -24,17 +33,25 @@ import { useNow } from "../../../clock"
 import { linkedOn, type LinkedDevice } from "../../model/linked-device"
 import { LinkedDevicesTab } from "../../settings/ui/linked-devices-tab"
 import { BoatConnectionFields, useBoatConnection } from "../../settings/ui/boat-row"
-import type { CloudState, DevicesGateway } from "../adapters/devices-gateway"
+import type {
+  CloudState,
+  DevicesGateway,
+  SshSuggestions,
+} from "../adapters/devices-gateway"
 import {
   agentsWord,
   ago,
+  connectWord,
   hubCard,
+  sshHostCard,
   sortWorkers,
   statusWord,
   summary,
   workerCard,
   type DeviceStatus,
+  type DeviceSshConnect,
   type HubCard,
+  type SshHostCard,
   type Usage,
   type WorkerCard,
 } from "../model/devices"
@@ -69,6 +86,12 @@ interface Read {
   readonly listening?: string | null
   readonly cloud?: CloudState | null
   readonly linked?: readonly LinkedDevice[] | null
+  /** The SSH hosts agents run on. */
+  readonly sshHosts?: readonly SshHostCard[]
+  /** Where a new chat runs when it names none; `null` is the hub. */
+  readonly defaultEnvironment?: string | null
+  /** Machines to suggest, and each setup under way; `null` unread. */
+  readonly suggestions?: SshSuggestions | null
   /** The last read of the list failed. */
   readonly unreachable: boolean
 }
@@ -81,10 +104,11 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
     if (!gateway) return
     let live = true
     const load = async () => {
-      const [list, cloud, linked] = await Promise.all([
+      const [list, cloud, linked, suggestions] = await Promise.all([
         gateway.list(),
         gateway.cloud(),
         gateway.linked(),
+        gateway.sshHosts(),
       ])
       if (!live) return
       setRead((last) => ({
@@ -95,6 +119,11 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
         listening: list.ok ? (list.value.listening ?? null) : last.listening,
         cloud: cloud.ok ? cloud.value : null,
         linked: linked.ok ? linked.value : null,
+        sshHosts: list.ok ? list.value.sshHosts.map(sshHostCard) : last.sshHosts,
+        defaultEnvironment: list.ok
+          ? list.value.defaultEnvironment
+          : last.defaultEnvironment,
+        suggestions: suggestions.ok ? suggestions.value : (last.suggestions ?? null),
         unreachable: !list.ok,
       }))
     }
@@ -201,6 +230,8 @@ export function DevicesView() {
   return (
     <DevicesList
       read={devices}
+      gateway={gateway}
+      onChanged={devices.reload}
       onOpen={(id) => setPage({ kind: "worker", id })}
       onCloud={() => setPage({ kind: "cloud" })}
       onAdd={() => setPage({ kind: "add" })}
@@ -226,12 +257,17 @@ const plus = (
 
 function DevicesList({
   read,
+  gateway,
+  onChanged,
   onOpen,
   onCloud,
   onAdd,
   onPool,
 }: {
   read: Read
+  gateway: DevicesGateway
+  /** Something was saved: read the list again. */
+  onChanged: () => void
   onOpen: (id: string) => void
   onCloud: () => void
   onAdd: () => void
@@ -240,6 +276,35 @@ function DevicesList({
   const now = useNow(30_000)
   const loaded = read.workers !== undefined
   const hubName = read.hub?.name ?? "This Mac"
+  // The star a person last pressed, shown at once and until its answer;
+  // an earlier press answering later does not take it back.
+  const [starring, setStarring] = useState<{
+    readonly to: string | null
+    readonly press: number
+  } | null>(null)
+  const presses = useRef(0)
+  const [starFailed, setStarFailed] = useState(false)
+  const current = starring !== null ? starring.to : (read.defaultEnvironment ?? null)
+  const makeDefault = (environment: string | null) => {
+    const press = (presses.current += 1)
+    setStarring({ to: environment, press })
+    setStarFailed(false)
+    void gateway.setDefault(environment).then((answer) => {
+      if (presses.current !== press) return
+      setStarring(null)
+      setStarFailed(!answer.ok)
+      onChanged()
+    })
+  }
+  const star = (environment: string | null, name: string) =>
+    loaded && read.defaultEnvironment !== undefined ? (
+      <DefaultStar
+        environment={environment}
+        current={current}
+        name={name}
+        onSet={makeDefault}
+      />
+    ) : null
   return (
     <div className="devices-page" data-devices-page="list">
       <header className="devices-header">
@@ -266,11 +331,16 @@ function DevicesList({
           The hub isn&apos;t answering. Showing what it last said.
         </p>
       ) : null}
+      {starFailed ? (
+        <p className="devices-muted" role="status" data-devices-default-failed>
+          Couldn&apos;t change where new chats run. Try again.
+        </p>
+      ) : null}
       {!loaded ? (
         <DelayedLoading />
       ) : (
         <>
-          <HubSection hub={read.hub ?? null} />
+          <HubSection hub={read.hub ?? null} star={star(null, hubName)} />
           <section className="devices-section" aria-label="Your devices">
             <div className="devices-grid" data-devices-list>
               {(read.workers ?? []).map((worker) => (
@@ -281,6 +351,7 @@ function DevicesList({
                   kind={worker.system}
                   status={worker.status}
                   onClick={() => onOpen(worker.id)}
+                  star={star(worker.environment, worker.name)}
                   data-devices-worker={worker.id}
                   footer={
                     worker.status === "offline" ? (
@@ -296,6 +367,18 @@ function DevicesList({
                       </span>
                     )
                   }
+                />
+              ))}
+              {(read.sshHosts ?? []).map((host) => (
+                <Tile
+                  key={host.host}
+                  art="server"
+                  name={host.name}
+                  kind={host.kind}
+                  status="ready"
+                  star={star(host.host, host.name)}
+                  data-devices-ssh={host.host}
+                  footer={<span>{host.address}</span>}
                 />
               ))}
               <CloudTile cloud={read.cloud} onOpen={onCloud} />
@@ -329,6 +412,11 @@ function DevicesList({
               </button>
             ) : null}
           </section>
+          <Suggestions
+            suggestions={read.suggestions}
+            gateway={gateway}
+            onChanged={onChanged}
+          />
         </>
       )}
     </div>
@@ -353,9 +441,10 @@ function Dot({ status }: { status: DeviceStatus }) {
   return <i className="devices-dot" data-status={status} aria-hidden="true" />
 }
 
-function HubSection({ hub }: { hub: HubCard | null }) {
+function HubSection({ hub, star }: { hub: HubCard | null; star: ReactNode }) {
   return (
     <section className="devices-hub" aria-labelledby="devices-hub-name" data-devices-hub>
+      {star ? <div className="devices-star-slot">{star}</div> : null}
       <DeviceFigure kind="desktop" className="devices-hub-figure" />
       <div className="devices-hub-title">
         <h2 id="devices-hub-name">
@@ -403,6 +492,7 @@ function Tile({
   status,
   footer,
   onClick,
+  star,
   ...data
 }: {
   art: DeviceFigureKind
@@ -413,6 +503,8 @@ function Tile({
   status: DeviceStatus
   footer: ReactNode
   onClick?: () => void
+  /** Makes it the default device; beside the tile, never inside its button. */
+  star?: ReactNode
   [data: `data-${string}`]: string
 }) {
   const body = (
@@ -438,7 +530,7 @@ function Tile({
       </div>
     </>
   )
-  return onClick ? (
+  const tile = onClick ? (
     <button
       type="button"
       className="devices-tile"
@@ -452,6 +544,154 @@ function Tile({
     <div className="devices-tile" {...data}>
       {body}
     </div>
+  )
+  return star ? (
+    <div className="devices-tile-holder">
+      {tile}
+      <div className="devices-star-slot">{star}</div>
+    </div>
+  ) : (
+    tile
+  )
+}
+
+/** The star that makes a device where new chats run: filled on that one. */
+function DefaultStar({
+  environment,
+  current,
+  name,
+  onSet,
+}: {
+  /** The device: `null` is the hub. */
+  environment: string | null
+  current: string | null
+  name: string
+  onSet: (environment: string | null) => void
+}) {
+  const chosen = environment === current
+  return (
+    <Button
+      variant="plain"
+      size="icon-sm"
+      shape="pill"
+      className="devices-star"
+      aria-pressed={chosen}
+      aria-label={chosen ? `${name} is where new chats run` : `Run new chats on ${name}`}
+      title={chosen ? "Default device: new chats run here" : "Make default"}
+      onClick={() => {
+        if (!chosen) onSet(environment)
+      }}
+      data-devices-default={environment ?? "hub"}
+      data-chosen={chosen ? "" : undefined}
+    >
+      <Star aria-hidden="true" fill={chosen ? "currentColor" : "none"} />
+    </Button>
+  )
+}
+
+/**
+ * The machines the hub's SSH configuration names, as pills under the list:
+ * each shows Connect on hover or focus, and then how its setup goes. One
+ * that restarted the hub leaves this list for the one above.
+ */
+function Suggestions({
+  suggestions,
+  gateway,
+  onChanged,
+}: {
+  suggestions: SshSuggestions | null | undefined
+  gateway: DevicesGateway
+  onChanged: () => void
+}) {
+  // A Connect pressed shows where it stands until the gateway's read that
+  // follows its answer says, and no longer: a read after a restart no
+  // longer names it, and an old answer would hold the pill on Installing.
+  const [pressed, setPressed] = useState<
+    Readonly<Record<string, { connect: DeviceSshConnect; answered: boolean }>>
+  >({})
+  useEffect(() => {
+    setPressed((last) => {
+      const kept = Object.entries(last).filter(([, each]) => !each.answered)
+      return kept.length === Object.keys(last).length ? last : Object.fromEntries(kept)
+    })
+  }, [suggestions])
+  if (!suggestions) return null
+  const under = new Map(suggestions.connecting.map((each) => [each.host, each]))
+  const stateOf = (host: string) => under.get(host) ?? pressed[host]?.connect
+  const shown = suggestions.suggested.filter(
+    (host) => stateOf(host.host)?.state !== "connected",
+  )
+  if (shown.length === 0) return null
+  const connect = (host: string) => {
+    setPressed((last) => ({
+      ...last,
+      [host]: { connect: { host, state: "installing" }, answered: false },
+    }))
+    void gateway.connectSsh(host).then((answer) => {
+      setPressed((last) => ({
+        ...last,
+        // Not answered at all: said as a setup that failed, never held on
+        // Installing.
+        [host]: {
+          connect: answer.ok
+            ? answer.value
+            : { host, state: "failed", refusal: "devices_unavailable" },
+          answered: answer.ok,
+        },
+      }))
+      onChanged()
+    })
+  }
+  return (
+    <section
+      className="devices-section devices-suggestions"
+      aria-labelledby="devices-suggestions-title"
+      data-devices-suggestions
+    >
+      <div className="devices-suggestions-head">
+        <h2 id="devices-suggestions-title">From your SSH config</h2>
+        <p className="devices-muted">
+          Connect one to install Nessa there and run agents on it.
+        </p>
+      </div>
+      <ul className="devices-pills">
+        {shown.map((host) => {
+          const card = sshHostCard(host)
+          const state = stateOf(host.host)
+          const busy = state?.state === "installing" || state?.state === "restarting"
+          return (
+            <li
+              key={host.host}
+              className="devices-pill"
+              data-devices-suggested={host.host}
+              data-state={state?.state ?? "idle"}
+            >
+              <span className="devices-pill-name">{host.host}</span>
+              {state ? (
+                <span className="devices-pill-note" role="status">
+                  {connectWord(state)}
+                </span>
+              ) : (
+                <span className="devices-pill-note devices-muted">{card.address}</span>
+              )}
+              {busy ? null : (
+                <Button
+                  className="devices-pill-connect"
+                  variant="inverse"
+                  size="24"
+                  shape="pill"
+                  onClick={() => connect(host.host)}
+                  aria-label={`Connect ${host.host}`}
+                  data-devices-action="connect"
+                >
+                  {state?.state === "failed" ? "Try again" : "Connect"}
+                </Button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }
 

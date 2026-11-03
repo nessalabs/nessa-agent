@@ -54,6 +54,7 @@ pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, 
 mod boat;
 mod channel;
 mod conversation;
+mod device_setup;
 mod github;
 mod mcp_apps;
 pub(crate) mod mcp_servers;

@@ -2059,7 +2059,15 @@ async fn dispatch_authorized(
             let Some(devices) = state.devices.as_ref() else {
                 return failure(&frame.id, "devices_unavailable");
             };
-            fitted_devices(&frame.id, device_list(devices.list(after).await))
+            let mut list = device_list(devices.list(after).await);
+            // The hosts this run serves and the default ride on the first page.
+            if after.is_none() {
+                list = super::device_setup::listed(state.device_setup.as_ref(), list).await;
+            }
+            fitted_devices(&frame.id, list)
+        }
+        "devices.sshHosts" | "devices.connectSsh" | "devices.setDefault" => {
+            super::device_setup::dispatch(state, session, frame).await
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -2645,6 +2653,8 @@ fn device_list(
         ),
     };
     DevicesListResult {
+        default_environment: None,
+        ssh_hosts: None,
         hub: list.hub.map(machine),
         listening: list.listening.map(|address| address.to_string()),
         workers: list
@@ -4902,6 +4912,8 @@ mod tests {
             .map(|index| format!("peer:{index:064x}"))
             .collect();
         let page = DevicesListResult {
+            default_environment: None,
+            ssh_hosts: None,
             hub: Some(machine()),
             listening: Some("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535".to_owned()),
             workers: names

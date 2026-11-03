@@ -55,7 +55,13 @@ function hooksChoice(value: unknown): "off" | "on" {
 /** Validate one authenticated gateway catalog before it reaches a picker. */
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
-  exact(result, ["agents", "environments", "commandHosts", "nativeHooks"])
+  exact(result, [
+    "agents",
+    "environments",
+    "commandHosts",
+    "nativeHooks",
+    "defaultEnvironment",
+  ])
   const hooks = object(result.nativeHooks)
   exact(hooks, ["claude", "codex"])
   hooksChoice(hooks.claude)
@@ -71,6 +77,13 @@ export function agentsList(value: unknown): AgentsListResult {
     if (environments.has(host)) throw new Error("Repeated agent catalog environment")
     environments.add(host)
   }
+  // The default device, when it is one of those places.
+  if (
+    Object.hasOwn(result, "defaultEnvironment") &&
+    (typeof result.defaultEnvironment !== "string" ||
+      !environments.has(result.defaultEnvironment))
+  )
+    throw new Error("Invalid agent catalog default environment")
   // Of those places, the ones the owner's turns may run commands on: each one
   // of them, named once, in their order.
   if (!Array.isArray(result.commandHosts))

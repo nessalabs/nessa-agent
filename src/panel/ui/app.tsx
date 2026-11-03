@@ -34,6 +34,8 @@ import {
   useConversation,
   toEditor,
   linksFilesHere,
+  chosenEnvironment,
+  HERE,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -827,14 +829,22 @@ export function App({
                     selectedModel &&
                     choices?.catalog.environments.length
                       ? {
-                          host: selection?.environment,
+                          // Unchosen, it runs on the gateway's default device.
+                          host: chosenEnvironment(
+                            selection,
+                            choices.catalog.defaultEnvironment,
+                          ),
                           hosts: choices.catalog.environments,
                           onChange: (environment) =>
                             chat.setSelection(chat.active.id, {
                               agent: selectedAgent.agent,
                               model: selectedModel.modelId,
                               approvalMode: selectedApprovalMode,
-                              environment,
+                              // This computer, chosen while another device is
+                              // the default, is named outright.
+                              environment:
+                                environment ??
+                                (choices.catalog.defaultEnvironment ? HERE : undefined),
                             }),
                         }
                       : undefined

@@ -96,9 +96,27 @@ export type ConversationSelection = {
   agent: string
   model: string
   approvalMode: ApprovalMode
-  /** The SSH host the conversation runs on for its whole life, one the
-   * gateway's catalog names; absent runs it on the gateway's own machine. */
+  /** Where the conversation runs for its whole life: an SSH host or paired
+   * machine the gateway's catalog names, or {@link HERE} for the gateway's
+   * own machine. Absent runs it on the gateway's default device (the
+   * catalog's `defaultEnvironment`), or its own machine when it has none. */
   environment?: string
+}
+
+/** The gateway's own machine, named outright: a draft that chose it keeps
+ * it even when another device is the default. */
+export const HERE = "here"
+
+/**
+ * Where a draft will run, as the gateway places it: what it chose, else the
+ * default device `fallback` names. `undefined` is the gateway's own machine.
+ */
+export function chosenEnvironment(
+  selection: ConversationSelection | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  const chosen = selection?.environment ?? fallback
+  return chosen === HERE ? undefined : chosen
 }
 
 /**
@@ -114,8 +132,9 @@ export function linksFilesHere(conversation: {
   remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
 }): boolean {
   const environment = conversation.remote?.lease?.environment
+  const chosen = conversation.selection?.environment
   return (
-    !conversation.selection?.environment &&
+    (chosen === undefined || chosen === HERE) &&
     environment !== "ssh" &&
     environment !== "peer"
   )
