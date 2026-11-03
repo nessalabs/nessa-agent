@@ -840,6 +840,7 @@ fn connection_cache_refuses_capacity_without_evicting_borrowed_environments() {
             ),
         ),
         environments: Default::default(),
+        logins: None,
     };
     let identity =
         |n: usize| ConversationId::new(&uuid::Uuid::from_u128(n as u128 + 1).to_string()).unwrap();

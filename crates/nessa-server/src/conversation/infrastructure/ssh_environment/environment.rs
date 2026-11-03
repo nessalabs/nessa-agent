@@ -52,6 +52,7 @@ use super::{
         AdmissionRefused, CommandAnswer, Granted, HostLink, Liveness, Opening, Published,
         StartError,
     },
+    logins::SavedLogins,
     peer::ServingCredentials,
     transfer::{FrameBytes, SftpBytes},
 };
@@ -63,8 +64,10 @@ use crate::conversation::application::{
 };
 use crate::conversation::application::{BudgetPlace, OrganizationBudgets};
 use nessa_auth::application::pairing::DeviceConnectionProof;
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::lease::{
-    self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
+    self, Cleanup, CommandEnd, GrantRefusal, Login, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
+    SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -121,6 +124,9 @@ struct Inner {
     /// opened again once lost, held while connecting, so one is opened at a
     /// time. A paired environment's is [`Reach::Peer`]'s `serving`.
     link: Mutex<Option<Arc<HostLink>>>,
+    /// Where a lease the host grants `takesLogin` asks for its agent's saved
+    /// login; `None` gives every harness none.
+    logins: Option<Arc<dyn SavedLogins>>,
 }
 
 /// How a host's connection is had.
@@ -270,8 +276,18 @@ impl SshEnvironment {
                 audit,
                 timings,
                 link: Mutex::new(None),
+                logins: None,
             }),
         }
+    }
+
+    /// Ask `logins` for the saved login of each lease the host grants
+    /// `takesLogin`. Only before the environment is shared.
+    pub(crate) fn with_logins(mut self, logins: Arc<dyn SavedLogins>) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.logins = Some(logins);
+        }
+        self
     }
 
     /// Serve this paired environment's leases over `connection`, which
@@ -659,10 +675,12 @@ impl Environment for SshEnvironment {
             let place = self.inner.budget_place(Work::Lease)?;
             let link = self.inner.link(Install::IfAbsent(lease.as_str())).await?;
             let released = Arc::new(std::sync::OnceLock::new());
+            let login = Arc::new(std::sync::OnceLock::new());
             let host: Arc<dyn HarnessHost> = Arc::new(LeaseHost {
                 released: released.clone(),
                 link: link.clone(),
                 lease: lease.as_str().into(),
+                login: login.clone(),
             });
             let provider = binding.on_host(host.clone()).map_err(|error| {
                 tracing::warn!(agent = work.agent(), %error, "this agent's binding cannot start its harness on a host");
@@ -682,6 +700,17 @@ impl Environment for SshEnvironment {
                     self.inner.timings.answer,
                 )
                 .await?;
+            // Asked only once the host's own grant takes one, and set before
+            // the binding can start anything: the lease is not returned yet.
+            if terms.takes_login {
+                let saved = match (&self.inner.logins, AgentId::parse(work.agent())) {
+                    (Some(logins), Some(agent)) => {
+                        logins.login(&self.inner.environment(), agent).await
+                    }
+                    _ => None,
+                };
+                let _ = login.set(saved);
+            }
             let workspace = Some(link.workspace().to_string_lossy().into_owned());
             Ok(EnvironmentLease {
                 provider,
@@ -1125,6 +1154,9 @@ struct LeaseHost {
     released: Arc<std::sync::OnceLock<CloseOutcome>>,
     link: Arc<HostLink>,
     lease: String,
+    /// The saved login each harness under the lease is started with, set
+    /// once at its grant; unset or `None` starts it with none.
+    login: Arc<std::sync::OnceLock<Option<Login>>>,
 }
 
 impl HarnessHost for LeaseHost {
@@ -1154,7 +1186,11 @@ impl HarnessHost for LeaseHost {
         }
         let started = self
             .link
-            .start(&self.lease, environment)
+            .start(
+                &self.lease,
+                environment,
+                self.login.get().cloned().flatten(),
+            )
             .map_err(|error| match error {
                 StartError::Closed => AgentError::Closed,
                 StartError::Busy => AgentError::Backpressure,

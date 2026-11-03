@@ -81,7 +81,7 @@ use nessa_protocol::build_update::{self, FromEnvironment::UpdateWanted};
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
-    GrantRefusal, GrantedTerms, MachineReport, PublishRefusal, Sandbox, StagedArtifact,
+    GrantRefusal, GrantedTerms, Login, MachineReport, PublishRefusal, Sandbox, StagedArtifact,
     ToEnvironment, Unavailability, COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
@@ -987,7 +987,8 @@ impl HostLink {
         routes.unaudited.remove(lease);
     }
 
-    /// Start a harness under `lease` with the binding's `environment`.
+    /// Start a harness under `lease` with the binding's `environment` and,
+    /// when the lease's grant takes one, the agent's saved `login`.
     /// Answers at once.
     ///
     /// # Errors
@@ -996,6 +997,7 @@ impl HostLink {
         &self,
         lease: &str,
         environment: BTreeMap<String, String>,
+        login: Option<Login>,
     ) -> Result<StartedChannel, StartError> {
         let (output_sender, output_receiver) = mpsc::channel(OUTPUT_QUEUE);
         let (stop, stop_asked) = oneshot::channel();
@@ -1030,6 +1032,7 @@ impl HostLink {
                 lease: lease.into(),
                 channel,
                 environment,
+                login,
             };
             // Larger than a frame carries: refused here, before it is queued
             // for every lease's connection.

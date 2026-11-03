@@ -403,6 +403,9 @@ pub(super) async fn product_state(
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     // Voice calls, with their key in the same vault.
     let voice = super::voice::compose(namespace, vault.vault.clone());
+    // The agents' saved logins, in the same vault, handed to the machines
+    // the policy lets receive them (issue #1260).
+    let saved_logins = super::logins::compose(namespace, vault.vault.clone())?;
     // A leftover plaintext sign-in is removed before agents start, whether or
     // not the vault is unlocked. A failed delete stops startup; the file is
     // not left in place and treated as signed out.
@@ -447,6 +450,7 @@ pub(super) async fn product_state(
                         access_policy: access_policy.clone(),
                         #[cfg(unix)]
                         github: github.as_ref().map(|github| github.connections.clone()),
+                        saved_logins: saved_logins.clone(),
                     },
                 )
                 .await?;
@@ -564,6 +568,7 @@ pub(super) async fn product_state(
     if let Some(voice) = voice {
         product = product.with_voice(voice);
     }
+    product = product.with_logins(saved_logins);
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
     // Composed whether or not native pairing runs: turning it on is how it
@@ -832,6 +837,9 @@ type PairedWorkers = (
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    /// The agents' saved logins, handed to the machines that may receive
+    /// them when an agent starts there.
+    saved_logins: Arc<crate::logins::application::SavedLoginsService>,
     stop_children_on_parent_stop: bool,
     live_threads: Option<usize>,
     #[cfg(unix)]
@@ -1212,6 +1220,7 @@ async fn conversations(
         serving,
         access_policy,
         github,
+        saved_logins,
     } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -1319,6 +1328,7 @@ async fn conversations(
             ),
         ),
         environments: Default::default(),
+        logins: Some(Arc::new(super::logins::ServiceLogins(saved_logins.clone()))),
     });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = crate::agent_install::infrastructure::host_platform();
@@ -1548,6 +1558,7 @@ async fn conversations(
         clock.clone(),
         serving,
         organization,
+        Arc::new(super::logins::ServiceLogins(saved_logins)),
     )?;
     let environment = environment.with_workspaces(workspace_environments);
     // Which paired computers the pool tries first and which it leaves out,
@@ -1823,6 +1834,7 @@ fn environments(
     clock: Arc<dyn Clock>,
     serving: Option<ServingAuth>,
     organization: crate::conversation::application::OrganizationBudgets,
+    logins: Arc<dyn crate::conversation::infrastructure::ssh_environment::SavedLogins>,
 ) -> Result<(Environments, Option<PairedParts>), RunError> {
     use super::paired_environments::{
         ListenerEnvironments, PeerWorkers, RegistryPaired, RegistryServing, SavedSightings,
@@ -1877,7 +1889,8 @@ fn environments(
                 organization,
             )
             .with_sightings(Arc::new(SavedSightings(sightings.clone())))
-            .with_updates(Arc::new(PeerUpdates::new(installer.clone(), audit.clone()))),
+            .with_updates(Arc::new(PeerUpdates::new(installer.clone(), audit.clone())))
+            .with_logins(logins.clone()),
         )),
         _ => None,
     };
@@ -1885,13 +1898,16 @@ fn environments(
         for host in hosts {
             environments.insert(
                 host.as_str().to_owned(),
-                Arc::new(SshEnvironment::new(
-                    host.clone(),
-                    connector.clone(),
-                    audit.clone(),
-                    installer.clone(),
-                    SshTimings::default(),
-                )),
+                Arc::new(
+                    SshEnvironment::new(
+                        host.clone(),
+                        connector.clone(),
+                        audit.clone(),
+                        installer.clone(),
+                        SshTimings::default(),
+                    )
+                    .with_logins(logins.clone()),
+                ),
             );
         }
     }

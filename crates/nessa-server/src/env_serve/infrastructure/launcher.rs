@@ -5,7 +5,8 @@
 //! ```text
 //! launch(agent, binding variables) ──▶ LaunchSpec for agent (host config)
 //!     command = spec.executable spec.args, in workspace,
-//!     environment = accepted binding variables, then the host's own (host wins),
+//!     environment = accepted binding variables, the gateway's saved login
+//!                   in the agent's login variable, then the host's own (host wins),
 //!                   then the lease's publish point (NESSA_ARTIFACTS), this side's,
 //!                   and this build's directory first on the host's PATH
 //!     ──▶ SupervisedHarness::start ──▶ HarnessProcess
@@ -14,11 +15,17 @@
 //! Arrows are calls, in order. The gateway sets only the variables the
 //! agent's binding declares it sets (`LAUNCH_VARIABLES`); any other name is
 //! refused, so a gateway cannot choose the executable, the search path, a
-//! preloaded library or a credential here. A harness given a publish point
-//! finds `nessa` on its search path: the copy serving its lease, which a
+//! preloaded library or a credential here. The one credential it may hand
+//! over is the agent's own saved login, only under a lease this host's
+//! grant lets take one, and only in the variable the agent reads its login
+//! from (the first of `lease::login_variables`); a login the host
+//! configures itself wins. A harness given a publish point finds `nessa` on its search path: the copy serving its lease, which a
 //! gateway installs where no search path looks (`env_serve::install`).
 use crate::env_serve::application::{HarnessLauncher, PUBLISH_POINT_VARIABLE};
-use nessa_protocol::agents::AgentId;
+use nessa_protocol::{
+    agents::AgentId,
+    lease::{login_variables, Login},
+};
 use nessa_sdk::{
     application::agent_execution::{agents::AgentError, providers::HarnessProcess},
     domain::agent_execution::leases::SandboxProfiles,
@@ -94,6 +101,7 @@ impl HarnessLauncher for ConfiguredLauncher {
         &self,
         agent: &str,
         environment: &BTreeMap<String, String>,
+        login: Option<&Login>,
         publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         let id = AgentId::parse(agent)
@@ -116,8 +124,11 @@ impl HarnessLauncher for ConfiguredLauncher {
             .args(&spec.args)
             .current_dir(&self.workspace)
             .env_clear()
-            .envs(environment)
-            .envs(&spec.environment);
+            .envs(environment);
+        if let Some((variable, login)) = login_to_set(id, login, &spec.environment) {
+            command.env(variable, login);
+        }
+        command.envs(&spec.environment);
         if let Some(point) = publish_point {
             command.env(PUBLISH_POINT_VARIABLE, point);
             let this_build = std::env::current_exe().ok();
@@ -135,6 +146,25 @@ impl HarnessLauncher for ConfiguredLauncher {
         } else {
             SupervisedHarness::start(command)
         }
+    }
+}
+
+/// Where the gateway's `login` for `agent` goes, and its value: the
+/// variable the agent reads its login from, only where the host's own
+/// `configured` variables set none of the agent's login variables. The
+/// host's configuration wins.
+pub(crate) fn login_to_set<'a>(
+    agent: AgentId,
+    login: Option<&'a Login>,
+    configured: &BTreeMap<OsString, OsString>,
+) -> Option<(&'static str, &'a str)> {
+    let variables = login_variables(agent);
+    let host_has_own = variables
+        .iter()
+        .any(|name| configured.contains_key(&OsString::from(name)));
+    match (login, host_has_own, variables.first()) {
+        (Some(login), false, Some(variable)) => Some((variable, login.expose())),
+        _ => None,
     }
 }
 

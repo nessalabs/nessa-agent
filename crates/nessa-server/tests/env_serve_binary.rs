@@ -208,6 +208,7 @@ fn a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger() {
                 sandbox: Sandbox::HarnessDefault,
                 timeout_ms: None,
                 lease_ms: None,
+                takes_login: false,
             },
         }
     );
@@ -228,6 +229,7 @@ fn a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger() {
         lease: LEASE.into(),
         channel: 1,
         environment: BTreeMap::new(),
+        login: None,
     });
     serving.send(ToEnvironment::Input {
         lease: LEASE.into(),
@@ -309,6 +311,7 @@ fn a_lease_held_when_the_gateways_stream_ends_is_ended_as_lost_and_accounted_aft
         lease: LEASE.into(),
         channel: 1,
         environment: BTreeMap::new(),
+        login: None,
     });
     serving.finish();
     assert!(ledger(root.path())

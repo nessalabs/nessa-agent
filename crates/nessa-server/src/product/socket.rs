@@ -2010,6 +2010,9 @@ async fn dispatch_authorized(
         method if method.starts_with("github.") => {
             super::github::dispatch(state, session, frame).await
         }
+        method if method.starts_with("logins.") => {
+            super::logins::dispatch(state, session, frame).await
+        }
         method if method.starts_with("voice.") => {
             super::voice::dispatch(state, session, frame).await
         }
@@ -2898,6 +2901,10 @@ mod tests {
     mod vault_tests {
         include!("../../tests/product/socket/vault.rs");
     }
+    mod logins_tests {
+        include!("../../tests/product/socket/logins.rs");
+    }
+
     mod voice_tests {
         include!("../../tests/product/socket/voice.rs");
     }
