@@ -207,11 +207,11 @@ export const KNOBS = {
   },
   huddles: {
     default: 1,
-    what: "turns that show a voice app (the test server's talk board): its frame is allowed the microphone, it opens in the chat's panel as one tab, and after Always allow its next message goes unasked",
+    what: "turns that show a voice app (the test server's talk board): its frame is allowed the microphone, it opens in the chat's panel as one tab, after Always allow its next message goes unasked, and Revoke in Settings › Access takes the trust back",
   },
   channels: {
     default: 1,
-    what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session",
+    what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session; the first then moves its new threads and main agent to Boat and back from its settings",
   },
   long: {
     default: 30,
